@@ -1,0 +1,101 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { getAuthContext } from "@/lib/auth/auth-context";
+import {
+  assignStaffRole as assignStaffRoleForActor,
+  createStaff as createStaffForActor,
+  updateStaff as updateStaffForActor,
+  type CreateStaffInput,
+  type StaffActionError,
+  type UpdateStaffInput,
+} from "@/lib/academies/staff";
+import type { AcademyRole } from "@/lib/auth/roles";
+
+const UNAUTHENTICATED: StaffActionError = {
+  code: "forbidden",
+  message: "You must be signed in.",
+};
+
+export interface CreateStaffFormState {
+  ok: boolean;
+  error?: StaffActionError;
+}
+
+/**
+ * FormData -> CreateStaffInput. Shape translation only — every field is
+ * re-validated by lib/academies/staff.ts's Zod schema right after this
+ * runs, same convention as lib/academies/settings-actions.ts's
+ * parseAcademySettingsFormData.
+ */
+function parseCreateStaffFormData(formData: FormData): CreateStaffInput {
+  return {
+    email: String(formData.get("email") ?? ""),
+    password: String(formData.get("password") ?? ""),
+    fullName: String(formData.get("fullName") ?? ""),
+    phone: String(formData.get("phone") ?? ""),
+    employeeNumber: String(formData.get("employeeNumber") ?? ""),
+    hireDate: String(formData.get("hireDate") ?? ""),
+    role: String(formData.get("role") ?? "") as CreateStaffInput["role"],
+  };
+}
+
+/** PLAN.md §4 server action name, form-bound via useActionState for /academy/staff/new. */
+export async function createStaff(
+  _prevState: CreateStaffFormState,
+  formData: FormData,
+): Promise<CreateStaffFormState> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await createStaffForActor(context, parseCreateStaffFormData(formData));
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/staff");
+  return { ok: true };
+}
+
+/**
+ * PLAN.md §4 server action name. Called directly (not through
+ * useActionState) from the staff list's inline per-row status/role
+ * controls, same convention as lib/platform-staff/actions.ts's
+ * grantPlatformPermission.
+ */
+export async function updateStaff(
+  staffProfileId: string,
+  input: UpdateStaffInput,
+): Promise<{ ok: true } | { ok: false; error: StaffActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await updateStaffForActor(context, staffProfileId, input);
+  if (result.ok) {
+    revalidatePath("/academy/staff");
+    return { ok: true };
+  }
+  return result;
+}
+
+/** PLAN.md §4 server action name. See updateStaff above. */
+export async function assignStaffRole(
+  targetUserId: string,
+  role: AcademyRole,
+): Promise<{ ok: true } | { ok: false; error: StaffActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await assignStaffRoleForActor(context, targetUserId, role);
+  if (result.ok) {
+    revalidatePath("/academy/staff");
+    return { ok: true };
+  }
+  return result;
+}

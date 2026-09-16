@@ -962,3 +962,126 @@ export const staffDocuments = pgTable(
     index("staff_documents_staff_profile_id_idx").on(table.staffProfileId),
   ],
 );
+
+// Phase 2, Item 37. PLAN.md's exact column list (Phase 2 §2): "id,
+// academy_id FK academies NOT NULL, branch_id FK branches NOT NULL,
+// student_number text NOT NULL, full_name text NOT NULL, date_of_birth date
+// nullable, gender text nullable, phone text nullable, email text nullable,
+// guardian_name text nullable, guardian_phone text nullable, status
+// enum(active,archived) NOT NULL default active, created_by FK users NOT
+// NULL, created_at, updated_at; unique (academy_id, student_number); index
+// (academy_id), (branch_id)."
+//
+// gender is free text, not a pgEnum: PLAN.md never gives an exhaustive
+// value list for it anywhere (unlike status, which is given directly as
+// "enum(active,archived)") — the same judgment already applied to
+// academies.type/subscription_payments.paymentMethod above.
+//
+// status reuses branchStatusEnum (active/archived) rather than a new
+// student-specific enum, for the same reason staffProfiles.status did in
+// Item 33: the Archive & Deactivation Rules table lists "Students" as its
+// own row with the identical archive-never-delete/restorable/
+// frees-allowance-slot semantics already modeled by branchStatusEnum for
+// branches and reused for staff — the same lifecycle concept, just another
+// entity, not a reason to fork a value-identical enum.
+export const students = pgTable(
+  "students",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id),
+    studentNumber: text("student_number").notNull(),
+    fullName: text("full_name").notNull(),
+    dateOfBirth: date("date_of_birth"),
+    gender: text("gender"),
+    phone: text("phone"),
+    email: text("email"),
+    guardianName: text("guardian_name"),
+    guardianPhone: text("guardian_phone"),
+    status: branchStatusEnum("status").notNull().default("active"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 2 §2 / Security considerations: "(academy_id, student_number)
+    // uniqueness is a DB-level unique constraint" — student IDs are unique
+    // within an academy and independent across academies (two academies can
+    // both use STD-000001, per the Phase 2 acceptance criteria).
+    uniqueIndex("students_academy_id_student_number_unique").on(
+      table.academyId,
+      table.studentNumber,
+    ),
+    // Phase 2 §2: "index (academy_id), (branch_id)".
+    index("students_academy_id_idx").on(table.academyId),
+    index("students_branch_id_idx").on(table.branchId),
+  ],
+);
+
+// document_type's exhaustive value list is given directly in PLAN.md's
+// Phase 2 §2 student_documents column list: id_copy/certificate/other — no
+// "contract" (unlike staffDocumentTypeEnum above, which does have
+// "contract"). Kept as its own pgEnum rather than reusing
+// staffDocumentTypeEnum: the two value sets differ, so sharing one enum
+// would silently let a student document be filed with a "contract" type
+// that PLAN.md's own column list for this table never allows.
+export const studentDocumentTypeEnum = pgEnum("student_document_type", [
+  "id_copy",
+  "certificate",
+  "other",
+]);
+
+// Phase 2, Item 37. PLAN.md's exact column list (Phase 2 §2): "id,
+// academy_id FK NOT NULL, student_id FK students NOT NULL, document_type
+// enum(id_copy,certificate,other) NOT NULL, file_ref text NOT NULL,
+// uploaded_by FK users NOT NULL, status enum(active,archived) NOT NULL
+// default active, created_at; index (student_id)." No updated_at: PLAN.md's
+// literal list ends at created_at, matching the same "follow the literal
+// list, don't assume symmetry with a sibling table" judgment already
+// applied to staffDocuments/academySubscriptions above.
+//
+// file_ref is a plain text reference, not a real upload — same
+// interface-placeholder judgment call as staffDocuments.fileRef above (no
+// lib/storage module exists yet; building actual storage/upload handling is
+// out of scope for this schema-only item and belongs to
+// uploadStudentDocument, a later item, not this one).
+//
+// status reuses branchStatusEnum for the same reason staffDocuments.status
+// did: "Documents (staff/student)" is its own single row in the Archive &
+// Deactivation Rules table, covering both staff and student documents under
+// one identical active/archived lifecycle.
+export const studentDocuments = pgTable(
+  "student_documents",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    documentType: studentDocumentTypeEnum("document_type").notNull(),
+    fileRef: text("file_ref").notNull(),
+    uploadedBy: uuid("uploaded_by")
+      .notNull()
+      .references(() => users.id),
+    status: branchStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 2 §2: "index (student_id)".
+    index("student_documents_student_id_idx").on(table.studentId),
+  ],
+);

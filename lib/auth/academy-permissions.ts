@@ -87,6 +87,13 @@ export type AcademyPermissionLevel = (typeof ACADEMY_PERMISSION_LEVELS)[number];
 export const ACADEMY_SETTINGS_ACTION = "academy.settings";
 
 /**
+ * PLAN.md Item 42 / Master Permission Matrix row "Academy audit log
+ * (view)": Full/Full/—/—/—/— ("n/a (Owner/Admin only, Decision #15)").
+ * Gates `/academy/audit-logs` — see lib/academies/audit-logs.ts.
+ */
+export const ACADEMY_AUDIT_LOG_ACTION = "academy.audit_log";
+
+/**
  * The extension point: one row per Master Permission Matrix "Academy-level
  * actions" line, one column per `AcademyRole`. Only `academy.settings` is
  * populated — see module comment above. A role/action combination that is
@@ -100,9 +107,13 @@ const ACADEMY_PERMISSIONS: Record<
 > = {
   academy_owner: {
     [ACADEMY_SETTINGS_ACTION]: "full",
+    "academy.branches": "full",
+    [ACADEMY_AUDIT_LOG_ACTION]: "full",
   },
   academy_admin: {
     [ACADEMY_SETTINGS_ACTION]: "full",
+    "academy.branches": "full",
+    [ACADEMY_AUDIT_LOG_ACTION]: "full",
   },
   // PLAN.md's matrix cell literally reads "View/Edit" — a value the
   // matrix's own legend (Full/Manage/View/Approve/Per grant) never defines
@@ -122,10 +133,15 @@ const ACADEMY_PERMISSIONS: Record<
   // pre-collapsed boolean.
   manager: {
     [ACADEMY_SETTINGS_ACTION]: "view_edit",
+    "academy.branches": "manage",
   },
-  admissions_officer: {},
+  admissions_officer: {
+    "academy.branches": "view",
+  },
   finance_officer: {},
-  trainer: {},
+  trainer: {
+    "academy.branches": "view",
+  },
 };
 
 /**
@@ -156,3 +172,26 @@ export function getAcademyPermissionLevel(
 export function hasAcademyPermission(role: AcademyRole, action: string): boolean {
   return getAcademyPermissionLevel(role, action) !== "none";
 }
+
+/**
+ * PLAN.md Item 35 — Master Permission Matrix "Staff" row: Owner Full,
+ * Admin Full, Manager Manage, Admissions —, Finance —, Trainer
+ * "View self/assigned". Additive row only (see this file's module comment
+ * on how later items extend `ACADEMY_PERMISSIONS`) — mutated in place
+ * rather than editing the object literal above, so this never collides
+ * with another item's own additive row landing in the same object at the
+ * same time.
+ *
+ * Judgment call on Trainer: the matrix's "View self/assigned" is a
+ * branch/self-scoped read, but branch-scoping (`staff_branch_assignments`,
+ * assigned to Item 36) doesn't exist yet — this row grants Trainer the
+ * unqualified "view" level for now (same level name PLAN.md's own legend
+ * uses elsewhere), and lib/academies/staff.ts's `listStaff` documents,
+ * at its own call site, that the result is academy-wide rather than
+ * filtered to "self/assigned" until Item 36 adds that filter.
+ */
+export const ACADEMY_STAFF_ACTION = "academy.staff";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STAFF_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STAFF_ACTION] = "full";
+ACADEMY_PERMISSIONS.manager[ACADEMY_STAFF_ACTION] = "manage";
+ACADEMY_PERMISSIONS.trainer[ACADEMY_STAFF_ACTION] = "view";

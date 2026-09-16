@@ -6,6 +6,7 @@ import {
   academySubscriptions,
   academyUsage,
   branches,
+  staffProfiles,
   subscriptionPlans,
 } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
@@ -117,11 +118,16 @@ async function countActiveStudents(
   return 0;
 }
 
-// Phase 2 (`staff_profiles` table, not yet built). See countActiveStudents.
+// PLAN.md Phase 2, Item 35 — `staff_profiles` now exists (Item 33) and
+// this is the real counter, same shape as countActiveBranches above:
+// active staff for this academy, straight COUNT(*) against the
+// source-of-truth table (no cached/derived count anywhere else).
 async function countActiveStaff(executor: DbClient, academyId: string): Promise<number> {
-  void executor;
-  void academyId;
-  return 0;
+  const [row] = await executor
+    .select({ count: sql<number>`count(*)::int` })
+    .from(staffProfiles)
+    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.status, "active")));
+  return row?.count ?? 0;
 }
 
 // Phase 3 (`courses` table, not yet built). See countActiveStudents.
