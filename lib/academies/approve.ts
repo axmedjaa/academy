@@ -1,10 +1,23 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { academies, users } from "@/lib/db/schema";
+import { db, type DbClient } from "@/lib/db";
+import {
+  academies,
+  academySubscriptions,
+  academyUsage,
+  branches,
+  subscriptionPayments,
+  subscriptionPlans,
+  users,
+} from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
+import {
+  computeLazySubscriptionStatus,
+  type SubscriptionStatus,
+} from "@/lib/subscriptions/state-machine";
 
 /**
  * PLAN.md Phase 1, Item 21 (shell scope — see app/platform/academies/*
@@ -71,14 +84,54 @@ export interface AcademySummary {
   closedAt: Date | null;
   createdAt: Date;
   status: AcademyLifecycleStatus;
+  /**
+   * DESIGN.md §8's /platform/academies column list ("plan, branch count,
+   * student count") plus §11.1's derived subscription badge — added onto
+   * AcademySummary (rather than a second parallel type) so listAcademies()
+   * and getAcademyById() share one shape, same as every other field here.
+   * null/0 for an academy that has no academy_subscriptions row at all
+   * (possible for rows inserted directly rather than through
+   * registerAcademy, e.g. this file's own test helpers) — never faked.
+   */
+  planName: string | null;
+  /**
+   * The *effective* status (computeLazySubscriptionStatus — lib/subscriptions/
+   * state-machine.ts), not the raw stored column: DESIGN.md §11.1's badge
+   * table is explicit that Past-Due-past-grace and Trial-past-trial-end must
+   * display as Suspended/Expired even before any write has lazily persisted
+   * that flip. Display-only; lifecycle-actions.tsx gates its buttons off the
+   * raw stored status instead (see that file's own comment for why).
+   */
+  subscriptionStatus: SubscriptionStatus | null;
+  /** Active branches only, matching lib/subscriptions/usage.ts's countActiveBranches. */
+  branchCount: number;
+  /**
+   * DESIGN.md §8 also wants a student-count column. No `students` table
+   * exists anywhere in this codebase yet (Phase 2+, same gap
+   * lib/subscriptions/usage.ts's countActiveStudents documents) — there is
+   * deliberately no `studentCount` field here. Rendering a 0 or omitting the
+   * column entirely at the call site is a UI decision, not a data one; this
+   * type simply never invents a number for something that can't be counted.
+   */
 }
 
 type AcademyRow = typeof academies.$inferSelect;
 
+interface SubscriptionSummaryInfo {
+  planName: string | null;
+  subscriptionStatus: SubscriptionStatus | null;
+}
+
 function toSummary(
   row: AcademyRow,
-  emails: { createdByEmail: string | null; approvedByEmail: string | null },
+  info: {
+    createdByEmail: string | null;
+    approvedByEmail: string | null;
+    subscription: SubscriptionSummaryInfo;
+    branchCount: number;
+  },
 ): AcademySummary {
+  const { subscription, branchCount, ...emails } = info;
   return {
     id: row.id,
     name: row.name,
@@ -101,8 +154,89 @@ function toSummary(
     closedAt: row.closedAt,
     createdAt: row.createdAt,
     status: deriveAcademyStatus(row),
+    planName: subscription.planName,
+    subscriptionStatus: subscription.subscriptionStatus,
+    branchCount,
   };
 }
+
+/**
+ * Batch helper shared by listAcademies()/getAcademyById(): for every academy
+ * id given, the plan name + effective subscription status of its *current*
+ * subscription (most-recently-started row — same "no is-current flag, latest
+ * starts_at wins" convention as lib/academies/lifecycle.ts's
+ * getCurrentSubscription and lib/academies/access-gate.ts's checkAcademyAccess).
+ * An academy with no academy_subscriptions row at all (only possible for a
+ * row inserted outside registerAcademy, e.g. this file's own tests) maps to
+ * { planName: null, subscriptionStatus: null } rather than throwing.
+ */
+async function getLatestSubscriptionSummaries(
+  academyIds: string[],
+  executor: DbClient = db,
+): Promise<Map<string, SubscriptionSummaryInfo>> {
+  const result = new Map<string, SubscriptionSummaryInfo>();
+  if (academyIds.length === 0) return result;
+
+  const rows = await executor
+    .select({
+      academyId: academySubscriptions.academyId,
+      status: academySubscriptions.status,
+      startsAt: academySubscriptions.startsAt,
+      endsAt: academySubscriptions.endsAt,
+      trialEndsAt: academySubscriptions.trialEndsAt,
+      planName: subscriptionPlans.name,
+    })
+    .from(academySubscriptions)
+    .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+    .where(inArray(academySubscriptions.academyId, academyIds))
+    .orderBy(desc(academySubscriptions.startsAt));
+
+  for (const row of rows) {
+    if (result.has(row.academyId)) continue; // first row per academy = latest, thanks to the ORDER BY above
+    result.set(row.academyId, {
+      planName: row.planName,
+      subscriptionStatus: computeLazySubscriptionStatus({
+        status: row.status,
+        trialEndsAt: row.trialEndsAt,
+        endsAt: row.endsAt,
+      }),
+    });
+  }
+  return result;
+}
+
+/**
+ * Batch helper shared by listAcademies()/getAcademyById(): active-branch
+ * count per academy id, matching lib/subscriptions/usage.ts's
+ * countActiveBranches (active branches only — an archived branch isn't part
+ * of an academy's operating footprint).
+ */
+async function getBranchCounts(
+  academyIds: string[],
+  executor: DbClient = db,
+): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  if (academyIds.length === 0) return result;
+
+  const rows = await executor
+    .select({
+      academyId: branches.academyId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(branches)
+    .where(and(inArray(branches.academyId, academyIds), eq(branches.status, "active")))
+    .groupBy(branches.academyId);
+
+  for (const row of rows) {
+    result.set(row.academyId, row.count);
+  }
+  return result;
+}
+
+const NO_SUBSCRIPTION_SUMMARY: SubscriptionSummaryInfo = {
+  planName: null,
+  subscriptionStatus: null,
+};
 
 /**
  * Lists every academy for /platform/academies, newest first. Callers must
@@ -137,12 +271,20 @@ export async function listAcademies(): Promise<AcademySummary[]> {
     }
   }
 
+  const academyIds = rows.map((row) => row.academy.id);
+  const [subscriptionByAcademy, branchCountByAcademy] = await Promise.all([
+    getLatestSubscriptionSummaries(academyIds),
+    getBranchCounts(academyIds),
+  ]);
+
   return rows.map(({ academy, createdByEmail }) =>
     toSummary(academy, {
       createdByEmail,
       approvedByEmail: academy.approvedBy
         ? (approverEmailById.get(academy.approvedBy) ?? null)
         : null,
+      subscription: subscriptionByAcademy.get(academy.id) ?? NO_SUBSCRIPTION_SUMMARY,
+      branchCount: branchCountByAcademy.get(academy.id) ?? 0,
     }),
   );
 }
@@ -182,9 +324,16 @@ export async function getAcademyById(
     approvedByEmail = approver?.email ?? null;
   }
 
+  const [subscriptionByAcademy, branchCountByAcademy] = await Promise.all([
+    getLatestSubscriptionSummaries([row.id]),
+    getBranchCounts([row.id]),
+  ]);
+
   return toSummary(row, {
     createdByEmail: creator?.email ?? null,
     approvedByEmail,
+    subscription: subscriptionByAcademy.get(row.id) ?? NO_SUBSCRIPTION_SUMMARY,
+    branchCount: branchCountByAcademy.get(row.id) ?? 0,
   });
 }
 
@@ -297,12 +446,231 @@ export async function approveAcademy(
       .where(eq(users.id, actorContext.userId))
       .limit(1);
 
+    // approveAcademy only ever changes approved_by/approved_at — plan/branch
+    // info can't have changed within this same transaction, but re-fetching
+    // via the shared batch helpers (rather than duplicating their queries
+    // inline) keeps this the one place that assembles a full AcademySummary.
+    const [subscriptionByAcademy, branchCountByAcademy] = await Promise.all([
+      getLatestSubscriptionSummaries([updated.id], tx),
+      getBranchCounts([updated.id], tx),
+    ]);
+
     return {
       ok: true,
       academy: toSummary(updated, {
         createdByEmail: creator?.email ?? null,
         approvedByEmail: approver?.email ?? null,
+        subscription: subscriptionByAcademy.get(updated.id) ?? NO_SUBSCRIPTION_SUMMARY,
+        branchCount: branchCountByAcademy.get(updated.id) ?? 0,
       }),
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Read-only helpers for /platform/academies/[id]'s Subscription & Plan,
+// Usage vs. Allowances, and Payment History sections (PLAN.md Item 21's
+// detail-page scope). These deliberately live here rather than in
+// lib/subscriptions/* (off-limits this wave — see this item's task brief):
+// each queries subscriptionPayments/academySubscriptions/subscriptionPlans/
+// academyUsage directly for exactly one academy, instead of reusing
+// lib/subscriptions/payments.ts's listSubscriptionPayments() (all academies,
+// no filter) or lib/subscriptions/usage.ts's listAcademyUsageOverview() (same
+// issue) — both of which are read-only modules this item isn't allowed to
+// modify to add a per-academy filter. Callers must already have checked
+// hasPermission() themselves, same convention as every list/get helper above.
+// ---------------------------------------------------------------------------
+
+export interface AcademySubscriptionOverview {
+  subscriptionId: string;
+  planId: string;
+  planName: string;
+  priceAmountCents: number;
+  currency: string;
+  billingPeriod: string;
+  /** Raw, stored status — what lifecycle-actions.tsx gates its buttons on. */
+  status: SubscriptionStatus;
+  /** Effective status (computeLazySubscriptionStatus) — what gets displayed. */
+  effectiveStatus: SubscriptionStatus;
+  startsAt: Date;
+  endsAt: Date | null;
+  trialEndsAt: Date | null;
+  activatedAt: Date | null;
+  suspendedAt: Date | null;
+  cancelledAt: Date | null;
+  renewedAt: Date | null;
+  notes: string | null;
+}
+
+/**
+ * The academy's *current* subscription (latest starts_at) joined to its
+ * plan, for the detail page's read-only Subscription & Plan section. Returns
+ * null when the academy has no academy_subscriptions row at all (see
+ * getLatestSubscriptionSummaries's own comment on why that's possible).
+ */
+export async function getAcademySubscriptionOverview(
+  academyId: string,
+): Promise<AcademySubscriptionOverview | null> {
+  const parsed = z.string().uuid().safeParse(academyId);
+  if (!parsed.success) return null;
+
+  const [row] = await db
+    .select({
+      subscriptionId: academySubscriptions.id,
+      planId: academySubscriptions.planId,
+      planName: subscriptionPlans.name,
+      priceAmountCents: subscriptionPlans.priceAmountCents,
+      currency: subscriptionPlans.currency,
+      billingPeriod: subscriptionPlans.billingPeriod,
+      status: academySubscriptions.status,
+      startsAt: academySubscriptions.startsAt,
+      endsAt: academySubscriptions.endsAt,
+      trialEndsAt: academySubscriptions.trialEndsAt,
+      activatedAt: academySubscriptions.activatedAt,
+      suspendedAt: academySubscriptions.suspendedAt,
+      cancelledAt: academySubscriptions.cancelledAt,
+      renewedAt: academySubscriptions.renewedAt,
+      notes: academySubscriptions.notes,
+    })
+    .from(academySubscriptions)
+    .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+    .where(eq(academySubscriptions.academyId, parsed.data))
+    .orderBy(desc(academySubscriptions.startsAt))
+    .limit(1);
+
+  if (!row) return null;
+
+  return {
+    ...row,
+    effectiveStatus: computeLazySubscriptionStatus({
+      status: row.status,
+      trialEndsAt: row.trialEndsAt,
+      endsAt: row.endsAt,
+    }),
+  };
+}
+
+export interface AcademyPaymentHistoryRow {
+  id: string;
+  amountCents: number;
+  currency: string;
+  paymentMethod: string;
+  paymentReference: string | null;
+  evidenceFileRef: string | null;
+  receivedAt: Date;
+  recordedByEmail: string | null;
+  verifiedByEmail: string | null;
+  status: "pending" | "verified" | "rejected" | "reversed";
+  notes: string | null;
+  createdAt: Date;
+}
+
+/**
+ * Every subscription_payments row for one academy, newest first, for the
+ * detail page's read-only Payment History section. Read-only display only —
+ * no Verify/Reject/Reverse row actions here, those stay on /platform/payments
+ * (lib/subscriptions/payments.ts, off-limits this wave), matching this
+ * item's brief for the Subscription tab being "read-only display only."
+ */
+export async function listAcademyPaymentHistory(
+  academyId: string,
+): Promise<AcademyPaymentHistoryRow[]> {
+  const parsed = z.string().uuid().safeParse(academyId);
+  if (!parsed.success) return [];
+
+  const recordedByUsers = users;
+  const verifiedByUsers = alias(users, "verified_by_users");
+
+  const rows = await db
+    .select({
+      id: subscriptionPayments.id,
+      amountCents: subscriptionPayments.amountCents,
+      currency: subscriptionPayments.currency,
+      paymentMethod: subscriptionPayments.paymentMethod,
+      paymentReference: subscriptionPayments.paymentReference,
+      evidenceFileRef: subscriptionPayments.evidenceFileRef,
+      receivedAt: subscriptionPayments.receivedAt,
+      recordedByEmail: recordedByUsers.email,
+      verifiedByEmail: verifiedByUsers.email,
+      status: subscriptionPayments.status,
+      notes: subscriptionPayments.notes,
+      createdAt: subscriptionPayments.createdAt,
+    })
+    .from(subscriptionPayments)
+    .innerJoin(recordedByUsers, eq(recordedByUsers.id, subscriptionPayments.recordedBy))
+    .leftJoin(verifiedByUsers, eq(verifiedByUsers.id, subscriptionPayments.verifiedBy))
+    .where(eq(subscriptionPayments.academyId, parsed.data))
+    .orderBy(desc(subscriptionPayments.createdAt));
+
+  return rows;
+}
+
+export interface AcademyUsageSnapshotView {
+  activeStudentsCount: number;
+  activeStaffCount: number;
+  branchCount: number;
+  courseCount: number;
+  storageUsedBytes: number;
+  calculatedAt: Date;
+}
+
+export interface AcademyUsageOverview {
+  /** Null when recalculateUsage (lib/subscriptions/usage.ts) has never run for this academy. */
+  usage: AcademyUsageSnapshotView | null;
+  /** Null when the academy has no subscription/plan to compare usage against. */
+  limits: {
+    maxBranches: number;
+    maxStudents: number;
+    maxStaff: number;
+    maxCourses: number;
+    maxStorageBytes: number;
+  } | null;
+}
+
+/**
+ * The academy's latest academy_usage snapshot plus its current plan's
+ * allowances, for the detail page's read-only Usage vs. Allowances section.
+ * Deliberately queries academyUsage/subscriptionPlans directly for this one
+ * academy rather than reusing lib/subscriptions/usage.ts's
+ * listAcademyUsageOverview() (every academy, no per-academy filter, and that
+ * file is off-limits this wave — see this section's top-of-file comment).
+ */
+export async function getAcademyUsageOverview(
+  academyId: string,
+): Promise<AcademyUsageOverview> {
+  const parsed = z.string().uuid().safeParse(academyId);
+  if (!parsed.success) return { usage: null, limits: null };
+
+  const [usageRow] = await db
+    .select({
+      activeStudentsCount: academyUsage.activeStudentsCount,
+      activeStaffCount: academyUsage.activeStaffCount,
+      branchCount: academyUsage.branchCount,
+      courseCount: academyUsage.courseCount,
+      storageUsedBytes: academyUsage.storageUsedBytes,
+      calculatedAt: academyUsage.calculatedAt,
+    })
+    .from(academyUsage)
+    .where(eq(academyUsage.academyId, parsed.data))
+    .orderBy(desc(academyUsage.calculatedAt))
+    .limit(1);
+
+  const [planRow] = await db
+    .select({
+      maxBranches: subscriptionPlans.maxBranches,
+      maxStudents: subscriptionPlans.maxStudents,
+      maxStaff: subscriptionPlans.maxStaff,
+      maxCourses: subscriptionPlans.maxCourses,
+      maxStorageBytes: subscriptionPlans.maxStorageBytes,
+    })
+    .from(academySubscriptions)
+    .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+    .where(eq(academySubscriptions.academyId, parsed.data))
+    .orderBy(desc(academySubscriptions.startsAt))
+    .limit(1);
+
+  return {
+    usage: usageRow ?? null,
+    limits: planRow ?? null,
+  };
 }

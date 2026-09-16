@@ -720,3 +720,66 @@ export const academyUsage = pgTable(
     ),
   ],
 );
+
+// Phase 1, Item 30. PLAN.md's exact column list (Phase 1 §2): "id,
+// subscription_payment_id unique, academy_subscription_id, consumed_at,
+// consumed_by" — "the mechanism that makes 'a verified payment can only
+// fund one renewal, ever' a hard database guarantee rather than an
+// application-logic promise" (PLAN.md's own words, quoted in the comment
+// on subscription_payments above this one referencing "renewSubscription
+// rule below"). One row per renewal ever performed: `renewSubscription`
+// (lib/subscriptions/renew.ts) inserts exactly one of these, inside the
+// same transaction that locks and validates the funding
+// subscription_payments row, atomically with the academy_subscriptions
+// update and the audit write — see that file's module comment for the
+// full 7-step algorithm PLAN.md §6 specifies.
+//
+// subscriptionPaymentId is UNIQUE (not just indexed): this is the actual
+// double-spend guard PLAN.md's renewSubscription rule depends on — "the
+// table's unique constraint on subscription_payment_id makes a
+// double-spend impossible even under a race — the second concurrent
+// transaction's insert simply fails." renewSubscription also serializes
+// concurrent calls earlier (locking the academy_subscriptions row, then
+// the candidate subscription_payments row, both via SELECT ... FOR
+// UPDATE) so in practice a racing second call is rejected cleanly before
+// ever reaching this INSERT — but the unique constraint is the layer that
+// makes the guarantee a real one, independent of the application code
+// getting its locking order right.
+//
+// No `updated_at`/status column: like subscription_payments, this is an
+// append-only fact table (a consumption, once recorded, is never edited
+// or reversed here — PLAN.md's algorithm has no "un-consume" step;
+// reversing the underlying payment via reverseSubscriptionPayment, a
+// different item's action, does not touch this table).
+export const subscriptionPaymentConsumptions = pgTable(
+  "subscription_payment_consumptions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    subscriptionPaymentId: uuid("subscription_payment_id")
+      .notNull()
+      .references(() => subscriptionPayments.id),
+    academySubscriptionId: uuid("academy_subscription_id")
+      .notNull()
+      .references(() => academySubscriptions.id),
+    consumedAt: timestamp("consumed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    consumedBy: uuid("consumed_by")
+      .notNull()
+      .references(() => users.id),
+  },
+  (table) => [
+    // The double-spend guard itself — see the table-level comment above.
+    uniqueIndex(
+      "subscription_payment_consumptions_subscription_payment_id_unique",
+    ).on(table.subscriptionPaymentId),
+    // Not explicitly listed in Database Constraints & Indexes, but
+    // extended here by the same judgment call as every other FK-scoped
+    // lookup index in this file — "renewal history for this subscription"
+    // is exactly the query the /platform/subscriptions page's history
+    // view would run.
+    index(
+      "subscription_payment_consumptions_academy_subscription_id_idx",
+    ).on(table.academySubscriptionId),
+  ],
+);
