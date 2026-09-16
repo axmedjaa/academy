@@ -43,6 +43,13 @@
       "when": 1789552896785,
       "tag": "0005_silent_nitro",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789553682933,
+      "tag": "0006_serious_matthew_murdock",
+      "breakpoints": true
     }
   ]
 }

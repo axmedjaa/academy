@@ -461,3 +461,94 @@ export const subscriptionPlans = pgTable(
     check("subscription_plans_max_storage_bytes_nonnegative", sql`${table.maxStorageBytes} >= 0`),
   ],
 );
+
+// Phase 1, Item 23. PLAN.md's exact column list (Phase 1 §2): "id,
+// academy_id, plan_id, status, starts_at, ends_at, trial_ends_at,
+// activated_at, suspended_at, cancelled_at, renewed_at, renewed_by,
+// created_by, updated_by, notes)" — deliberately no created_at/updated_at
+// columns despite every other table in this file having them: PLAN.md's
+// lists for academies/subscription_plans explicitly end with "..., created_at"
+// / "..., created_at, updated_at", while this one's list ends at "notes" —
+// so this table's column set is followed literally rather than assuming
+// symmetry with its siblings. `starts_at` is the closest analogue to a
+// creation timestamp for this table.
+//
+// status values mirror the state-transition table (Phase 1 §6, "Subscription
+// state machine — exact transition table"): Draft, Trial, Active, Past Due,
+// Suspended, Expired, Cancelled. Rendered here as lowercase snake_case
+// (draft/trial/active/past_due/suspended/expired/cancelled) to match every
+// other status-like enum in this file (user_status, branch_status,
+// membership_status) — PLAN.md's table headers use Title Case for
+// readability, not as literal identifiers (the same judgment already applied
+// to billing_period/reports_level above). The full transition logic (which
+// of these are reachable from which, including the two lazily-computed
+// entries — Trial->Expired and Active->PastDue->Suspended) lives in
+// lib/subscriptions/state-machine.ts, not in this enum.
+export const subscriptionStatusEnum = pgEnum("subscription_status", [
+  "draft",
+  "trial",
+  "active",
+  "past_due",
+  "suspended",
+  "expired",
+  "cancelled",
+]);
+
+export const academySubscriptions = pgTable(
+  "academy_subscriptions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    planId: uuid("plan_id")
+      .notNull()
+      .references(() => subscriptionPlans.id),
+    status: subscriptionStatusEnum("status").notNull().default("draft"),
+    // Not null + defaultNow(): every subscription's grace/expiry math is
+    // anchored to starts_at (Database Constraints & Indexes: "ends_at >=
+    // starts_at; trial_ends_at, when set, >= starts_at"), and this table has
+    // no created_at of its own (see comment above) for starts_at to fall
+    // back on if it were left nullable.
+    startsAt: timestamp("starts_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    // Nullable: a Draft/Trial subscription that hasn't been priced into a
+    // billing period yet has no end date; ends_at is populated once
+    // activateAcademy/renewSubscription (Items 24/26/30, not yet built)
+    // establish one. The nonnegativity-style check below still holds when
+    // ends_at is null — Postgres treats `NULL >= starts_at` as not
+    // violating the constraint, so no separate `IS NULL OR` clause is
+    // needed (same reasoning PLAN.md's own "when set" qualifier on
+    // trial_ends_at implies).
+    endsAt: timestamp("ends_at", { withTimezone: true }),
+    trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    suspendedAt: timestamp("suspended_at", { withTimezone: true }),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    renewedAt: timestamp("renewed_at", { withTimezone: true }),
+    renewedBy: uuid("renewed_by").references(() => users.id),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    updatedBy: uuid("updated_by").references(() => users.id),
+    notes: text("notes"),
+  },
+  (table) => [
+    // Not explicitly listed in Database Constraints & Indexes, but every
+    // other academy-scoped table in this file carries an index on
+    // academy_id for "list this academy's rows" lookups (see
+    // branches_academy_id_idx) — extended here by the same judgment call.
+    index("academy_subscriptions_academy_id_idx").on(table.academyId),
+    // Database Constraints & Indexes: "academy_subscriptions: ends_at >=
+    // starts_at; trial_ends_at, when set, >= starts_at."
+    check(
+      "academy_subscriptions_ends_at_after_starts_at",
+      sql`${table.endsAt} >= ${table.startsAt}`,
+    ),
+    check(
+      "academy_subscriptions_trial_ends_at_after_starts_at",
+      sql`${table.trialEndsAt} >= ${table.startsAt}`,
+    ),
+  ],
+);
