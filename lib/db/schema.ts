@@ -4,10 +4,13 @@ import {
   uuid,
   text,
   integer,
+  bigint,
+  boolean,
   timestamp,
   pgEnum,
   uniqueIndex,
   index,
+  check,
   jsonb,
 } from "drizzle-orm/pg-core";
 
@@ -365,5 +368,96 @@ export const academyMemberships = pgTable(
       table.academyId,
       table.userId,
     ),
+  ],
+);
+
+// Phase 1, Item 22. PLAN.md's exact column list (Phase 1 §2): "id, name,
+// description, price_amount_cents, currency, billing_period, max_branches,
+// max_students, max_staff, max_courses, max_storage_bytes, sms_enabled,
+// email_enabled, certificate_enabled, reports_level, is_active, created_at,
+// updated_at)." PLAN.md doesn't enumerate concrete values for
+// billing_period or reports_level anywhere (unlike user_status/
+// platform_role/branch_status, which are given explicit value lists) — two
+// judgment calls, documented on each enum below.
+//
+// billing_period must be a fixed, closed set rather than free text: Phase 1
+// §6's renewSubscription rule computes "ends_at = max(current ends_at, now)
+// + plan.billing_period", i.e. billing_period drives real date arithmetic,
+// which only works if its values map to well-defined durations.
+// monthly/quarterly/annual are the three periods every mainstream SaaS
+// billing model uses; nothing in PLAN.md suggests a fourth (e.g. weekly).
+export const billingPeriodEnum = pgEnum("billing_period", [
+  "monthly",
+  "quarterly",
+  "annual",
+]);
+
+// reports_level is named "_level" (not "_enabled" like its sibling feature
+// flags sms_enabled/email_enabled/certificate_enabled), implying a graded
+// tier rather than a boolean — otherwise PLAN.md would have called it
+// reports_enabled to match the others. "none/basic/advanced" is the
+// smallest tier set that justifies a dedicated level field instead of a
+// boolean: "none" for the cheapest plan tier (no reporting), "basic" for
+// standard operational reports, "advanced" for the breakdown/export-style
+// reporting Phase 1 §3's /platform/reports describes for the platform
+// itself — mirrored here as the per-academy-plan feature ceiling.
+export const reportsLevelEnum = pgEnum("reports_level", [
+  "none",
+  "basic",
+  "advanced",
+]);
+
+export const subscriptionPlans = pgTable(
+  "subscription_plans",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    name: text("name").notNull(),
+    description: text("description"),
+    priceAmountCents: integer("price_amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    billingPeriod: billingPeriodEnum("billing_period").notNull(),
+    maxBranches: integer("max_branches").notNull(),
+    maxStudents: integer("max_students").notNull(),
+    maxStaff: integer("max_staff").notNull(),
+    maxCourses: integer("max_courses").notNull(),
+    // bigint, not integer: a plain 4-byte Postgres integer caps at
+    // ~2.1 billion, i.e. ~2GB — far too small for a per-academy storage
+    // allowance expressed in bytes (a realistic plan tier is tens/hundreds
+    // of GB or more). mode: "number" keeps this a plain JS number in app
+    // code (safe up to 2^53 bytes, ~9 petabytes — nowhere near a plan
+    // limit) rather than forcing bigint arithmetic everywhere it's used.
+    maxStorageBytes: bigint("max_storage_bytes", { mode: "number" }).notNull(),
+    smsEnabled: boolean("sms_enabled").notNull().default(false),
+    emailEnabled: boolean("email_enabled").notNull().default(false),
+    certificateEnabled: boolean("certificate_enabled").notNull().default(false),
+    reportsLevel: reportsLevelEnum("reports_level").notNull(),
+    // Archive & Deactivation Rules' project-wide "archive, never delete"
+    // posture (Planning Gaps Resolution §12), applied here via is_active
+    // rather than a status enum since is_active is the exact field name
+    // PLAN.md's own column list gives — setPlanActive(false) is the
+    // "Retire (not delete)" action DESIGN.md's /platform/plans row
+    // describes; there is no deletePlan action anywhere in PLAN.md's
+    // server-action list.
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Consolidated "Database Constraints & Indexes" only states this
+    // nonnegativity rule for `*_amount_cents` columns explicitly, but the
+    // same rule is extended here (judgment call) to the per-resource limit
+    // columns — a negative allowance has no meaning and would silently
+    // break checkAllowance() (a later item) if it ever got past the Zod
+    // layer via a direct DB write.
+    check("subscription_plans_price_amount_cents_nonnegative", sql`${table.priceAmountCents} >= 0`),
+    check("subscription_plans_max_branches_nonnegative", sql`${table.maxBranches} >= 0`),
+    check("subscription_plans_max_students_nonnegative", sql`${table.maxStudents} >= 0`),
+    check("subscription_plans_max_staff_nonnegative", sql`${table.maxStaff} >= 0`),
+    check("subscription_plans_max_courses_nonnegative", sql`${table.maxCourses} >= 0`),
+    check("subscription_plans_max_storage_bytes_nonnegative", sql`${table.maxStorageBytes} >= 0`),
   ],
 );
