@@ -1,12 +1,18 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { academies, academyMemberships, branches, users } from "@/lib/db/schema";
+import { academies, academyMemberships, branches, subscriptionPlans, users } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/auth/password";
 import { passwordSchema } from "@/lib/auth/password";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
+import {
+  createAcademySubscription,
+  createAcademySubscriptionSchema,
+  type CreateAcademySubscriptionError,
+} from "@/lib/subscriptions/create-subscription";
+import type { SubscriptionStatus } from "@/lib/subscriptions/state-machine";
 
 // PLAN.md §4/Item 20: "registerAcademy" is listed in UNGRANTABLE_CAPABILITIES
 // (lib/auth/permissions.ts) — hasPermission() returns true for this
@@ -15,7 +21,12 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 const REGISTER_ACADEMY_CAPABILITY = "registerAcademy";
 
 export interface RegisterAcademyActionError {
-  code: "forbidden" | "validation" | "owner_email_taken" | "conflict";
+  code:
+    | "forbidden"
+    | "validation"
+    | "owner_email_taken"
+    | "plan_unavailable"
+    | "conflict";
   message: string;
 }
 
@@ -83,13 +94,47 @@ export const registerAcademySchema = z.object({
     .max(30),
   branchAddress: optionalText(500),
   branchPhone: optionalText(50),
+
+  // Subscription (DESIGN.md §8 /platform/academies/new, steps "Plan +
+  // allowances" / "Subscription dates") — createAcademySubscription (Item
+  // 24) needs a plan_id (academy_subscriptions.plan_id is NOT NULL, no
+  // default), so registration requires picking one up front rather than
+  // deferring plan assignment to a later action. Reuses
+  // createAcademySubscriptionSchema's own planId validator (no transform
+  // involved, so re-parsing it there too is a no-op). `trialDays` is
+  // deliberately left as a loose optional string here (same shape as
+  // optionalText's other fields) rather than re-running its numeric
+  // transform/refine pipeline a second time — createAcademySubscription
+  // parses+validates the real value itself, and a rejection there surfaces
+  // through SubscriptionCreationFailure below.
+  planId: createAcademySubscriptionSchema.shape.planId,
+  trialDays: optionalText(10),
 });
 
 export type RegisterAcademyInput = z.input<typeof registerAcademySchema>;
 
 export type RegisterAcademyResult =
-  | { ok: true; academyId: string; branchId: string; ownerUserId: string }
+  | {
+      ok: true;
+      academyId: string;
+      branchId: string;
+      ownerUserId: string;
+      subscriptionId: string;
+      subscriptionStatus: SubscriptionStatus;
+    }
   | { ok: false; error: RegisterAcademyActionError };
+
+/**
+ * Thrown from inside the transaction when createAcademySubscription rejects
+ * its input — lets the single outer try/catch (which already exists to
+ * catch a slug/branch-code race) translate it into a RegisterAcademyResult
+ * without a second layer of transaction/rollback handling.
+ */
+class SubscriptionCreationFailure extends Error {
+  constructor(public readonly subError: CreateAcademySubscriptionError) {
+    super(subError.message);
+  }
+}
 
 function slugify(name: string): string {
   const base = name
@@ -132,12 +177,19 @@ async function findAvailableSlug(baseName: string): Promise<string> {
 
 /**
  * Registers a brand-new academy: the `academies` row (expanded profile
- * fields), a default `branches` row, and the owner's `users` +
- * `academy_memberships` row — all in one transaction, exactly matching
- * PLAN.md Phase 1 §2 "Onboarding, end to end" step (1). Subsequent
- * onboarding steps (plan assignment, subscription creation, payment,
- * approval, activation) are separate actions from later items (24+) that
- * operate on the academy this call creates — they are out of scope here.
+ * fields), a default `branches` row, the owner's `users` +
+ * `academy_memberships` row, and — per Item 24 — its initial
+ * `academy_subscriptions` row via `createAcademySubscription`, all in one
+ * transaction, exactly matching PLAN.md Phase 1 §2 "Onboarding, end to end"
+ * step (1). The created subscription starts in `trial` (when the caller
+ * supplies `trialDays`) or `draft` (when it doesn't) — never `active`
+ * directly; PLAN.md's state-transition table has no row that produces
+ * Active from registration itself, only `activateAcademy` (Item 26, once
+ * the onboarding checklist is satisfied) or a no-trial `activateAcademy`
+ * call moves a fresh subscription out of Draft. Payment recording/
+ * verification, approval, and activation remain separate, later actions
+ * (Items 25/21/26) that operate on the academy/subscription this call
+ * creates — out of scope here.
  *
  * Pure/framework-agnostic (no "use server", no next/navigation) so it's
  * directly Vitest-testable against the real local Postgres DB, matching
@@ -176,6 +228,31 @@ export async function registerAcademy(
         code: "owner_email_taken",
         message: "An account with that owner email already exists.",
       },
+    };
+  }
+
+  // Best-effort pre-check, same pattern as findAvailableSlug's own comment:
+  // done before the transaction opens purely so an obviously-bad plan
+  // choice (retired since the page loaded, or never existed) fails fast
+  // without opening a transaction. createAcademySubscription (inside the
+  // transaction below) re-checks this itself — that is the final guard
+  // against a race with e.g. setPlanActive(false) between this check and
+  // the insert.
+  const [plan] = await db
+    .select({ id: subscriptionPlans.id, isActive: subscriptionPlans.isActive })
+    .from(subscriptionPlans)
+    .where(eq(subscriptionPlans.id, data.planId))
+    .limit(1);
+  if (!plan) {
+    return {
+      ok: false,
+      error: { code: "plan_unavailable", message: "Selected plan does not exist." },
+    };
+  }
+  if (!plan.isActive) {
+    return {
+      ok: false,
+      error: { code: "plan_unavailable", message: "Selected plan is not active." },
     };
   }
 
@@ -252,11 +329,51 @@ export async function registerAcademy(
         tx,
       );
 
-      return { academyId: academy.id, branchId: branch.id, ownerUserId: owner.id };
+      // Item 24: "createAcademySubscription wired into registration" — the
+      // academy's initial academy_subscriptions row, created in the same
+      // transaction so an academy can never exist without one.
+      // createAcademySubscription does its own permission-free plan
+      // existence/is_active re-check (the pre-check above already covers
+      // the common case); a rejection here throws to trigger a full
+      // rollback of the academy/branch/owner rows just inserted, caught
+      // below and translated back into a RegisterAcademyResult.
+      const subscriptionResult = await createAcademySubscription(
+        tx,
+        { userId: actorContext.userId, role: actorContext.platformRole },
+        {
+          academyId: academy.id,
+          planId: data.planId,
+          trialDays: data.trialDays,
+        },
+      );
+      if (!subscriptionResult.ok) {
+        throw new SubscriptionCreationFailure(subscriptionResult.error);
+      }
+
+      return {
+        academyId: academy.id,
+        branchId: branch.id,
+        ownerUserId: owner.id,
+        subscriptionId: subscriptionResult.subscriptionId,
+        subscriptionStatus: subscriptionResult.status,
+      };
     });
 
     return { ok: true, ...result };
   } catch (err) {
+    if (err instanceof SubscriptionCreationFailure) {
+      return {
+        ok: false,
+        error: {
+          // "validation" (e.g. a malformed trialDays) maps straight
+          // through; plan_not_found/plan_inactive both surface as the
+          // single plan_unavailable code — the UI only needs to know "the
+          // chosen plan can't be used," not which of the two it was.
+          code: err.subError.code === "validation" ? "validation" : "plan_unavailable",
+          message: err.subError.message,
+        },
+      };
+    }
     // Final guard against a race on academies.slug (or, in principle,
     // branches' (academy_id, code) unique index) between the pre-check
     // above and this transaction's insert — see findAvailableSlug's

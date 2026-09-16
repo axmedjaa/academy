@@ -36,6 +36,39 @@
  * (a column on a different table, owned by a different item) and overrides
  * subscription status entirely rather than transitioning it; it belongs to
  * closeAcademy (Item 26), not here.
+ *
+ * --- Item 26 addition: `suspend` / `reactivate` events ---
+ *
+ * The literal table above has exactly one path into Suspended (the lazy,
+ * computed Past Due -> Suspended grace-period flip) and exactly one path out
+ * (renewSubscription's verified-payment-gated reactivation). It has no row
+ * for a manual, administrative "suspend this academy right now, for a reason
+ * unrelated to non-payment" action, or a manual reactivation that doesn't
+ * require a payment. Item 26 (lib/academies/lifecycle.ts) still has to build
+ * standalone `suspendAcademy`/`reactivateAcademy` server actions per PLAN.md
+ * Phase 1 §4's action list and item 26's checklist entry, and DESIGN.md
+ * (§8's `/platform/academies/[id]` action row, §11.1's Suspended-state copy
+ * "contact the platform owner to reactivate") depicts Suspend/Reactivate as
+ * standalone buttons distinct from the payment-driven Renew action on
+ * `/platform/subscriptions`. Two new events are added here — additively,
+ * nothing above is changed — to give those actions a real transition rather
+ * than duplicating transition logic outside this module:
+ *
+ *   - `suspend`: active/trial/past_due -> suspended. An administrative,
+ *     "for cause" suspension (e.g. a policy violation), orthogonal to
+ *     non-payment. Excluded sources: draft (nothing running to suspend),
+ *     suspended (no-op), expired/cancelled (already not serving traffic).
+ *   - `reactivate`: suspended -> active. The administrative counterpart.
+ *     This function only answers "is this transition legal in the abstract"
+ *     — it has no way to know *why* a given row is currently Suspended.
+ *     lib/academies/lifecycle.ts's reactivateAcademy adds the business-rule
+ *     guard this module deliberately doesn't encode: it refuses to fire this
+ *     event when the subscription's lapse is payment-driven (i.e. when
+ *     computeLazySubscriptionStatus would independently already call it
+ *     Suspended purely from ends_at + the grace period), directing the
+ *     caller to renewSubscription instead — preserving PLAN.md's hard "no
+ *     verified payment, no renewal" rule. This event exists only for the
+ *     administrative-suspension case `suspend` produces.
  */
 
 export const SUBSCRIPTION_STATUSES = [
@@ -63,7 +96,10 @@ export type SubscriptionTransitionEvent =
   | "start_trial"
   | "activate"
   | "renew"
-  | "cancel";
+  | "cancel"
+  // Item 26 addition — see the top-of-file "Item 26 addition" note above.
+  | "suspend"
+  | "reactivate";
 
 export interface SubscriptionTransitionError {
   code: "invalid_transition";
@@ -117,6 +153,21 @@ const ALLOWED_TRANSITIONS: Record<
     past_due: "cancelled",
     suspended: "cancelled",
     expired: "cancelled",
+  },
+  // Item 26 addition — administrative ("for cause") suspension, distinct
+  // from the lazy Past Due -> Suspended flip. See the top-of-file
+  // "Item 26 addition" note for why this isn't in PLAN.md's literal table.
+  suspend: {
+    active: "suspended",
+    trial: "suspended",
+    past_due: "suspended",
+  },
+  // Item 26 addition — the administrative counterpart to `suspend`. The
+  // payment-lapse guard (refusing to reactivate a Suspended subscription
+  // that lapsed for non-payment) is enforced by the caller
+  // (lib/academies/lifecycle.ts), not here — see the top-of-file note.
+  reactivate: {
+    suspended: "active",
   },
 };
 

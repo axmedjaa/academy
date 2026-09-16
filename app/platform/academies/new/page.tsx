@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
+import { listSubscriptionPlans } from "@/lib/subscriptions/plans";
 import { RegisterAcademyForm } from "./register-academy-form";
 
 const REGISTER_ACADEMY_CAPABILITY = "registerAcademy";
@@ -30,6 +31,17 @@ export default async function RegisterAcademyPage() {
     );
   }
 
+  // Item 24: registration now assigns a plan and creates the initial
+  // academy_subscriptions row itself (createAcademySubscription), so the
+  // wizard needs the selectable plan list up front — "only active plans
+  // should be selectable at registration time" (retired plans are filtered
+  // out here rather than in the form, matching listSubscriptionPlans()'s own
+  // "callers must already have checked permission" convention: this page's
+  // registerAcademy gate is platform_owner-only, at least as strict as
+  // plans.manage, so no separate permission check is needed to read them).
+  const plans = await listSubscriptionPlans();
+  const activePlans = plans.filter((plan) => plan.isActive);
+
   return (
     <main
       style={{
@@ -41,11 +53,10 @@ export default async function RegisterAcademyPage() {
     >
       <h1>Register a new academy</h1>
       <p style={{ color: "#555" }}>
-        Creates the academy profile, its owner account, and a default branch
-        in one step. Plan assignment and subscription setup happen next, from
-        the academy&apos;s own page.
+        Creates the academy profile, its owner account, a default branch, and
+        its initial subscription in one step.
       </p>
-      <RegisterAcademyForm />
+      <RegisterAcademyForm activePlans={activePlans} />
     </main>
   );
 }

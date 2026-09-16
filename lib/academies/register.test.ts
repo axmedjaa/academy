@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
   academies,
   academyMemberships,
+  academySubscriptions,
   auditLogs,
   branches,
   platformMemberships,
+  subscriptionPlans,
   users,
 } from "@/lib/db/schema";
 import { resolveAuthContext } from "@/lib/auth/auth-context";
@@ -16,6 +18,8 @@ import { registerAcademy, type RegisterAcademyInput } from "./register";
 let ownerUserId: string;
 let adminUserId: string;
 let plainUserId: string;
+let activePlanId: string;
+let inactivePlanId: string;
 
 // academyIds created by successful registerAcademy calls in this file —
 // cleaned up (along with their branch/membership/owner rows) in afterEach.
@@ -44,6 +48,11 @@ function baseInput(overrides: Partial<RegisterAcademyInput> = {}): RegisterAcade
     ownerPassword: "a-valid-password-123",
     branchName: "Main Branch",
     branchCode: "MAIN",
+    // Item 24: planId is required (academy_subscriptions.plan_id is NOT
+    // NULL). Defaults to no trial (Draft) so tests unrelated to subscription
+    // behavior don't have to reason about trial_ends_at math; the dedicated
+    // "subscription creation" tests below override trialDays explicitly.
+    planId: activePlanId,
     ...overrides,
   };
 }
@@ -60,6 +69,9 @@ async function cleanupAcademy(academyId: string, ownerId: string): Promise<void>
     .delete(auditLogs)
     .where(or(eq(auditLogs.academyId, academyId), eq(auditLogs.actorUserId, ownerId)));
   await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
+  // academy_subscriptions.academy_id FKs to academies.id — must go before
+  // the academies delete below (same ordering concern as auditLogs above).
+  await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
   await db.delete(branches).where(eq(branches.academyId, academyId));
   await db.delete(academies).where(eq(academies.id, academyId));
   await db.delete(platformMemberships).where(eq(platformMemberships.userId, ownerId));
@@ -75,6 +87,25 @@ async function cleanupUser(userId: string): Promise<void> {
   await db.delete(users).where(eq(users.id, userId));
 }
 
+function planValues(overrides: Partial<typeof subscriptionPlans.$inferInsert> = {}) {
+  return {
+    name: `Test plan ${randomUUID()}`,
+    priceAmountCents: 1000,
+    currency: "USD",
+    billingPeriod: "monthly" as const,
+    maxBranches: 5,
+    maxStudents: 500,
+    maxStaff: 50,
+    maxCourses: 50,
+    maxStorageBytes: 1_073_741_824,
+    smsEnabled: false,
+    emailEnabled: true,
+    certificateEnabled: false,
+    reportsLevel: "basic" as const,
+    ...overrides,
+  };
+}
+
 beforeAll(async () => {
   ownerUserId = await createUser();
   await db.insert(platformMemberships).values({ userId: ownerUserId, role: "platform_owner" });
@@ -83,6 +114,18 @@ beforeAll(async () => {
   await db.insert(platformMemberships).values({ userId: adminUserId, role: "platform_admin" });
 
   plainUserId = await createUser();
+
+  const [activePlan] = await db
+    .insert(subscriptionPlans)
+    .values(planValues())
+    .returning({ id: subscriptionPlans.id });
+  activePlanId = activePlan.id;
+
+  const [inactivePlan] = await db
+    .insert(subscriptionPlans)
+    .values(planValues({ isActive: false }))
+    .returning({ id: subscriptionPlans.id });
+  inactivePlanId = inactivePlan.id;
 });
 
 afterEach(async () => {
@@ -109,6 +152,9 @@ afterAll(async () => {
   await cleanupUser(ownerUserId);
   await cleanupUser(adminUserId);
   await cleanupUser(plainUserId);
+  await db
+    .delete(subscriptionPlans)
+    .where(or(eq(subscriptionPlans.id, activePlanId), eq(subscriptionPlans.id, inactivePlanId)));
 });
 
 describe("registerAcademy — authorization", () => {
@@ -221,10 +267,14 @@ describe("registerAcademy — success path", () => {
     if (!result.ok) return;
     createdAcademyIds.push(result.academyId);
 
+    // Filtered by action, not just academyId: Item 24 now also writes a
+    // second, createAcademySubscription audit row for the same academyId in
+    // this same transaction (see the "subscription creation" describe block
+    // below), so academyId alone is no longer a unique-enough filter here.
     const [audit] = await db
       .select()
       .from(auditLogs)
-      .where(eq(auditLogs.academyId, result.academyId));
+      .where(and(eq(auditLogs.academyId, result.academyId), eq(auditLogs.action, "registerAcademy")));
     expect(audit?.action).toBe("registerAcademy");
     expect(audit?.entityType).toBe("academy");
     expect(audit?.entityId).toBe(result.academyId);
@@ -287,5 +337,117 @@ describe("registerAcademy — success path", () => {
       .where(eq(academies.id, second.academyId));
 
     expect(firstAcademy?.slug).not.toBe(secondAcademy?.slug);
+  });
+});
+
+// Item 24: "createAcademySubscription wired into registration" —
+// academy_subscriptions.plan_id is NOT NULL with no default, so a plan must
+// be chosen up front; the resulting row starts in Draft (no trial) or Trial
+// (trialDays given), matching initialSubscriptionStatus()
+// (lib/subscriptions/state-machine.ts, Item 23) and never Active directly.
+describe("registerAcademy — subscription creation (Item 24)", () => {
+  it("creates the academy_subscriptions row in Draft status with no trial_ends_at when trialDays is omitted", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await registerAcademy(ownerContext, baseInput());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    createdAcademyIds.push(result.academyId);
+    expect(result.subscriptionStatus).toBe("draft");
+
+    const [subscription] = await db
+      .select()
+      .from(academySubscriptions)
+      .where(eq(academySubscriptions.id, result.subscriptionId));
+    expect(subscription?.academyId).toBe(result.academyId);
+    expect(subscription?.planId).toBe(activePlanId);
+    expect(subscription?.status).toBe("draft");
+    expect(subscription?.trialEndsAt).toBeNull();
+    expect(subscription?.endsAt).toBeNull();
+    expect(subscription?.createdBy).toBe(ownerUserId);
+  });
+
+  it("creates the academy_subscriptions row in Trial status with trial_ends_at set when trialDays is given", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const before = Date.now();
+    const result = await registerAcademy(ownerContext, baseInput({ trialDays: "14" }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    createdAcademyIds.push(result.academyId);
+    expect(result.subscriptionStatus).toBe("trial");
+
+    const [subscription] = await db
+      .select()
+      .from(academySubscriptions)
+      .where(eq(academySubscriptions.id, result.subscriptionId));
+    expect(subscription?.status).toBe("trial");
+    expect(subscription?.trialEndsAt).not.toBeNull();
+
+    const expectedMin = before + 14 * 24 * 60 * 60 * 1000;
+    const expectedMax = Date.now() + 14 * 24 * 60 * 60 * 1000;
+    const trialEndsAtMs = subscription?.trialEndsAt?.getTime() ?? 0;
+    expect(trialEndsAtMs).toBeGreaterThanOrEqual(expectedMin);
+    expect(trialEndsAtMs).toBeLessThanOrEqual(expectedMax);
+  });
+
+  it("writes a createAcademySubscription audit_logs row in the same transaction", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await registerAcademy(ownerContext, baseInput());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    createdAcademyIds.push(result.academyId);
+
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(
+        and(
+          eq(auditLogs.academyId, result.academyId),
+          eq(auditLogs.action, "createAcademySubscription"),
+        ),
+      );
+    expect(audit?.entityType).toBe("academy_subscription");
+    expect(audit?.entityId).toBe(result.subscriptionId);
+    expect(audit?.actorUserId).toBe(ownerUserId);
+    expect(audit?.result).toBe("success");
+  });
+
+  it("refuses registration when planId does not correspond to an existing plan", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await registerAcademy(ownerContext, baseInput({ planId: randomUUID() }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("plan_unavailable");
+    }
+  });
+
+  it("refuses registration when planId refers to a retired (inactive) plan", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await registerAcademy(ownerContext, baseInput({ planId: inactivePlanId }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("plan_unavailable");
+    }
+  });
+
+  it("does not create an academy at all when the chosen plan is unavailable (full transaction rollback)", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const input = baseInput({ planId: inactivePlanId });
+    const result = await registerAcademy(ownerContext, input);
+    expect(result.ok).toBe(false);
+
+    const [academy] = await db
+      .select({ id: academies.id })
+      .from(academies)
+      .where(eq(academies.name, input.name));
+    expect(academy).toBeUndefined();
+  });
+
+  it("rejects a malformed trialDays value", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await registerAcademy(ownerContext, baseInput({ trialDays: "not-a-number" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
+    }
   });
 });

@@ -178,6 +178,60 @@ describe("transitionSubscriptionState — every unlisted transition is rejected"
 });
 
 // ---------------------------------------------------------------------------
+// Item 26 addition: `suspend` / `reactivate` — administrative transitions
+// added on top of Item 23's literal table (see state-machine.ts's top-of-file
+// "Item 26 addition" note). Kept as a separate describe block rather than
+// folded into LISTED_TRANSITIONS/the unlisted-transition sweep above, so
+// none of Item 23's existing structure or assertions are touched.
+// ---------------------------------------------------------------------------
+
+describe("transitionSubscriptionState — suspend/reactivate (Item 26 addition)", () => {
+  it.each([
+    { from: "active", to: "suspended" },
+    { from: "trial", to: "suspended" },
+    { from: "past_due", to: "suspended" },
+  ] as Array<{ from: SubscriptionStatus; to: SubscriptionStatus }>)(
+    "suspend: $from -> $to is accepted",
+    ({ from, to }) => {
+      const result = transitionSubscriptionState(from, "suspend");
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.status).toBe(to);
+      }
+    },
+  );
+
+  it.each(["draft", "suspended", "expired", "cancelled"] as SubscriptionStatus[])(
+    "suspend from %s is rejected",
+    (from) => {
+      const result = transitionSubscriptionState(from, "suspend");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("invalid_transition");
+      }
+    },
+  );
+
+  it("reactivate: suspended -> active is accepted", () => {
+    const result = transitionSubscriptionState("suspended", "reactivate");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.status).toBe("active");
+    }
+  });
+
+  it.each(
+    ["draft", "trial", "active", "past_due", "expired", "cancelled"] as SubscriptionStatus[],
+  )("reactivate from %s is rejected", (from) => {
+    const result = transitionSubscriptionState(from, "reactivate");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("invalid_transition");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // computeLazySubscriptionStatus — Trial -> Expired and the 7-day grace
 // computation for Active -> Past Due -> Suspended.
 // ---------------------------------------------------------------------------

@@ -50,6 +50,20 @@
       "when": 1789553682933,
       "tag": "0006_serious_matthew_murdock",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789554289884,
+      "tag": "0007_next_echo",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789555270583,
+      "tag": "0008_familiar_sir_ram",
+      "breakpoints": true
     }
   ]
 }

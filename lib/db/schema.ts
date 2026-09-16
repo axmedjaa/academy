@@ -552,3 +552,171 @@ export const academySubscriptions = pgTable(
     ),
   ],
 );
+
+// Phase 1, Item 25. PLAN.md's exact column list (Phase 1 §2): "id,
+// academy_id, subscription_id, amount_cents, currency, payment_method,
+// payment_reference, evidence_file_ref nullable, received_at, recorded_by,
+// verified_by, status, notes, created_at)" — deliberately no updated_at, no
+// verified_at/rejected_at/reversed_at, and (unlike student_payments'
+// reversed_payment_id self-FK, Phase 2) no linked-row reversal column:
+// PLAN.md §6 states these rows are "append-only with a status field," so
+// verify/reject/reverse all flip `status` in place on the same row rather
+// than writing a new linked row. The exact moment/actor of a reject or
+// reverse (as opposed to record/verify, which the row itself remembers via
+// recorded_by/verified_by) lives on that action's audit_logs row instead
+// (actor_user_id + created_at + the required `reason`) — this table's own
+// columns are exactly PLAN.md's literal list, nothing added for symmetry
+// with student_payments' richer reversal shape.
+//
+// status values (verify/reject/reverse workflow, DESIGN.md §8's
+// /platform/payments row actions "Verify / Reject / Reverse"): a row is
+// created "pending"; from pending it goes to "verified" (verifySubscriptionPayment,
+// stamping verified_by) or "rejected" (rejectSubscriptionPayment, verified_by
+// stays null); only a "verified" row can be reversed, to "reversed"
+// (reverseSubscriptionPayment) — matching Phase 1 §6's renewSubscription
+// precondition text "verify it is status = Verified and not reversed," which
+// only makes sense if reversed is a distinct value a previously-verified row
+// can move to. "rejected" and "reversed" are both terminal: PLAN.md never
+// describes un-rejecting or re-verifying a payment. Lowercase snake_case to
+// match every other status-like enum in this file.
+export const subscriptionPaymentStatusEnum = pgEnum(
+  "subscription_payment_status",
+  ["pending", "verified", "rejected", "reversed"],
+);
+
+export const subscriptionPayments = pgTable(
+  "subscription_payments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    subscriptionId: uuid("subscription_id")
+      .notNull()
+      .references(() => academySubscriptions.id),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    // Judgment call: unlike student_payments.method (Phase 2), which PLAN.md
+    // gives an explicit exhaustive value list (`enum(cash, mobile_money,
+    // bank_transfer)`), PLAN.md never enumerates concrete values for
+    // subscription_payments' payment_method anywhere — the same reasoning
+    // already applied to academies.type above (free text, not a pgEnum,
+    // when PLAN.md doesn't give a closed value set). Recorded free-text by
+    // whoever enters the payment (e.g. "bank_transfer", "mobile_money",
+    // "cheque", "cash") rather than constrained to student_payments' set,
+    // since a platform-level manual payment can arrive by methods an
+    // academy's own students never use (e.g. an international wire).
+    paymentMethod: text("payment_method").notNull(),
+    paymentReference: text("payment_reference"),
+    // Evidence upload is a future interface only (Cross-Cutting Architecture
+    // Decisions — no lib/storage module exists yet this phase): stored as a
+    // plain nullable file reference/key, not a real upload. Building actual
+    // storage is out of scope for this item.
+    evidenceFileRef: text("evidence_file_ref"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    verifiedBy: uuid("verified_by").references(() => users.id),
+    status: subscriptionPaymentStatusEnum("status")
+      .notNull()
+      .default("pending"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Database Constraints & Indexes' explicit index list: "subscription_payments(subscription_id)".
+    index("subscription_payments_subscription_id_idx").on(
+      table.subscriptionId,
+    ),
+    // Not explicitly listed, but extended here by the same judgment call as
+    // academy_subscriptions_academy_id_idx above — every academy-scoped
+    // table in this file carries an academy_id lookup index.
+    index("subscription_payments_academy_id_idx").on(table.academyId),
+    // Non-negativity constraints: "All *_amount_cents columns: nonnegative,
+    // except reversal/adjustment rows which are explicitly signed/linked" —
+    // this table has no signed reversal row (reverse flips status in place,
+    // per the comment above), so amount_cents is unconditionally nonnegative.
+    check(
+      "subscription_payments_amount_cents_nonnegative",
+      sql`${table.amountCents} >= 0`,
+    ),
+  ],
+);
+
+// Phase 1, Item 29. PLAN.md's exact column list (Phase 1 §2): "id,
+// academy_id, active_students_count, active_staff_count, branch_count,
+// course_count, storage_used_bytes, calculated_at)".
+//
+// Row model — judgment call: PLAN.md's "Database Constraints & Indexes"
+// section lists a unique constraint explicitly for every table that needs
+// "one current row" semantics (e.g. academy_memberships' (user_id,
+// academy_id)) but names none for academy_usage, and Phase 4 §"Reconciled
+// write paths" describes usage as something that gets a "counter
+// increment" on events like student enrollment — i.e. an existing row
+// being mutated, not a fresh row appended per event. Despite that, this
+// table is modeled the same way academy_subscriptions already is in this
+// file (no unique-per-academy constraint, "current" = the newest row by
+// its own timestamp column, see lib/academies/access-gate.ts's
+// checkAcademyAccess "current subscription" lookup) rather than an
+// upsert-in-place single row: recalculateUsage (lib/subscriptions/usage.ts)
+// is a full, audited recomputation from source-of-truth counts, and
+// keeping every recomputation as its own row gives the /platform/usage
+// page an actual history of when usage was last (re)computed and what it
+// was, for free, with no separate audit-log lookup — consistent with this
+// codebase's general preference for append-only records over in-place
+// mutation (e.g. subscription_payments' "append-only with a status field"
+// rule). Future per-event counter increments (Phase 2+, e.g. student
+// enrollment) can still land as a new row the same way; nothing here
+// forecloses that.
+//
+// All five count/byte columns are nonnegative integers/bigint, matching
+// subscription_plans' max_* sibling columns (max_storage_bytes bigint,
+// mode: "number", for the same >2GB reasoning given there) — a negative
+// usage figure has no meaning.
+export const academyUsage = pgTable(
+  "academy_usage",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    activeStudentsCount: integer("active_students_count").notNull().default(0),
+    activeStaffCount: integer("active_staff_count").notNull().default(0),
+    branchCount: integer("branch_count").notNull().default(0),
+    courseCount: integer("course_count").notNull().default(0),
+    storageUsedBytes: bigint("storage_used_bytes", { mode: "number" })
+      .notNull()
+      .default(0),
+    calculatedAt: timestamp("calculated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Not explicitly listed in Database Constraints & Indexes, but every
+    // other academy-scoped table in this file carries an academy_id lookup
+    // index (see branches_academy_id_idx/academy_subscriptions_academy_id_idx)
+    // — "latest row per academy" (the /platform/usage read path) is exactly
+    // the query this serves, paired with calculated_at for the ordering.
+    index("academy_usage_academy_id_calculated_at_idx").on(
+      table.academyId,
+      table.calculatedAt,
+    ),
+    check(
+      "academy_usage_active_students_count_nonnegative",
+      sql`${table.activeStudentsCount} >= 0`,
+    ),
+    check(
+      "academy_usage_active_staff_count_nonnegative",
+      sql`${table.activeStaffCount} >= 0`,
+    ),
+    check("academy_usage_branch_count_nonnegative", sql`${table.branchCount} >= 0`),
+    check("academy_usage_course_count_nonnegative", sql`${table.courseCount} >= 0`),
+    check(
+      "academy_usage_storage_used_bytes_nonnegative",
+      sql`${table.storageUsedBytes} >= 0`,
+    ),
+  ],
+);

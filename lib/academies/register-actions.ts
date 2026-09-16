@@ -55,6 +55,8 @@ export async function registerAcademy(
     branchCode: String(formData.get("branchCode") ?? ""),
     branchAddress: String(formData.get("branchAddress") ?? ""),
     branchPhone: String(formData.get("branchPhone") ?? ""),
+    planId: String(formData.get("planId") ?? ""),
+    trialDays: String(formData.get("trialDays") ?? ""),
   });
 
   if (!result.ok) {
