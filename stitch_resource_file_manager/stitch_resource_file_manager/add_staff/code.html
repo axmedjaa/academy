@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<!-- Breadcrumb Navigation & Top Action Bar -->
+<div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-space-md mb-space-xl">
+<div class="flex flex-col gap-space-xxs">
+<nav class="flex items-center gap-space-xs text-secondary font-caption text-caption mb-1">
+<a class="flex items-center gap-1 hover:text-primary transition-colors" data-path="staff" href="#">
+<span class="material-symbols-outlined text-[16px]">arrow_back</span>
+<span>Back to Staff</span>
+</a>
+<span class="text-outline-variant">/</span>
+<a class="hover:text-primary transition-colors" data-path="staff" href="#">Staff Directory</a>
+<span class="text-outline-variant">/</span>
+<span class="text-on-surface font-medium">Onboard Academy Member</span>
+</nav>
+<div class="flex items-center gap-space-sm flex-wrap">
+<h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">Add Staff Member</h1>
+<div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface-container text-primary font-label-sm text-label-sm shadow-sm">
+<span class="material-symbols-outlined text-[15px]">badge</span>
+<span>Auto ID: AFG-STF-2024-009</span>
+</div>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">
+<span class="w-1.5 h-1.5 rounded-full bg-primary-container inline-block"></span>
+          Draft Mode
+        </span>
+</div>
+<p class="font-body-base text-body-base text-secondary mt-0.5">
+        Onboard instructors, admissions officers, finance officers, or academy administrators to your team.
+      </p>
+</div>
+<!-- Top Secondary / Primary Actions -->
+<div class="flex items-center gap-space-sm self-start lg:self-center">
+<a class="h-10 px-4 rounded-xl bg-surface-card text-on-surface font-body-medium text-body-medium shadow-sm hover:bg-surface-subtle transition-all flex items-center gap-2" data-path="staff" href="#">
+        Cancel
+      </a>
+<button class="h-10 px-4 rounded-xl bg-surface-card text-secondary font-body-medium text-body-medium shadow-sm hover:text-on-surface hover:bg-surface-subtle transition-all flex items-center gap-2" id="saveDraftTop" type="button">
+<span class="material-symbols-outlined text-[18px]">bookmark_border</span>
+<span>Save as Draft</span>
+</button>
+<button class="h-10 px-5 rounded-xl bg-primary-container text-on-primary font-body-medium text-body-medium shadow-sm hover:bg-primary-hover transition-all flex items-center gap-2" id="submitFormTop" type="button">
+<span class="material-symbols-outlined text-[18px]">person_add</span>
+<span>Create Staff Member</span>
+</button>
+</div>
+</div>
+<!-- Main Grid Workspace: Left (Form Cards) / Right (Live Preview & Guidelines Side-rail) -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-space-xl items-start">
+<!-- Left Column: Structured Form Cards (8 cols) -->
+<form class="lg:col-span-8 flex flex-col gap-space-xl" id="staffOnboardingForm" onsubmit="event.preventDefault();">
+<!-- Card 1: Personal & Contact Information -->
+<section class="bg-surface-card rounded-xl p-space-xl shadow-sm relative overflow-hidden">
+<div class="flex items-center justify-between pb-space-md mb-space-lg bg-surface-card border-b border-border-subtle">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-lg bg-primary-subtle text-primary flex items-center justify-center font-title text-label-md">
+              1
+            </div>
+<div>
+<h2 class="font-title text-title text-on-surface">Personal & Contact Information</h2>
+<p class="font-caption text-caption text-secondary">Core identity, professional credentials, and direct communication channels.</p>
+</div>
+</div>
+<span class="font-caption text-caption text-secondary">Fields marked * are mandatory</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-space-md">
+<!-- Profile Photo Upload / Dropzone (4 cols) -->
+<div class="md:col-span-4 flex flex-col">
+<label class="font-label-md text-label-md text-on-surface mb-1.5 flex items-center justify-between">
+<span>Avatar / Photo</span>
+<span class="font-caption text-[11px] text-secondary">Max 5MB</span>
+</label>
+<div class="group relative flex flex-col items-center justify-center p-4 rounded-xl bg-surface-page text-center hover:bg-surface-subtle transition-all cursor-pointer min-h-[168px]">
+<div class="w-16 h-16 rounded-full bg-surface-card shadow-sm flex items-center justify-center text-primary group-hover:scale-105 transition-transform overflow-hidden relative mb-2">
+<img class="w-full h-full object-cover hidden" data-alt="High-resolution professional headshot portrait of an academy faculty instructor smiling warmly with soft studio lighting and a clean neutral gray background" id="avatarPreviewImg" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAMJQVPFtIpc_67E6_xzDqv8geqGC5Ubk2eiqV1oNjzRfDiWnQIcTgItHlrs2T-CmBXU0WMbTUMLL51lDnfn2f-hxFS66x-BMNGglOQqefPGHbIiK0kUVbS7WKf9Gc8fXVvuAdePlu5CaVb4K5cv3jypeqgsdqUTNx677mdWx9mChtKy251nXBWSL0JfMbYBsGOvMB4rcimOrXlc8922E3lNGp0I1NeLIzoJToc18yEmQYdnklHbGK2"/>
+<span class="material-symbols-outlined text-[32px] text-secondary group-hover:text-primary" id="avatarPlaceholderIcon">account_circle</span>
+</div>
+<p class="font-label-sm text-label-sm text-on-surface">Upload photo</p>
+<p class="font-caption text-[11px] text-secondary">Drag & drop or browse</p>
+<input accept="image/png, image/jpeg, image/webp" class="absolute inset-0 opacity-0 cursor-pointer" id="avatarInput" type="file"/>
+</div>
+</div>
+<!-- Name & Primary Contact (8 cols) -->
+<div class="md:col-span-8 flex flex-col gap-space-md">
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block" for="staffFullName">Full Legal & Professional Name *</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">badge</span>
+<input class="w-full h-10 pl-9 pr-3 rounded-lg bg-surface-card text-on-surface font-body-base text-body-base placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-sm transition-all" id="staffFullName" placeholder="e.g. Dr. Farah Malik" required="" type="text" value="Dr. Farah Malik"/>
+</div>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-sm">
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block" for="staffEmail">Work Email Address *</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">mail</span>
+<input class="w-full h-10 pl-9 pr-3 rounded-lg bg-surface-card text-on-surface font-body-base text-body-base placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-sm transition-all" id="staffEmail" placeholder="f.malik@afoogy.academy" required="" type="email" value="f.malik@afoogy.academy"/>
+</div>
+</div>
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block" for="staffPhone">Primary Phone Number *</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">call</span>
+<input class="w-full h-10 pl-9 pr-3 rounded-lg bg-surface-card text-on-surface font-body-base text-body-base placeholder:text-secondary focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-sm transition-all" id="staffPhone" placeholder="+1 (555) 234-5678" required="" type="tel" value="+1 (555) 842-1920"/>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Secondary Collapsible / Emergency Contact Details -->
+<div class="mt-space-md pt-space-md border-t border-border-subtle">
+<details class="group">
+<summary class="flex items-center justify-between cursor-pointer list-none select-none text-on-surface font-label-md text-label-md hover:text-primary transition-colors">
+<span class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[18px] text-secondary">contact_emergency</span>
+<span>Emergency Contact & Physical Address (Optional)</span>
+</span>
+<span class="material-symbols-outlined text-[18px] text-secondary group-open:rotate-180 transition-transform">expand_more</span>
+</summary>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-space-sm pt-space-md mt-1">
+<div>
+<label class="font-label-sm text-label-sm text-secondary mb-1 block" for="emergencyName">Emergency Contact Name</label>
+<input class="w-full h-10 px-3 rounded-lg bg-surface-page text-on-surface font-body-base text-body-base placeholder:text-secondary focus:outline-none focus:bg-surface-card focus:ring-2 focus:ring-primary/20 transition-all" id="emergencyName" placeholder="e.g. Tariq Malik (Spouse)" type="text"/>
+</div>
+<div>
+<label class="font-label-sm text-label-sm text-secondary mb-1 block" for="emergencyPhone">Emergency Phone</label>
+<input class="w-full h-10 px-3 rounded-lg bg-surface-page text-on-surface font-body-base text-body-base placeholder:text-secondary focus:outline-none focus:bg-surface-card focus:ring-2 focus:ring-primary/20 transition-all" id="emergencyPhone" placeholder="+1 (555) 091-8822" type="tel"/>
+</div>
+<div>
+<label class="font-label-sm text-label-sm text-secondary mb-1 block" for="staffLocation">Residential City / District</label>
+<input class="w-full h-10 px-3 rounded-lg bg-surface-page text-on-surface font-body-base text-body-base placeholder:text-secondary focus:outline-none focus:bg-surface-card focus:ring-2 focus:ring-primary/20 transition-all" id="staffLocation" placeholder="Seattle, Washington" type="text"/>
+</div>
+</div>
+</details>
+</div>
+</section>
+<!-- Card 2: Role, Department & Employment Details -->
+<section class="bg-surface-card rounded-xl p-space-xl shadow-sm relative">
+<div class="flex items-center justify-between pb-space-md mb-space-lg border-b border-border-subtle">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-lg bg-primary-subtle text-primary flex items-center justify-center font-title text-label-md">
+              2
+            </div>
+<div>
+<h2 class="font-title text-title text-on-surface">Role & Department Assignment</h2>
+<p class="font-caption text-caption text-secondary">Define organizational position, functional department, and contract framework.</p>
+</div>
+</div>
+<span class="inline-flex items-center gap-1 text-[11px] font-label-sm text-status-paid-text bg-status-paid-bg px-2 py-0.5 rounded-full">
+<span class="w-1.5 h-1.5 rounded-full bg-status-paid-text"></span>
+            Capacity Active
+          </span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-space-md mb-space-lg">
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block" for="staffRoleSelect">Academy Role *</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">verified_user</span>
+<select class="w-full h-10 pl-9 pr-8 rounded-lg bg-surface-card text-on-surface font-body-base text-body-base focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-sm appearance-none cursor-pointer" id="staffRoleSelect">
+<option selected="" value="Trainer / Instructor">Trainer / Instructor</option>
+<option value="Academy Manager">Academy Manager</option>
+<option value="Admissions Staff">Admissions Staff</option>
+<option value="Finance Staff">Finance Staff</option>
+<option value="System Admin">System Admin</option>
+</select>
+<span class="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-secondary text-[18px] pointer-events-none">expand_more</span>
+</div>
+</div>
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block" for="staffDepartmentSelect">Primary Department / Faculty *</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">domain</span>
+<select class="w-full h-10 pl-9 pr-8 rounded-lg bg-surface-card text-on-surface font-body-base text-body-base focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-sm appearance-none cursor-pointer" id="staffDepartmentSelect">
+<option selected="" value="Design & UX">Design & User Experience (UX)</option>
+<option value="Computer Science & Engineering">Computer Science & Engineering</option>
+<option value="Data Science & AI">Data Science & AI</option>
+<option value="Admissions & Operations">Admissions & Operations</option>
+<option value="Finance & Cash Desk">Finance & Cash Desk</option>
+</select>
+<span class="material-symbols-outlined absolute right-2.5 top-1/2 -translate-y-1/2 text-secondary text-[18px] pointer-events-none">expand_more</span>
+</div>
+</div>
+</div>
+<!-- Employment Type Pill Selectors -->
+<div class="mb-space-lg">
+<label class="font-label-md text-label-md text-on-surface mb-2 block">Employment Framework *</label>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-space-sm" id="employmentTypeGroup">
+<label class="cursor-pointer relative flex flex-col p-3 rounded-xl bg-primary-subtle text-on-surface transition-all select-none">
+<input checked="" class="sr-only peer" name="employment_type" type="radio" value="Full-Time Core"/>
+<div class="flex items-center justify-between mb-1">
+<span class="font-title text-label-md text-primary peer-checked:text-primary">Full-Time Core</span>
+<span class="material-symbols-outlined text-[18px] text-primary">check_circle</span>
+</div>
+<span class="font-caption text-caption text-secondary">Salaried core faculty member (40h / wk)</span>
+</label>
+<label class="cursor-pointer relative flex flex-col p-3 rounded-xl bg-surface-page text-on-surface hover:bg-surface-subtle transition-all select-none">
+<input class="sr-only peer" name="employment_type" type="radio" value="Adjunct / Contract Fellow"/>
+<div class="flex items-center justify-between mb-1">
+<span class="font-title text-label-md text-on-surface">Adjunct / Fellow</span>
+<span class="material-symbols-outlined text-[18px] text-secondary">radio_button_unchecked</span>
+</div>
+<span class="font-caption text-caption text-secondary">Per-term contract or cohort mentor</span>
+</label>
+<label class="cursor-pointer relative flex flex-col p-3 rounded-xl bg-surface-page text-on-surface hover:bg-surface-subtle transition-all select-none">
+<input class="sr-only peer" name="employment_type" type="radio" value="Visiting Specialist"/>
+<div class="flex items-center justify-between mb-1">
+<span class="font-title text-label-md text-on-surface">Visiting Specialist</span>
+<span class="material-symbols-outlined text-[18px] text-secondary">radio_button_unchecked</span>
+</div>
+<span class="font-caption text-caption text-secondary">Executive guest lecturer & workshop leader</span>
+</label>
+</div>
+</div>
+<!-- Joining Date & Academic Title -->
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-md">
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block" for="joiningDate">Effective Joining Date *</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">calendar_today</span>
+<input class="w-full h-10 pl-9 pr-3 rounded-lg bg-surface-card text-on-surface font-body-base text-body-base focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-sm cursor-pointer" id="joiningDate" type="date" value="2024-09-01"/>
+</div>
+</div>
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block" for="staffTitle">Academic / Staff Designation</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">school</span>
+<input class="w-full h-10 pl-9 pr-3 rounded-lg bg-surface-card text-on-surface font-body-base text-body-base focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-sm" id="staffTitle" placeholder="e.g. Lead UX Design Specialist" type="text" value="Lead UX Design Specialist"/>
+</div>
+</div>
+</div>
+</section>
+<!-- Card 3: Teaching & Cohort Allocation (Contextual for Instructor role) -->
+<section class="bg-surface-card rounded-xl p-space-xl shadow-sm relative transition-all" id="teachingAllocationCard">
+<div class="flex items-center justify-between pb-space-md mb-space-lg border-b border-border-subtle">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-lg bg-primary-subtle text-primary flex items-center justify-center font-title text-label-md">
+              3
+            </div>
+<div>
+<h2 class="font-title text-title text-on-surface">Teaching & Cohort Allocation</h2>
+<p class="font-caption text-caption text-secondary">Assign initial active cohorts, weekly load caps, and specialized curricular domain tags.</p>
+</div>
+</div>
+<span class="px-2 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">
+            Trainer Focus
+          </span>
+</div>
+<!-- Initial Cohort Assignment Multi-select checkboxes -->
+<div class="mb-space-lg">
+<label class="font-label-md text-label-md text-on-surface mb-2 block flex items-center justify-between">
+<span>Assign Initial Active Batches / Cohorts</span>
+<span class="font-caption text-caption text-secondary">Select 1 or more currently scheduling cohorts</span>
+</label>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-space-sm">
+<label class="flex items-start gap-space-sm p-3 rounded-xl bg-surface-page hover:bg-surface-subtle transition-colors cursor-pointer select-none">
+<input checked="" class="mt-0.5 rounded w-4 h-4 text-primary focus:ring-primary/20 border-border-strong" name="cohort_assignment" type="checkbox" value="UX-301"/>
+<div class="flex flex-col">
+<div class="flex items-center gap-1.5">
+<span class="font-body-medium text-body-medium text-on-surface">Evening Product Sprint Q3</span>
+<span class="px-1.5 py-0.2 rounded bg-surface-card text-[11px] font-mono text-secondary">UX-301</span>
+</div>
+<span class="font-caption text-caption text-secondary">Mon / Wed • 18:30–21:00 • 24 Enrolled</span>
+</div>
+</label>
+<label class="flex items-start gap-space-sm p-3 rounded-xl bg-surface-page hover:bg-surface-subtle transition-colors cursor-pointer select-none">
+<input checked="" class="mt-0.5 rounded w-4 h-4 text-primary focus:ring-primary/20 border-border-strong" name="cohort_assignment" type="checkbox" value="FSD-201"/>
+<div class="flex flex-col">
+<div class="flex items-center gap-1.5">
+<span class="font-body-medium text-body-medium text-on-surface">Full-Stack Web Dev Alpha</span>
+<span class="px-1.5 py-0.2 rounded bg-surface-card text-[11px] font-mono text-secondary">FSD-201</span>
+</div>
+<span class="font-caption text-caption text-secondary">Tue / Thu • 10:00–13:00 • 18 Enrolled</span>
+</div>
+</label>
+<label class="flex items-start gap-space-sm p-3 rounded-xl bg-surface-page hover:bg-surface-subtle transition-colors cursor-pointer select-none">
+<input class="mt-0.5 rounded w-4 h-4 text-primary focus:ring-primary/20 border-border-strong" name="cohort_assignment" type="checkbox" value="DS-104"/>
+<div class="flex flex-col">
+<div class="flex items-center gap-1.5">
+<span class="font-body-medium text-body-medium text-on-surface">Data Science Cohort 4</span>
+<span class="px-1.5 py-0.2 rounded bg-surface-card text-[11px] font-mono text-secondary">DS-104</span>
+</div>
+<span class="font-caption text-caption text-secondary">Sat • Full Day Immersion • 30 Enrolled</span>
+</div>
+</label>
+<label class="flex items-start gap-space-sm p-3 rounded-xl bg-surface-page hover:bg-surface-subtle transition-colors cursor-pointer select-none">
+<input class="mt-0.5 rounded w-4 h-4 text-primary focus:ring-primary/20 border-border-strong" name="cohort_assignment" type="checkbox" value="UI-102"/>
+<div class="flex flex-col">
+<div class="flex items-center gap-1.5">
+<span class="font-body-medium text-body-medium text-on-surface">Design Systems & UI Tokens</span>
+<span class="px-1.5 py-0.2 rounded bg-surface-card text-[11px] font-mono text-secondary">UI-102</span>
+</div>
+<span class="font-caption text-caption text-secondary">Fri • 14:00–17:00 • 16 Enrolled</span>
+</div>
+</label>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-space-md">
+<!-- Maximum Capacity -->
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block" for="cohortCapacity">Maximum Concurrent Load</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">speed</span>
+<input class="w-full h-10 pl-9 pr-3 rounded-lg bg-surface-card text-on-surface font-body-base text-body-base focus:outline-none focus:ring-2 focus:ring-primary/20 shadow-sm" id="cohortCapacity" type="text" value="3 Active Cohorts (approx. 20 hrs/week)"/>
+</div>
+<p class="font-caption text-caption text-secondary mt-1">Triggers automated alert when faculty schedule hits 85% utilization.</p>
+</div>
+<!-- Specialized Course Tracks -->
+<div>
+<label class="font-label-md text-label-md text-on-surface mb-1 block">Specialized Course Tracks & Tags</label>
+<div class="flex items-center flex-wrap gap-1.5 p-2 rounded-lg bg-surface-page min-h-[40px]">
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-surface-card text-on-surface font-label-sm text-[12px] shadow-sm">
+                Figma & UI Systems
+                <button class="hover:text-error transition-colors" type="button">×</button>
+</span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-surface-card text-on-surface font-label-sm text-[12px] shadow-sm">
+                UX Research & Testing
+                <button class="hover:text-error transition-colors" type="button">×</button>
+</span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-surface-card text-on-surface font-label-sm text-[12px] shadow-sm">
+                Design Ops
+                <button class="hover:text-error transition-colors" type="button">×</button>
+</span>
+<input class="bg-transparent text-caption font-body-base text-on-surface placeholder:text-secondary focus:outline-none w-24 px-1" placeholder="+ Add track..." type="text"/>
+</div>
+</div>
+</div>
+</section>
+<!-- Card 4: System Access & Portal Permissions -->
+<section class="bg-surface-card rounded-xl p-space-xl shadow-sm relative">
+<div class="flex items-center justify-between pb-space-md mb-space-lg border-b border-border-subtle">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-lg bg-primary-subtle text-primary flex items-center justify-center font-title text-label-md">
+              4
+            </div>
+<div>
+<h2 class="font-title text-title text-on-surface">Permissions & System Access</h2>
+<p class="font-caption text-caption text-secondary">Control staff member ERP rights, two-factor enforcement, and onboarding invites.</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-secondary text-[20px]">lock_reset</span>
+</div>
+<div class="space-y-space-md">
+<!-- Toggle 1: Enable ERP Access -->
+<div class="flex items-center justify-between p-3.5 rounded-xl bg-surface-page">
+<div class="flex items-start gap-space-sm pr-space-md">
+<div class="w-9 h-9 rounded-lg bg-surface-card flex items-center justify-center text-primary shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[20px]">vpn_key</span>
+</div>
+<div>
+<span class="font-title text-label-md text-on-surface block">Enable Afoogy ERP Dashboard & Staff Portal Access</span>
+<p class="font-caption text-caption text-secondary">Allows this staff member to authenticate via SSO or password credentials into staff views.</p>
+</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer shrink-0">
+<input checked="" class="sr-only peer" id="enableErpAccess" type="checkbox"/>
+<div class="w-11 h-6 bg-secondary/30 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-surface-card after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface-card after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-container"></div>
+</label>
+</div>
+<!-- Role Preset Permission Matrix Summary Note -->
+<div class="p-3.5 rounded-xl bg-surface-subtle flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-primary text-[20px] shrink-0 mt-0.5">policy</span>
+<div class="flex-1">
+<span class="font-label-md text-label-md text-on-surface block mb-0.5">Role Permission Policy Inheritance</span>
+<p class="font-body-base text-caption text-secondary leading-relaxed" id="permissionPolicyText">
+                Under <span class="font-medium text-on-surface">Trainer / Instructor</span> profile: Member receives write permission for <span class="text-on-surface font-medium">Daily Attendance</span>, <span class="text-on-surface font-medium">Cohort Grading</span>, and <span class="text-on-surface font-medium">Syllabus Milestones</span> for assigned cohorts. View-only access to enrolled student contact directories. Strict zero-access enforced on Financial Ledger, Tuition Collections, and Certificate Master Authority.
+              </p>
+</div>
+</div>
+<!-- Toggle 2: 2FA Enforcement -->
+<div class="flex items-center justify-between p-3.5 rounded-xl bg-surface-page">
+<div class="flex items-start gap-space-sm pr-space-md">
+<div class="w-9 h-9 rounded-lg bg-surface-card flex items-center justify-center text-tertiary shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[20px]">security</span>
+</div>
+<div>
+<span class="font-title text-label-md text-on-surface block">Mandate Two-Factor Authentication (2FA)</span>
+<p class="font-caption text-caption text-secondary">Requires an authenticator app (Google Auth, Microsoft Auth) on the initial login handshake.</p>
+</div>
+</div>
+<label class="relative inline-flex items-center cursor-pointer shrink-0">
+<input checked="" class="sr-only peer" id="enable2FA" type="checkbox"/>
+<div class="w-11 h-6 bg-secondary/30 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-surface-card after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-surface-card after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-container"></div>
+</label>
+</div>
+<!-- Checkbox: Send Welcome Invitation -->
+<label class="flex items-start gap-space-sm p-3 rounded-xl bg-surface-page cursor-pointer select-none">
+<input checked="" class="mt-0.5 rounded w-4 h-4 text-primary focus:ring-primary/20 border-border-strong" id="sendWelcomeEmail" type="checkbox"/>
+<div>
+<span class="font-label-md text-label-md text-on-surface block">Send immediate invitation email with secure password setup link</span>
+<p class="font-caption text-caption text-secondary">A time-sensitive token will be dispatched to <span class="font-mono text-on-surface" id="emailRecipientPreview">f.malik@afoogy.academy</span> with login instructions.</p>
+</div>
+</label>
+</div>
+</section>
+<!-- Bottom Form Actions Row inside Left Rail -->
+<div class="flex items-center justify-between pt-space-xs pb-space-lg">
+<button class="px-4 py-2 rounded-xl text-secondary hover:text-on-surface font-body-medium text-body-medium transition-colors" type="button">
+          Discard Changes
+        </button>
+<div class="flex items-center gap-space-sm">
+<button class="h-10 px-4 rounded-xl bg-surface-card text-on-surface font-body-medium text-body-medium shadow-sm hover:bg-surface-subtle transition-all" type="button">
+            Save as Draft
+          </button>
+<button class="h-10 px-6 rounded-xl bg-primary-container text-on-primary font-body-medium text-body-medium shadow-sm hover:bg-primary-hover transition-all flex items-center gap-2" id="submitFormBottom" type="submit">
+<span>Create Staff Member</span>
+<span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+</button>
+</div>
+</div>
+</form>
+<!-- Right Side-Rail: Live Profile Card Preview, Guidelines, & Branch Allocation (4 cols) -->
+<aside class="lg:col-span-4 flex flex-col gap-space-xl">
+<!-- Live Staff Profile Card Preview -->
+<div class="bg-surface-card rounded-xl p-space-xl shadow-sm relative overflow-hidden">
+<div class="flex items-center justify-between mb-space-md">
+<span class="text-[11px] font-semibold uppercase tracking-wider text-secondary">Live Staff Card Preview</span>
+<span class="w-2 h-2 rounded-full bg-tertiary"></span>
+</div>
+<div class="flex flex-col items-center text-center pb-space-lg border-b border-border-subtle">
+<div class="relative mb-3">
+<div class="w-20 h-20 rounded-full bg-surface-container text-primary flex items-center justify-center font-display text-[26px] font-bold overflow-hidden shadow-sm">
+<span id="previewAvatarInitials">FM</span>
+<img class="w-full h-full object-cover hidden" data-alt="Small circular portrait thumbnail of Dr. Farah Malik for staff directory card display" id="previewSideImg" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDdgc3Cmq9hGOnFYFe5xesz7dIjib5hWJEEBK8ZMXLkQ5cEsqZ1QSE7PT2XsxO86dsIi7LHfp7FZH-_LuCK1CT0HDFoe_ltQEWOWVQl5uhbusteO_7von5O62lwLyJA-x_LA3BABLtRNkxZSuQwH5mFwapO27sGG1KRXii-fozW5wpEdpUNCtOBxRqQb9jd3iZpixSP9VFodAVXrWy1oc-YXvTJYpbbLggbI-GnwlICuIfPe9FFSvOb"/>
+</div>
+<span class="absolute bottom-0 right-0 w-4 h-4 rounded-full bg-status-paid-text ring-2 ring-surface-card" title="Active Account"></span>
+</div>
+<h3 class="font-headline-md text-headline-md text-on-surface tracking-tight" id="previewStaffName">Dr. Farah Malik</h3>
+<p class="font-body-base text-body-base text-secondary mt-0.5" id="previewStaffTitle">Lead UX Design Specialist</p>
+<div class="flex items-center justify-center gap-1.5 mt-2 flex-wrap">
+<span class="px-2.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[12px]" id="previewRoleBadge">
+              Trainer / Instructor
+            </span>
+<span class="px-2 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-[11px]" id="previewDeptBadge">
+              Design & UX
+            </span>
+</div>
+</div>
+<!-- Quick Scan Credentials & Details -->
+<div class="py-space-md space-y-space-sm border-b border-border-subtle">
+<div class="flex items-center justify-between text-body-base text-[13px]">
+<span class="text-secondary flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">fingerprint</span>
+<span>Staff ID</span>
+</span>
+<span class="font-mono font-medium text-on-surface">AFG-STF-2024-009</span>
+</div>
+<div class="flex items-center justify-between text-body-base text-[13px]">
+<span class="text-secondary flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">alternate_email</span>
+<span>Work Email</span>
+</span>
+<span class="font-body-medium text-on-surface truncate max-w-[170px]" id="previewEmailText">f.malik@afoogy.academy</span>
+</div>
+<div class="flex items-center justify-between text-body-base text-[13px]">
+<span class="text-secondary flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">work_outline</span>
+<span>Framework</span>
+</span>
+<span class="font-body-medium text-on-surface" id="previewFrameworkText">Full-Time Core</span>
+</div>
+<div class="flex items-center justify-between text-body-base text-[13px]">
+<span class="text-secondary flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[16px]">calendar_month</span>
+<span>Effective Date</span>
+</span>
+<span class="font-body-medium text-on-surface" id="previewJoiningText">Sep 01, 2024</span>
+</div>
+</div>
+<!-- Assigned Cohorts Mini Snapshot -->
+<div class="pt-space-md">
+<div class="flex items-center justify-between mb-2">
+<span class="text-[11px] font-semibold uppercase tracking-wider text-secondary">Active Cohorts (2)</span>
+<span class="font-caption text-caption text-primary font-medium">Capacity 66%</span>
+</div>
+<div class="space-y-1.5" id="previewCohortList">
+<div class="flex items-center justify-between p-2 rounded-lg bg-surface-page text-caption font-caption">
+<span class="font-body-medium text-on-surface truncate">Evening Product Sprint Q3</span>
+<span class="font-mono text-secondary px-1 bg-surface-card rounded text-[11px]">UX-301</span>
+</div>
+<div class="flex items-center justify-between p-2 rounded-lg bg-surface-page text-caption font-caption">
+<span class="font-body-medium text-on-surface truncate">Full-Stack Web Dev Alpha</span>
+<span class="font-mono text-secondary px-1 bg-surface-card rounded text-[11px]">FSD-201</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Campus & Branch Location Anchor Card -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm">
+<div class="flex items-center justify-between mb-space-sm">
+<span class="text-[11px] font-semibold uppercase tracking-wider text-secondary">Campus & Facility Linkage</span>
+<span class="material-symbols-outlined text-secondary text-[18px]">domain_verification</span>
+</div>
+<div class="flex items-center gap-space-sm p-3 rounded-xl bg-surface-page mb-space-sm">
+<div class="w-10 h-10 rounded-lg bg-primary-subtle text-primary flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-[22px]">location_city</span>
+</div>
+<div class="flex-1 min-w-0">
+<p class="font-title text-label-md text-on-surface truncate">Central Campus – Main Branch</p>
+<p class="font-caption text-caption text-secondary">Bldg 4 • Floors 2-3 Design Labs</p>
+</div>
+</div>
+<div class="flex items-center justify-between text-caption font-caption text-secondary px-1">
+<span>Branch Identifier: <strong class="text-on-surface font-mono">BR-MAIN-01</strong></span>
+<a class="text-primary hover:underline font-medium" href="#">Switch Branch</a>
+</div>
+</div>
+<!-- Staff Allocation Guidelines Card -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm">
+<div class="flex items-center gap-2 mb-space-sm text-on-surface">
+<span class="material-symbols-outlined text-secondary text-[20px]">info</span>
+<span class="font-title text-label-md">Onboarding Guidelines</span>
+</div>
+<ul class="space-y-space-sm text-caption font-body-base text-secondary leading-relaxed">
+<li class="flex items-start gap-2">
+<span class="material-symbols-outlined text-[16px] text-tertiary shrink-0 mt-0.5">check_circle</span>
+<span><strong>Trainers & Instructors:</strong> Require at least 1 certified active syllabus track linkage before batch launch.</span>
+</li>
+<li class="flex items-start gap-2">
+<span class="material-symbols-outlined text-[16px] text-status-pending-text shrink-0 mt-0.5">verified_user</span>
+<span><strong>Finance Staff:</strong> Strict hardware-based Two-Factor Authentication (2FA) enforced by campus security policy.</span>
+</li>
+<li class="flex items-start gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary shrink-0 mt-0.5">shield</span>
+<span><strong>Academy Managers:</strong> Automatically inherit cross-department reporting and student financial status overview.</span>
+</li>
+<li class="flex items-start gap-2">
+<span class="material-symbols-outlined text-[16px] text-secondary shrink-0 mt-0.5">mail</span>
+<span>Password activation links expire exactly 48 hours post-dispatch.</span>
+</li>
+</ul>
+<div class="mt-space-md pt-space-sm border-t border-border-subtle flex items-center justify-between text-caption text-secondary">
+<span>Need custom permissions?</span>
+<a class="text-primary font-medium hover:underline flex items-center gap-0.5" data-path="settings" href="#">
+<span>Roles Matrix</span>
+<span class="material-symbols-outlined text-[14px]">arrow_outward</span>
+</a>
+</div>
+</div>
+<!-- Subtle Quick Help Banner -->
+<div class="p-4 rounded-xl bg-surface-container flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-primary text-[24px]">support_agent</span>
+<div class="flex-1">
+<p class="font-label-sm text-label-sm text-on-surface">Bulk Staff Import?</p>
+<p class="font-caption text-caption text-secondary">Have multiple faculty members? Use CSV Batch Onboarding.</p>
+</div>
+<a class="px-2.5 py-1 rounded-lg bg-surface-card text-primary font-label-sm text-[12px] shadow-sm hover:bg-surface-subtle transition-colors" href="#">
+          Upload CSV
+        </a>
+</div>
+</aside>
+</div>
+<!-- Notification Toast Simulation (Hidden by default, triggered on submit) -->
+<div class="fixed bottom-6 right-6 bg-inverse-surface text-inverse-on-surface px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 transition-transform duration-300 translate-y-24 z-50 pointer-events-none" id="toastNotification">
+<span class="material-symbols-outlined text-tertiary-fixed text-[22px]">check_circle</span>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-inverse-on-surface leading-tight" id="toastTitle">Staff Member Onboarded</span>
+<span class="font-caption text-caption text-inverse-on-surface/80" id="toastSubtitle">Invitation dispatched to f.malik@afoogy.academy</span>
+</div>
+</div>
+</div>
+<script>
+  (function() {
+    // Dynamic Form Syncing with Live Profile Card
+    const nameInput = document.getElementById('staffFullName');
+    const emailInput = document.getElementById('staffEmail');
+    const titleInput = document.getElementById('staffTitle');
+    const roleSelect = document.getElementById('staffRoleSelect');
+    const deptSelect = document.getElementById('staffDepartmentSelect');
+    const dateInput = document.getElementById('joiningDate');
+
+    const previewName = document.getElementById('previewStaffName');
+    const previewEmail = document.getElementById('previewEmailText');
+    const previewTitle = document.getElementById('previewStaffTitle');
+    const previewRole = document.getElementById('previewRoleBadge');
+    const previewDept = document.getElementById('previewDeptBadge');
+    const previewDate = document.getElementById('previewJoiningText');
+    const previewInitials = document.getElementById('previewAvatarInitials');
+    const emailRecipientPreview = document.getElementById('emailRecipientPreview');
+    const teachingCard = document.getElementById('teachingAllocationCard');
+    const policyText = document.getElementById('permissionPolicyText');
+
+    function updateInitials(name) {
+      if (!name) return 'ST';
+      const parts = name.replace(/^(Dr\.|Prof\.|Mr\.|Ms\.|Mrs\.)\s+/i, '').trim().split(' ');
+      if (parts.length >= 2) {
+        return (parts[0][0] + parts[1][0]).toUpperCase();
+      }
+      return name.slice(0, 2).toUpperCase();
+    }
+
+    if (nameInput) {
+      nameInput.addEventListener('input', (e) => {
+        const val = e.target.value.trim() || 'New Staff Member';
+        previewName.textContent = val;
+        previewInitials.textContent = updateInitials(val);
+      });
+    }
+
+    if (emailInput) {
+      emailInput.addEventListener('input', (e) => {
+        const val = e.target.value.trim() || 'staff@afoogy.academy';
+        previewEmail.textContent = val;
+        if (emailRecipientPreview) emailRecipientPreview.textContent = val;
+      });
+    }
+
+    if (titleInput) {
+      titleInput.addEventListener('input', (e) => {
+        previewTitle.textContent = e.target.value.trim() || 'Academy Faculty';
+      });
+    }
+
+    if (roleSelect) {
+      roleSelect.addEventListener('change', (e) => {
+        const role = e.target.value;
+        previewRole.textContent = role;
+
+        // Contextual adjust for teaching card & permission notes
+        if (role === 'Trainer / Instructor') {
+          teachingCard.style.opacity = '1';
+          teachingCard.style.pointerEvents = 'auto';
+          policyText.innerHTML = 'Under <span class="font-medium text-on-surface">Trainer / Instructor</span> profile: Member receives write permission for <span class="text-on-surface font-medium">Daily Attendance</span>, <span class="text-on-surface font-medium">Cohort Grading</span>, and <span class="text-on-surface font-medium">Syllabus Milestones</span> for assigned cohorts. View-only access to student rosters. No financial or certificate master authorization.';
+        } else if (role === 'Finance Staff') {
+          policyText.innerHTML = 'Under <span class="font-medium text-on-surface">Finance Staff</span> profile: Full authority over Student Invoicing, Installment Plans, Manual Cash Desk Receipts, and Ledger reconciliations. Zero access to course syllabi grading or batch curricular modifications.';
+        } else if (role === 'Academy Manager') {
+          policyText.innerHTML = 'Under <span class="font-medium text-on-surface">Academy Manager</span> profile: Broad operational supervision across all batches, student rosters, admissions pipelines, and multi-trainer schedules with campus-level reporting export rights.';
+        } else if (role === 'Admissions Staff') {
+          policyText.innerHTML = 'Under <span class="font-medium text-on-surface">Admissions Staff</span> profile: Full access to Applicant Leads, Student Registrations, Document Verification, and Intake Quota tracking.';
+        } else {
+          policyText.innerHTML = 'Under <span class="font-medium text-on-surface">' + role + '</span> profile: Custom system role permissions apply per academy configuration policies.';
+        }
+      });
+    }
+
+    if (deptSelect) {
+      deptSelect.addEventListener('change', (e) => {
+        previewDept.textContent = e.target.value;
+      });
+    }
+
+    if (dateInput) {
+      dateInput.addEventListener('change', (e) => {
+        if (!e.target.value) return;
+        const d = new Date(e.target.value);
+        previewDate.textContent = d.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+      });
+    }
+
+    // Employment radio cards selection
+    const empRadios = document.querySelectorAll('input[name="employment_type"]');
+    const previewFramework = document.getElementById('previewFrameworkText');
+    empRadios.forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        if (previewFramework) previewFramework.textContent = e.target.value;
+        // Highlight chosen parent label
+        document.querySelectorAll('#employmentTypeGroup label').forEach(lbl => {
+          lbl.classList.remove('bg-primary-subtle');
+          lbl.classList.add('bg-surface-page');
+          const icon = lbl.querySelector('.material-symbols-outlined');
+          if (icon) {
+            icon.textContent = 'radio_button_unchecked';
+            icon.classList.remove('text-primary');
+            icon.classList.add('text-secondary');
+          }
+        });
+        const parent = e.target.closest('label');
+        if (parent) {
+          parent.classList.remove('bg-surface-page');
+          parent.classList.add('bg-primary-subtle');
+          const icon = parent.querySelector('.material-symbols-outlined');
+          if (icon) {
+            icon.textContent = 'check_circle';
+            icon.classList.remove('text-secondary');
+            icon.classList.add('text-primary');
+          }
+        }
+      });
+    });
+
+    // Simple toast simulation on trigger
+    function triggerToast(title, subtitle) {
+      const toast = document.getElementById('toastNotification');
+      if (!toast) return;
+      document.getElementById('toastTitle').textContent = title;
+      document.getElementById('toastSubtitle').textContent = subtitle;
+      toast.classList.remove('translate-y-24');
+      toast.classList.add('translate-y-0');
+      setTimeout(() => {
+        toast.classList.remove('translate-y-0');
+        toast.classList.add('translate-y-24');
+      }, 3800);
+    }
+
+    const form = document.getElementById('staffOnboardingForm');
+    const submitBtnTop = document.getElementById('submitFormTop');
+    const submitBtnBottom = document.getElementById('submitFormBottom');
+    const saveDraftTop = document.getElementById('saveDraftTop');
+
+    function handleSave(isDraft) {
+      const name = nameInput ? nameInput.value : 'Staff Member';
+      if (isDraft) {
+        triggerToast('Draft Saved', name + ' draft record saved to academy directory.');
+      } else {
+        triggerToast('Staff Member Created', 'Onboarding invitation dispatched to ' + (emailInput ? emailInput.value : 'staff inbox'));
+      }
+    }
+
+    if (submitBtnTop) submitBtnTop.addEventListener('click', () => handleSave(false));
+    if (submitBtnBottom) submitBtnBottom.addEventListener('click', () => handleSave(false));
+    if (saveDraftTop) saveDraftTop.addEventListener('click', () => handleSave(true));
+
+    if (form) {
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        handleSave(false);
+      });
+    }
+  })();
+</script></div></main></div></body></html>

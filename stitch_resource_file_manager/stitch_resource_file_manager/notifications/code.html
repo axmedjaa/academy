@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<!-- Interactive Toast Feedback (Hidden by default) -->
+<div class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 ease-out flex items-center gap-space-sm bg-inverse-surface text-inverse-on-surface px-space-md py-space-sm rounded-xl shadow-xl" id="toast-message">
+<span class="material-symbols-outlined text-tertiary-fixed text-[20px]">check_circle</span>
+<span class="font-body-medium text-body-medium" id="toast-text">All notifications marked as read</span>
+</div>
+<!-- Page Header -->
+<section class="flex flex-col md:flex-row md:items-center md:justify-between gap-space-md mb-space-xl">
+<div class="flex flex-col gap-1">
+<div class="flex items-center gap-space-sm">
+<h1 class="font-headline-lg text-headline-lg text-on-surface font-semibold tracking-tight">Notifications</h1>
+<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-label-sm font-label-sm bg-primary text-on-primary shadow-sm transition-transform duration-200" id="unread-count-pill">
+          3 Unread
+        </span>
+</div>
+<p class="font-body-base text-body-base text-secondary">
+        Stay updated on student enrollments, fee payments, certificate requests, and attendance alerts.
+      </p>
+</div>
+<!-- Header Actions -->
+<div class="flex items-center gap-space-sm self-start md:self-auto">
+<button class="inline-flex items-center gap-space-xs h-10 px-4 rounded-xl bg-surface-card text-on-surface font-body-medium text-body-medium shadow-sm hover:bg-surface-subtle transition-all duration-150 active:scale-[0.98]" id="mark-all-read-btn" onclick="markAllAsRead()">
+<span class="material-symbols-outlined text-[18px] text-secondary">done_all</span>
+<span>Mark All as Read</span>
+</button>
+<button class="inline-flex items-center gap-space-xs h-10 px-4 rounded-xl bg-surface-card text-on-surface font-body-medium text-body-medium shadow-sm hover:bg-surface-subtle transition-all duration-150" onclick="openPreferencesModal()">
+<span class="material-symbols-outlined text-[18px] text-secondary">tune</span>
+<span>Notification Preferences</span>
+</button>
+</div>
+</section>
+<!-- Notification Filter & Search Toolbar -->
+<section class="bg-surface-card rounded-xl p-space-md shadow-sm mb-space-xl flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-space-md">
+<!-- Filter Pills -->
+<div class="flex items-center gap-space-xxs overflow-x-auto pb-1 lg:pb-0" id="filter-container">
+<button class="filter-pill whitespace-nowrap h-8 px-3.5 rounded-full text-label-sm font-label-sm bg-primary text-on-primary transition-colors duration-150" onclick="filterCategory('all', this)">
+        All (24)
+      </button>
+<button class="filter-pill whitespace-nowrap h-8 px-3.5 rounded-full text-label-sm font-label-sm bg-surface-subtle text-secondary hover:text-on-surface transition-colors duration-150 flex items-center gap-1.5" onclick="filterCategory('unread', this)">
+<span class="w-1.5 h-1.5 rounded-full bg-primary inline-block"></span>
+        Unread (3)
+      </button>
+<button class="filter-pill whitespace-nowrap h-8 px-3.5 rounded-full text-label-sm font-label-sm bg-surface-subtle text-secondary hover:text-on-surface transition-colors duration-150" onclick="filterCategory('payments', this)">
+        Payments (8)
+      </button>
+<button class="filter-pill whitespace-nowrap h-8 px-3.5 rounded-full text-label-sm font-label-sm bg-surface-subtle text-secondary hover:text-on-surface transition-colors duration-150" onclick="filterCategory('enrollments', this)">
+        Enrollments (5)
+      </button>
+<button class="filter-pill whitespace-nowrap h-8 px-3.5 rounded-full text-label-sm font-label-sm bg-surface-subtle text-secondary hover:text-on-surface transition-colors duration-150" onclick="filterCategory('certificates', this)">
+        Certificates (4)
+      </button>
+<button class="filter-pill whitespace-nowrap h-8 px-3.5 rounded-full text-label-sm font-label-sm bg-surface-subtle text-secondary hover:text-on-surface transition-colors duration-150" onclick="filterCategory('attendance', this)">
+        Attendance (4)
+      </button>
+<button class="filter-pill whitespace-nowrap h-8 px-3.5 rounded-full text-label-sm font-label-sm bg-surface-subtle text-secondary hover:text-on-surface transition-colors duration-150" onclick="filterCategory('system', this)">
+        System (3)
+      </button>
+</div>
+<!-- Search and Sort -->
+<div class="flex items-center gap-space-sm">
+<div class="relative flex-1 sm:w-80">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span>
+<input class="w-full h-9 pl-9 pr-8 text-body-base font-body-base bg-surface-page rounded-lg placeholder:text-secondary focus:outline-none focus:bg-surface-card transition-all" id="notif-search" oninput="handleSearch(this.value)" placeholder="Search notifications by student, batch..." type="text"/>
+<button class="hidden absolute right-2.5 top-1/2 -translate-y-1/2 text-secondary hover:text-on-surface" id="clear-search" onclick="clearSearchInput()">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</div>
+<div class="relative">
+<button class="h-9 px-3 rounded-lg bg-surface-page text-on-surface font-body-medium text-body-medium flex items-center gap-1 hover:bg-surface-subtle transition-colors" id="sort-menu-btn" onclick="toggleSortMenu()">
+<span class="material-symbols-outlined text-[16px] text-secondary">swap_vert</span>
+<span id="sort-label">Most Recent</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">expand_more</span>
+</button>
+<div class="hidden absolute right-0 mt-1 w-44 bg-surface-card rounded-xl shadow-xl py-1 z-30" id="sort-dropdown">
+<button class="w-full text-left px-3 py-2 text-label-sm font-label-sm text-on-surface hover:bg-surface-subtle flex items-center justify-between" onclick="selectSort('Most Recent')">
+            Most Recent
+            <span class="material-symbols-outlined text-[16px] text-primary">check</span>
+</button>
+<button class="w-full text-left px-3 py-2 text-label-sm font-label-sm text-secondary hover:bg-surface-subtle hover:text-on-surface" onclick="selectSort('Oldest First')">
+            Oldest First
+          </button>
+<button class="w-full text-left px-3 py-2 text-label-sm font-label-sm text-secondary hover:bg-surface-subtle hover:text-on-surface" onclick="selectSort('Highest Priority')">
+            Highest Priority
+          </button>
+</div>
+</div>
+</div>
+</section>
+<!-- Two Column Layout: Feed (Left) & Control Panel (Right) -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-space-xl items-start">
+<!-- Left / Main Column: Chronological Notification Feed (8 Cols) -->
+<div class="lg:col-span-8 flex flex-col gap-space-xl" id="notifications-stream">
+<!-- TODAY GROUP -->
+<div class="flex flex-col gap-space-sm" data-group="today">
+<div class="flex items-center justify-between px-space-xs">
+<div class="flex items-center gap-2">
+<span class="font-title text-title text-on-surface font-semibold">Today</span>
+<span class="px-2 py-0.5 rounded-full text-caption font-caption bg-surface-container text-primary font-medium">4 updates</span>
+</div>
+<span class="text-caption font-caption text-secondary">October 24, 2024</span>
+</div>
+<!-- 1. Payment Recorded (Unread, high priority highlight) -->
+<article class="notif-item group relative bg-surface-card rounded-xl p-space-lg shadow-sm hover:shadow-md transition-all duration-200" data-category="payments" data-unread="true" id="notif-1">
+<div class="flex items-start gap-space-md">
+<!-- Icon Container (Emerald Green) -->
+<div class="w-10 h-10 rounded-xl bg-status-paid-bg text-status-paid-text flex items-center justify-center shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[22px]">payments</span>
+</div>
+<!-- Content Area -->
+<div class="flex-1 min-w-0">
+<div class="flex flex-wrap items-center justify-between gap-space-xs mb-1">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary shrink-0 unread-dot"></span>
+<h3 class="font-title text-title text-on-surface font-semibold truncate">Payment Recorded: Ahmed Ali</h3>
+</div>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded-md text-label-sm font-label-sm bg-status-paid-bg text-status-paid-text">Payment</span>
+<span class="font-caption text-caption text-secondary">12 minutes ago</span>
+</div>
+</div>
+<p class="font-body-base text-body-base text-secondary mb-space-md leading-relaxed">
+                Tuition installment of <span class="font-semibold text-on-surface">$450.00</span> received via <strong class="font-medium text-on-surface">Bank Transfer</strong> for Full-Stack Web Development (Batch 24A). Recorded by Fatima Al-Zahra.
+              </p>
+<!-- Card Action Bar -->
+<div class="flex items-center justify-between pt-space-xs">
+<div class="flex items-center gap-space-sm">
+<a class="inline-flex items-center gap-1 text-primary hover:text-primary-hover font-body-medium text-body-medium font-medium group-hover:underline" href="#">
+<span>View Receipt</span>
+<span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</a>
+<span class="text-secondary/40">•</span>
+<button class="mark-btn text-secondary hover:text-on-surface font-body-medium text-body-medium transition-colors" onclick="markItemRead('notif-1')">
+                    Mark as Read
+                  </button>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1 rounded text-secondary hover:text-on-surface hover:bg-surface-subtle" onclick="archiveItem('notif-1')" title="Archive">
+<span class="material-symbols-outlined text-[18px]">archive</span>
+</button>
+<button class="p-1 rounded text-secondary hover:text-on-surface hover:bg-surface-subtle" title="More">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</article>
+<!-- 2. New Student Registered (Unread) -->
+<article class="notif-item group relative bg-surface-card rounded-xl p-space-lg shadow-sm hover:shadow-md transition-all duration-200" data-category="enrollments" data-unread="true" id="notif-2">
+<div class="flex items-start gap-space-md">
+<!-- Icon Container (Blue) -->
+<div class="w-10 h-10 rounded-xl bg-status-active-bg text-status-active-text flex items-center justify-center shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[22px]">person_add</span>
+</div>
+<!-- Content Area -->
+<div class="flex-1 min-w-0">
+<div class="flex flex-wrap items-center justify-between gap-space-xs mb-1">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary shrink-0 unread-dot"></span>
+<h3 class="font-title text-title text-on-surface font-semibold truncate">New Student Registered</h3>
+</div>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded-md text-label-sm font-label-sm bg-status-active-bg text-status-active-text">Enrollment</span>
+<span class="font-caption text-caption text-secondary">1 hour ago</span>
+</div>
+</div>
+<p class="font-body-base text-body-base text-secondary mb-space-md leading-relaxed">
+<strong class="font-medium text-on-surface">Sarah Al-Mansoor</strong> completed enrollment in <span class="text-on-surface">Data Science & AI</span> (Batch 12B). Assigned Student ID: <code class="px-1.5 py-0.5 rounded bg-surface-subtle text-on-surface font-mono text-label-sm">AFG-STU-88241</code>.
+              </p>
+<!-- Card Action Bar -->
+<div class="flex items-center justify-between pt-space-xs">
+<div class="flex items-center gap-space-sm">
+<a class="inline-flex items-center gap-1 text-primary hover:text-primary-hover font-body-medium text-body-medium font-medium group-hover:underline" href="#">
+<span>View Profile</span>
+<span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</a>
+<span class="text-secondary/40">•</span>
+<button class="text-on-surface hover:text-primary font-body-medium text-body-medium transition-colors">
+                    Assign Batch
+                  </button>
+<span class="text-secondary/40">•</span>
+<button class="mark-btn text-secondary hover:text-on-surface font-body-medium text-body-medium transition-colors" onclick="markItemRead('notif-2')">
+                    Mark as Read
+                  </button>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1 rounded text-secondary hover:text-on-surface hover:bg-surface-subtle" onclick="archiveItem('notif-2')" title="Archive">
+<span class="material-symbols-outlined text-[18px]">archive</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</article>
+<!-- 3. Certificate Pending Approval (Unread) -->
+<article class="notif-item group relative bg-surface-card rounded-xl p-space-lg shadow-sm hover:shadow-md transition-all duration-200" data-category="certificates" data-unread="true" id="notif-3">
+<div class="flex items-start gap-space-md">
+<!-- Icon Container (Amber) -->
+<div class="w-10 h-10 rounded-xl bg-status-pending-bg text-status-pending-text flex items-center justify-center shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[22px]">workspace_premium</span>
+</div>
+<!-- Content Area -->
+<div class="flex-1 min-w-0">
+<div class="flex flex-wrap items-center justify-between gap-space-xs mb-1">
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary shrink-0 unread-dot"></span>
+<h3 class="font-title text-title text-on-surface font-semibold truncate">Certificate Awaiting Verification & Signing</h3>
+</div>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded-md text-label-sm font-label-sm bg-status-pending-bg text-status-pending-text">Certificates</span>
+<span class="font-caption text-caption text-secondary">2 hours ago</span>
+</div>
+</div>
+<p class="font-body-base text-body-base text-secondary mb-space-md leading-relaxed">
+<strong class="font-medium text-on-surface">Elena Rostova</strong> completed capstone defense for <span class="text-on-surface">Cloud Architecture Intensive</span> (100% completed). Certificate <code class="px-1.5 py-0.5 rounded bg-surface-subtle text-on-surface font-mono text-label-sm">#AFG-CERT-2024-0895</code> requires director signature.
+              </p>
+<!-- Card Action Bar -->
+<div class="flex items-center justify-between pt-space-xs">
+<div class="flex items-center gap-space-sm">
+<button class="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-primary text-on-primary font-body-medium text-body-medium font-medium hover:bg-primary-hover shadow-sm transition-all">
+<span class="material-symbols-outlined text-[16px]">draw</span>
+<span>Review & Sign</span>
+</button>
+<a class="text-secondary hover:text-on-surface font-body-medium text-body-medium transition-colors" href="#">
+                    View Student
+                  </a>
+<span class="text-secondary/40">•</span>
+<button class="mark-btn text-secondary hover:text-on-surface font-body-medium text-body-medium transition-colors" onclick="markItemRead('notif-3')">
+                    Mark as Read
+                  </button>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1 rounded text-secondary hover:text-on-surface hover:bg-surface-subtle" onclick="archiveItem('notif-3')" title="Archive">
+<span class="material-symbols-outlined text-[18px]">archive</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</article>
+<!-- 4. Attendance Alert (Read) -->
+<article class="notif-item group relative bg-surface-card rounded-xl p-space-lg shadow-sm hover:shadow-md transition-all duration-200" data-category="attendance" data-unread="false" id="notif-4">
+<div class="flex items-start gap-space-md">
+<!-- Icon Container (Rose / Red) -->
+<div class="w-10 h-10 rounded-xl bg-status-overdue-bg text-status-overdue-text flex items-center justify-center shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[22px]">warning</span>
+</div>
+<!-- Content Area -->
+<div class="flex-1 min-w-0">
+<div class="flex flex-wrap items-center justify-between gap-space-xs mb-1">
+<h3 class="font-title text-title text-on-surface font-semibold truncate">Low Attendance Warning: 3 Students Below 80%</h3>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded-md text-label-sm font-label-sm bg-status-overdue-bg text-status-overdue-text">Attendance</span>
+<span class="font-caption text-caption text-secondary">4 hours ago</span>
+</div>
+</div>
+<p class="font-body-base text-body-base text-secondary mb-space-md leading-relaxed">
+                Marcus Vance logged attendance for <span class="font-medium text-on-surface">Batch 24A</span> today. 3 students (<span class="text-on-surface">Bilal Khan, Zoya Malik, Omar Siddiq</span>) crossed below the 80% minimum threshold.
+              </p>
+<!-- Card Action Bar -->
+<div class="flex items-center justify-between pt-space-xs">
+<div class="flex items-center gap-space-sm">
+<a class="inline-flex items-center gap-1 text-primary hover:text-primary-hover font-body-medium text-body-medium font-medium group-hover:underline" href="#">
+<span>View Attendance Log</span>
+<span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</a>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1 rounded text-secondary hover:text-on-surface hover:bg-surface-subtle" onclick="archiveItem('notif-4')" title="Archive">
+<span class="material-symbols-outlined text-[18px]">archive</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</article>
+</div>
+<!-- YESTERDAY GROUP -->
+<div class="flex flex-col gap-space-sm" data-group="yesterday">
+<div class="flex items-center justify-between px-space-xs pt-space-xs">
+<div class="flex items-center gap-2">
+<span class="font-title text-title text-on-surface font-semibold">Yesterday</span>
+<span class="px-2 py-0.5 rounded-full text-caption font-caption bg-surface-subtle text-secondary font-medium">2 updates</span>
+</div>
+<span class="text-caption font-caption text-secondary">October 23, 2024</span>
+</div>
+<!-- 5. Outstanding Fee Reminder (Read) -->
+<article class="notif-item group relative bg-surface-card rounded-xl p-space-lg shadow-sm hover:shadow-md transition-all duration-200" data-category="payments" data-unread="false" id="notif-5">
+<div class="flex items-start gap-space-md">
+<!-- Icon Container (Amber) -->
+<div class="w-10 h-10 rounded-xl bg-status-pending-bg text-status-pending-text flex items-center justify-center shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[22px]">pending_actions</span>
+</div>
+<!-- Content Area -->
+<div class="flex-1 min-w-0">
+<div class="flex flex-wrap items-center justify-between gap-space-xs mb-1">
+<h3 class="font-title text-title text-on-surface font-semibold truncate">Tuition Overdue: 12 Students</h3>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded-md text-label-sm font-label-sm bg-status-pending-bg text-status-pending-text">Finance</span>
+<span class="font-caption text-caption text-secondary">Yesterday at 4:30 PM</span>
+</div>
+</div>
+<p class="font-body-base text-body-base text-secondary mb-space-md leading-relaxed">
+                Automated statement generated: 12 enrolled students have tuition installments overdue by more than 7 days, totaling <span class="font-semibold text-on-surface">$4,200.00</span>.
+              </p>
+<!-- Card Action Bar -->
+<div class="flex items-center justify-between pt-space-xs">
+<div class="flex items-center gap-space-sm">
+<a class="inline-flex items-center gap-1 text-primary hover:text-primary-hover font-body-medium text-body-medium font-medium group-hover:underline" href="#">
+<span>View Outstanding Fees</span>
+<span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</a>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1 rounded text-secondary hover:text-on-surface hover:bg-surface-subtle" onclick="archiveItem('notif-5')" title="Archive">
+<span class="material-symbols-outlined text-[18px]">archive</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</article>
+<!-- 6. Batch Schedule Completed (Read) -->
+<article class="notif-item group relative bg-surface-card rounded-xl p-space-lg shadow-sm hover:shadow-md transition-all duration-200" data-category="system" data-unread="false" id="notif-6">
+<div class="flex items-start gap-space-md">
+<!-- Icon Container (Indigo/Secondary) -->
+<div class="w-10 h-10 rounded-xl bg-secondary-container text-secondary flex items-center justify-center shrink-0 shadow-sm">
+<span class="material-symbols-outlined text-[22px]">event_available</span>
+</div>
+<!-- Content Area -->
+<div class="flex-1 min-w-0">
+<div class="flex flex-wrap items-center justify-between gap-space-xs mb-1">
+<h3 class="font-title text-title text-on-surface font-semibold truncate">Batch Concluded: UX Design Weekend (Batch 09)</h3>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded-md text-label-sm font-label-sm bg-surface-subtle text-secondary">Batches</span>
+<span class="font-caption text-caption text-secondary">Yesterday at 11:15 AM</span>
+</div>
+</div>
+<p class="font-body-base text-body-base text-secondary mb-space-md leading-relaxed">
+                All 16 scheduled classroom and practical project sessions have concluded. Batch is now ready for capstone audits and certificate generation.
+              </p>
+<!-- Card Action Bar -->
+<div class="flex items-center justify-between pt-space-xs">
+<div class="flex items-center gap-space-sm">
+<a class="inline-flex items-center gap-1 text-primary hover:text-primary-hover font-body-medium text-body-medium font-medium group-hover:underline" href="#">
+<span>Batch Summary</span>
+<span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</a>
+</div>
+<div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="p-1 rounded text-secondary hover:text-on-surface hover:bg-surface-subtle" onclick="archiveItem('notif-6')" title="Archive">
+<span class="material-symbols-outlined text-[18px]">archive</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</article>
+</div>
+<!-- No Results Placeholder (Filtered State) -->
+<div class="hidden bg-surface-card rounded-xl p-space-2xl text-center shadow-sm" id="empty-state">
+<div class="w-12 h-12 rounded-full bg-surface-subtle flex items-center justify-center mx-auto mb-space-sm text-secondary">
+<span class="material-symbols-outlined text-[28px]">notifications_off</span>
+</div>
+<h4 class="font-title text-title text-on-surface font-semibold mb-1">No notifications match this filter</h4>
+<p class="font-body-base text-body-base text-secondary mb-space-md max-w-sm mx-auto">
+          Try resetting your active category filters or search query to view older operational updates.
+        </p>
+<button class="h-9 px-4 rounded-lg bg-surface-subtle text-on-surface font-body-medium text-body-medium hover:bg-surface-variant transition-colors" onclick="filterCategory('all', document.querySelector('.filter-pill'))">
+          Reset Filter
+        </button>
+</div>
+</div>
+<!-- Right Column: Control Panel & Status Summaries (4 Cols) -->
+<aside class="lg:col-span-4 flex flex-col gap-space-lg sticky top-[80px]">
+<!-- Quick Operational Action Alerts -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm">
+<div class="flex items-center justify-between mb-space-md pb-space-xs border-b border-border-subtle">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">bolt</span>
+<h2 class="font-title text-title text-on-surface font-semibold">Priority Action Queue</h2>
+</div>
+<span class="text-caption font-caption text-secondary">Live</span>
+</div>
+<div class="flex flex-col gap-space-sm">
+<!-- Alert 1 -->
+<div class="flex items-start gap-space-sm p-3 rounded-lg bg-status-pending-bg/60 hover:bg-status-pending-bg transition-colors cursor-pointer group">
+<span class="w-2 h-2 rounded-full bg-status-pending-text mt-2 shrink-0"></span>
+<div class="flex-1 min-w-0">
+<div class="flex items-center justify-between mb-0.5">
+<span class="font-body-medium text-body-medium font-semibold text-status-pending-text">Certificates Waiting</span>
+<span class="px-1.5 py-0.2 rounded text-[11px] font-bold bg-surface-card text-status-pending-text shadow-sm">3</span>
+</div>
+<p class="font-caption text-caption text-secondary">Awaiting director verification & seal endorsement</p>
+</div>
+</div>
+<!-- Alert 2 -->
+<div class="flex items-start gap-space-sm p-3 rounded-lg bg-status-overdue-bg/60 hover:bg-status-overdue-bg transition-colors cursor-pointer group">
+<span class="w-2 h-2 rounded-full bg-status-overdue-text mt-2 shrink-0"></span>
+<div class="flex-1 min-w-0">
+<div class="flex items-center justify-between mb-0.5">
+<span class="font-body-medium text-body-medium font-semibold text-status-overdue-text">Outstanding Invoices</span>
+<span class="px-1.5 py-0.2 rounded text-[11px] font-bold bg-surface-card text-status-overdue-text shadow-sm">6</span>
+</div>
+<p class="font-caption text-caption text-secondary">Tuition arrears exceeding payment grace period</p>
+</div>
+</div>
+<!-- Alert 3 -->
+<div class="flex items-start gap-space-sm p-3 rounded-lg bg-status-active-bg/60 hover:bg-status-active-bg transition-colors cursor-pointer group">
+<span class="w-2 h-2 rounded-full bg-status-active-text mt-2 shrink-0"></span>
+<div class="flex-1 min-w-0">
+<div class="flex items-center justify-between mb-0.5">
+<span class="font-body-medium text-body-medium font-semibold text-status-active-text">Unassigned Applicant</span>
+<span class="px-1.5 py-0.2 rounded text-[11px] font-bold bg-surface-card text-status-active-text shadow-sm">1</span>
+</div>
+<p class="font-caption text-caption text-secondary">New online registration needs batch placement</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Delivery Channels Configuration Summary -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm">
+<div class="flex items-center justify-between mb-space-md pb-space-xs border-b border-border-subtle">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[20px]">mark_email_read</span>
+<h2 class="font-title text-title text-on-surface font-semibold">Delivery Channels</h2>
+</div>
+<button class="text-caption font-caption text-primary hover:underline font-medium" onclick="openPreferencesModal()">Edit</button>
+</div>
+<div class="flex flex-col gap-space-md">
+<!-- Channel 1: Email Digests -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-lg bg-surface-subtle flex items-center justify-center text-secondary">
+<span class="material-symbols-outlined text-[18px]">email</span>
+</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface leading-tight">Email Digests</span>
+<span class="font-caption text-caption text-secondary">Daily Summary at 8:00 AM</span>
+</div>
+</div>
+<span class="px-2 py-0.5 rounded-full text-label-sm font-label-sm bg-status-paid-bg text-status-paid-text flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary"></span>
+              Enabled
+            </span>
+</div>
+<!-- Channel 2: In-App Push -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-lg bg-surface-subtle flex items-center justify-center text-secondary">
+<span class="material-symbols-outlined text-[18px]">notifications_active</span>
+</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface leading-tight">In-App Push</span>
+<span class="font-caption text-caption text-secondary">Instant for high-priority</span>
+</div>
+</div>
+<span class="px-2 py-0.5 rounded-full text-label-sm font-label-sm bg-status-paid-bg text-status-paid-text flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary"></span>
+              Instant
+            </span>
+</div>
+<!-- Channel 3: SMS Alerts -->
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-lg bg-surface-subtle flex items-center justify-center text-secondary">
+<span class="material-symbols-outlined text-[18px]">sms</span>
+</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface leading-tight">SMS Emergency</span>
+<span class="font-caption text-caption text-secondary">Critical disruptions</span>
+</div>
+</div>
+<span class="px-2 py-0.5 rounded-full text-label-sm font-label-sm bg-status-paid-bg text-status-paid-text flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary"></span>
+              Active
+            </span>
+</div>
+</div>
+</div>
+<!-- Data Retention Policy Notice -->
+<div class="bg-surface-subtle rounded-xl p-space-md text-secondary">
+<div class="flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-secondary text-[20px] mt-0.5 shrink-0">inventory_2</span>
+<div class="flex flex-col gap-1">
+<span class="font-label-md text-label-md text-on-surface font-semibold">Notification Retention Policy</span>
+<p class="font-caption text-caption text-secondary leading-relaxed">
+              Standard notifications are automatically archived after 90 days. Immutable system audit logs remain permanently accessible inside the 
+              <a class="text-primary font-medium hover:underline" href="#">Reports module</a>.
+            </p>
+</div>
+</div>
+</div>
+<!-- Quick Academy Staff Roster Card with generative profile references -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm">
+<div class="flex items-center justify-between mb-space-sm">
+<span class="font-label-md text-label-md text-on-surface font-semibold">Active Dispatchers</span>
+<span class="font-caption text-caption text-secondary">On-duty today</span>
+</div>
+<div class="flex items-center gap-space-sm pt-1">
+<div class="flex -space-x-2 overflow-hidden">
+<img class="inline-block h-8 w-8 rounded-full ring-2 ring-surface-card object-cover" data-alt="Close up photographic headshot of an executive female academy manager in a crisp navy blazer standing in a bright modern educational campus, confident friendly expression, professional corporate lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBl6J3PGiTOaXXcSv6ijRzyIhqWmmkXEcGeIjjX5gikNkVkpAxKLULjgBMpYAqKpvP_B7lnbRjeVwmf5DMRUbjYCD0duz8NOVJgilWZ4ibquiLjP_6V-L2YDY5tJ2fV5maeEeMXOBTy9p8OGTZ6gA5sydKZQ1mjTD1Bn5euZp8PEY0q6OYEe3nCcGIjvYGpMKg_pnGbzlj6oAz-sHO0BGhP5-GLfps7XY6gcsPYAnNEBfzqrRKGCoEm"/>
+<img class="inline-block h-8 w-8 rounded-full ring-2 ring-surface-card object-cover" data-alt="Professional photographic portrait of an educational registrar man in professional attire with glasses in an ultra clean minimalist office setting, natural soft studio lighting." src="https://lh3.googleusercontent.com/aida-public/AB6AXuATSd376Ndqs3vd4Oyw83rmmAtKhQisPVWoB4AweVT9nShipEl_xHQ5QGo5gEHvrl2lTCm7HqDNShaAEdybxGHVAC9bMW_qgsNK1tI34Ka0iJBXhDfAA6H5CziaO6V35LWqLm-AEwI564m9aMwpd6xctMG3WKbF4f3RRAKYnibLJVaf7ZiKEc_AAhN9jb2N9RHv91Q6rAffxytUDZQ_-s2ur73sE6NYvSEFdwWZz3gkFNp4OC9f_0bK"/>
+<img class="inline-block h-8 w-8 rounded-full ring-2 ring-surface-card object-cover" data-alt="Portrait photo of an academy lead instructor smiling with subtle technological campus background, crisp editorial aesthetic, modern educational atmosphere." src="https://lh3.googleusercontent.com/aida-public/AB6AXuAeIH5Mb4nkyHv9nS6FXrws1DP4EqdnLd2bGMtQAipH-KY0zb8wlT-UlhAj08uWXGj28PRllvocNXeraWvQBLZRdOdre72TUPB0ZEhhHCMT6LiFWY_xKlgpzYKuwukefRAIEjcswJf3bytTHoZ_12mBaEyn_ANpAezgQPl2y4kJDse6YiWuD0w423tl1OkPAvR6NyBpEZps-RVys8jf7b8P-ubwQJRf8lbTSZLXLyS3BgKImDfs-GrW"/>
+</div>
+<div class="flex flex-col pl-2">
+<span class="font-label-sm text-label-sm text-on-surface font-medium">3 Staff Active</span>
+<span class="font-caption text-caption text-secondary">Auto-routing messages</span>
+</div>
+</div>
+</div>
+</aside>
+</div>
+<!-- Notification Preferences Modal (Hidden Backdrop & Sheet) -->
+<div class="fixed inset-0 z-50 hidden flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" id="preferences-modal">
+<div class="bg-surface-card rounded-xl shadow-2xl max-w-lg w-full p-space-xl relative flex flex-col gap-space-lg">
+<div class="flex items-center justify-between border-b border-border-subtle pb-space-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[22px]">settings_suggest</span>
+<h3 class="font-headline-md text-headline-md text-on-surface font-semibold">Notification Preferences</h3>
+</div>
+<button class="text-secondary hover:text-on-surface p-1 rounded-lg" onclick="closePreferencesModal()">
+<span class="material-symbols-outlined text-[20px]">close</span>
+</button>
+</div>
+<div class="flex flex-col gap-space-md max-h-[614px] overflow-y-auto pr-1">
+<!-- Setting 1 -->
+<div class="flex items-center justify-between py-1">
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface font-semibold">Fee Payment Confirmations</span>
+<span class="font-caption text-caption text-secondary">Notify when tuition or enrollment payments are booked</span>
+</div>
+<input checked="" class="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<!-- Setting 2 -->
+<div class="flex items-center justify-between py-1">
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface font-semibold">Attendance Threshold Alerts</span>
+<span class="font-caption text-caption text-secondary">Trigger warning when student falls below 80% mark</span>
+</div>
+<input checked="" class="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<!-- Setting 3 -->
+<div class="flex items-center justify-between py-1">
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface font-semibold">Certificate Signing Requests</span>
+<span class="font-caption text-caption text-secondary">Send priority prompt when student completes defense</span>
+</div>
+<input checked="" class="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox"/>
+</div>
+<!-- Setting 4 -->
+<div class="flex items-center justify-between py-1">
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface font-semibold">Batch Scheduling Updates</span>
+<span class="font-caption text-caption text-secondary">Daily batch schedule completions & classroom changes</span>
+</div>
+<input class="w-4 h-4 rounded text-primary accent-primary cursor-pointer" type="checkbox"/>
+</div>
+</div>
+<div class="flex items-center justify-end gap-space-sm pt-space-xs border-t border-border-subtle">
+<button class="h-10 px-4 rounded-xl bg-surface-subtle text-on-surface font-body-medium text-body-medium hover:bg-surface-variant transition-colors" onclick="closePreferencesModal()">
+          Cancel
+        </button>
+<button class="h-10 px-5 rounded-xl bg-primary text-on-primary font-body-medium text-body-medium font-medium hover:bg-primary-hover transition-colors shadow-sm" onclick="savePreferences()">
+          Save Preferences
+        </button>
+</div>
+</div>
+</div>
+</div>
+<script>
+  // State variables
+  let activeFilter = 'all';
+  let searchQuery = '';
+
+  // Toast Trigger Helper
+  function showToast(message) {
+    const toast = document.getElementById('toast-message');
+    const toastText = document.getElementById('toast-text');
+    if (!toast) return;
+    toastText.textContent = message;
+    toast.classList.remove('translate-y-20', 'opacity-0');
+    toast.classList.add('translate-y-0', 'opacity-100');
+    
+    setTimeout(() => {
+      toast.classList.add('translate-y-20', 'opacity-0');
+      toast.classList.remove('translate-y-0', 'opacity-100');
+    }, 3000);
+  }
+
+  // Mark a single notification as read
+  function markItemRead(id) {
+    const item = document.getElementById(id);
+    if (!item) return;
+    
+    item.setAttribute('data-unread', 'false');
+    const dot = item.querySelector('.unread-dot');
+    if (dot) dot.remove();
+
+    const markBtn = item.querySelector('.mark-btn');
+    if (markBtn) markBtn.remove();
+
+    updateUnreadCount();
+    showToast('Notification marked as read');
+  }
+
+  // Mark all notifications as read
+  function markAllAsRead() {
+    const unreadItems = document.querySelectorAll('.notif-item[data-unread="true"]');
+    unreadItems.forEach(item => {
+      item.setAttribute('data-unread', 'false');
+      const dot = item.querySelector('.unread-dot');
+      if (dot) dot.remove();
+      const markBtn = item.querySelector('.mark-btn');
+      if (markBtn) markBtn.remove();
+    });
+
+    updateUnreadCount();
+    showToast('All notifications marked as read');
+  }
+
+  // Update pill and shell count
+  function updateUnreadCount() {
+    const remaining = document.querySelectorAll('.notif-item[data-unread="true"]').length;
+    const pill = document.getElementById('unread-count-pill');
+    
+    if (pill) {
+      if (remaining > 0) {
+        pill.textContent = `${remaining} Unread`;
+        pill.classList.remove('hidden');
+      } else {
+        pill.textContent = '0 Unread';
+        pill.classList.add('bg-surface-subtle', 'text-secondary');
+        pill.classList.remove('bg-primary', 'text-on-primary');
+      }
+    }
+
+    // Also synchronize sidebar badge if present
+    const sidebarBadge = document.querySelector('aside a[data-path="notifications"] span:last-child');
+    if (sidebarBadge) {
+      if (remaining > 0) {
+        sidebarBadge.textContent = remaining;
+      } else {
+        sidebarBadge.style.display = 'none';
+      }
+    }
+  }
+
+  // Filter Categories
+  function filterCategory(category, buttonEl) {
+    activeFilter = category;
+    
+    // Update active button styles
+    const pills = document.querySelectorAll('.filter-pill');
+    pills.forEach(p => {
+      p.classList.remove('bg-primary', 'text-on-primary');
+      p.classList.add('bg-surface-subtle', 'text-secondary');
+    });
+
+    if (buttonEl) {
+      buttonEl.classList.remove('bg-surface-subtle', 'text-secondary');
+      buttonEl.classList.add('bg-primary', 'text-on-primary');
+    }
+
+    applyFilters();
+  }
+
+  // Handle Search Input
+  function handleSearch(val) {
+    searchQuery = val.trim().toLowerCase();
+    const clearBtn = document.getElementById('clear-search');
+    if (clearBtn) {
+      if (searchQuery.length > 0) {
+        clearBtn.classList.remove('hidden');
+      } else {
+        clearBtn.classList.add('hidden');
+      }
+    }
+    applyFilters();
+  }
+
+  function clearSearchInput() {
+    const input = document.getElementById('notif-search');
+    if (input) {
+      input.value = '';
+      handleSearch('');
+    }
+  }
+
+  // Core filter logic
+  function applyFilters() {
+    const items = document.querySelectorAll('.notif-item');
+    let visibleCount = 0;
+
+    items.forEach(item => {
+      const category = item.getAttribute('data-category');
+      const isUnread = item.getAttribute('data-unread') === 'true';
+      const textContent = item.innerText.toLowerCase();
+
+      let matchesCategory = true;
+      if (activeFilter === 'unread') {
+        matchesCategory = isUnread;
+      } else if (activeFilter !== 'all') {
+        matchesCategory = (category === activeFilter);
+      }
+
+      const matchesSearch = searchQuery === '' || textContent.includes(searchQuery);
+
+      if (matchesCategory && matchesSearch) {
+        item.classList.remove('hidden');
+        visibleCount++;
+      } else {
+        item.classList.add('hidden');
+      }
+    });
+
+    // Check empty state
+    const emptyState = document.getElementById('empty-state');
+    const groups = document.querySelectorAll('#notifications-stream > div[data-group]');
+
+    groups.forEach(group => {
+      const activeInGroup = group.querySelectorAll('.notif-item:not(.hidden)').length;
+      if (activeInGroup === 0) {
+        group.classList.add('hidden');
+      } else {
+        group.classList.remove('hidden');
+      }
+    });
+
+    if (emptyState) {
+      if (visibleCount === 0) {
+        emptyState.classList.remove('hidden');
+      } else {
+        emptyState.classList.add('hidden');
+      }
+    }
+  }
+
+  // Archive Item animation
+  function archiveItem(id) {
+    const item = document.getElementById(id);
+    if (!item) return;
+    item.style.transform = 'scale(0.95)';
+    item.style.opacity = '0';
+    setTimeout(() => {
+      item.remove();
+      updateUnreadCount();
+      applyFilters();
+      showToast('Notification archived');
+    }, 200);
+  }
+
+  // Sort Dropdown
+  function toggleSortMenu() {
+    const drop = document.getElementById('sort-dropdown');
+    if (drop) drop.classList.toggle('hidden');
+  }
+
+  function selectSort(sortType) {
+    const label = document.getElementById('sort-label');
+    if (label) label.textContent = sortType;
+    toggleSortMenu();
+    showToast(`Sorted by: ${sortType}`);
+  }
+
+  // Modal Controls
+  function openPreferencesModal() {
+    const modal = document.getElementById('preferences-modal');
+    if (modal) modal.classList.remove('hidden');
+  }
+
+  function closePreferencesModal() {
+    const modal = document.getElementById('preferences-modal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  function savePreferences() {
+    closePreferencesModal();
+    showToast('Preferences updated successfully');
+  }
+
+  // Close dropdown when clicked outside
+  window.addEventListener('click', function(e) {
+    const sortBtn = document.getElementById('sort-menu-btn');
+    const sortDrop = document.getElementById('sort-dropdown');
+    if (sortBtn && sortDrop && !sortBtn.contains(e.target) && !sortDrop.contains(e.target)) {
+      sortDrop.classList.add('hidden');
+    }
+  });
+</script></div></main></div></body></html>

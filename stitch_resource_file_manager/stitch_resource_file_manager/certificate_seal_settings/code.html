@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<!-- Top Breadcrumb & Executive Action Header -->
+<div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-space-md mb-space-2xl">
+<div class="flex flex-col gap-space-xxs">
+<div class="flex items-center gap-space-xs font-caption text-caption text-secondary">
+<span>System Administration</span>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<span>Platform Preferences</span>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<span class="font-body-medium text-on-surface">Certificate & Seal Settings</span>
+</div>
+<div class="flex items-center gap-space-sm mt-1">
+<h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">Certificate & Seal Settings</h1>
+<div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-paid-bg text-status-paid-text font-label-sm text-[12px]">
+<span class="w-2 h-2 rounded-full bg-tertiary"></span>
+          SHA-256 Ledger Anchor Active
+        </div>
+</div>
+<p class="font-body-base text-body-base text-secondary max-w-3xl">
+        Configure official diploma templates, institutional digital seal, authorized cryptographic signatories, and tamper-proof verification policies.
+      </p>
+</div>
+<!-- Action Buttons -->
+<div class="flex items-center gap-space-sm shrink-0">
+<button class="h-10 px-space-md bg-surface-card hover:bg-surface-subtle text-on-surface font-body-medium rounded-xl shadow-sm transition-all flex items-center gap-space-xs" type="button">
+<span class="material-symbols-outlined text-[18px] text-secondary">history</span>
+<span>Discard Changes</span>
+</button>
+<button class="h-10 px-space-lg bg-primary-container hover:bg-primary-hover text-on-primary font-body-medium rounded-xl shadow-sm transition-all flex items-center gap-space-xs" type="button">
+<span class="material-symbols-outlined text-[18px]">verified_user</span>
+<span>Save Changes</span>
+</button>
+</div>
+</div>
+<!-- Settings Grid Layout with Sub-Navigation -->
+<div class="grid grid-cols-12 gap-space-xl">
+<!-- Left Settings Sub-Navigation Sidebar (Col 1-3) -->
+<div class="col-span-12 lg:col-span-3 flex flex-col gap-space-lg">
+<div class="bg-surface-card rounded-xl p-space-sm shadow-sm flex flex-col gap-1">
+<div class="px-space-sm py-2 font-label-sm text-[11px] uppercase tracking-wider text-secondary">
+          Settings Categories
+        </div>
+<a class="flex items-center gap-space-sm px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-[20px] text-secondary">domain</span>
+<span class="font-body-medium text-body-medium">Academy Profile</span>
+</a>
+<a class="flex items-center gap-space-sm px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-[20px] text-secondary">manage_accounts</span>
+<span class="font-body-medium text-body-medium">Staff & Permissions</span>
+</a>
+<a class="flex items-center gap-space-sm px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-[20px] text-secondary">account_balance_wallet</span>
+<span class="font-body-medium text-body-medium">Payment & Currency</span>
+</a>
+<!-- Active Tab: Certificate & Seal -->
+<a class="flex items-center justify-between px-space-sm py-2.5 rounded-xl bg-primary-subtle text-status-active-text font-body-medium shadow-xs" href="#">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-[20px] text-primary" style="font-variation-settings: 'FILL' 1;">workspace_premium</span>
+<span class="font-body-medium text-body-medium text-primary">Certificate & Seal</span>
+</div>
+<span class="w-1.5 h-4 rounded-full bg-primary"></span>
+</a>
+<a class="flex items-center justify-between px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-[20px] text-secondary">notifications_active</span>
+<span class="font-body-medium text-body-medium">Notifications & Alerts</span>
+</div>
+<span class="px-1.5 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-[11px]">8 Active</span>
+</a>
+<a class="flex items-center gap-space-sm px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#">
+<span class="material-symbols-outlined text-[20px] text-secondary">security</span>
+<span class="font-body-medium text-body-medium">Account & Security</span>
+</a>
+</div>
+<!-- Trust Anchor Status Widget -->
+<div class="bg-surface-card rounded-xl p-space-md shadow-sm flex flex-col gap-space-sm">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-[11px] uppercase tracking-wider text-secondary">Cryptographic Trust</span>
+<span class="material-symbols-outlined text-tertiary text-[18px]">verified</span>
+</div>
+<div class="flex flex-col gap-1">
+<span class="font-title text-label-md text-on-surface">Tier 2 Enterprise License</span>
+<span class="font-caption text-caption text-secondary">Internal Root CA: AFOOGY-ROOT-X29</span>
+</div>
+<div class="p-2.5 rounded-xl bg-surface-page flex flex-col gap-1">
+<div class="flex items-center justify-between font-caption text-[11px]">
+<span class="text-secondary">Key Roll Schedule</span>
+<span class="font-label-sm text-on-surface">318 Days</span>
+</div>
+<div class="w-full h-1.5 rounded-full bg-surface-subtle overflow-hidden">
+<div class="h-full bg-tertiary rounded-full" style="width: 82%;"></div>
+</div>
+</div>
+<span class="font-caption text-[11px] text-secondary">ISO-27001 compliant immutable verifiable credential ledger.</span>
+</div>
+</div>
+<!-- Center Main Configuration Area (Col 4-9) -->
+<div class="col-span-12 lg:col-span-6 flex flex-col gap-space-xl">
+<!-- Section 1: Official Institutional Seal -->
+<div class="bg-surface-card rounded-xl p-space-xl shadow-sm flex flex-col gap-space-lg">
+<div class="flex items-start justify-between">
+<div class="flex flex-col">
+<h2 class="font-title text-title text-on-surface">Official Institutional Seal & Watermark</h2>
+<p class="font-caption text-caption text-secondary">Manage the official vector emblem embossed across all accredited certificates.</p>
+</div>
+<span class="px-2 py-1 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">High Fidelity Vector</span>
+</div>
+<!-- Seal Visual Card & Upload Actions -->
+<div class="flex flex-col sm:flex-row items-center gap-space-lg p-space-md bg-surface-page rounded-xl">
+<!-- Circular Seal Emblem Graphic -->
+<div class="relative w-28 h-28 rounded-full bg-surface-card shadow-md flex items-center justify-center p-2 shrink-0">
+<svg class="w-full h-full text-primary" fill="none" viewbox="0 0 100 100">
+<!-- Outer decorative teeth -->
+<circle cx="50" cy="50" r="46" stroke="currentColor" stroke-dasharray="2 3" stroke-width="1.5"></circle>
+<circle cx="50" cy="50" r="41" stroke="currentColor" stroke-width="1"></circle>
+<circle cx="50" cy="50" r="38" stroke="currentColor" stroke-width="0.5"></circle>
+<!-- Emblem Text Ring -->
+<path d="M 50,50 m -32,0 a 32,32 0 1,1 64,0 a 32,32 0 1,1 -64,0" fill="none" id="sealPath"></path>
+<text class="text-[5px] uppercase font-bold fill-primary tracking-[0.14em]">
+<textpath href="#sealPath" startoffset="0%">AFOOGY SKILL ACADEMY • OFFICIAL SEAL • EST. 2021 •</textpath>
+</text>
+<!-- Center Laurels and Book -->
+<circle cx="50" cy="50" fill="currentColor" fill-opacity="0.08" r="16"></circle>
+<path d="M44 48L50 44L56 48V56L50 53L44 56V48Z" fill="currentColor"></path>
+<path d="M50 44V53" stroke="#FFFFFF" stroke-width="1"></path>
+<circle cx="50" cy="40" fill="currentColor" r="2"></circle>
+</svg>
+<span class="absolute -bottom-1 -right-1 p-1 bg-tertiary text-on-tertiary rounded-full shadow-xs">
+<span class="material-symbols-outlined text-[14px] block">verified</span>
+</span>
+</div>
+<div class="flex flex-col gap-space-xs flex-1">
+<div class="flex items-center gap-space-xs">
+<span class="font-body-medium text-body-medium text-on-surface">afoogy-official-seal-v2.svg</span>
+<span class="px-1.5 py-0.2 rounded bg-surface-subtle text-secondary font-label-sm text-[10px]">300 DPI</span>
+</div>
+<p class="font-caption text-caption text-secondary">
+              Recommended: Transparent SVG or high-resolution PNG (minimum 1200×1200px) with clean transparency mask.
+            </p>
+<div class="flex items-center gap-space-xs mt-1">
+<button class="h-8 px-3 rounded-xl bg-surface-card hover:bg-surface-subtle font-body-medium text-[13px] text-primary shadow-xs transition-all flex items-center gap-1" type="button">
+<span class="material-symbols-outlined text-[16px]">upload</span>
+                Upload New Seal
+              </button>
+<button class="h-8 px-3 rounded-xl bg-surface-card hover:bg-surface-subtle font-body-medium text-[13px] text-secondary shadow-xs transition-all flex items-center gap-1" type="button">
+<span class="material-symbols-outlined text-[16px]">crop</span>
+                Manage Geometry
+              </button>
+</div>
+</div>
+</div>
+<!-- Seal Configurations Form -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-space-lg">
+<div class="flex flex-col gap-1.5">
+<label class="font-label-sm text-label-sm text-secondary">Placement on Diploma</label>
+<div class="grid grid-cols-3 gap-1 bg-surface-page p-1 rounded-xl">
+<label class="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-surface-card shadow-xs cursor-pointer text-[12px] font-medium text-primary">
+<input checked="" class="hidden" name="seal_pos" type="radio"/>
+                Bottom Center
+              </label>
+<label class="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg hover:bg-surface-card/60 cursor-pointer text-[12px] font-medium text-secondary">
+<input class="hidden" name="seal_pos" type="radio"/>
+                Bottom Right
+              </label>
+<label class="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg hover:bg-surface-card/60 cursor-pointer text-[12px] font-medium text-secondary">
+<input class="hidden" name="seal_pos" type="radio"/>
+                Center Ghost
+              </label>
+</div>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="font-label-sm text-label-sm text-secondary">Embossing & Foil Finish</label>
+<div class="grid grid-cols-3 gap-1 bg-surface-page p-1 rounded-xl">
+<label class="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-surface-card shadow-xs cursor-pointer text-[12px] font-medium text-primary">
+<input checked="" class="hidden" name="seal_foil" type="radio"/>
+                Metallic Gold
+              </label>
+<label class="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg hover:bg-surface-card/60 cursor-pointer text-[12px] font-medium text-secondary">
+<input class="hidden" name="seal_foil" type="radio"/>
+                Navy Indigo
+              </label>
+<label class="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg hover:bg-surface-card/60 cursor-pointer text-[12px] font-medium text-secondary">
+<input class="hidden" name="seal_foil" type="radio"/>
+                Hologram
+              </label>
+</div>
+</div>
+<div class="col-span-1 md:col-span-2 flex flex-col gap-1.5">
+<div class="flex items-center justify-between">
+<label class="font-label-sm text-label-sm text-secondary">Holographic Security Watermark Opacity</label>
+<span class="font-label-sm text-[12px] text-primary">12% Ambient</span>
+</div>
+<input class="w-full accent-primary h-1.5 bg-surface-page rounded-full cursor-pointer" max="40" min="0" type="range" value="12"/>
+<div class="flex items-center justify-between font-caption text-[11px] text-secondary">
+<span>0% (Invisible)</span>
+<span>Balanced Legibility (10%–15%)</span>
+<span>40% (Opaque Security)</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Section 2: Authorized Signatories & Digital Sign-off Roster -->
+<div class="bg-surface-card rounded-xl p-space-xl shadow-sm flex flex-col gap-space-lg">
+<div class="flex items-start justify-between">
+<div class="flex flex-col">
+<h2 class="font-title text-title text-on-surface">Authorized Signatories & Digital Sign-off</h2>
+<p class="font-caption text-caption text-secondary">Signatures securely affixed to issued credentials upon validated batch milestone completion.</p>
+</div>
+<button class="h-8 px-3 rounded-xl bg-primary-subtle text-primary font-body-medium text-[13px] hover:bg-primary-fixed transition-colors flex items-center gap-1" type="button">
+<span class="material-symbols-outlined text-[16px]">add</span>
+            Add Signatory
+          </button>
+</div>
+<!-- Signatory List -->
+<div class="flex flex-col gap-space-sm">
+<!-- Signatory 1: David Sterling -->
+<div class="p-space-md rounded-xl bg-surface-page flex flex-col sm:flex-row sm:items-center justify-between gap-space-md">
+<div class="flex items-center gap-space-md">
+<div class="w-12 h-12 rounded-xl bg-surface-card shadow-xs flex items-center justify-center p-1.5 shrink-0 overflow-hidden">
+<img class="w-full h-full object-contain" data-alt="Cryptographically registered clean monochrome cursive signature of Academy Director David Sterling on clean white background with security seal stamp." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCOOCmtffJC5hPktASZ73x2_oIQ5xfCEwhIExKX1MCYfQEkt7vB6fGdBrfMNKsluZQbN5J0JYgsxuGMTn-s8qovb1YF3ETRJLCq0Z7ucyyv6TcEnIfZzJcFR7XvK4wuEk_K1M1lnXjosFzOVD5uPdjKo-BLGpdECwnPJvO5NezxCGRQDvsfhFP2O1TYhx-KYD9JhfPV5qghe4FxTp79dGsYxOjTbNx64bHoT1g2BxmqskegfEeDM2In"/>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center gap-space-xs">
+<span class="font-title text-label-md text-on-surface">David Sterling</span>
+<span class="px-1.5 py-0.5 rounded bg-status-paid-bg text-status-paid-text font-label-sm text-[10px]">Active Primary</span>
+</div>
+<span class="font-caption text-caption text-secondary">Academy Director & Academic Dean</span>
+<span class="font-caption text-[11px] text-secondary mt-0.5">RSA-4096 Key: SHA-256::e3b0c44...</span>
+</div>
+</div>
+<div class="flex items-center gap-space-sm self-end sm:self-center">
+<div class="flex items-center gap-2">
+<span class="font-caption text-[11px] text-secondary">Affix Automatically</span>
+<button class="relative inline-flex h-6 w-11 items-center rounded-full bg-primary transition-colors focus:outline-none" type="button">
+<span class="inline-block h-4 w-4 transform rounded-full bg-surface-card shadow-sm transition-transform translate-x-6"></span>
+</button>
+</div>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-card transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">edit</span>
+</button>
+</div>
+</div>
+<!-- Signatory 2: Dr. Marcus Vance -->
+<div class="p-space-md rounded-xl bg-surface-page flex flex-col sm:flex-row sm:items-center justify-between gap-space-md">
+<div class="flex items-center gap-space-md">
+<div class="w-12 h-12 rounded-xl bg-surface-card shadow-xs flex items-center justify-center p-1.5 shrink-0 overflow-hidden">
+<img class="w-full h-full object-contain" data-alt="Clean authentic academic digital cursive signature of Dr Marcus Vance for accredited university certificate issuance." src="https://lh3.googleusercontent.com/aida-public/AB6AXuD2ErPJqLt5fhlr7GyvPIa8WeNDKNbh7miRd9T6PdyQMkV8Aq1kf49Y4S2dlwSA4W3e7R8TwRj4zgQtoLqry24nIJMIBYrPT8MYQegMQp_ghG_xb-_pXsKuMmKl8zUvD0gimZD9DK7jmx0olupdTg47Gc5LJelITCssStmF6DbIZWOnipdf6_cGU1LeNKlD63H0N9EbCmIJumUJ2BmsXpWo9W67ncH4_y6E4t0pMJigEUnEwihydjct"/>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center gap-space-xs">
+<span class="font-title text-label-md text-on-surface">Dr. Marcus Vance</span>
+<span class="px-1.5 py-0.5 rounded bg-status-paid-bg text-status-paid-text font-label-sm text-[10px]">Active Secondary</span>
+</div>
+<span class="font-caption text-caption text-secondary">Head of Academic Curriculum & Research</span>
+<span class="font-caption text-[11px] text-secondary mt-0.5">RSA-4096 Key: SHA-256::7f83b16...</span>
+</div>
+</div>
+<div class="flex items-center gap-space-sm self-end sm:self-center">
+<div class="flex items-center gap-2">
+<span class="font-caption text-[11px] text-secondary">Affix Automatically</span>
+<button class="relative inline-flex h-6 w-11 items-center rounded-full bg-primary transition-colors focus:outline-none" type="button">
+<span class="inline-block h-4 w-4 transform rounded-full bg-surface-card shadow-sm transition-transform translate-x-6"></span>
+</button>
+</div>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-card transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">edit</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Dual Signature Requirement Policy Card -->
+<div class="p-space-md rounded-xl bg-surface-subtle flex items-center justify-between">
+<div class="flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-primary text-[22px] mt-0.5">how_to_reg</span>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Dual Sign-off Requirement</span>
+<span class="font-caption text-caption text-secondary">Require both authorized signatures for professional diplomas exceeding 120 credit hours.</span>
+</div>
+</div>
+<button class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full bg-primary transition-colors focus:outline-none" type="button">
+<span class="inline-block h-4 w-4 transform rounded-full bg-surface-card shadow-sm transition-transform translate-x-6"></span>
+</button>
+</div>
+</div>
+<!-- Section 3: Certificate Template & Layout Presets -->
+<div class="bg-surface-card rounded-xl p-space-xl shadow-sm flex flex-col gap-space-lg">
+<div class="flex items-start justify-between">
+<div class="flex flex-col">
+<h2 class="font-title text-title text-on-surface">Certificate Template & Guilloche Layout</h2>
+<p class="font-caption text-caption text-secondary">Select master design layout, border typography, and public ledger QR verification anchors.</p>
+</div>
+<span class="px-2 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-[11px]">A4 Landscape Vector</span>
+</div>
+<!-- Template Selector Tabs -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-space-sm">
+<div class="p-space-md rounded-xl bg-primary-subtle shadow-xs cursor-pointer flex flex-col gap-2 relative">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-[12px] text-primary">Executive Distinction</span>
+<span class="material-symbols-outlined text-primary text-[18px]">check_circle</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">Double gold frame with centered seal & dual sign-off row.</span>
+</div>
+<div class="p-space-md rounded-xl bg-surface-page hover:bg-surface-subtle shadow-xs cursor-pointer flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-[12px] text-on-surface">Academic Parchment</span>
+<span class="material-symbols-outlined text-secondary text-[18px]">radio_button_unchecked</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">Traditional serif typography with ornamental corner embellishments.</span>
+</div>
+<div class="p-space-md rounded-xl bg-surface-page hover:bg-surface-subtle shadow-xs cursor-pointer flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-[12px] text-on-surface">Minimal Tech Specialist</span>
+<span class="material-symbols-outlined text-secondary text-[18px]">radio_button_unchecked</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">Clean geometric layout with prominent cryptographic QR block.</span>
+</div>
+</div>
+<!-- Customization Fields -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-space-md">
+<div class="flex flex-col gap-1.5">
+<label class="font-label-sm text-label-sm text-secondary">Border & Guilloche Pattern</label>
+<select class="h-10 px-3 rounded-xl bg-surface-page text-body-base text-on-surface focus:outline-none focus:bg-surface-card transition-colors">
+<option selected="">Guilloche Security Wave (Anti-Counterfeit)</option>
+<option>Classic Formal Double Stroke</option>
+<option>Geometric Modern Navy Inset</option>
+<option>Clean Frameless Borderless</option>
+</select>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="font-label-sm text-label-sm text-secondary">Serial Number Prefix Format</label>
+<input class="h-10 px-3 rounded-xl bg-surface-page text-body-base text-on-surface focus:outline-none focus:bg-surface-card font-mono text-[13px]" type="text" value="AFG-CERT-[YEAR]-[HEX6]"/>
+<span class="font-caption text-[11px] text-secondary">Live Sample Preview: <strong class="text-on-surface">AFG-CERT-2024-9F810A</strong></span>
+</div>
+<div class="col-span-1 md:col-span-2 p-space-md rounded-xl bg-surface-page flex items-center justify-between">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-primary text-[22px]">qr_code_2</span>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">QR Code Public Verification Anchor</span>
+<span class="font-caption text-caption text-secondary">Renders a scannable live QR link directing to the cryptographic verification page.</span>
+</div>
+</div>
+<button class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full bg-primary transition-colors focus:outline-none" type="button">
+<span class="inline-block h-4 w-4 transform rounded-full bg-surface-card shadow-sm transition-transform translate-x-6"></span>
+</button>
+</div>
+</div>
+</div>
+<!-- Section 4: Cryptographic Integrity & Public Verification Policies -->
+<div class="bg-surface-card rounded-xl p-space-xl shadow-sm flex flex-col gap-space-lg">
+<div class="flex items-start justify-between">
+<div class="flex flex-col">
+<h2 class="font-title text-title text-on-surface">Cryptographic Integrity & Verification Policies</h2>
+<p class="font-caption text-caption text-secondary">Decentralized Merkle ledger notarization, employer lookup portals, and revocation rules.</p>
+</div>
+<span class="px-2 py-0.5 rounded-full bg-status-paid-bg text-status-paid-text font-label-sm text-[11px]">Ledger Sync 100%</span>
+</div>
+<div class="flex flex-col gap-space-md">
+<div class="p-space-md rounded-xl bg-surface-page flex items-center justify-between">
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">SHA-256 Merkle Ledger Anchoring</span>
+<span class="font-caption text-caption text-secondary">Automatically generate tamper-proof SHA-256 digest on immutable institutional block registry.</span>
+</div>
+<button class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full bg-primary transition-colors" type="button">
+<span class="inline-block h-4 w-4 transform rounded-full bg-surface-card shadow-sm transition-transform translate-x-6"></span>
+</button>
+</div>
+<div class="p-space-md rounded-xl bg-surface-page flex items-center justify-between">
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Public Direct Verification Portal</span>
+<span class="font-caption text-caption text-secondary">Allow authorized corporate recruiters and universities to verify authenticity at <code class="text-primary font-mono">academy.afoogy.com/verify</code> without credential sign-in.</span>
+</div>
+<button class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full bg-primary transition-colors" type="button">
+<span class="inline-block h-4 w-4 transform rounded-full bg-surface-card shadow-sm transition-transform translate-x-6"></span>
+</button>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-space-md pt-2">
+<div class="flex flex-col gap-1">
+<span class="font-label-sm text-label-sm text-secondary">Credential Default Validity</span>
+<select class="h-10 px-3 rounded-xl bg-surface-page text-body-base text-on-surface focus:outline-none">
+<option selected="">Lifetime Valid (No Expiration)</option>
+<option>3 Years Renewable Certification</option>
+<option>5 Years Standard Academic Period</option>
+<option>Custom Milestone Expiration Date</option>
+</select>
+</div>
+<div class="flex flex-col gap-1">
+<span class="font-label-sm text-label-sm text-secondary">Revocation & Dispute Governance</span>
+<div class="h-10 px-3 rounded-xl bg-surface-page flex items-center justify-between text-body-base">
+<span class="font-label-sm text-primary">Protocol Active V2.4</span>
+<a class="font-caption text-secondary hover:text-primary underline flex items-center gap-1" href="#">
+<span>Audit Rules</span>
+<span class="material-symbols-outlined text-[14px]">open_in_new</span>
+</a>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Side Inspection & Contextual Preview (Col 10-12) -->
+<div class="col-span-12 lg:col-span-3 flex flex-col gap-space-lg">
+<!-- Live Interactive Certificate Scaled Preview Sheet -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[20px]">preview</span>
+<span class="font-title text-label-md text-on-surface">Live Certificate Canvas</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">300 DPI Preview</span>
+</div>
+<!-- Certificate Scaled Sheet Container -->
+<div class="w-full aspect-[1.414/1] bg-surface-card rounded-xl shadow-md p-3 relative overflow-hidden flex flex-col justify-between">
+<!-- Guilloche Background Wave (Subtle SVG Overlay) -->
+<svg class="absolute inset-0 w-full h-full opacity-10 pointer-events-none text-primary" fill="none" viewbox="0 0 200 140">
+<path d="M0 20 C 50 0, 150 40, 200 20" stroke="currentColor" stroke-width="0.5"></path>
+<path d="M0 40 C 60 10, 140 70, 200 40" stroke="currentColor" stroke-width="0.5"></path>
+<path d="M0 70 C 80 40, 120 100, 200 70" stroke="currentColor" stroke-width="0.5"></path>
+<path d="M0 100 C 40 80, 160 120, 200 100" stroke="currentColor" stroke-width="0.5"></path>
+<circle cx="100" cy="70" r="40" stroke="currentColor" stroke-dasharray="1 2" stroke-width="0.5"></circle>
+</svg>
+<!-- Top Certificate Branding -->
+<div class="flex flex-col items-center text-center relative z-10">
+<span class="text-[7px] uppercase font-bold tracking-[0.2em] text-secondary">Afoogy Skill Academy</span>
+<span class="text-[9px] font-bold text-on-surface tracking-tight mt-0.5 font-display">Certificate of Completion</span>
+<span class="text-[5px] text-secondary mt-0.5">THIS RECOGNIZES THE SUCCESSFUL ACCREDITATION OF</span>
+<span class="text-[9px] font-semibold text-primary mt-1 border-b border-primary/20 pb-0.5 px-4 font-display">Alexander M. Richardson</span>
+</div>
+<!-- Certificate Center Body Text -->
+<div class="flex flex-col items-center text-center relative z-10 px-2">
+<span class="text-[6px] text-on-surface leading-tight">For comprehensive mastery of Full-Stack Enterprise Systems & Distributed Architecture with distinction.</span>
+</div>
+<!-- Bottom Row: Primary Seal, Signatures, and Verification QR -->
+<div class="flex items-end justify-between relative z-10 pt-1">
+<!-- Left Signature -->
+<div class="flex flex-col items-center">
+<div class="w-12 h-4 flex items-center justify-center opacity-85">
+<svg class="w-full h-full fill-none stroke-on-surface" stroke-width="1.2" viewbox="0 0 80 25">
+<path d="M5 18 C 15 5, 25 22, 35 10 C 42 3, 50 18, 65 12 C 70 10, 75 16, 78 14"></path>
+</svg>
+</div>
+<div class="w-14 h-px bg-secondary/30 my-0.5"></div>
+<span class="text-[5px] font-semibold text-on-surface">David Sterling</span>
+<span class="text-[4px] text-secondary">Academy Director</span>
+</div>
+<!-- Center Gold Foil Embossed Seal -->
+<div class="relative w-8 h-8 rounded-full bg-gradient-to-br from-amber-300 via-amber-400 to-amber-600 shadow-sm flex items-center justify-center p-0.5 shrink-0">
+<div class="w-full h-full rounded-full border border-amber-100/60 flex items-center justify-center">
+<span class="material-symbols-outlined text-white text-[12px]">verified</span>
+</div>
+</div>
+<!-- Right Verification QR Block -->
+<div class="flex flex-col items-center">
+<div class="w-6 h-6 bg-surface-card rounded p-0.5 shadow-xs flex items-center justify-center">
+<!-- Mini QR SVG Vector representation -->
+<svg class="w-full h-full text-on-surface" fill="currentColor" viewbox="0 0 24 24">
+<path d="M2 2h8v8H2V2zm2 2v4h4V4H4zm10-2h8v8h-8V2zm2 2v4h4V4h-4zM2 14h8v8H2v-8zm2 2v4h4v-4H4zm14 3h2v3h-2v-3zm-4-3h3v2h-3v-2zm3 2h2v2h-2v-2zm-3 3h2v2h-2v-2zm5-1h2v3h-2v-3zm-2-4h4v1h-4v-1z"></path>
+</svg>
+</div>
+<span class="text-[4px] font-mono text-secondary mt-0.5">AFG-9F810A</span>
+</div>
+</div>
+</div>
+<button class="w-full h-9 rounded-xl bg-surface-subtle hover:bg-surface-page font-body-medium text-[13px] text-on-surface flex items-center justify-center gap-1.5 transition-colors" type="button">
+<span class="material-symbols-outlined text-[16px] text-secondary">download</span>
+          Export High-Res Sample PDF
+        </button>
+</div>
+<!-- Credential Issuance Metric Stats -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between">
+<span class="font-title text-label-md text-on-surface">Issuance Snapshot</span>
+<span class="material-symbols-outlined text-secondary text-[18px]">analytics</span>
+</div>
+<div class="grid grid-cols-3 gap-space-xs text-center">
+<div class="p-space-xs rounded-xl bg-surface-page flex flex-col">
+<span class="font-headline-md text-headline-md text-on-surface font-bold">150</span>
+<span class="font-caption text-[11px] text-secondary">Total Issued</span>
+</div>
+<div class="p-space-xs rounded-xl bg-surface-page flex flex-col">
+<span class="font-headline-md text-headline-md text-tertiary font-bold">100%</span>
+<span class="font-caption text-[11px] text-secondary">Verified</span>
+</div>
+<div class="p-space-xs rounded-xl bg-surface-page flex flex-col">
+<span class="font-headline-md text-headline-md text-on-surface font-bold">0</span>
+<span class="font-caption text-[11px] text-secondary">Disputed</span>
+</div>
+</div>
+<!-- Issuance Velocity Mini Inline Sparkline Chart -->
+<div class="flex flex-col gap-1 mt-1">
+<div class="flex items-center justify-between font-caption text-[11px]">
+<span class="text-secondary">Issuance Velocity</span>
+<span class="text-status-paid-text font-medium">+18% this month</span>
+</div>
+<div class="h-10 w-full">
+<svg class="w-full h-full text-primary" fill="none" viewbox="0 0 200 40">
+<path d="M0 35 L 25 32 L 50 28 L 75 30 L 100 22 L 125 18 L 150 20 L 175 10 L 200 8" stroke="currentColor" stroke-linecap="round" stroke-width="2"></path>
+<path d="M0 35 L 25 32 L 50 28 L 75 30 L 100 22 L 125 18 L 150 20 L 175 10 L 200 8 L 200 40 L 0 40 Z" fill="currentColor" fill-opacity="0.08"></path>
+</svg>
+</div>
+</div>
+</div>
+<!-- Audit Trail Snapshot Box -->
+<div class="bg-surface-card rounded-xl p-space-md shadow-sm flex flex-col gap-space-sm">
+<span class="font-label-sm text-[11px] uppercase tracking-wider text-secondary">Audit Trail Snapshot</span>
+<div class="flex items-start gap-space-xs text-secondary font-caption text-[12px] leading-snug">
+<span class="material-symbols-outlined text-tertiary text-[18px] shrink-0 mt-0.5">history_toggle_off</span>
+<div>
+            Last template modification by <strong class="text-on-surface">David Sterling (Owner)</strong> on Oct 22, 2024 at 14:38 UTC. 
+            <span class="block mt-1 font-mono text-[10px] text-secondary/80">Merkle Root: 0x82f1...99bc</span>
+</div>
+</div>
+</div>
+<!-- Security Advisory Box -->
+<div class="p-space-md rounded-xl bg-status-active-bg flex items-start gap-space-xs">
+<span class="material-symbols-outlined text-status-active-text text-[20px] shrink-0">shield_lock</span>
+<div class="flex flex-col">
+<span class="font-label-sm text-[12px] text-status-active-text">Tamper-Proof Verification Standard</span>
+<p class="font-caption text-[11px] text-secondary mt-0.5">
+            Compliant with ISO/IEC 27001 verifiable credential specifications. All rendered diploma hashes are cryptographically signed.
+          </p>
+</div>
+</div>
+</div>
+</div>
+</div></div></main></div></body></html>

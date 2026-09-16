@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md mb-space-xl">
+<div>
+<div class="flex items-center gap-space-xs text-secondary font-label-sm text-label-sm mb-1 uppercase tracking-wider">
+<span>Cohorts & Batches</span>
+<span class="text-secondary/50">/</span>
+<span class="text-primary font-medium">Session Roll Call</span>
+</div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface">Attendance</h1>
+<p class="font-body-base text-body-base text-secondary mt-0.5">Rapid daily roll call and session attendance tracking for active cohorts.</p>
+</div>
+<div class="flex items-center gap-space-sm self-start lg:self-auto">
+<button class="h-10 px-4 rounded-xl bg-surface-card hover:bg-surface-subtle text-on-surface font-body-medium text-body-medium shadow-sm flex items-center gap-2 transition-colors" id="btn-quick-all-present" type="button">
+<span class="material-symbols-outlined text-[18px] text-tertiary">done_all</span>
+<span>Mark All Present</span>
+</button>
+<button class="h-10 px-5 rounded-xl bg-primary-container hover:bg-primary-hover text-on-primary font-body-medium text-body-medium shadow-sm flex items-center gap-2 transition-all" id="btn-top-save" type="button">
+<span class="material-symbols-outlined text-[18px]">check_circle</span>
+<span>Save Attendance</span>
+</button>
+</div>
+</div>
+<section class="bg-surface-card rounded-xl p-space-lg shadow-sm mb-space-xl">
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-space-md items-end">
+<div class="xl:col-span-4 flex flex-col gap-1.5">
+<label class="font-label-md text-label-md text-secondary flex items-center justify-between" for="batch-select">
+<span>Active Batch</span>
+<span class="text-primary font-caption text-caption font-semibold">20 Enrolled</span>
+</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[20px] pointer-events-none">school</span>
+<select class="w-full h-10 pl-10 pr-9 bg-surface-page rounded-xl font-body-base text-body-base text-on-surface appearance-none focus:outline-none focus:bg-surface-card transition-colors cursor-pointer" id="batch-select">
+<option selected="">Evening Product Sprint Q3 (BTH-2024-048) — UX-301</option>
+<option>Morning Full-Stack Web Dev (BTH-2024-033) — CS-102</option>
+<option>Data Analytics Weekend Bootcamp (BTH-2024-051) — DA-201</option>
+<option>AI & Machine Learning Foundations (BTH-2024-019) — AI-401</option>
+</select>
+<span class="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-secondary text-[18px] pointer-events-none">expand_more</span>
+</div>
+</div>
+<div class="xl:col-span-3 flex flex-col gap-1.5">
+<label class="font-label-md text-label-md text-secondary flex items-center justify-between" for="date-select">
+<span>Session Date</span>
+<span class="font-caption text-caption text-secondary">Session 37 / 40</span>
+</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[20px] pointer-events-none">calendar_today</span>
+<input class="w-full h-10 pl-10 pr-3 bg-surface-page rounded-xl font-body-base text-body-base text-on-surface focus:outline-none focus:bg-surface-card transition-colors" id="date-select" type="text" value="Today, Oct 29, 2024"/>
+</div>
+</div>
+<div class="xl:col-span-3 flex flex-col gap-1.5">
+<label class="font-label-md text-label-md text-secondary flex items-center justify-between" for="topic-select">
+<span>Curriculum Module</span>
+<span class="font-caption text-caption text-tertiary font-semibold flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary inline-block"></span>
+            Trainer: Alex Morgan
+          </span>
+</label>
+<div class="relative">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[20px] pointer-events-none">auto_stories</span>
+<input class="w-full h-10 pl-10 pr-3 bg-surface-page rounded-xl font-body-base text-body-base text-on-surface focus:outline-none focus:bg-surface-card transition-colors" id="topic-select" type="text" value="Design Systems Governance & Token Handoff"/>
+</div>
+</div>
+<div class="xl:col-span-2 flex items-center gap-space-xs">
+<button class="w-full h-10 px-4 rounded-xl bg-surface-subtle hover:bg-surface-variant text-on-surface font-body-medium text-body-medium transition-colors flex items-center justify-center gap-2" id="btn-load-students" type="button">
+<span class="material-symbols-outlined text-[18px] text-primary">sync</span>
+<span>Refresh Roster</span>
+</button>
+</div>
+</div>
+</section>
+<section class="bg-surface-card rounded-xl p-space-md shadow-sm mb-space-lg">
+<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md">
+<div class="flex flex-wrap items-center gap-space-sm">
+<div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-surface-page">
+<span class="material-symbols-outlined text-[18px] text-secondary">groups</span>
+<span class="font-label-sm text-label-sm text-secondary">Cohort:</span>
+<span class="font-body-medium text-body-medium text-on-surface" id="counter-total">20 Enrolled</span>
+</div>
+<div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-status-paid-bg text-status-paid-text">
+<span class="material-symbols-outlined text-[18px]">check_circle</span>
+<span class="font-label-sm text-label-sm">Present:</span>
+<span class="font-title text-body-medium" id="counter-present">17</span>
+</div>
+<div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-status-pending-bg text-status-pending-text">
+<span class="material-symbols-outlined text-[18px]">schedule</span>
+<span class="font-label-sm text-label-sm">Late:</span>
+<span class="font-title text-body-medium" id="counter-late">2</span>
+</div>
+<div class="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-status-overdue-bg text-status-overdue-text">
+<span class="material-symbols-outlined text-[18px]">cancel</span>
+<span class="font-label-sm text-label-sm">Absent:</span>
+<span class="font-title text-body-medium" id="counter-absent">1</span>
+</div>
+</div>
+<div class="flex items-center gap-space-lg self-end lg:self-auto">
+<div class="flex items-center gap-3">
+<div class="flex flex-col items-end">
+<span class="font-caption text-caption text-secondary">Session Rate</span>
+<span class="font-title text-title text-on-surface" id="counter-rate">95.0%</span>
+</div>
+<div class="w-12 h-12 relative flex items-center justify-center">
+<svg class="w-12 h-12 -rotate-90" viewbox="0 0 36 36">
+<path class="text-surface-subtle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="3.5"></path>
+<path class="text-primary transition-all duration-500" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" id="rate-ring" stroke="currentColor" stroke-dasharray="95, 100" stroke-linecap="round" stroke-width="3.5"></path>
+</svg>
+<span class="material-symbols-outlined text-primary text-[16px] absolute">trending_up</span>
+</div>
+</div>
+<div class="flex items-center gap-2 pl-4 border-l border-surface-subtle">
+<button class="text-primary hover:text-primary-hover font-label-sm text-label-sm py-1 px-2 rounded hover:bg-primary-subtle transition-colors flex items-center gap-1" id="btn-bulk-present" type="button">
+<span class="material-symbols-outlined text-[16px]">done_all</span>
+<span>All Present</span>
+</button>
+<span class="text-secondary/40 text-caption">•</span>
+<button class="text-secondary hover:text-on-surface font-label-sm text-label-sm py-1 px-2 rounded hover:bg-surface-subtle transition-colors flex items-center gap-1" id="btn-bulk-clear" type="button">
+<span class="material-symbols-outlined text-[16px]">restart_alt</span>
+<span>Reset</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+<div class="bg-surface-card rounded-xl shadow-sm overflow-hidden mb-space-2xl">
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-page text-secondary font-label-sm text-label-sm">
+<th class="py-3 px-space-md w-12 text-center">#</th>
+<th class="py-3 px-space-md min-w-[260px]">Trainee Name & ID</th>
+<th class="py-3 px-space-md w-44">Cohort Track Record</th>
+<th class="py-3 px-space-md min-w-[280px]">Status Roll Call</th>
+<th class="py-3 px-space-md min-w-[240px]">Arrival Time & Operational Notes</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-surface-subtle font-body-base text-body-base" id="student-roster">
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0891">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">01</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-primary-subtle text-primary font-title text-label-md flex items-center justify-center font-medium">AK</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Amina Karim</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0891</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 97%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">97%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">36 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-paid-bg text-status-paid-text font-semibold shadow-xs" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="On time (5:55 PM)"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0902">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">02</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-secondary-container text-on-secondary-container font-title text-label-md flex items-center justify-center font-medium">DL</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">David Lee</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0902</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 92%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">92%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">34 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-pending-bg text-status-pending-text font-semibold shadow-xs" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="Arrived 6:18 PM (Transit delay)"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0915">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">03</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-surface-container-high text-primary font-title text-label-md flex items-center justify-center font-medium">SN</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Sophia Nguyen</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0915</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 100%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">100%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">37 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-paid-bg text-status-paid-text font-semibold shadow-xs" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="On time (5:58 PM)"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors bg-status-overdue-bg/30" data-student-id="AFG-2024-0921">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">04</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-error-container text-on-error-container font-title text-label-md flex items-center justify-center font-medium">TO</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Tariq Oladipo</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0921</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-status-pending-text h-full rounded-full" style="width: 78%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-status-pending-text font-bold">78%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">29 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-overdue-bg text-status-overdue-text font-semibold shadow-xs" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="Excused notice sent via email"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0934">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">05</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-primary-fixed text-on-primary-fixed font-title text-label-md flex items-center justify-center font-medium">ER</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Elena Rostova</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0934</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 95%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">95%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">35 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-paid-bg text-status-paid-text font-semibold shadow-xs" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="On time (6:00 PM)"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0947">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">06</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-tertiary-fixed text-on-tertiary-fixed font-title text-label-md flex items-center justify-center font-medium">MC</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Marcus Chen</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0947</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 100%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">100%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">37 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-paid-bg text-status-paid-text font-semibold shadow-xs" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="On time (5:50 PM)"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0955">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">07</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-surface-variant text-on-surface-variant font-title text-label-md flex items-center justify-center font-medium">CB</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Chloe Bennett</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0955</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 89%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">89%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">33 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-paid-bg text-status-paid-text font-semibold shadow-xs" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="On time (6:02 PM)"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0968">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">08</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-secondary-fixed text-on-secondary-fixed font-title text-label-md flex items-center justify-center font-medium">FA</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Fatima Al-Zahra</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0968</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 94%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">94%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">35 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-pending-bg text-status-pending-text font-semibold shadow-xs" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="Arrived 6:22 PM (Work conflict)"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0972">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">09</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-surface-container-highest text-on-surface-variant font-title text-label-md flex items-center justify-center font-medium">KZ</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Kevin Zhang</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0972</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 97%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">97%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">36 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-paid-bg text-status-paid-text font-semibold shadow-xs" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="On time (5:59 PM)"/>
+</td>
+</tr>
+<tr class="hover:bg-surface-page/50 transition-colors" data-student-id="AFG-2024-0980">
+<td class="py-3.5 px-space-md text-center text-secondary font-label-sm text-caption">10</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-3">
+<div class="w-9 h-9 rounded-full bg-primary-subtle text-primary font-title text-label-md flex items-center justify-center font-medium">LO</div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Liam O'Connor</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0980</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-2">
+<div class="flex-1 bg-surface-subtle rounded-full h-1.5 overflow-hidden">
+<div class="bg-tertiary h-full rounded-full" style="width: 100%;"></div>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface">100%</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">37 of 37 sessions</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex rounded-xl bg-surface-page p-0.5 gap-1 status-group">
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all bg-status-paid-bg text-status-paid-text font-semibold shadow-xs" data-status="present" type="button">
+<span class="material-symbols-outlined text-[16px]">check</span>
+<span>Present</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="late" type="button">
+<span class="material-symbols-outlined text-[16px]">schedule</span>
+<span>Late</span>
+</button>
+<button class="status-btn px-3 py-1.5 rounded-lg font-label-sm text-label-sm flex items-center gap-1.5 transition-all text-secondary hover:text-on-surface" data-status="absent" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+<span>Absent</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<input class="w-full h-8 px-3 rounded-lg bg-surface-page font-body-base text-body-base text-on-surface placeholder:text-secondary/60 focus:outline-none focus:bg-surface-card transition-colors" placeholder="Add timestamp or note..." type="text" value="On time (6:01 PM)"/>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="px-space-md py-3 bg-surface-page flex flex-col sm:flex-row items-center justify-between gap-2 text-secondary font-caption text-caption">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-secondary">info</span>
+<span>Showing 10 of 20 trainees for this view. Cohort members 11–20 marked Present by system default.</span>
+</div>
+<span class="font-medium text-on-surface">Hotkeys active: [P] Present • [L] Late • [A] Absent • [Tab] Next Trainee</span>
+</div>
+</div>
+<div class="sticky bottom-4 z-30 bg-surface-card/95 backdrop-blur-md rounded-xl p-space-md shadow-xl flex flex-col md:flex-row items-center justify-between gap-space-md">
+<div class="flex flex-col sm:flex-row sm:items-center gap-space-md w-full md:w-auto">
+<div class="flex items-center gap-2">
+<span class="w-2.5 h-2.5 rounded-full bg-tertiary animate-pulse"></span>
+<span class="font-body-medium text-body-medium text-on-surface">20 of 20 trainees marked</span>
+<span class="text-secondary">•</span>
+<span class="font-body-base text-body-base text-secondary">Session 37 ready to submit</span>
+</div>
+<label class="flex items-center gap-2 cursor-pointer select-none">
+<input checked="" class="w-4 h-4 rounded text-primary focus:ring-primary/20 cursor-pointer" id="notify-absent" type="checkbox"/>
+<span class="font-caption text-caption text-secondary hover:text-on-surface">Send automated SMS/Email notification to absent trainees</span>
+</label>
+</div>
+<div class="flex items-center gap-space-sm w-full md:w-auto justify-end">
+<button class="h-10 px-4 rounded-xl bg-surface-page hover:bg-surface-subtle text-on-surface font-body-medium text-body-medium transition-colors" id="btn-save-draft" type="button">
+        Save as Draft
+      </button>
+<button class="h-10 px-5 rounded-xl bg-primary-container hover:bg-primary-hover text-on-primary font-body-medium text-body-medium shadow-sm flex items-center gap-2 transition-all" id="btn-finalize" type="button">
+<span class="material-symbols-outlined text-[18px]">verified</span>
+<span>Save & Finalize Attendance</span>
+</button>
+</div>
+</div>
+<div class="fixed bottom-20 right-8 z-50 transform translate-y-8 opacity-0 pointer-events-none transition-all duration-300 flex items-center gap-3 px-4 py-3 rounded-xl bg-inverse-surface text-inverse-on-surface shadow-xl font-body-medium text-body-medium" id="toast-message">
+<span class="material-symbols-outlined text-tertiary-fixed text-[20px]">check_circle</span>
+<span id="toast-text">Attendance recorded successfully.</span>
+</div>
+</div>
+<script>
+  (function() {
+    const presentClasses = ['bg-status-paid-bg', 'text-status-paid-text', 'font-semibold', 'shadow-xs'];
+    const lateClasses = ['bg-status-pending-bg', 'text-status-pending-text', 'font-semibold', 'shadow-xs'];
+    const absentClasses = ['bg-status-overdue-bg', 'text-status-overdue-text', 'font-semibold', 'shadow-xs'];
+    const idleClasses = ['text-secondary', 'hover:text-on-surface'];
+
+    const counterPresent = document.getElementById('counter-present');
+    const counterLate = document.getElementById('counter-late');
+    const counterAbsent = document.getElementById('counter-absent');
+    const counterRate = document.getElementById('counter-rate');
+    const rateRing = document.getElementById('rate-ring');
+    const toast = document.getElementById('toast-message');
+    const toastText = document.getElementById('toast-text');
+
+    function showToast(msg) {
+      if (!toast) return;
+      toastText.textContent = msg;
+      toast.classList.remove('translate-y-8', 'opacity-0', 'pointer-events-none');
+      toast.classList.add('translate-y-0', 'opacity-100');
+      setTimeout(() => {
+        toast.classList.add('translate-y-8', 'opacity-0', 'pointer-events-none');
+        toast.classList.remove('translate-y-0', 'opacity-100');
+      }, 3200);
+    }
+
+    function setButtonActive(btn, status) {
+      btn.classList.remove(...idleClasses, ...presentClasses, ...lateClasses, ...absentClasses);
+      if (status === 'present') {
+        btn.classList.add(...presentClasses);
+      } else if (status === 'late') {
+        btn.classList.add(...lateClasses);
+      } else if (status === 'absent') {
+        btn.classList.add(...absentClasses);
+      }
+    }
+
+    function setButtonIdle(btn) {
+      btn.classList.remove(...presentClasses, ...lateClasses, ...absentClasses);
+      btn.classList.add(...idleClasses);
+    }
+
+    function recalcCounts() {
+      const rows = document.querySelectorAll('#student-roster tr');
+      let presentCount = 10;
+      let lateCount = 0;
+      let absentCount = 0;
+
+      rows.forEach(row => {
+        const activeBtn = row.querySelector('.status-btn.bg-status-paid-bg, .status-btn.bg-status-pending-bg, .status-btn.bg-status-overdue-bg');
+        if (!activeBtn) return;
+        const status = activeBtn.getAttribute('data-status');
+        if (status === 'present') {
+          // Already default included
+        } else if (status === 'late') {
+          presentCount--;
+          lateCount++;
+        } else if (status === 'absent') {
+          presentCount--;
+          absentCount++;
+        }
+      });
+
+      const totalCohort = 20;
+      const actualPresent = 10 + presentCount;
+      const totalAttended = actualPresent + lateCount;
+      const rate = Math.round((totalAttended / totalCohort) * 100);
+
+      if (counterPresent) counterPresent.textContent = actualPresent;
+      if (counterLate) counterLate.textContent = lateCount;
+      if (counterAbsent) counterAbsent.textContent = absentCount;
+      if (counterRate) counterRate.textContent = rate + '%';
+      if (rateRing) rateRing.setAttribute('stroke-dasharray', rate + ', 100');
+    }
+
+    document.querySelectorAll('.status-group').forEach(group => {
+      const buttons = group.querySelectorAll('.status-btn');
+      const row = group.closest('tr');
+      const noteInput = row ? row.querySelector('input') : null;
+
+      buttons.forEach(btn => {
+        btn.addEventListener('click', function() {
+          const status = this.getAttribute('data-status');
+          buttons.forEach(b => setButtonIdle(b));
+          setButtonActive(this, status);
+
+          if (row) {
+            row.classList.remove('bg-status-overdue-bg/30');
+            if (status === 'absent') {
+              row.classList.add('bg-status-overdue-bg/30');
+            }
+          }
+
+          if (noteInput) {
+            const now = new Date();
+            const hours = now.getHours() % 12 || 12;
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const ampm = now.getHours() >= 12 ? 'PM' : 'AM';
+            const timeStr = hours + ':' + minutes + ' ' + ampm;
+
+            if (status === 'present' && !noteInput.value.includes('On time')) {
+              noteInput.value = 'On time (' + timeStr + ')';
+            } else if (status === 'late' && !noteInput.value.includes('Arrived')) {
+              noteInput.value = 'Arrived ' + timeStr;
+            } else if (status === 'absent' && (!noteInput.value || noteInput.value.includes('On time') || noteInput.value.includes('Arrived'))) {
+              noteInput.value = 'Unexcused - No show logged';
+            }
+          }
+
+          recalcCounts();
+        });
+      });
+    });
+
+    const markAllPresent = () => {
+      document.querySelectorAll('#student-roster tr').forEach(row => {
+        row.classList.remove('bg-status-overdue-bg/30');
+        const buttons = row.querySelectorAll('.status-btn');
+        buttons.forEach(btn => {
+          if (btn.getAttribute('data-status') === 'present') {
+            setButtonActive(btn, 'present');
+          } else {
+            setButtonIdle(btn);
+          }
+        });
+        const noteInput = row.querySelector('input');
+        if (noteInput) {
+          noteInput.value = 'On time (6:00 PM)';
+        }
+      });
+      recalcCounts();
+      showToast('All 20 trainees marked as Present.');
+    };
+
+    const clearAll = () => {
+      document.querySelectorAll('#student-roster tr').forEach(row => {
+        row.classList.remove('bg-status-overdue-bg/30');
+        const buttons = row.querySelectorAll('.status-btn');
+        buttons.forEach(b => setButtonIdle(b));
+        const noteInput = row.querySelector('input');
+        if (noteInput) noteInput.value = '';
+      });
+      if (counterPresent) counterPresent.textContent = '0';
+      if (counterLate) counterLate.textContent = '0';
+      if (counterAbsent) counterAbsent.textContent = '0';
+      if (counterRate) counterRate.textContent = '0%';
+      if (rateRing) rateRing.setAttribute('stroke-dasharray', '0, 100');
+      showToast('Roll call cleared. Please re-mark status.');
+    };
+
+    const btnQuickAllPresent = document.getElementById('btn-quick-all-present');
+    const btnBulkPresent = document.getElementById('btn-bulk-present');
+    const btnBulkClear = document.getElementById('btn-bulk-clear');
+    const btnSaveDraft = document.getElementById('btn-save-draft');
+    const btnFinalize = document.getElementById('btn-finalize');
+    const btnTopSave = document.getElementById('btn-top-save');
+    const btnLoadStudents = document.getElementById('btn-load-students');
+
+    if (btnQuickAllPresent) btnQuickAllPresent.addEventListener('click', markAllPresent);
+    if (btnBulkPresent) btnBulkPresent.addEventListener('click', markAllPresent);
+    if (btnBulkClear) btnBulkClear.addEventListener('click', clearAll);
+
+    if (btnLoadStudents) {
+      btnLoadStudents.addEventListener('click', () => {
+        showToast('Roster re-synced with Central Campus database.');
+      });
+    }
+
+    if (btnSaveDraft) {
+      btnSaveDraft.addEventListener('click', () => {
+        showToast('Attendance draft saved for Session 37.');
+      });
+    }
+
+    const finalizeAction = () => {
+      showToast('Session 37 finalized & verified. Notifications dispatched.');
+    };
+
+    if (btnFinalize) btnFinalize.addEventListener('click', finalizeAction);
+    if (btnTopSave) btnTopSave.addEventListener('click', finalizeAction);
+  })();
+</script></div></main></div></body></html>

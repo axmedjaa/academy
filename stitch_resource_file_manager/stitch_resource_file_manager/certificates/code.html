@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<div class="flex flex-col md:flex-row md:items-center justify-between gap-space-md mb-space-2xl">
+<div class="flex flex-col gap-space-xxs">
+<div class="flex items-center gap-space-xs">
+<span class="font-display text-display text-on-surface">Certificates</span>
+<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">Audit Ledger v2.4</span>
+</div>
+<p class="font-body-base text-body-base text-secondary">Issue, track, and manage verified academy graduation credentials and student certificates.</p>
+</div>
+<div class="flex items-center gap-space-sm self-start md:self-auto">
+<button class="inline-flex items-center gap-space-xs px-space-md h-10 rounded-xl bg-surface-card text-on-surface font-body-medium shadow-sm hover:bg-surface-subtle transition-all" type="button">
+<span class="material-symbols-outlined text-[18px] text-secondary">cloud_download</span>
+<span>Export Registry</span>
+</button>
+<button class="inline-flex items-center gap-space-xs px-space-md h-10 rounded-xl bg-primary-container text-on-primary font-body-medium shadow-sm hover:bg-primary-hover transition-all" onclick="document.getElementById('issueCertModal').classList.remove('hidden')" type="button">
+<span class="material-symbols-outlined text-[18px]">add</span>
+<span>Issue Certificate</span>
+</button>
+</div>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-space-md mb-space-2xl">
+<div class="p-space-lg rounded-xl bg-surface-card shadow-sm flex flex-col justify-between">
+<div class="flex items-center justify-between mb-space-xs">
+<span class="font-label-md text-label-md text-secondary">Pending Clearance</span>
+<div class="w-8 h-8 rounded-lg bg-status-pending-bg text-status-pending-text flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">hourglass_top</span>
+</div>
+</div>
+<div class="flex items-baseline gap-space-xs my-space-xxs">
+<span class="font-display text-display text-on-surface">8</span>
+<span class="font-caption text-caption text-secondary">students</span>
+</div>
+<p class="font-caption text-caption text-secondary">Trainees completed curriculum, pending review/clearance</p>
+</div>
+<div class="p-space-lg rounded-xl bg-surface-card shadow-sm flex flex-col justify-between">
+<div class="flex items-center justify-between mb-space-xs">
+<span class="font-label-md text-label-md text-secondary">Issued & Verified</span>
+<div class="w-8 h-8 rounded-lg bg-status-paid-bg text-status-paid-text flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">verified</span>
+</div>
+</div>
+<div class="flex items-baseline gap-space-xs my-space-xxs">
+<span class="font-display text-display text-on-surface">142</span>
+<span class="font-caption text-caption text-tertiary font-medium">94.6% issued</span>
+</div>
+<p class="font-caption text-caption text-secondary">Official credentials distributed and tamper-locked</p>
+</div>
+<div class="p-space-lg rounded-xl bg-surface-card shadow-sm flex flex-col justify-between">
+<div class="flex items-center justify-between mb-space-xs">
+<span class="font-label-md text-label-md text-secondary">This Month</span>
+<div class="w-8 h-8 rounded-lg bg-status-active-bg text-status-active-text flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">calendar_month</span>
+</div>
+</div>
+<div class="flex items-baseline gap-space-xs my-space-xxs">
+<span class="font-display text-display text-on-surface">24</span>
+<span class="inline-flex items-center text-caption text-tertiary font-medium">
+<span class="material-symbols-outlined text-[14px]">trending_up</span> +18%
+        </span>
+</div>
+<p class="font-caption text-caption text-secondary">New credentials issued in current billing term</p>
+</div>
+<div class="p-space-lg rounded-xl bg-surface-card shadow-sm flex flex-col justify-between">
+<div class="flex items-center justify-between mb-space-xs">
+<span class="font-label-md text-label-md text-secondary">Total Certificates</span>
+<div class="w-8 h-8 rounded-lg bg-surface-subtle text-secondary flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">workspace_premium</span>
+</div>
+</div>
+<div class="flex items-baseline gap-space-xs my-space-xxs">
+<span class="font-display text-display text-on-surface">150</span>
+<span class="font-caption text-caption text-secondary">historical</span>
+</div>
+<p class="font-caption text-caption text-secondary">Cumulative across all academy cohorts</p>
+</div>
+</div>
+<div class="bg-surface-card rounded-xl shadow-sm mb-space-2xl">
+<div class="p-space-md flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-space-md">
+<div class="relative flex-1">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span>
+<input class="w-full h-10 pl-9 pr-4 text-body-base font-body-base bg-surface-page rounded-xl placeholder:text-secondary focus:outline-none focus:bg-surface-card shadow-inner" id="certSearch" placeholder="Search student name, certificate ID, course..." type="text"/>
+</div>
+<div class="flex flex-wrap items-center gap-space-sm">
+<div class="flex items-center gap-space-xs bg-surface-page px-space-sm py-1.5 rounded-xl">
+<span class="font-caption text-caption text-secondary">Status:</span>
+<select class="bg-transparent font-label-md text-label-md text-on-surface focus:outline-none cursor-pointer">
+<option value="all">All Statuses</option>
+<option value="issued">Issued</option>
+<option value="pending">Pending Review</option>
+<option value="clearance">Under Clearance</option>
+<option value="revoked">Revoked</option>
+</select>
+</div>
+<div class="flex items-center gap-space-xs bg-surface-page px-space-sm py-1.5 rounded-xl">
+<span class="font-caption text-caption text-secondary">Program:</span>
+<select class="bg-transparent font-label-md text-label-md text-on-surface focus:outline-none cursor-pointer">
+<option value="all">All Courses & Programs</option>
+<option value="ux">Advanced Product Design UX-301</option>
+<option value="fs">Full-Stack Cohort Alpha</option>
+<option value="cloud">Cloud Architect Intensive</option>
+<option value="da">Data Analytics Masterclass</option>
+</select>
+</div>
+<div class="flex items-center gap-space-xs bg-surface-page px-space-sm py-1.5 rounded-xl">
+<span class="material-symbols-outlined text-secondary text-[16px]">date_range</span>
+<select class="bg-transparent font-label-md text-label-md text-on-surface focus:outline-none cursor-pointer">
+<option value="all">All Time</option>
+<option value="current-month">This Month</option>
+<option value="q3-2024">Q3 2024</option>
+<option value="2024">Full Academic Year 2024</option>
+</select>
+</div>
+<button class="inline-flex items-center gap-space-xs px-space-sm h-9 rounded-xl bg-surface-subtle text-on-surface hover:bg-surface-container transition-colors font-label-md text-label-md" type="button">
+<span class="material-symbols-outlined text-[16px] text-secondary">shield</span>
+<span>Bulk Verify / Audit</span>
+</button>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left">
+<thead>
+<tr class="bg-surface-page">
+<th class="py-3 px-space-lg font-label-sm text-label-sm uppercase tracking-wider text-secondary">Student</th>
+<th class="py-3 px-space-lg font-label-sm text-label-sm uppercase tracking-wider text-secondary">Course & Cohort</th>
+<th class="py-3 px-space-lg font-label-sm text-label-sm uppercase tracking-wider text-secondary">Issue Date</th>
+<th class="py-3 px-space-lg font-label-sm text-label-sm uppercase tracking-wider text-secondary">Certificate ID</th>
+<th class="py-3 px-space-lg font-label-sm text-label-sm uppercase tracking-wider text-secondary">Status</th>
+<th class="py-3 px-space-lg font-label-sm text-label-sm uppercase tracking-wider text-secondary text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y-0">
+<tr class="hover:bg-surface-page transition-colors">
+<td class="py-3.5 px-space-lg">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-status-active-bg text-status-active-text font-title text-title flex items-center justify-center">AK</div>
+<div class="flex flex-col">
+<span class="font-title text-body-medium text-on-surface">Amina Karim</span>
+<span class="font-caption text-caption text-secondary">STU-2024-0319</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Advanced Product Design UX-301</span>
+<span class="font-caption text-caption text-secondary">Cohort Echo • Grade Distinction</span>
+</div>
+</td>
+<td class="py-3.5 px-space-lg font-body-base text-body-base text-on-surface">Oct 24, 2024</td>
+<td class="py-3.5 px-space-lg">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-subtle font-mono text-[12px] text-on-surface">
+<span>AFG-CERT-2024-0891</span>
+<button class="text-secondary hover:text-primary transition-colors" onclick="navigator.clipboard.writeText('AFG-CERT-2024-0891')" title="Copy Certificate ID" type="button">
+<span class="material-symbols-outlined text-[14px]">content_copy</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+<span>Issued</span>
+</span>
+</td>
+<td class="py-3.5 px-space-lg text-right">
+<div class="inline-flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" onclick="document.getElementById('certPreviewSheet').classList.remove('hidden')" title="View Certificate" type="button">
+<span class="material-symbols-outlined text-[18px]">visibility</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Download PDF" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Certificate" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" title="More Options" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-page transition-colors bg-surface-subtle/30">
+<td class="py-3.5 px-space-lg">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-status-pending-bg text-status-pending-text font-title text-title flex items-center justify-center">DL</div>
+<div class="flex flex-col">
+<span class="font-title text-body-medium text-on-surface">David Lee</span>
+<span class="font-caption text-caption text-secondary">STU-2024-0402</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Full-Stack Cohort Alpha</span>
+<span class="font-caption text-caption text-secondary">Cohort Alpha • Clearance in Review</span>
+</div>
+</td>
+<td class="py-3.5 px-space-lg font-caption text-caption text-secondary italic">Pending Clearance</td>
+<td class="py-3.5 px-space-lg">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-subtle font-mono text-[12px] text-secondary">
+<span>AFG-HOLD-2024-0104</span>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-status-pending-bg text-status-pending-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">pending</span>
+<span>Pending Clearance</span>
+</span>
+</td>
+<td class="py-3.5 px-space-lg text-right">
+<div class="inline-flex items-center justify-end gap-1">
+<button class="px-2.5 py-1 rounded-md bg-primary-container text-on-primary font-label-sm text-label-sm hover:bg-primary-hover transition-colors" type="button">
+                  Approve
+                </button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" title="More Options" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-page transition-colors">
+<td class="py-3.5 px-space-lg">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-status-active-bg text-status-active-text font-title text-title flex items-center justify-center">ER</div>
+<div class="flex flex-col">
+<span class="font-title text-body-medium text-on-surface">Elena Rostova</span>
+<span class="font-caption text-caption text-secondary">STU-2024-0198</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Cloud Architect Intensive</span>
+<span class="font-caption text-caption text-secondary">Cohort Delta • Grade Merit</span>
+</div>
+</td>
+<td class="py-3.5 px-space-lg font-body-base text-body-base text-on-surface">Oct 21, 2024</td>
+<td class="py-3.5 px-space-lg">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-subtle font-mono text-[12px] text-on-surface">
+<span>AFG-CERT-2024-0879</span>
+<button class="text-secondary hover:text-primary transition-colors" onclick="navigator.clipboard.writeText('AFG-CERT-2024-0879')" title="Copy Certificate ID" type="button">
+<span class="material-symbols-outlined text-[14px]">content_copy</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+<span>Issued</span>
+</span>
+</td>
+<td class="py-3.5 px-space-lg text-right">
+<div class="inline-flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" onclick="document.getElementById('certPreviewSheet').classList.remove('hidden')" title="View Certificate" type="button">
+<span class="material-symbols-outlined text-[18px]">visibility</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Download PDF" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Certificate" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" title="More Options" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-page transition-colors">
+<td class="py-3.5 px-space-lg">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-status-active-bg text-status-active-text font-title text-title flex items-center justify-center">MC</div>
+<div class="flex flex-col">
+<span class="font-title text-body-medium text-on-surface">Marcus Chen</span>
+<span class="font-caption text-caption text-secondary">STU-2024-0512</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Full-Stack Cohort Alpha</span>
+<span class="font-caption text-caption text-secondary">Cohort Alpha • Signature Stage</span>
+</div>
+</td>
+<td class="py-3.5 px-space-lg font-body-base text-body-base text-on-surface">Oct 19, 2024</td>
+<td class="py-3.5 px-space-lg">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-subtle font-mono text-[12px] text-on-surface">
+<span>AFG-CERT-2024-0865</span>
+<button class="text-secondary hover:text-primary transition-colors" onclick="navigator.clipboard.writeText('AFG-CERT-2024-0865')" title="Copy Certificate ID" type="button">
+<span class="material-symbols-outlined text-[14px]">content_copy</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-status-active-bg text-status-active-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">sync</span>
+<span>Processing</span>
+</span>
+</td>
+<td class="py-3.5 px-space-lg text-right">
+<div class="inline-flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="View Log" type="button">
+<span class="material-symbols-outlined text-[18px]">history</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" title="More Options" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-page transition-colors">
+<td class="py-3.5 px-space-lg">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-status-active-bg text-status-active-text font-title text-title flex items-center justify-center">TO</div>
+<div class="flex flex-col">
+<span class="font-title text-body-medium text-on-surface">Tariq Oladipo</span>
+<span class="font-caption text-caption text-secondary">STU-2024-0220</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Advanced Product Design UX-301</span>
+<span class="font-caption text-caption text-secondary">Cohort Echo • Grade High Merit</span>
+</div>
+</td>
+<td class="py-3.5 px-space-lg font-body-base text-body-base text-on-surface">Oct 16, 2024</td>
+<td class="py-3.5 px-space-lg">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-surface-subtle font-mono text-[12px] text-on-surface">
+<span>AFG-CERT-2024-0842</span>
+<button class="text-secondary hover:text-primary transition-colors" onclick="navigator.clipboard.writeText('AFG-CERT-2024-0842')" title="Copy Certificate ID" type="button">
+<span class="material-symbols-outlined text-[14px]">content_copy</span>
+</button>
+</div>
+</td>
+<td class="py-3.5 px-space-lg">
+<span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+<span>Issued</span>
+</span>
+</td>
+<td class="py-3.5 px-space-lg text-right">
+<div class="inline-flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" onclick="document.getElementById('certPreviewSheet').classList.remove('hidden')" title="View Certificate" type="button">
+<span class="material-symbols-outlined text-[18px]">visibility</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Download PDF" type="button">
+<span class="material-symbols-outlined text-[18px]">download</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Certificate" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" title="More Options" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="p-space-md flex flex-col sm:flex-row items-center justify-between gap-space-sm bg-surface-card rounded-b-xl">
+<span class="font-caption text-caption text-secondary">Showing 5 of 150 student certificates across 6 active cohorts</span>
+<div class="flex items-center gap-space-xs">
+<button class="px-3 py-1.5 rounded-lg bg-surface-subtle font-label-md text-label-md text-secondary hover:text-on-surface disabled:opacity-50" disabled="" type="button">Previous</button>
+<button class="w-8 h-8 rounded-lg bg-primary-container text-on-primary font-label-md text-label-md flex items-center justify-center" type="button">1</button>
+<button class="w-8 h-8 rounded-lg bg-surface-subtle text-on-surface font-label-md text-label-md flex items-center justify-center hover:bg-surface-container" type="button">2</button>
+<button class="w-8 h-8 rounded-lg bg-surface-subtle text-on-surface font-label-md text-label-md flex items-center justify-center hover:bg-surface-container" type="button">3</button>
+<span class="font-caption text-caption text-secondary px-1">...</span>
+<button class="w-8 h-8 rounded-lg bg-surface-subtle text-on-surface font-label-md text-label-md flex items-center justify-center hover:bg-surface-container" type="button">30</button>
+<button class="px-3 py-1.5 rounded-lg bg-surface-subtle font-label-md text-label-md text-secondary hover:text-on-surface" type="button">Next</button>
+</div>
+</div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-space-md mb-space-2xl">
+<div class="p-space-lg rounded-xl bg-surface-card shadow-sm flex flex-col justify-between">
+<div>
+<div class="flex items-center justify-between mb-space-sm">
+<span class="font-title text-title text-on-surface">Issuance Velocity</span>
+<span class="material-symbols-outlined text-[18px] text-secondary">insights</span>
+</div>
+<p class="font-caption text-caption text-secondary mb-space-md">Monthly graduation clearance rates comparing 2023 vs 2024 academic cycle.</p>
+</div>
+<div class="h-28 flex items-end gap-2 pt-space-xs">
+<div class="flex-1 flex flex-col items-center gap-1">
+<div class="w-full bg-primary-container rounded-t-sm" style="height: 48%;"></div>
+<span class="font-caption text-[11px] text-secondary">Jul</span>
+</div>
+<div class="flex-1 flex flex-col items-center gap-1">
+<div class="w-full bg-primary-container rounded-t-sm" style="height: 64%;"></div>
+<span class="font-caption text-[11px] text-secondary">Aug</span>
+</div>
+<div class="flex-1 flex flex-col items-center gap-1">
+<div class="w-full bg-primary-container rounded-t-sm" style="height: 52%;"></div>
+<span class="font-caption text-[11px] text-secondary">Sep</span>
+</div>
+<div class="flex-1 flex flex-col items-center gap-1">
+<div class="w-full bg-primary-container rounded-t-sm" style="height: 90%;"></div>
+<span class="font-caption text-[11px] text-primary font-medium">Oct</span>
+</div>
+<div class="flex-1 flex flex-col items-center gap-1">
+<div class="w-full bg-surface-subtle rounded-t-sm" style="height: 35%;"></div>
+<span class="font-caption text-[11px] text-secondary">Nov</span>
+</div>
+</div>
+</div>
+<div class="p-space-lg rounded-xl bg-surface-card shadow-sm flex flex-col justify-between">
+<div>
+<div class="flex items-center justify-between mb-space-sm">
+<span class="font-title text-title text-on-surface">Cohort Readiness Checklist</span>
+<span class="material-symbols-outlined text-[18px] text-tertiary">task_alt</span>
+</div>
+<p class="font-caption text-caption text-secondary mb-space-sm">Next batch release: Full-Stack Alpha Graduation (Nov 05)</p>
+</div>
+<div class="space-y-space-xs">
+<div class="flex items-center justify-between p-2 rounded-lg bg-surface-page">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary text-[18px]">check_circle</span>
+<span class="font-body-base text-body-base text-on-surface">Curriculum & Capstone Audits</span>
+</div>
+<span class="font-label-sm text-label-sm text-status-paid-text font-semibold">24 / 24</span>
+</div>
+<div class="flex items-center justify-between p-2 rounded-lg bg-surface-page">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary text-[18px]">check_circle</span>
+<span class="font-body-base text-body-base text-on-surface">Tuition & Fee Clearances</span>
+</div>
+<span class="font-label-sm text-label-sm text-status-paid-text font-semibold">22 / 24</span>
+</div>
+<div class="flex items-center justify-between p-2 rounded-lg bg-surface-page">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[18px]">pending</span>
+<span class="font-body-base text-body-base text-on-surface">Director Digital Signatures</span>
+</div>
+<span class="font-label-sm text-label-sm text-status-pending-text font-semibold">Awaiting 1</span>
+</div>
+</div>
+</div>
+<div class="p-space-lg rounded-xl bg-surface-card shadow-sm flex flex-col justify-between">
+<div>
+<div class="flex items-center justify-between mb-space-sm">
+<span class="font-title text-title text-on-surface">Registry Security Status</span>
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-status-paid-bg text-status-paid-text font-label-sm text-[11px]">Syncing Realtime</span>
+</div>
+<p class="font-caption text-caption text-secondary mb-space-sm">SHA-256 integrity check and public ledger audit logs.</p>
+</div>
+<div class="p-space-sm rounded-xl bg-surface-page space-y-space-xxs">
+<div class="flex justify-between items-center text-[12px]">
+<span class="text-secondary font-mono">ROOT_MERKLE_TREE</span>
+<span class="text-on-surface font-mono font-medium">0x9c4...28f0</span>
+</div>
+<div class="flex justify-between items-center text-[12px]">
+<span class="text-secondary">Signature Protocol</span>
+<span class="text-on-surface font-medium">Ed25519 PKI v2</span>
+</div>
+<div class="flex justify-between items-center text-[12px]">
+<span class="text-secondary">Last Cryptographic Seal</span>
+<span class="text-on-surface font-medium">2 mins ago</span>
+</div>
+</div>
+</div>
+</div>
+<div class="p-space-md rounded-xl bg-surface-card shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-space-md">
+<div class="flex items-center gap-space-sm">
+<div class="w-10 h-10 rounded-xl bg-status-active-bg text-status-active-text flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-[22px]">verified_user</span>
+</div>
+<div class="flex flex-col">
+<span class="font-title text-body-medium text-on-surface font-semibold">Tamper-Proof Digital Verification</span>
+<span class="font-caption text-caption text-secondary">
+          All certificates issued by Afoogy Skill Academy are cryptographically hashed and publicly verifiable via the student portal or public QR code verification ledger.
+        </span>
+</div>
+</div>
+<button class="inline-flex items-center gap-space-xs px-space-md py-2 rounded-xl bg-surface-page text-on-surface hover:bg-surface-subtle transition-colors text-label-md font-label-md shrink-0" type="button">
+<span class="material-symbols-outlined text-[16px] text-secondary">open_in_new</span>
+<span>Public Ledger Portal</span>
+</button>
+</div>
+<div class="hidden fixed inset-0 z-50 flex items-center justify-center p-space-md bg-inverse-surface/40 backdrop-blur-xs" id="certPreviewSheet">
+<div class="bg-surface-card rounded-xl shadow-xl w-full max-w-3xl overflow-hidden animate-fadeIn">
+<div class="p-space-md bg-surface-card flex items-center justify-between">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-primary text-[20px]">workspace_premium</span>
+<span class="font-title text-title text-on-surface">Certificate Preview & Verification Card</span>
+</div>
+<button class="p-1 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle" onclick="document.getElementById('certPreviewSheet').classList.add('hidden')" type="button">
+<span class="material-symbols-outlined text-[20px]">close</span>
+</button>
+</div>
+<div class="p-space-2xl bg-surface-page flex items-center justify-center">
+<div class="w-full max-w-2xl bg-surface-card p-space-2xl rounded-xl shadow-md relative text-center">
+<div class="flex items-center justify-between mb-space-xl">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[24px]">school</span>
+<span class="font-title text-title text-on-surface font-bold">AFOOGY SKILL ACADEMY</span>
+</div>
+<div class="px-2.5 py-1 rounded bg-status-paid-bg text-status-paid-text font-mono text-[11px] font-semibold">
+              SEAL VERIFIED
+            </div>
+</div>
+<span class="font-caption text-caption uppercase tracking-widest text-secondary font-semibold">Certificate of Completion & Mastery</span>
+<h2 class="font-display text-headline-lg text-on-surface mt-space-xs mb-space-xxs">Amina Karim</h2>
+<p class="font-body-base text-body-base text-secondary max-w-md mx-auto mb-space-lg">
+            has successfully fulfilled all academic, capstone, and project requirements for the comprehensive professional curriculum of
+          </p>
+<div class="py-space-sm px-space-lg rounded-xl bg-surface-page inline-block mb-space-xl">
+<span class="font-title text-title text-primary font-bold">Advanced Product Design UX-301</span>
+</div>
+<div class="grid grid-cols-3 gap-space-md items-end pt-space-md">
+<div class="flex flex-col items-center">
+<div class="h-10 flex items-end font-serif italic text-on-surface font-semibold text-[17px]">Sarah Jenkins</div>
+<div class="w-32 h-0.5 bg-border-strong my-1"></div>
+<span class="font-caption text-caption text-secondary">Academy Director</span>
+</div>
+<div class="flex flex-col items-center justify-center">
+<div class="w-14 h-14 rounded-full bg-status-active-bg text-status-active-text flex items-center justify-center shadow-inner">
+<span class="material-symbols-outlined text-[28px]">verified</span>
+</div>
+<span class="font-mono text-[10px] text-secondary mt-1">OCT 2024</span>
+</div>
+<div class="flex flex-col items-center">
+<div class="h-10 flex items-end font-serif italic text-on-surface font-semibold text-[17px]">Dr. Liam Vance</div>
+<div class="w-32 h-0.5 bg-border-strong my-1"></div>
+<span class="font-caption text-caption text-secondary">Chief Academic Officer</span>
+</div>
+</div>
+<div class="mt-space-xl pt-space-md flex items-center justify-between font-mono text-[11px] text-secondary">
+<span>ID: AFG-CERT-2024-0891</span>
+<span>PUBLIC LEDGER: https://verify.afoogy.edu/c/0891</span>
+</div>
+</div>
+</div>
+<div class="p-space-md bg-surface-card flex items-center justify-between">
+<div class="flex items-center gap-space-xs text-caption font-caption text-secondary">
+<span class="material-symbols-outlined text-[16px] text-tertiary">lock</span>
+<span>Digitally Signed with RSA-4096 / SHA-256</span>
+</div>
+<div class="flex items-center gap-space-sm">
+<button class="px-space-md h-9 rounded-xl bg-surface-subtle text-on-surface font-label-md text-label-md hover:bg-surface-container transition-colors" onclick="window.print()" type="button">Print Copy</button>
+<button class="px-space-md h-9 rounded-xl bg-primary-container text-on-primary font-label-md text-label-md hover:bg-primary-hover transition-colors" type="button">Download Official PDF</button>
+</div>
+</div>
+</div>
+</div>
+<div class="hidden fixed inset-0 z-50 flex items-center justify-center p-space-md bg-inverse-surface/40 backdrop-blur-xs" id="issueCertModal">
+<div class="bg-surface-card rounded-xl shadow-xl w-full max-w-lg overflow-hidden animate-fadeIn">
+<div class="p-space-md flex items-center justify-between bg-surface-card">
+<div class="flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-primary text-[20px]">add_circle</span>
+<span class="font-title text-title text-on-surface">Issue New Graduation Certificate</span>
+</div>
+<button class="p-1 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle" onclick="document.getElementById('issueCertModal').classList.add('hidden')" type="button">
+<span class="material-symbols-outlined text-[20px]">close</span>
+</button>
+</div>
+<form class="p-space-lg space-y-space-md" onsubmit="event.preventDefault(); document.getElementById('issueCertModal').classList.add('hidden');">
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1">Select Graduating Student</label>
+<select class="w-full h-10 px-3 rounded-xl bg-surface-page text-body-base font-body-base text-on-surface focus:outline-none focus:bg-surface-card">
+<option value="">Choose a cleared trainee...</option>
+<option value="1">David Lee (STU-2024-0402) - Full-Stack Cohort Alpha</option>
+<option value="2">Zainab Khan (STU-2024-0552) - UI/UX Design</option>
+<option value="3">Lucas Romero (STU-2024-0611) - Cloud Architect</option>
+</select>
+</div>
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1">Graduation Date</label>
+<input class="w-full h-10 px-3 rounded-xl bg-surface-page text-body-base font-body-base text-on-surface focus:outline-none focus:bg-surface-card" type="date" value="2024-10-25"/>
+</div>
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1">Graduation Distinction / Honor</label>
+<select class="w-full h-10 px-3 rounded-xl bg-surface-page text-body-base font-body-base text-on-surface focus:outline-none focus:bg-surface-card">
+<option value="standard">Standard Completion</option>
+<option value="merit">High Merit Honors</option>
+<option value="distinction">Dean's Distinction (Top 5%)</option>
+</select>
+</div>
+<div class="p-space-sm rounded-xl bg-surface-page flex items-start gap-space-xs">
+<span class="material-symbols-outlined text-primary text-[18px] shrink-0 mt-0.5">info</span>
+<span class="font-caption text-caption text-secondary">
+            Issuing will automatically create cryptographic signature hashes and send verified PDF links to both the student email and their digital badge wallet.
+          </span>
+</div>
+<div class="flex items-center justify-end gap-space-sm pt-space-xs">
+<button class="px-space-md h-10 rounded-xl bg-surface-subtle text-on-surface font-body-medium hover:bg-surface-container transition-colors" onclick="document.getElementById('issueCertModal').classList.add('hidden')" type="button">
+            Cancel
+          </button>
+<button class="px-space-md h-10 rounded-xl bg-primary-container text-on-primary font-body-medium hover:bg-primary-hover shadow-sm transition-colors" type="submit">
+            Sign & Issue Credential
+          </button>
+</div>
+</form>
+</div>
+</div>
+</div>
+<script>
+  (function() {
+    // Highlight Certificates in the parent shell navigation
+    const certNavLink = document.querySelector('aside nav a[data-path="certificates"]');
+    if (certNavLink) {
+      document.querySelectorAll('aside nav a').forEach(el => {
+        el.classList.remove('bg-primary-container', 'text-on-primary', 'shadow-sm');
+        el.classList.add('text-on-surface-variant');
+      });
+      certNavLink.classList.remove('text-on-surface-variant');
+      certNavLink.classList.add('bg-primary-container', 'text-on-primary', 'font-body-medium', 'shadow-sm');
+    }
+
+    // Client-side quick filter micro-interaction for the search bar
+    const searchInput = document.getElementById('certSearch');
+    if (searchInput) {
+      searchInput.addEventListener('input', function(e) {
+        const query = e.target.value.toLowerCase();
+        const rows = document.querySelectorAll('tbody tr');
+        rows.forEach(row => {
+          const text = row.innerText.toLowerCase();
+          row.style.display = text.includes(query) ? '' : 'none';
+        });
+      });
+    }
+  })();
+</script></div></main></div></body></html>

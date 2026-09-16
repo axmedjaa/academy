@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<!-- Breadcrumbs & Quick Back -->
+<div class="flex items-center justify-between mb-space-md">
+<div class="flex items-center gap-space-xs text-secondary font-label-md text-label-md">
+<a class="flex items-center gap-1 hover:text-primary transition-colors text-secondary" data-path="batches" href="#">
+<span class="material-symbols-outlined text-[18px]">arrow_back</span>
+<span>Back to Batches</span>
+</a>
+<span class="text-outline-variant">/</span>
+<span class="text-on-surface font-medium">Evening Product Sprint Q3 (BTH-2024-048)</span>
+</div>
+<!-- Live indicator badge -->
+<div class="flex items-center gap-2 bg-status-active-bg px-2.5 py-1 rounded-full text-status-active-text font-label-sm text-label-sm">
+<span class="w-2 h-2 rounded-full bg-primary-container animate-pulse"></span>
+<span>Term in Session • Final Evaluation in 4 Weeks</span>
+</div>
+</div>
+<!-- Header Card: Batch Identity & Master Actions -->
+<div class="bg-surface-card rounded-xl p-space-xl shadow-sm mb-space-xl">
+<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-lg pb-space-lg border-b border-border-subtle">
+<div class="flex flex-col gap-space-xs">
+<div class="flex flex-wrap items-center gap-space-xs">
+<span class="px-2 py-0.5 rounded-lg bg-surface-subtle text-secondary font-label-sm text-label-sm font-semibold tracking-wide">
+            BTH-2024-048
+          </span>
+<span class="px-2.5 py-0.5 rounded-lg bg-status-active-bg text-status-active-text font-label-sm text-label-sm">
+            In Session (Week 18 of 22)
+          </span>
+<span class="px-2.5 py-0.5 rounded-lg bg-secondary-container text-on-secondary-container font-label-sm text-label-sm">
+            Advanced Product Design Masterclass (UX-301)
+          </span>
+</div>
+<h1 class="font-display text-display text-on-surface tracking-tight mt-1">Evening Product Sprint Q3</h1>
+<p class="font-body-base text-body-base text-secondary">
+          Capstone sprint preparing senior trainees for Design Systems and Multi-platform UX handoffs.
+        </p>
+</div>
+<!-- Action Cluster -->
+<div class="flex flex-wrap items-center gap-space-sm">
+<button class="h-10 px-4 rounded-xl bg-surface-card border border-border-subtle text-on-surface font-body-medium text-body-medium hover:bg-surface-subtle hover:border-border-strong transition-all flex items-center gap-2 shadow-sm" type="button">
+<span class="material-symbols-outlined text-[18px] text-secondary">fact_check</span>
+<span>Take Attendance</span>
+</button>
+<button class="h-10 px-4 rounded-xl bg-surface-card border border-border-subtle text-on-surface font-body-medium text-body-medium hover:bg-surface-subtle hover:border-border-strong transition-all flex items-center gap-2 shadow-sm" type="button">
+<span class="material-symbols-outlined text-[18px] text-secondary">download</span>
+<span>Export Roster</span>
+</button>
+<button class="h-10 px-4 rounded-xl bg-primary-container text-on-primary font-body-medium text-body-medium hover:bg-primary-hover active:bg-primary transition-all flex items-center gap-2 shadow-sm" type="button">
+<span class="material-symbols-outlined text-[18px]">person_add</span>
+<span>Enroll Student</span>
+</button>
+</div>
+</div>
+<!-- Batch Metadata / Overview 4-Pillar Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-space-lg pt-space-lg">
+<!-- Trainer Meta -->
+<div class="flex items-start gap-space-sm">
+<div class="w-11 h-11 rounded-xl bg-primary-subtle text-primary flex items-center justify-center font-title text-title shrink-0">
+          AM
+        </div>
+<div class="flex flex-col min-w-0">
+<span class="font-caption text-caption text-secondary uppercase tracking-wider font-semibold">Lead Instructor</span>
+<span class="font-title text-title text-on-surface truncate">Alex Morgan</span>
+<span class="font-caption text-caption text-secondary truncate">Staff Product Designer</span>
+</div>
+</div>
+<!-- Schedule Meta -->
+<div class="flex items-start gap-space-sm">
+<div class="w-11 h-11 rounded-xl bg-surface-subtle text-secondary flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-[22px]">calendar_today</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-caption text-caption text-secondary uppercase tracking-wider font-semibold">Schedule & Lab</span>
+<span class="font-body-medium text-body-medium text-on-surface truncate">Tue & Thu • 6:00 – 9:00 PM</span>
+<span class="font-caption text-caption text-secondary truncate">Lab 2A, Central Campus</span>
+</div>
+</div>
+<!-- Timeline Meta -->
+<div class="flex items-start gap-space-sm">
+<div class="w-11 h-11 rounded-xl bg-surface-subtle text-secondary flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-[22px]">timer</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-caption text-caption text-secondary uppercase tracking-wider font-semibold">Duration & Cohort</span>
+<span class="font-body-medium text-body-medium text-on-surface">Jul 1 – Nov 20, 2024</span>
+<div class="flex items-center gap-1.5 mt-0.5">
+<span class="w-2 h-2 rounded-full bg-status-paid-text"></span>
+<span class="font-caption text-caption text-secondary">20 / 20 Seats Filled (Full)</span>
+</div>
+</div>
+</div>
+<!-- Batch Financial & Attendance Health -->
+<div class="flex items-start gap-space-sm">
+<div class="w-11 h-11 rounded-xl bg-status-paid-bg text-status-paid-text flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-[22px]">insights</span>
+</div>
+<div class="flex flex-col min-w-0">
+<span class="font-caption text-caption text-secondary uppercase tracking-wider font-semibold">Batch Health</span>
+<div class="flex items-center gap-2">
+<span class="font-headline-md text-headline-md text-on-surface">93.4%</span>
+<span class="font-caption text-caption text-status-paid-text bg-status-paid-bg px-1.5 py-0.2 rounded font-semibold">Healthy</span>
+</div>
+<span class="font-caption text-caption text-secondary">$2,400 pending fee balance</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Operational Stack: 3 Clearly Defined Minimalist Cards -->
+<div class="flex flex-col gap-space-2xl">
+<!-- SECTION 1: STUDENTS ROSTER -->
+<section class="bg-surface-card rounded-xl border border-border-subtle shadow-sm overflow-hidden">
+<!-- Section Header with Search and Quick Tab Filter -->
+<div class="p-space-lg border-b border-border-subtle flex flex-col md:flex-row md:items-center justify-between gap-space-md bg-surface-card">
+<div class="flex items-center gap-space-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[22px]">group</span>
+<h2 class="font-headline-md text-headline-md text-on-surface">Students Roster</h2>
+</div>
+<span class="px-2 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-label-sm font-semibold">
+            20 Enrolled
+          </span>
+</div>
+<!-- Filter Bar & Search -->
+<div class="flex items-center gap-space-sm">
+<!-- Quick Status Pills -->
+<div class="inline-flex p-1 bg-surface-subtle rounded-xl text-label-md font-label-md text-secondary">
+<button class="px-3 py-1 rounded-lg bg-surface-card text-on-surface font-medium shadow-xs">All (20)</button>
+<button class="px-3 py-1 rounded-lg text-secondary hover:text-on-surface transition-colors">Fully Paid (17)</button>
+<button class="px-3 py-1 rounded-lg text-secondary hover:text-on-surface transition-colors">Pending Balance (3)</button>
+</div>
+<!-- Roster Search -->
+<div class="relative w-64">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span>
+<input class="w-full h-9 pl-9 pr-3 text-body-base font-body-base bg-surface-card border border-border-subtle rounded-lg placeholder:text-secondary focus:outline-none focus:border-primary-container focus:ring-2 focus:ring-primary-container/10 transition-all" placeholder="Filter roster..." type="text"/>
+</div>
+</div>
+</div>
+<!-- Trainees Table -->
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="h-11 bg-surface-subtle/70 text-secondary font-label-sm text-label-sm uppercase tracking-wider border-b border-border-subtle">
+<th class="pl-space-lg pr-space-md py-3 font-semibold">Student Name & ID</th>
+<th class="px-space-md py-3 font-semibold">Attendance Rate</th>
+<th class="px-space-md py-3 font-semibold">Fee Status</th>
+<th class="px-space-md py-3 font-semibold">Certification Eligibility</th>
+<th class="pr-space-lg pl-space-md py-3 font-semibold text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-border-subtle font-body-base text-body-base">
+<!-- Row 1 -->
+<tr class="h-14 hover:bg-surface-subtle/50 transition-colors">
+<td class="pl-space-lg pr-space-md py-3">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-surface-container text-primary font-title text-label-md flex items-center justify-center font-semibold">
+                    AK
+                  </div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface leading-tight">Amina Karim</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0891 • amina.k@example.com</span>
+</div>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="flex items-center gap-2">
+<div class="w-20 h-2 rounded-full bg-surface-subtle overflow-hidden">
+<div class="h-full bg-status-paid-text rounded-full" style="width: 97%;"></div>
+</div>
+<span class="font-title text-label-md text-on-surface">97%</span>
+<span class="font-caption text-caption text-secondary">(35/36)</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+<span>Paid $1,200</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm font-medium">
+<span class="w-1.5 h-1.5 rounded-full bg-status-paid-text"></span>
+                  Eligible for Capstone
+                </span>
+</td>
+<td class="pr-space-lg pl-space-md py-3 text-right">
+<div class="inline-flex items-center gap-1">
+<button class="px-2.5 py-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface font-label-md text-label-md transition-colors">
+                    View
+                  </button>
+<button class="p-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="h-14 hover:bg-surface-subtle/50 transition-colors">
+<td class="pl-space-lg pr-space-md py-3">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-surface-container text-primary font-title text-label-md flex items-center justify-center font-semibold">
+                    DL
+                  </div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface leading-tight">David Lee</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0902 • d.lee@designco.io</span>
+</div>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="flex items-center gap-2">
+<div class="w-20 h-2 rounded-full bg-surface-subtle overflow-hidden">
+<div class="h-full bg-status-paid-text rounded-full" style="width: 92%;"></div>
+</div>
+<span class="font-title text-label-md text-on-surface">92%</span>
+<span class="font-caption text-caption text-secondary">(33/36)</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-pending-bg text-status-pending-text font-label-sm text-label-sm font-semibold">
+<span class="material-symbols-outlined text-[14px]">error</span>
+<span>Due $400 ($800 pd)</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-pending-bg text-status-pending-text font-label-sm text-label-sm font-medium">
+<span class="w-1.5 h-1.5 rounded-full bg-status-pending-text"></span>
+                  Fee Cleared Req
+                </span>
+</td>
+<td class="pr-space-lg pl-space-md py-3 text-right">
+<div class="inline-flex items-center gap-1">
+<button class="px-2.5 py-1 rounded-lg bg-surface-subtle text-primary font-label-md text-label-md hover:bg-primary-subtle transition-colors">
+                    Record Pay
+                  </button>
+<button class="p-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="h-14 hover:bg-surface-subtle/50 transition-colors">
+<td class="pl-space-lg pr-space-md py-3">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-surface-container text-primary font-title text-label-md flex items-center justify-center font-semibold">
+                    SN
+                  </div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface leading-tight">Sophia Nguyen</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0914 • sophia.n@outlook.com</span>
+</div>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="flex items-center gap-2">
+<div class="w-20 h-2 rounded-full bg-surface-subtle overflow-hidden">
+<div class="h-full bg-status-paid-text rounded-full" style="width: 100%;"></div>
+</div>
+<span class="font-title text-label-md text-on-surface">100%</span>
+<span class="font-caption text-caption text-secondary">(36/36)</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+<span>Paid $1,200</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm font-medium">
+<span class="w-1.5 h-1.5 rounded-full bg-status-paid-text"></span>
+                  Eligible for Capstone
+                </span>
+</td>
+<td class="pr-space-lg pl-space-md py-3 text-right">
+<div class="inline-flex items-center gap-1">
+<button class="px-2.5 py-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface font-label-md text-label-md transition-colors">
+                    View
+                  </button>
+<button class="p-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="h-14 hover:bg-surface-subtle/50 transition-colors">
+<td class="pl-space-lg pr-space-md py-3">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-surface-container text-primary font-title text-label-md flex items-center justify-center font-semibold">
+                    TO
+                  </div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface leading-tight">Tariq Oladipo</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0925 • tariq.dev@gmail.com</span>
+</div>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="flex items-center gap-2">
+<div class="w-20 h-2 rounded-full bg-surface-subtle overflow-hidden">
+<div class="h-full bg-status-overdue-text rounded-full" style="width: 78%;"></div>
+</div>
+<span class="font-title text-label-md text-status-overdue-text">78%</span>
+<span class="font-caption text-caption text-secondary">(28/36)</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+<span>Paid $1,200</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-overdue-bg text-status-overdue-text font-label-sm text-label-sm font-medium">
+<span class="w-1.5 h-1.5 rounded-full bg-status-overdue-text"></span>
+                  Attendance At Risk (<80%)
+                </span>
+</td>
+<td class="pr-space-lg pl-space-md py-3 text-right">
+<div class="inline-flex items-center gap-1">
+<button class="px-2.5 py-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface font-label-md text-label-md transition-colors">
+                    View
+                  </button>
+<button class="p-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<!-- Row 5 -->
+<tr class="h-14 hover:bg-surface-subtle/50 transition-colors">
+<td class="pl-space-lg pr-space-md py-3">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-surface-container text-primary font-title text-label-md flex items-center justify-center font-semibold">
+                    EB
+                  </div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface leading-tight">Elena Rostova</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0938 • elena.r@rostova.cc</span>
+</div>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="flex items-center gap-2">
+<div class="w-20 h-2 rounded-full bg-surface-subtle overflow-hidden">
+<div class="h-full bg-status-paid-text rounded-full" style="width: 94%;"></div>
+</div>
+<span class="font-title text-label-md text-on-surface">94%</span>
+<span class="font-caption text-caption text-secondary">(34/36)</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-pending-bg text-status-pending-text font-label-sm text-label-sm font-semibold">
+<span class="material-symbols-outlined text-[14px]">error</span>
+<span>Due $1,200 ($0 pd)</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-pending-bg text-status-pending-text font-label-sm text-label-sm font-medium">
+<span class="w-1.5 h-1.5 rounded-full bg-status-pending-text"></span>
+                  Tuition Overdue
+                </span>
+</td>
+<td class="pr-space-lg pl-space-md py-3 text-right">
+<div class="inline-flex items-center gap-1">
+<button class="px-2.5 py-1 rounded-lg bg-surface-subtle text-primary font-label-md text-label-md hover:bg-primary-subtle transition-colors">
+                    Record Pay
+                  </button>
+<button class="p-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<!-- Row 6 -->
+<tr class="h-14 hover:bg-surface-subtle/50 transition-colors">
+<td class="pl-space-lg pr-space-md py-3">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-full bg-surface-container text-primary font-title text-label-md flex items-center justify-center font-semibold">
+                    MC
+                  </div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface leading-tight">Marcus Chen</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0941 • marcus.c@techfin.co</span>
+</div>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="flex items-center gap-2">
+<div class="w-20 h-2 rounded-full bg-surface-subtle overflow-hidden">
+<div class="h-full bg-status-paid-text rounded-full" style="width: 97%;"></div>
+</div>
+<span class="font-title text-label-md text-on-surface">97%</span>
+<span class="font-caption text-caption text-secondary">(35/36)</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+<span>Paid $1,200</span>
+</div>
+</td>
+<td class="px-space-md py-3">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm font-medium">
+<span class="w-1.5 h-1.5 rounded-full bg-status-paid-text"></span>
+                  Eligible for Capstone
+                </span>
+</td>
+<td class="pr-space-lg pl-space-md py-3 text-right">
+<div class="inline-flex items-center gap-1">
+<button class="px-2.5 py-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface font-label-md text-label-md transition-colors">
+                    View
+                  </button>
+<button class="p-1 rounded-lg hover:bg-surface-subtle text-secondary hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Table Footer / Pagination -->
+<div class="px-space-lg py-space-sm bg-surface-card border-t border-border-subtle flex items-center justify-between text-secondary font-caption text-caption">
+<span>Showing 6 of 20 trainees enrolled</span>
+<div class="flex items-center gap-2">
+<button class="px-2.5 py-1 rounded border border-border-subtle hover:bg-surface-subtle disabled:opacity-50" disabled="">Previous</button>
+<button class="px-2.5 py-1 rounded border border-border-subtle hover:bg-surface-subtle text-on-surface font-medium">Next</button>
+</div>
+</div>
+</section>
+<!-- SECTION 2: ATTENDANCE SUMMARY -->
+<section class="bg-surface-card rounded-xl border border-border-subtle shadow-sm p-space-lg">
+<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md mb-space-lg pb-space-md border-b border-border-subtle">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-lg bg-status-active-bg text-primary flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]">fact_check</span>
+</div>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">Attendance Summary</h2>
+<p class="font-caption text-caption text-secondary">36 of 40 planned class sessions conducted to date</p>
+</div>
+</div>
+<div class="flex items-center gap-space-sm">
+<button class="h-9 px-3 rounded-lg border border-border-subtle bg-surface-card text-on-surface font-label-md text-label-md hover:bg-surface-subtle transition-all flex items-center gap-1.5" type="button">
+<span class="material-symbols-outlined text-[16px] text-secondary">history</span>
+<span>View Full Log</span>
+</button>
+<button class="h-9 px-3 rounded-lg bg-primary-container text-on-primary font-label-md text-label-md hover:bg-primary-hover transition-all flex items-center gap-1.5" type="button">
+<span class="material-symbols-outlined text-[16px]">open_in_new</span>
+<span>Open Attendance Sheet</span>
+</button>
+</div>
+</div>
+<!-- Summary Stat Tiles -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-space-md mb-space-lg">
+<div class="p- space-md bg-surface-page rounded-xl border border-border-subtle p-3">
+<span class="font-caption text-caption text-secondary block mb-1">Sessions Completed</span>
+<div class="flex items-baseline gap-1.5">
+<span class="font-headline-lg text-headline-lg text-on-surface font-semibold">36</span>
+<span class="font-caption text-caption text-secondary">/ 40 total</span>
+</div>
+<div class="w-full h-1.5 bg-border-subtle rounded-full mt-2 overflow-hidden">
+<div class="bg-primary-container h-full rounded-full" style="width: 90%;"></div>
+</div>
+</div>
+<div class="p-space-md bg-surface-page rounded-xl border border-border-subtle p-3">
+<span class="font-caption text-caption text-secondary block mb-1">Batch Attendance Rate</span>
+<div class="flex items-baseline gap-1.5">
+<span class="font-headline-lg text-headline-lg text-status-paid-text font-semibold">93.4%</span>
+<span class="font-caption text-caption text-secondary">target >85%</span>
+</div>
+<span class="font-caption text-caption text-status-paid-text mt-2 block font-medium">Well above threshold</span>
+</div>
+<div class="p-space-md bg-surface-page rounded-xl border border-border-subtle p-3">
+<span class="font-caption text-caption text-secondary block mb-1">Late Check-ins</span>
+<div class="flex items-baseline gap-1.5">
+<span class="font-headline-lg text-headline-lg text-status-pending-text font-semibold">6</span>
+<span class="font-caption text-caption text-secondary">recorded</span>
+</div>
+<span class="font-caption text-caption text-secondary mt-2 block"><1% total sessions</span>
+</div>
+<div class="p-space-md bg-surface-page rounded-xl border border-border-subtle p-3">
+<span class="font-caption text-caption text-secondary block mb-1">Total Absences</span>
+<div class="flex items-baseline gap-1.5">
+<span class="font-headline-lg text-headline-lg text-secondary font-semibold">14</span>
+<span class="font-caption text-caption text-secondary">excused: 11</span>
+</div>
+<span class="font-caption text-caption text-status-overdue-text mt-2 block font-medium">3 unexcused</span>
+</div>
+</div>
+<!-- Recent Sessions Strip / Compact Feed -->
+<div class="border border-border-subtle rounded-xl overflow-hidden">
+<div class="bg-surface-subtle px-space-md py-2 text-label-sm font-label-sm text-secondary font-semibold uppercase tracking-wider flex items-center justify-between">
+<span>Recent Sessions (Last 4)</span>
+<span class="text-caption font-normal normal-case text-secondary">Signed off by Trainer Alex Morgan</span>
+</div>
+<div class="divide-y divide-border-subtle bg-surface-card font-body-base text-body-base">
+<!-- Session Item 1 -->
+<div class="px-space-md py-3 flex flex-col md:flex-row md:items-center justify-between gap-2 hover:bg-surface-subtle/40 transition-colors">
+<div class="flex items-center gap-space-md">
+<span class="font-title text-label-md text-on-surface w-24">Oct 24, 2024</span>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded bg-surface-subtle font-caption text-caption font-semibold">Session 36</span>
+<span class="font-title text-label-md text-on-surface">Design Tokens in Figma & Code Sync</span>
+</div>
+</div>
+<div class="flex items-center gap-space-lg text-secondary font-caption text-caption">
+<span class="text-on-surface font-medium">19 / 20 Present (95%)</span>
+<span class="inline-flex items-center gap-1 text-status-paid-text font-medium bg-status-paid-bg px-2 py-0.5 rounded">
+<span class="material-symbols-outlined text-[14px]">verified</span> Signed Off
+              </span>
+</div>
+</div>
+<!-- Session Item 2 -->
+<div class="px-space-md py-3 flex flex-col md:flex-row md:items-center justify-between gap-2 hover:bg-surface-subtle/40 transition-colors">
+<div class="flex items-center gap-space-md">
+<span class="font-title text-label-md text-on-surface w-24">Oct 22, 2024</span>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded bg-surface-subtle font-caption text-caption font-semibold">Session 35</span>
+<span class="font-title text-label-md text-on-surface">Multi-Brand Typography & Layout Grids</span>
+</div>
+</div>
+<div class="flex items-center gap-space-lg text-secondary font-caption text-caption">
+<span class="text-on-surface font-medium">18 / 20 Present (90%)</span>
+<span class="inline-flex items-center gap-1 text-status-paid-text font-medium bg-status-paid-bg px-2 py-0.5 rounded">
+<span class="material-symbols-outlined text-[14px]">verified</span> Signed Off
+              </span>
+</div>
+</div>
+<!-- Session Item 3 -->
+<div class="px-space-md py-3 flex flex-col md:flex-row md:items-center justify-between gap-2 hover:bg-surface-subtle/40 transition-colors">
+<div class="flex items-center gap-space-md">
+<span class="font-title text-label-md text-on-surface w-24">Oct 17, 2024</span>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded bg-surface-subtle font-caption text-caption font-semibold">Session 34</span>
+<span class="font-title text-label-md text-on-surface">Interactive Prototyping & Variables Logic</span>
+</div>
+</div>
+<div class="flex items-center gap-space-lg text-secondary font-caption text-caption">
+<span class="text-on-surface font-medium">20 / 20 Present (100%)</span>
+<span class="inline-flex items-center gap-1 text-status-paid-text font-medium bg-status-paid-bg px-2 py-0.5 rounded">
+<span class="material-symbols-outlined text-[14px]">verified</span> Signed Off
+              </span>
+</div>
+</div>
+<!-- Session Item 4 -->
+<div class="px-space-md py-3 flex flex-col md:flex-row md:items-center justify-between gap-2 hover:bg-surface-subtle/40 transition-colors">
+<div class="flex items-center gap-space-md">
+<span class="font-title text-label-md text-on-surface w-24">Oct 15, 2024</span>
+<div class="flex items-center gap-2">
+<span class="px-2 py-0.5 rounded bg-surface-subtle font-caption text-caption font-semibold">Session 33</span>
+<span class="font-title text-label-md text-on-surface">Design Auditing & Accessibility Compliance</span>
+</div>
+</div>
+<div class="flex items-center gap-space-lg text-secondary font-caption text-caption">
+<span class="text-on-surface font-medium">19 / 20 Present (95%)</span>
+<span class="inline-flex items-center gap-1 text-status-paid-text font-medium bg-status-paid-bg px-2 py-0.5 rounded">
+<span class="material-symbols-outlined text-[14px]">verified</span> Signed Off
+              </span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- SECTION 3: RECENT PAYMENT STATUS -->
+<section class="bg-surface-card rounded-xl border border-border-subtle shadow-sm p-space-lg mb-space-2xl">
+<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md mb-space-lg pb-space-md border-b border-border-subtle">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded-lg bg-status-paid-bg text-status-paid-text flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]">payments</span>
+</div>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">Recent Payment Status</h2>
+<p class="font-caption text-caption text-secondary">Batch financial ledger and outstanding balances</p>
+</div>
+</div>
+<div class="flex items-center gap-space-sm">
+<button class="h-9 px-3 rounded-lg border border-border-subtle bg-surface-card text-on-surface font-label-md text-label-md hover:bg-surface-subtle transition-all flex items-center gap-1.5" type="button">
+<span class="material-symbols-outlined text-[16px] text-secondary">receipt_long</span>
+<span>Batch Fee Ledger</span>
+</button>
+<button class="h-9 px-3 rounded-lg bg-primary-container text-on-primary font-label-md text-label-md hover:bg-primary-hover transition-all flex items-center gap-1.5" type="button">
+<span class="material-symbols-outlined text-[16px]">mail</span>
+<span>Send Balance Reminders</span>
+</button>
+</div>
+</div>
+<!-- Financial Metric Cards (3 Columns) -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-space-md mb-space-lg">
+<!-- Total Batch Tuition -->
+<div class="p-space-md bg-surface-page rounded-xl border border-border-subtle">
+<span class="font-caption text-caption text-secondary block mb-1">Total Expected Tuition</span>
+<span class="font-headline-lg text-headline-lg text-on-surface font-bold">$24,000.00</span>
+<span class="font-caption text-caption text-secondary mt-1 block">20 Trainees × $1,200 standard tuition</span>
+</div>
+<!-- Collected Amount -->
+<div class="p-space-md bg-surface-page rounded-xl border border-border-subtle">
+<span class="font-caption text-caption text-secondary block mb-1">Collected Revenue</span>
+<div class="flex items-baseline gap-2">
+<span class="font-headline-lg text-headline-lg text-status-paid-text font-bold">$21,600.00</span>
+<span class="font-caption text-caption text-status-paid-text font-semibold">90%</span>
+</div>
+<span class="font-caption text-caption text-secondary mt-1 block">17 Trainees fully settled</span>
+</div>
+<!-- Outstanding Amount Alert -->
+<div class="p-space-md bg-status-pending-bg/50 rounded-xl border border-status-pending-text/20">
+<span class="font-caption text-caption text-status-pending-text font-semibold block mb-1">Total Outstanding</span>
+<div class="flex items-baseline gap-2">
+<span class="font-headline-lg text-headline-lg text-status-pending-text font-bold">$2,400.00</span>
+<span class="font-caption text-caption text-status-pending-text font-medium">3 Trainees</span>
+</div>
+<span class="font-caption text-caption text-status-pending-text mt-1 block">Requires manual review before certificates</span>
+</div>
+</div>
+<!-- Table: Trainees with Pending Balances -->
+<div class="border border-border-subtle rounded-xl overflow-hidden">
+<div class="bg-surface-subtle px-space-md py-2.5 flex items-center justify-between border-b border-border-subtle">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-pending-text text-[18px]">warning</span>
+<span class="font-label-md text-label-md text-on-surface font-semibold">Outstanding Balances Pending Follow-up (3)</span>
+</div>
+<span class="font-caption text-caption text-secondary">Final tuition cutoff: Nov 10, 2024</span>
+</div>
+<table class="w-full text-left border-collapse font-body-base text-body-base">
+<thead>
+<tr class="h-10 bg-surface-subtle/40 text-secondary font-label-sm text-label-sm uppercase tracking-wider border-b border-border-subtle">
+<th class="pl-space-md py-2 font-semibold">Student Name</th>
+<th class="px-space-md py-2 font-semibold">Total Fee</th>
+<th class="px-space-md py-2 font-semibold">Paid Amount</th>
+<th class="px-space-md py-2 font-semibold">Balance Due</th>
+<th class="px-space-md py-2 font-semibold">Due Date</th>
+<th class="pr-space-md py-2 font-semibold text-right">Action</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-border-subtle bg-surface-card font-body-base text-body-base">
+<!-- Balance Row 1 -->
+<tr class="h-12 hover:bg-surface-subtle/30 transition-colors">
+<td class="pl-space-md py-2.5">
+<div class="flex items-center gap-2">
+<span class="font-title text-label-md text-on-surface">David Lee</span>
+<span class="font-caption text-caption text-secondary">(AFG-2024-0902)</span>
+</div>
+</td>
+<td class="px-space-md py-2.5 text-on-surface font-medium">$1,200.00</td>
+<td class="px-space-md py-2.5 text-status-paid-text font-medium">$800.00</td>
+<td class="px-space-md py-2.5 text-status-pending-text font-semibold">$400.00</td>
+<td class="px-space-md py-2.5 text-secondary font-caption text-caption">Oct 30, 2024</td>
+<td class="pr-space-md py-2.5 text-right">
+<button class="h-8 px-3 rounded-lg bg-surface-card border border-border-subtle text-primary font-label-md text-label-md hover:bg-primary-subtle transition-all">
+                  Record Payment
+                </button>
+</td>
+</tr>
+<!-- Balance Row 2 -->
+<tr class="h-12 hover:bg-surface-subtle/30 transition-colors">
+<td class="pl-space-md py-2.5">
+<div class="flex items-center gap-2">
+<span class="font-title text-label-md text-on-surface">Elena Rostova</span>
+<span class="font-caption text-caption text-secondary">(AFG-2024-0938)</span>
+</div>
+</td>
+<td class="px-space-md py-2.5 text-on-surface font-medium">$1,200.00</td>
+<td class="px-space-md py-2.5 text-secondary font-medium">$0.00</td>
+<td class="px-space-md py-2.5 text-status-overdue-text font-semibold">$1,200.00</td>
+<td class="px-space-md py-2.5 text-status-overdue-text font-caption text-caption font-semibold">Overdue (Oct 15)</td>
+<td class="pr-space-md py-2.5 text-right">
+<button class="h-8 px-3 rounded-lg bg-primary-container text-on-primary font-label-md text-label-md hover:bg-primary-hover transition-all">
+                  Record Payment
+                </button>
+</td>
+</tr>
+<!-- Balance Row 3 -->
+<tr class="h-12 hover:bg-surface-subtle/30 transition-colors">
+<td class="pl-space-md py-2.5">
+<div class="flex items-center gap-2">
+<span class="font-title text-label-md text-on-surface">Marcus Chen</span>
+<span class="font-caption text-caption text-secondary">(AFG-2024-0941)</span>
+</div>
+</td>
+<td class="px-space-md py-2.5 text-on-surface font-medium">$1,200.00</td>
+<td class="px-space-md py-2.5 text-status-paid-text font-medium">$400.00</td>
+<td class="px-space-md py-2.5 text-status-pending-text font-semibold">$800.00</td>
+<td class="px-space-md py-2.5 text-secondary font-caption text-caption">Nov 05, 2024</td>
+<td class="pr-space-md py-2.5 text-right">
+<button class="h-8 px-3 rounded-lg bg-surface-card border border-border-subtle text-primary font-label-md text-label-md hover:bg-primary-subtle transition-all">
+                  Record Payment
+                </button>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</div>
+</div>
+<script>
+  // Ensure "Batches" is visually active in the App Shell's sidebar
+  (function setActiveSidebar() {
+    const batchLinks = document.querySelectorAll('aside nav a[data-path="batches"]');
+    batchLinks.forEach(link => {
+      link.className = "flex items-center gap-space-sm px-space-sm py-2 rounded-xl bg-primary-container text-on-primary font-body-medium shadow-sm transition-colors";
+    });
+  })();
+</script></div></main></div></body></html>

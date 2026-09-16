@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<!-- Breadcrumb and Top Executive Action Bar -->
+<div class="flex flex-col md:flex-row md:items-center justify-between gap-space-md mb-space-xl">
+<div class="flex flex-col gap-space-xxs">
+<div class="flex items-center gap-space-xs text-secondary font-caption text-caption">
+<span>System Administration</span>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<span>Platform Preferences</span>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<span class="text-on-surface font-label-md text-label-md">Staff & Permissions</span>
+</div>
+<div class="flex items-center gap-space-sm flex-wrap mt-0.5">
+<h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">Staff & Permissions</h1>
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary"></span>
+          Role-Based Access Control (RBAC) Active
+        </span>
+</div>
+<p class="font-body-base text-body-base text-secondary max-w-2xl">
+        Configure administrative roles, staff access levels, module permission policies, and security guardrails across academy operations.
+      </p>
+</div>
+<!-- Actions -->
+<div class="flex items-center gap-space-sm self-start md:self-auto">
+<button class="inline-flex items-center gap-1.5 px-space-md h-10 rounded-xl bg-surface-card text-on-surface font-body-medium text-body-medium shadow-sm hover:bg-surface-subtle transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px] text-secondary">restart_alt</span>
+        Discard Changes
+      </button>
+<button class="inline-flex items-center gap-1.5 px-space-md h-10 rounded-xl bg-primary-container text-on-primary font-body-medium text-body-medium shadow-sm hover:bg-primary-hover transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">check_circle</span>
+        Save Permissions
+      </button>
+</div>
+</div>
+<!-- Primary 3-Column Studio Grid Layout -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-space-xl">
+<!-- LEFT COLUMN: Settings Sub-Navigation & Compliance (3 Cols) -->
+<div class="lg:col-span-3 flex flex-col gap-space-md">
+<div class="bg-surface-card rounded-xl p-space-sm shadow-sm flex flex-col gap-space-xxs">
+<div class="px-space-sm py-space-xs text-[11px] font-semibold uppercase tracking-wider text-secondary">
+          Settings Categories
+        </div>
+<a class="flex items-center gap-space-sm px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#academy-profile">
+<span class="material-symbols-outlined text-[20px]">corporate_fare</span>
+<span class="font-body-medium text-body-medium">Academy Profile</span>
+</a>
+<a class="flex items-center justify-between px-space-sm py-2.5 rounded-xl bg-primary-container text-on-primary font-body-medium text-body-medium shadow-sm" href="#staff-permissions">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">admin_panel_settings</span>
+<span>Staff & Permissions</span>
+</div>
+<span class="w-2 h-2 rounded-full bg-surface-card"></span>
+</a>
+<a class="flex items-center gap-space-sm px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#payment-currency">
+<span class="material-symbols-outlined text-[20px]">account_balance_wallet</span>
+<span class="font-body-medium text-body-medium">Payment & Currency</span>
+</a>
+<a class="flex items-center gap-space-sm px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#certificate-seal">
+<span class="material-symbols-outlined text-[20px]">verified</span>
+<span class="font-body-medium text-body-medium">Certificate & Seal</span>
+</a>
+<a class="flex items-center justify-between px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#notifications-alerts">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-[20px]">notifications_active</span>
+<span class="font-body-medium text-body-medium">Notifications & Alerts</span>
+</div>
+<span class="px-2 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-[11px]">8 Active</span>
+</a>
+<a class="flex items-center gap-space-sm px-space-sm py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" href="#account-security">
+<span class="material-symbols-outlined text-[20px]">security</span>
+<span class="font-body-medium text-body-medium">Account & Security</span>
+</a>
+</div>
+<!-- Enterprise Security Info Card -->
+<div class="bg-surface-container-low rounded-xl p-space-md flex flex-col gap-space-sm shadow-sm relative overflow-hidden">
+<div class="absolute -right-3 -bottom-3 text-surface-dim opacity-40 select-none pointer-events-none">
+<span class="material-symbols-outlined text-[96px]">shield_person</span>
+</div>
+<div class="flex items-center gap-space-xs text-primary font-label-sm text-label-sm uppercase tracking-wider">
+<span class="material-symbols-outlined text-[16px]">verified_user</span>
+          RBAC v2.4 Compliant
+        </div>
+<div>
+<div class="font-title text-title text-on-surface">ISO-27001 Certified Access</div>
+<p class="font-caption text-caption text-secondary mt-1">
+            Privilege inheritance strictly follows separation of duties. Every role escalation triggers an immutable audit log.
+          </p>
+</div>
+<div class="pt-space-xs flex items-center justify-between text-caption font-caption text-primary">
+<a class="inline-flex items-center gap-1 font-body-medium hover:underline" href="#">
+            View Security Logs
+            <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</a>
+<span class="text-secondary text-[11px]">Last Sync 14m ago</span>
+</div>
+</div>
+</div>
+<!-- CENTER COLUMN: Roles, Capability Matrix, Security Guardrails (6 Cols) -->
+<div class="lg:col-span-6 flex flex-col gap-space-xl">
+<!-- CARD 1: Academy Roles & Access Hierarchy -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between pb-space-xs">
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">Academy Roles & Hierarchy</h2>
+<p class="font-caption text-caption text-secondary">5 configured operational tiers across Central Campus</p>
+</div>
+<button class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-page hover:bg-surface-subtle text-primary font-label-md text-label-md transition-colors shadow-sm" type="button">
+<span class="material-symbols-outlined text-[18px]">add_moderator</span>
+            + Create Custom Role
+          </button>
+</div>
+<!-- Horizontal Roles Mini-List / Cards -->
+<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-space-sm">
+<!-- Role: Owner -->
+<div class="p-space-sm rounded-xl bg-surface-page hover:bg-surface-subtle transition-all flex flex-col justify-between gap-space-xs cursor-pointer group">
+<div class="flex items-start justify-between">
+<span class="w-8 h-8 rounded-lg bg-primary-subtle text-primary flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">crown</span>
+</span>
+<span class="px-2 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-[11px]">Tier 0</span>
+</div>
+<div>
+<div class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Owner / Super Admin</div>
+<div class="font-caption text-caption text-secondary line-clamp-1">David Sterling (1 Active)</div>
+</div>
+<div class="text-[11px] font-medium text-tertiary">Full system sovereignty</div>
+</div>
+<!-- Role: Academy Manager -->
+<div class="p-space-sm rounded-xl bg-surface-page hover:bg-surface-subtle transition-all flex flex-col justify-between gap-space-xs cursor-pointer group">
+<div class="flex items-start justify-between">
+<span class="w-8 h-8 rounded-lg bg-secondary-container text-secondary flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">manage_accounts</span>
+</span>
+<span class="px-2 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-[11px]">Tier 1</span>
+</div>
+<div>
+<div class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Academy Manager</div>
+<div class="font-caption text-caption text-secondary line-clamp-1">Sarah Jenkins + 1 (2 Active)</div>
+</div>
+<div class="text-[11px] font-medium text-primary">Operations & Schedules</div>
+</div>
+<!-- Role: Trainer / Instructor (Selected Highlight) -->
+<div class="p-space-sm rounded-xl bg-primary-subtle ring-2 ring-primary/20 shadow-sm flex flex-col justify-between gap-space-xs cursor-pointer">
+<div class="flex items-start justify-between">
+<span class="w-8 h-8 rounded-lg bg-primary-container text-on-primary flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">school</span>
+</span>
+<span class="px-2 py-0.5 rounded-full bg-surface-card text-primary font-label-sm text-[11px]">Active View</span>
+</div>
+<div>
+<div class="font-title text-label-md text-primary font-semibold">Trainer / Instructor</div>
+<div class="font-caption text-caption text-secondary line-clamp-1">8 Active Staff Members</div>
+</div>
+<div class="text-[11px] font-medium text-primary-hover">Curriculum & Attendance</div>
+</div>
+<!-- Role: Finance Staff -->
+<div class="p-space-sm rounded-xl bg-surface-page hover:bg-surface-subtle transition-all flex flex-col justify-between gap-space-xs cursor-pointer group">
+<div class="flex items-start justify-between">
+<span class="w-8 h-8 rounded-lg bg-surface-subtle text-on-surface flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">receipt_long</span>
+</span>
+<span class="px-2 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-[11px]">Tier 2</span>
+</div>
+<div>
+<div class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Finance Staff</div>
+<div class="font-caption text-caption text-secondary line-clamp-1">Fatima Al-Zahra + 1 (2 Active)</div>
+</div>
+<div class="text-[11px] font-medium text-secondary">Cash desk & Invoices</div>
+</div>
+<!-- Role: Admissions Staff -->
+<div class="p-space-sm rounded-xl bg-surface-page hover:bg-surface-subtle transition-all flex flex-col justify-between gap-space-xs cursor-pointer group">
+<div class="flex items-start justify-between">
+<span class="w-8 h-8 rounded-lg bg-surface-subtle text-on-surface flex items-center justify-center">
+<span class="material-symbols-outlined text-[18px]">how_to_reg</span>
+</span>
+<span class="px-2 py-0.5 rounded-full bg-surface-subtle text-secondary font-label-sm text-[11px]">Tier 3</span>
+</div>
+<div>
+<div class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Admissions Staff</div>
+<div class="font-caption text-caption text-secondary line-clamp-1">Liam Chen (1 Active)</div>
+</div>
+<div class="text-[11px] font-medium text-secondary">Intake & Seat Reservations</div>
+</div>
+<!-- Placeholder Custom Profile -->
+<div class="p-space-sm rounded-xl bg-surface-page/60 border-2 border-dashed border-border-subtle flex flex-col items-center justify-center text-center gap-1 cursor-pointer hover:bg-surface-page transition-colors">
+<span class="material-symbols-outlined text-secondary text-[22px]">add_circle_outline</span>
+<span class="font-label-md text-label-md text-secondary">New Role Template</span>
+<span class="text-[10px] text-secondary/80">Clone or build from scratch</span>
+</div>
+</div>
+</div>
+<!-- CARD 2: Role Permissions Matrix & Capabilities (Interactive Matrix) -->
+<div class="bg-surface-card rounded-xl shadow-sm overflow-hidden flex flex-col">
+<!-- Matrix Header & Tab switcher -->
+<div class="p-space-lg bg-surface-card flex flex-col gap-space-sm">
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-xs">
+<div>
+<div class="flex items-center gap-space-xs">
+<span class="font-headline-md text-headline-md text-on-surface">Module Permissions Policy</span>
+<span class="px-2 py-0.5 rounded-md bg-status-active-bg text-status-active-text font-label-sm text-[11px]">Configuring: Trainer / Instructor</span>
+</div>
+<p class="font-caption text-caption text-secondary">Fine-tune individual operational allowances for trainers across the academic lifecycle.</p>
+</div>
+<div class="flex items-center gap-space-xs self-start sm:self-auto">
+<button class="px-2.5 py-1 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle text-[12px] font-medium transition-colors">Select Preset</button>
+<button class="px-2.5 py-1 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle text-[12px] font-medium transition-colors">Compare Roles</button>
+</div>
+</div>
+<!-- Role Switcher Pills -->
+<div class="flex items-center gap-1.5 p-1 bg-surface-subtle rounded-xl overflow-x-auto">
+<button class="px-3 py-1.5 rounded-lg text-[13px] font-medium text-secondary hover:text-on-surface">Owner</button>
+<button class="px-3 py-1.5 rounded-lg text-[13px] font-medium text-secondary hover:text-on-surface">Manager</button>
+<button class="px-3.5 py-1.5 rounded-lg text-[13px] font-semibold bg-surface-card text-primary shadow-xs">Trainer / Instructor</button>
+<button class="px-3 py-1.5 rounded-lg text-[13px] font-medium text-secondary hover:text-on-surface">Finance</button>
+<button class="px-3 py-1.5 rounded-lg text-[13px] font-medium text-secondary hover:text-on-surface">Admissions</button>
+</div>
+</div>
+<!-- Capability Matrix Rows -->
+<div class="flex flex-col divide-y divide-border-subtle bg-surface-card">
+<!-- Module 1: Students & Profiles -->
+<div class="p-space-lg flex flex-col md:flex-row md:items-center justify-between gap-space-md hover:bg-surface-bright transition-colors">
+<div class="flex items-start gap-space-sm max-w-md">
+<div class="w-9 h-9 rounded-lg bg-surface-subtle flex items-center justify-center text-secondary shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-[20px]">badge</span>
+</div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Students & Profiles</span>
+<span class="font-caption text-caption text-secondary">Student directory, contact cards, attendance log history, emergency details.</span>
+</div>
+</div>
+<!-- Sub-actions / Matrix toggles -->
+<div class="flex items-center gap-space-md flex-wrap">
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-on-surface">View All Students</span>
+<button aria-label="Toggle View All Students" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-secondary">Edit Profile Data</span>
+<button aria-label="Toggle Edit Profile Data" class="w-11 h-6 rounded-full bg-surface-dim relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-0 transition-transform shadow-xs"></span>
+</button>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-status-completed-bg text-status-completed-text font-label-sm text-[11px]">Read Only</span>
+</div>
+</div>
+<!-- Module 2: Attendance & Roll Call -->
+<div class="p-space-lg flex flex-col md:flex-row md:items-center justify-between gap-space-md hover:bg-surface-bright transition-colors">
+<div class="flex items-start gap-space-sm max-w-md">
+<div class="w-9 h-9 rounded-lg bg-primary-subtle flex items-center justify-center text-primary shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-[20px]">fact_check</span>
+</div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Attendance & Roll Call</span>
+<span class="font-caption text-caption text-secondary">Daily batch check-in, late arrival marking, session log notes, absence alerts.</span>
+</div>
+</div>
+<div class="flex items-center gap-space-md flex-wrap">
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-on-surface">Mark Daily</span>
+<button aria-label="Toggle Mark Daily Attendance" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-secondary">Backdate (>48h)</span>
+<button aria-label="Toggle Backdate Records" class="w-11 h-6 rounded-full bg-surface-dim relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-0 transition-transform shadow-xs"></span>
+</button>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-status-active-bg text-status-active-text font-label-sm text-[11px]">Operational</span>
+</div>
+</div>
+<!-- Module 3: Batches & Curriculum -->
+<div class="p-space-lg flex flex-col md:flex-row md:items-center justify-between gap-space-md hover:bg-surface-bright transition-colors">
+<div class="flex items-start gap-space-sm max-w-md">
+<div class="w-9 h-9 rounded-lg bg-surface-subtle flex items-center justify-center text-secondary shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-[20px]">date_range</span>
+</div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Batches & Curriculum</span>
+<span class="font-caption text-caption text-secondary">Syllabus pacing, classroom allocation, lesson milestone completion, homework reviews.</span>
+</div>
+</div>
+<div class="flex items-center gap-space-md flex-wrap">
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-on-surface">Update Syllabus</span>
+<button aria-label="Toggle Syllabus Milestones" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-secondary">Create Batch</span>
+<button aria-label="Toggle Create Batch" class="w-11 h-6 rounded-full bg-surface-dim relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-0 transition-transform shadow-xs"></span>
+</button>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-status-paid-bg text-status-paid-text font-label-sm text-[11px]">Scoped</span>
+</div>
+</div>
+<!-- Module 4: Payments & Cash Desk -->
+<div class="p-space-lg flex flex-col md:flex-row md:items-center justify-between gap-space-md hover:bg-surface-bright transition-colors bg-status-overdue-bg/20">
+<div class="flex items-start gap-space-sm max-w-md">
+<div class="w-9 h-9 rounded-lg bg-status-overdue-bg flex items-center justify-center text-status-overdue-text shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-[20px]">point_of_sale</span>
+</div>
+<div class="flex flex-col">
+<div class="flex items-center gap-2">
+<span class="font-title text-label-md text-on-surface">Payments & Cash Desk</span>
+<span class="material-symbols-outlined text-[16px] text-status-overdue-text">lock</span>
+</div>
+<span class="font-caption text-caption text-secondary">Tuition balances, POS receipts, bank slips, manual discounts, fee waivers.</span>
+</div>
+</div>
+<div class="flex items-center gap-space-md flex-wrap">
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-secondary">View Balance</span>
+<button aria-label="View Balance Disabled" class="w-11 h-6 rounded-full bg-surface-dim relative p-0.5 transition-colors cursor-not-allowed opacity-60" disabled="">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-0 transition-transform shadow-xs"></span>
+</button>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-secondary">Collect Cash</span>
+<button aria-label="Collect Cash Disabled" class="w-11 h-6 rounded-full bg-surface-dim relative p-0.5 transition-colors cursor-not-allowed opacity-60" disabled="">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-0 transition-transform shadow-xs"></span>
+</button>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-status-overdue-bg text-status-overdue-text font-label-sm text-[11px]">Restricted</span>
+</div>
+</div>
+<!-- Module 5: Certificates & Verification -->
+<div class="p-space-lg flex flex-col md:flex-row md:items-center justify-between gap-space-md hover:bg-surface-bright transition-colors">
+<div class="flex items-start gap-space-sm max-w-md">
+<div class="w-9 h-9 rounded-lg bg-surface-subtle flex items-center justify-center text-secondary shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-[20px]">workspace_premium</span>
+</div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Certificates & Graduation</span>
+<span class="font-caption text-caption text-secondary">Graduation eligibility approval, skill badge assignment, tamper-evident signing.</span>
+</div>
+</div>
+<div class="flex items-center gap-space-md flex-wrap">
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-on-surface">Nominate Student</span>
+<button aria-label="Toggle Nominate Student" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-secondary">Digital Seal / Sign</span>
+<button aria-label="Toggle Digital Seal" class="w-11 h-6 rounded-full bg-surface-dim relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-0 transition-transform shadow-xs"></span>
+</button>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-status-pending-bg text-status-pending-text font-label-sm text-[11px]">Nominate Only</span>
+</div>
+</div>
+<!-- Module 6: Reports & Exports -->
+<div class="p-space-lg flex flex-col md:flex-row md:items-center justify-between gap-space-md hover:bg-surface-bright transition-colors">
+<div class="flex items-start gap-space-sm max-w-md">
+<div class="w-9 h-9 rounded-lg bg-surface-subtle flex items-center justify-center text-secondary shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-[20px]">bar_chart</span>
+</div>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Reports & Analytics</span>
+<span class="font-caption text-caption text-secondary">Batch completion stats, dropout indicators, revenue forecasting, CSV rosters.</span>
+</div>
+</div>
+<div class="flex items-center gap-space-md flex-wrap">
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-on-surface">Batch Progression</span>
+<button aria-label="Toggle Progression Reports" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+<div class="flex items-center gap-2">
+<span class="font-caption text-caption text-secondary">Financial Ledgers</span>
+<button aria-label="Toggle Financial Ledgers" class="w-11 h-6 rounded-full bg-surface-dim relative p-0.5 transition-colors focus:outline-none">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-0 transition-transform shadow-xs"></span>
+</button>
+</div>
+<span class="px-2 py-0.5 rounded-md bg-status-completed-bg text-status-completed-text font-label-sm text-[11px]">Internal Only</span>
+</div>
+</div>
+</div>
+</div>
+<!-- CARD 3: Global Security Guardrails & Policy Rules -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between">
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">Academy Security Guardrails</h2>
+<p class="font-caption text-caption text-secondary">Platform-wide constraints enforced regardless of staff role assignment</p>
+</div>
+<span class="material-symbols-outlined text-secondary text-[22px]">gavel</span>
+</div>
+<div class="space-y-space-md pt-space-xs">
+<!-- Policy 1: MFA Enforcement -->
+<div class="flex items-center justify-between p-space-sm rounded-xl bg-surface-page gap-space-md">
+<div class="flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-primary text-[22px] mt-0.5">phonelink_lock</span>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Enforce Multi-Factor Authentication (2FA)</span>
+<span class="font-caption text-caption text-secondary">Mandate TOTP authenticator app or SMS one-time passcode for all 14 staff logins.</span>
+</div>
+</div>
+<button aria-label="Toggle 2FA" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 shrink-0">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+<!-- Policy 2: Session Inactivity Timeout -->
+<div class="flex flex-col sm:flex-row sm:items-center justify-between p-space-sm rounded-xl bg-surface-page gap-space-md">
+<div class="flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-secondary text-[22px] mt-0.5">timer</span>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Staff Idle Inactivity Timeout</span>
+<span class="font-caption text-caption text-secondary">Automatically lock unattended browser sessions to prevent unauthorized desk access.</span>
+</div>
+</div>
+<div class="sm:w-48 shrink-0">
+<select class="w-full h-9 px-3 text-body-base font-body-base bg-surface-card rounded-lg text-on-surface focus:outline-none shadow-sm cursor-pointer">
+<option>15 Minutes</option>
+<option selected="">30 Minutes (Recommended)</option>
+<option>60 Minutes</option>
+<option>2 Hours</option>
+</select>
+</div>
+</div>
+<!-- Policy 3: Campus IP Whitelisting -->
+<div class="p-space-sm rounded-xl bg-surface-page flex flex-col gap-space-sm">
+<div class="flex items-center justify-between">
+<div class="flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-tertiary text-[22px] mt-0.5">lan</span>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Campus Restricted IP Gateway</span>
+<span class="font-caption text-caption text-secondary">Allow staff grade modifications and cash desk entry solely within campus subnet.</span>
+</div>
+</div>
+<button aria-label="Toggle IP Whitelist" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 shrink-0">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+<div class="flex items-center gap-space-sm pl-8">
+<span class="font-caption text-caption font-mono px-2 py-1 bg-surface-card rounded text-secondary shadow-xs">198.51.100.0/24</span>
+<span class="text-[12px] text-tertiary font-medium flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary"></span>
+                Active Gateway (Branch Main Wi-Fi)
+              </span>
+</div>
+</div>
+<!-- Policy 4: Two-Person Rule for Financial Reversals -->
+<div class="flex items-center justify-between p-space-sm rounded-xl bg-surface-page gap-space-md">
+<div class="flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-secondary text-[22px] mt-0.5">approval</span>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Two-Person Rule for Financial Reversals & Refunds</span>
+<span class="font-caption text-caption text-secondary">Require explicit approval from Academy Manager or Super Admin for fee adjustments exceeding $100.</span>
+</div>
+</div>
+<button aria-label="Toggle Two Person Rule" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 shrink-0">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+<!-- Policy 5: Cashier Desk Audit Trail -->
+<div class="flex items-center justify-between p-space-sm rounded-xl bg-surface-page gap-space-md">
+<div class="flex items-start gap-space-sm">
+<span class="material-symbols-outlined text-secondary text-[22px] mt-0.5">history_edu</span>
+<div class="flex flex-col">
+<span class="font-title text-label-md text-on-surface">Immutable Cashier Desk Audit Trail</span>
+<span class="font-caption text-caption text-secondary">Log every payment line, partial receipt reprint, and student discount code with staff user hash.</span>
+</div>
+</div>
+<button aria-label="Toggle Cashier Audit" class="w-11 h-6 rounded-full bg-primary-container relative p-0.5 shrink-0">
+<span class="block w-5 h-5 rounded-full bg-on-primary transform translate-x-5 transition-transform shadow-xs"></span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- RIGHT COLUMN: Staff Capacity, Audit Activity & Security Guidelines (3 Cols) -->
+<div class="lg:col-span-3 flex flex-col gap-space-xl">
+<!-- Staff Capacity & Distribution Card -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between">
+<h3 class="font-headline-md text-headline-md text-on-surface">Staff Allocation</h3>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-primary-subtle text-primary">14 Active</span>
+</div>
+<!-- SVG Donut Chart Visual -->
+<div class="flex items-center gap-space-md py-space-xs">
+<div class="relative w-24 h-24 shrink-0 flex items-center justify-center">
+<svg class="w-full h-full transform -rotate-90" viewbox="0 0 36 36">
+<!-- Background Circle -->
+<path class="text-surface-subtle" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-width="4.5"></path>
+<!-- Trainers: 8/14 = 57% (Color: Primary) -->
+<path class="text-primary-container" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="57, 100" stroke-linecap="round" stroke-width="4.5"></path>
+<!-- Operations / Admin: 4/14 = 29% (Color: Secondary) -->
+<path class="text-secondary" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="29, 100" stroke-dashoffset="-57" stroke-linecap="round" stroke-width="4.5"></path>
+<!-- Finance: 2/14 = 14% (Color: Tertiary) -->
+<path class="text-tertiary" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" stroke-dasharray="14, 100" stroke-dashoffset="-86" stroke-linecap="round" stroke-width="4.5"></path>
+</svg>
+<div class="absolute flex flex-col items-center justify-center text-center">
+<span class="font-headline-md text-headline-md text-on-surface leading-none">14</span>
+<span class="text-[10px] text-secondary uppercase font-semibold mt-0.5">Users</span>
+</div>
+</div>
+<!-- Metric Breakdown -->
+<div class="flex flex-col gap-1 text-caption font-caption flex-1">
+<div class="flex items-center justify-between">
+<span class="flex items-center gap-1.5 text-on-surface">
+<span class="w-2 h-2 rounded-full bg-primary-container"></span>
+                Trainers
+              </span>
+<span class="font-semibold text-on-surface">8 (57%)</span>
+</div>
+<div class="flex items-center justify-between">
+<span class="flex items-center gap-1.5 text-on-surface">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+                Admin / Ops
+              </span>
+<span class="font-semibold text-on-surface">4 (29%)</span>
+</div>
+<div class="flex items-center justify-between">
+<span class="flex items-center gap-1.5 text-on-surface">
+<span class="w-2 h-2 rounded-full bg-tertiary"></span>
+                Finance
+              </span>
+<span class="font-semibold text-on-surface">2 (14%)</span>
+</div>
+</div>
+</div>
+<div class="pt-space-xs p-space-sm rounded-lg bg-surface-page flex items-center justify-between">
+<span class="text-caption font-caption text-secondary">Trainer-Student Ratio</span>
+<span class="font-title text-label-md text-on-surface font-semibold">1 : 18.4</span>
+</div>
+</div>
+<!-- Recent Audit & Escalation Log -->
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col gap-space-md">
+<div class="flex items-center justify-between">
+<h3 class="font-headline-md text-headline-md text-on-surface">Audit Trail Log</h3>
+<span class="material-symbols-outlined text-[18px] text-secondary">history</span>
+</div>
+<div class="space-y-space-md">
+<!-- Event 1 -->
+<div class="flex items-start gap-space-sm relative">
+<div class="w-2 h-2 rounded-full bg-primary mt-1.5 shrink-0"></div>
+<div class="flex flex-col">
+<span class="font-body-medium text-label-md text-on-surface leading-snug">
+                Sarah Jenkins modified Trainer attendance edit window to 48 hours.
+              </span>
+<span class="font-caption text-caption text-secondary mt-0.5">2 hours ago • Central Campus</span>
+</div>
+</div>
+<!-- Event 2 -->
+<div class="flex items-start gap-space-sm relative">
+<div class="w-2 h-2 rounded-full bg-tertiary mt-1.5 shrink-0"></div>
+<div class="flex flex-col">
+<span class="font-body-medium text-label-md text-on-surface leading-snug">
+                David Sterling promoted Fatima Al-Zahra to Senior Finance Staff.
+              </span>
+<span class="font-caption text-caption text-secondary mt-0.5">Yesterday at 16:40 • IP 198.51.100.12</span>
+</div>
+</div>
+<!-- Event 3 -->
+<div class="flex items-start gap-space-sm relative">
+<div class="w-2 h-2 rounded-full bg-status-pending-text mt-1.5 shrink-0"></div>
+<div class="flex flex-col">
+<span class="font-body-medium text-label-md text-on-surface leading-snug">
+                Admissions role seat reservation throttle updated to 12 seats/day.
+              </span>
+<span class="font-caption text-caption text-secondary mt-0.5">3 days ago • System Auto-rule</span>
+</div>
+</div>
+</div>
+<a class="text-center font-label-md text-label-md text-primary hover:text-primary-hover pt-space-xs block transition-colors" href="#view-full-audit">
+          Download Complete CSV Audit Log →
+        </a>
+</div>
+<!-- Quick Guideline Box: Principles of Least Privilege -->
+<div class="bg-primary-subtle rounded-xl p-space-lg flex flex-col gap-space-sm shadow-sm relative">
+<div class="flex items-center gap-space-xs text-primary font-title text-title">
+<span class="material-symbols-outlined text-[20px]">lightbulb</span>
+          Principles of Least Privilege
+        </div>
+<p class="font-caption text-caption text-on-surface-variant leading-relaxed">
+          Zero-trust role containment shields your academy against accidental financial ledger manipulation and bulk student data exfiltration. Assign staff to the lowest tier capable of completing daily instructional duties.
+        </p>
+<div class="pt-space-xs flex items-center justify-between text-[11px] text-secondary font-medium">
+<span>Security Protocol v2.4</span>
+<span class="text-primary hover:underline cursor-pointer">Read RBAC Docs</span>
+</div>
+</div>
+<!-- Active Operations Officer Snapshot -->
+<div class="bg-surface-card rounded-xl p-space-md shadow-sm flex items-center gap-space-sm">
+<img class="w-12 h-12 rounded-full object-cover" data-alt="A focused female executive sitting in an ultra-modern academy administrative office with clean architectural lines, warm natural daylight, wearing a tailored navy blazer, smiling reassuringly, photorealistic portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD-gmdkQ0VwKgsuBhOMKlnXAXX7FbPEnWCLvd_YQe3j8c2Z2wm-juBbDeF48KiEonBNyEg6k6ZS67hXk7zUa2aKN2lNtmNvRFDljrtvmKtJWb0LtrAJMSLS7GD0CrAWrEfbaf_c1covHvnZf5uf9CSONr7YATn3Ye5lsMdU057QEWg091rlMx1b7LTZ5OUtKTEEMXQ_fms-S3oZ943L6tP-W6gx_FURJggxRuHuz9nQxrzukI8n0lMw"/>
+<div class="flex flex-col min-w-0">
+<span class="font-title text-label-md text-on-surface truncate">Sarah Jenkins</span>
+<span class="font-caption text-caption text-secondary truncate">Designated RBAC Compliance Officer</span>
+<span class="text-[11px] text-tertiary font-medium">Session Active (Station #04)</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<script>
+  // Simple micro-interaction for interactive switch toggles
+  document.querySelectorAll('button[aria-label^="Toggle"]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      if (this.disabled) return;
+      const thumb = this.querySelector('span');
+      const isChecked = thumb.classList.contains('translate-x-5');
+      if (isChecked) {
+        thumb.classList.remove('translate-x-5');
+        thumb.classList.add('translate-x-0');
+        this.classList.remove('bg-primary-container');
+        this.classList.add('bg-surface-dim');
+      } else {
+        thumb.classList.remove('translate-x-0');
+        thumb.classList.add('translate-x-5');
+        this.classList.remove('bg-surface-dim');
+        this.classList.add('bg-primary-container');
+      }
+    });
+  });
+</script></div></main></div></body></html>

@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<script>
+    (function () {
+      const links = document.querySelectorAll('aside nav a[data-path="reports"]');
+      links.forEach(link => {
+        link.classList.remove('text-on-surface-variant', 'hover:bg-surface-subtle');
+        link.classList.add('bg-primary-container', 'text-on-primary', 'font-body-medium', 'shadow-sm');
+      });
+    })();
+  </script>
+<!-- Page Header Area -->
+<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md mb-space-2xl">
+<div>
+<div class="flex items-center gap-space-xs mb-1">
+<span class="font-caption text-caption text-secondary">Analytics & Governance</span>
+<span class="text-secondary">•</span>
+<span class="font-caption text-caption text-primary font-medium">Term 1 Summary</span>
+</div>
+<h1 class="font-display text-display text-on-surface tracking-tight">Reports</h1>
+<p class="font-body-base text-body-base text-secondary mt-0.5">Academy performance summaries, financial totals, and student metrics.</p>
+</div>
+<!-- Date Range Picker & Export Action Group -->
+<div class="flex flex-wrap items-center gap-space-sm">
+<div class="relative">
+<button class="h-10 px-space-md bg-surface-card rounded-xl text-on-surface font-body-medium text-body-medium shadow-sm flex items-center gap-space-xs hover:bg-surface-subtle transition-all duration-150" id="dateRangeBtn" type="button">
+<span class="material-symbols-outlined text-secondary text-[20px]">calendar_today</span>
+<span id="dateRangeLabel">This Academic Term (Sep 1 – Nov 30, 2024)</span>
+<span class="material-symbols-outlined text-secondary text-[18px]">expand_more</span>
+</button>
+<div class="hidden absolute right-0 mt-space-xs w-72 bg-surface-card rounded-xl shadow-xl z-30 py-2" id="dateRangeDropdown">
+<button class="w-full text-left px-space-md py-2 text-body-base font-body-base hover:bg-surface-subtle flex items-center justify-between" onclick="selectDateRange('This Academic Term (Sep 1 – Nov 30, 2024)')" type="button">
+<span>This Academic Term</span>
+<span class="material-symbols-outlined text-primary text-[18px]">check</span>
+</button>
+<button class="w-full text-left px-space-md py-2 text-body-base font-body-base hover:bg-surface-subtle flex items-center justify-between" onclick="selectDateRange('Last 30 Days (Oct 15 – Nov 15, 2024)')" type="button">
+<span>Last 30 Days</span>
+</button>
+<button class="w-full text-left px-space-md py-2 text-body-base font-body-base hover:bg-surface-subtle flex items-center justify-between" onclick="selectDateRange('Year to Date (2024)')" type="button">
+<span>Year to Date (2024)</span>
+</button>
+<button class="w-full text-left px-space-md py-2 text-body-base font-body-base hover:bg-surface-subtle flex items-center justify-between" onclick="selectDateRange('Previous Term (May 1 – Aug 31, 2024)')" type="button">
+<span>Previous Term</span>
+</button>
+</div>
+</div>
+<div class="relative">
+<button class="h-10 px-space-md bg-primary-container hover:bg-primary-hover active:bg-primary text-on-primary rounded-xl font-body-medium text-body-medium shadow-sm flex items-center gap-space-xs transition-all duration-150" id="exportDropdownBtn" type="button">
+<span class="material-symbols-outlined text-[19px]">file_download</span>
+<span>Export Report</span>
+<span class="material-symbols-outlined text-[18px]">expand_more</span>
+</button>
+<div class="hidden absolute right-0 mt-space-xs w-56 bg-surface-card rounded-xl shadow-xl z-30 py-2" id="exportDropdown">
+<div class="px-space-md py-1 text-caption font-caption text-secondary">Export Format</div>
+<button class="w-full text-left px-space-md py-2 text-body-base font-body-base hover:bg-surface-subtle flex items-center gap-space-xs text-on-surface" onclick="triggerExport('PDF Document (.pdf)')" type="button">
+<span class="material-symbols-outlined text-error text-[20px]">picture_as_pdf</span>
+<span>Comprehensive PDF</span>
+</button>
+<button class="w-full text-left px-space-md py-2 text-body-base font-body-base hover:bg-surface-subtle flex items-center gap-space-xs text-on-surface" onclick="triggerExport('CSV Data Sheet (.csv)')" type="button">
+<span class="material-symbols-outlined text-tertiary text-[20px]">table_chart</span>
+<span>Standard CSV Dataset</span>
+</button>
+<button class="w-full text-left px-space-md py-2 text-body-base font-body-base hover:bg-surface-subtle flex items-center gap-space-xs text-on-surface" onclick="triggerExport('Excel Workbook (.xlsx)')" type="button">
+<span class="material-symbols-outlined text-status-paid-text text-[20px]">view_in_ar_new</span>
+<span>Excel Workbook</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+<!-- Operational Metric Digest Tabs -->
+<div class="flex items-center gap-2 p-1.5 bg-surface-card rounded-xl shadow-sm mb-space-2xl overflow-x-auto">
+<button class="report-nav-tab px-4 py-2 rounded-xl text-body-medium font-body-medium text-on-primary bg-primary-container transition-all" id="tab-all" onclick="switchReportTab('all')" type="button">
+      Executive Overview
+    </button>
+<button class="report-nav-tab px-4 py-2 rounded-xl text-body-medium font-body-medium text-secondary hover:text-on-surface hover:bg-surface-subtle transition-all" id="tab-students" onclick="switchReportTab('students')" type="button">
+      Student Demographics
+    </button>
+<button class="report-nav-tab px-4 py-2 rounded-xl text-body-medium font-body-medium text-secondary hover:text-on-surface hover:bg-surface-subtle transition-all" id="tab-financial" onclick="switchReportTab('financial')" type="button">
+      Financials & Collections
+    </button>
+<button class="report-nav-tab px-4 py-2 rounded-xl text-body-medium font-body-medium text-secondary hover:text-on-surface hover:bg-surface-subtle transition-all" id="tab-attendance" onclick="switchReportTab('attendance')" type="button">
+      Attendance Performance
+    </button>
+<button class="report-nav-tab px-4 py-2 rounded-xl text-body-medium font-body-medium text-secondary hover:text-on-surface hover:bg-surface-subtle transition-all" id="tab-certificates" onclick="switchReportTab('certificates')" type="button">
+      Certificate Audits
+    </button>
+</div>
+<!-- SECTION 1: Student Reports -->
+<section class="report-section mb-space-3xl" id="section-students">
+<div class="flex items-center justify-between mb-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="flex items-center justify-center w-8 h-8 rounded-xl bg-status-active-bg text-status-active-text">
+<span class="material-symbols-outlined text-[20px]">school</span>
+</span>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">1. Student Reports</h2>
+<p class="font-caption text-caption text-secondary">Enrollment velocity, program composition, and retention status</p>
+</div>
+</div>
+<span class="px-space-xs py-0.5 rounded-lg bg-status-active-bg text-status-active-text font-label-sm text-label-sm">Updated Today, 08:30 AM</span>
+</div>
+<!-- Student KPI Cards -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-space-md mb-space-lg">
+<div class="bg-surface-card p-space-lg rounded-xl shadow-sm flex flex-col justify-between">
+<span class="font-label-md text-label-md text-secondary">Total Students</span>
+<div class="my-2">
+<span class="font-display text-display text-on-surface">348</span>
+</div>
+<div class="flex items-center gap-1 font-caption text-caption text-status-paid-text">
+<span class="material-symbols-outlined text-[16px]">arrow_upward</span>
+<span>+12.4% vs previous term</span>
+</div>
+</div>
+<div class="bg-surface-card p-space-lg rounded-xl shadow-sm flex flex-col justify-between">
+<span class="font-label-md text-label-md text-secondary">New Students (This Month)</span>
+<div class="my-2">
+<span class="font-display text-display text-on-surface">42</span>
+</div>
+<div class="flex items-center gap-1 font-caption text-caption text-status-paid-text">
+<span class="material-symbols-outlined text-[16px]">trending_up</span>
+<span>On track for Q4 projection</span>
+</div>
+</div>
+<div class="bg-surface-card p-space-lg rounded-xl shadow-sm flex flex-col justify-between">
+<span class="font-label-md text-label-md text-secondary">Active Students</span>
+<div class="my-2">
+<span class="font-display text-display text-primary">286</span>
+</div>
+<div class="flex items-center gap-1 font-caption text-caption text-secondary">
+<span class="w-2 h-2 rounded-full bg-status-paid-text"></span>
+<span>82.2% active campus engagement</span>
+</div>
+</div>
+<div class="bg-surface-card p-space-lg rounded-xl shadow-sm flex flex-col justify-between">
+<span class="font-label-md text-label-md text-secondary">Completed / Graduated</span>
+<div class="my-2">
+<span class="font-display text-display text-on-surface">62</span>
+</div>
+<div class="flex items-center gap-1 font-caption text-caption text-status-completed-text">
+<span class="material-symbols-outlined text-[16px]">workspace_premium</span>
+<span>17.8% term completion rate</span>
+</div>
+</div>
+</div>
+<!-- Student Program Breakdown Table / Visual -->
+<div class="bg-surface-card rounded-xl shadow-sm p-space-xl">
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm mb-space-lg">
+<div>
+<h3 class="font-title text-title text-on-surface">Program Enrollment Distribution</h3>
+<p class="font-caption text-caption text-secondary">Cohort capacity, active students, and graduation pacing</p>
+</div>
+<div class="flex items-center gap-space-xs text-caption font-caption text-secondary">
+<span class="inline-block w-3 h-3 rounded-full bg-primary"></span> Full-Stack
+          <span class="inline-block w-3 h-3 rounded-full bg-tertiary ml-2"></span> Data & AI
+          <span class="inline-block w-3 h-3 rounded-full bg-secondary ml-2"></span> Product Design
+        </div>
+</div>
+<!-- Linear Breakdown Visualization Bar -->
+<div class="w-full bg-surface-subtle h-3.5 rounded-full overflow-hidden flex mb-space-lg">
+<div class="bg-primary" style="width: 44%;" title="Full-Stack Engineering: 44%"></div>
+<div class="bg-tertiary" style="width: 32%;" title="Data Science & AI: 32%"></div>
+<div class="bg-secondary" style="width: 24%;" title="UX/UI & Product: 24%"></div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-body-base text-body-base">
+<thead>
+<tr class="h-11 bg-surface-page text-secondary text-label-sm font-label-sm uppercase tracking-wider">
+<th class="px-space-md rounded-l-lg">Program Track</th>
+<th class="px-space-md">Batches</th>
+<th class="px-space-md text-right">Active</th>
+<th class="px-space-md text-right">Graduated</th>
+<th class="px-space-md text-right">Total</th>
+<th class="px-space-md rounded-r-lg text-right">Retention</th>
+</tr>
+</thead>
+<tbody class="divide-y-0">
+<tr class="h-14 hover:bg-surface-page transition-colors">
+<td class="px-space-md font-body-medium text-on-surface">
+<div class="flex items-center gap-space-xs">
+<span class="w-2.5 h-2.5 rounded-full bg-primary"></span>
+<span>Full-Stack Web Engineering</span>
+</div>
+</td>
+<td class="px-space-md text-secondary">6 Batches</td>
+<td class="px-space-md text-right font-body-medium text-on-surface">128</td>
+<td class="px-space-md text-right text-secondary">26</td>
+<td class="px-space-md text-right text-on-surface">154</td>
+<td class="px-space-md text-right">
+<span class="inline-flex items-center px-2 py-0.5 rounded-md bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">96.2%</span>
+</td>
+</tr>
+<tr class="h-14 hover:bg-surface-page transition-colors">
+<td class="px-space-md font-body-medium text-on-surface">
+<div class="flex items-center gap-space-xs">
+<span class="w-2.5 h-2.5 rounded-full bg-tertiary"></span>
+<span>Data Science & Machine Learning</span>
+</div>
+</td>
+<td class="px-space-md text-secondary">4 Batches</td>
+<td class="px-space-md text-right font-body-medium text-on-surface">94</td>
+<td class="px-space-md text-right text-secondary">18</td>
+<td class="px-space-md text-right text-on-surface">112</td>
+<td class="px-space-md text-right">
+<span class="inline-flex items-center px-2 py-0.5 rounded-md bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">94.8%</span>
+</td>
+</tr>
+<tr class="h-14 hover:bg-surface-page transition-colors">
+<td class="px-space-md font-body-medium text-on-surface">
+<div class="flex items-center gap-space-xs">
+<span class="w-2.5 h-2.5 rounded-full bg-secondary"></span>
+<span>Product Design & User Experience</span>
+</div>
+</td>
+<td class="px-space-md text-secondary">3 Batches</td>
+<td class="px-space-md text-right font-body-medium text-on-surface">64</td>
+<td class="px-space-md text-right text-secondary">18</td>
+<td class="px-space-md text-right text-on-surface">82</td>
+<td class="px-space-md text-right">
+<span class="inline-flex items-center px-2 py-0.5 rounded-md bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">91.4%</span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+<!-- SECTION 2: Financial Reports -->
+<section class="report-section mb-space-3xl" id="section-financial">
+<div class="flex items-center justify-between mb-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="flex items-center justify-center w-8 h-8 rounded-xl bg-status-paid-bg text-status-paid-text">
+<span class="material-symbols-outlined text-[20px]">payments</span>
+</span>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">2. Financial Reports</h2>
+<p class="font-caption text-caption text-secondary">Tuition revenue realization, receivable pipeline, and monthly trendline</p>
+</div>
+</div>
+<span class="px-space-xs py-0.5 rounded-lg bg-status-paid-bg text-status-paid-text font-label-sm text-label-sm">Reconciliation Clear</span>
+</div>
+<!-- Financial KPI Cards -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-space-md mb-space-lg">
+<div class="bg-surface-card p-space-lg rounded-xl shadow-sm flex flex-col justify-between">
+<span class="font-label-md text-label-md text-secondary">Total Collected (Term)</span>
+<div class="my-2">
+<span class="font-display text-display text-on-surface">$184,250.00</span>
+</div>
+<div class="flex items-center justify-between font-caption text-caption">
+<span class="text-status-paid-text font-medium">91.8% Collection Rate</span>
+<span class="text-secondary">Target: $195k</span>
+</div>
+</div>
+<div class="bg-surface-card p-space-lg rounded-xl shadow-sm flex flex-col justify-between">
+<span class="font-label-md text-label-md text-secondary">Outstanding Fees</span>
+<div class="my-2">
+<span class="font-display text-display text-status-overdue-text">$16,400.00</span>
+</div>
+<div class="flex items-center justify-between font-caption text-caption">
+<span class="text-secondary">14 pending student installments</span>
+<span class="text-status-pending-text font-medium">Overdue: $4,200</span>
+</div>
+</div>
+<div class="bg-surface-card p-space-lg rounded-xl shadow-sm flex flex-col justify-between">
+<span class="font-label-md text-label-md text-secondary">Monthly Revenue (Current)</span>
+<div class="my-2">
+<span class="font-display text-display text-primary">$28,500.00</span>
+</div>
+<div class="flex items-center gap-1 font-caption text-caption text-status-paid-text">
+<span class="material-symbols-outlined text-[16px]">trending_up</span>
+<span>+6.2% vs October closing</span>
+</div>
+</div>
+</div>
+<!-- Minimalist Revenue Trajectory Chart Container -->
+<div class="bg-surface-card rounded-xl shadow-sm p-space-xl">
+<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm mb-space-xl">
+<div>
+<h3 class="font-title text-title text-on-surface">Revenue Realization Trajectory (Jul – Nov 2024)</h3>
+<p class="font-caption text-caption text-secondary">Monthly collections vs billing milestones. Sustained 91.8% collection efficiency.</p>
+</div>
+<div class="flex items-center gap-space-md">
+<div class="flex items-center gap-1.5 text-caption font-caption text-secondary">
+<span class="w-3 h-3 rounded-sm bg-primary"></span>
+<span>Collected Revenue</span>
+</div>
+<div class="flex items-center gap-1.5 text-caption font-caption text-secondary">
+<span class="w-3 h-3 rounded-sm bg-surface-dim"></span>
+<span>Receivable Invoiced</span>
+</div>
+</div>
+</div>
+<!-- Minimalist Chart Graphic via Inline SVG -->
+<div class="w-full">
+<svg class="w-full h-56" fill="none" preserveaspectratio="none" viewbox="0 0 700 200">
+<!-- Grid guidelines -->
+<line stroke="#f1f5f9" stroke-dasharray="3 3" x1="30" x2="670" y1="30" y2="30"></line>
+<line stroke="#f1f5f9" stroke-dasharray="3 3" x1="30" x2="670" y1="80" y2="80"></line>
+<line stroke="#f1f5f9" stroke-dasharray="3 3" x1="30" x2="670" y1="130" y2="130"></line>
+<line stroke="#e2e8f0" x1="30" x2="670" y1="170" y2="170"></line>
+<!-- Jul -->
+<rect fill="#cbdbf5" height="95" rx="3" width="28" x="70" y="75"></rect>
+<rect fill="#2563eb" height="85" rx="3" width="28" x="104" y="85"></rect>
+<!-- Aug -->
+<rect fill="#cbdbf5" height="110" rx="3" width="28" x="190" y="60"></rect>
+<rect fill="#2563eb" height="100" rx="3" width="28" x="224" y="70"></rect>
+<!-- Sep -->
+<rect fill="#cbdbf5" height="125" rx="3" width="28" x="310" y="45"></rect>
+<rect fill="#2563eb" height="115" rx="3" width="28" x="344" y="55"></rect>
+<!-- Oct -->
+<rect fill="#cbdbf5" height="130" rx="3" width="28" x="430" y="40"></rect>
+<rect fill="#2563eb" height="122" rx="3" width="28" x="464" y="48"></rect>
+<!-- Nov -->
+<rect fill="#cbdbf5" height="135" rx="3" width="28" x="550" y="35"></rect>
+<rect fill="#2563eb" height="128" rx="3" width="28" x="584" y="42"></rect>
+</svg>
+<!-- Chart Labels Row -->
+<div class="grid grid-cols-5 text-center pt-space-xs font-caption text-caption text-secondary">
+<div>
+<div class="font-body-medium text-on-surface">Jul 2024</div>
+<div>$32,400</div>
+</div>
+<div>
+<div class="font-body-medium text-on-surface">Aug 2024</div>
+<div>$36,800</div>
+</div>
+<div>
+<div class="font-body-medium text-on-surface">Sep 2024</div>
+<div>$42,150</div>
+</div>
+<div>
+<div class="font-body-medium text-on-surface">Oct 2024</div>
+<div>$44,400</div>
+</div>
+<div>
+<div class="font-body-medium text-primary font-semibold">Nov 2024</div>
+<div class="text-primary font-medium">$28,500*</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Split Grid: Attendance & Certificate Reports -->
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-space-xl mb-space-3xl">
+<!-- SECTION 3: Attendance Reports -->
+<section class="report-section flex flex-col" id="section-attendance">
+<div class="flex items-center justify-between mb-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="flex items-center justify-center w-8 h-8 rounded-xl bg-status-active-bg text-status-active-text">
+<span class="material-symbols-outlined text-[20px]">fact_check</span>
+</span>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">3. Attendance Reports</h2>
+<p class="font-caption text-caption text-secondary">Cohort participation rates and early-warning watchlist</p>
+</div>
+</div>
+</div>
+<!-- Attendance Key Metrics Mini-Cards -->
+<div class="grid grid-cols-3 gap-space-sm mb-space-md">
+<div class="bg-surface-card p-space-md rounded-xl shadow-sm">
+<div class="font-caption text-caption text-secondary">Academy Rate</div>
+<div class="font-headline-lg text-headline-lg text-status-paid-text mt-1">94.2%</div>
+<div class="text-[11px] text-secondary mt-1">Benchmark: 90%</div>
+</div>
+<div class="bg-surface-card p-space-md rounded-xl shadow-sm">
+<div class="font-caption text-caption text-secondary">Best Cohort</div>
+<div class="font-title text-title text-on-surface mt-1 truncate" title="Full-Stack Alpha">FS Alpha</div>
+<div class="text-[11px] text-status-paid-text font-medium mt-1">97.8% Peak</div>
+</div>
+<div class="bg-surface-card p-space-md rounded-xl shadow-sm">
+<div class="font-caption text-caption text-secondary">Watchlist</div>
+<div class="font-headline-lg text-headline-lg text-status-overdue-text mt-1">6</div>
+<div class="text-[11px] text-status-overdue-text mt-1"><80% Threshold</div>
+</div>
+</div>
+<!-- Top 3 Cohorts Attendance Table -->
+<div class="bg-surface-card rounded-xl shadow-sm p-space-lg flex-1">
+<div class="flex items-center justify-between mb-space-sm">
+<h3 class="font-title text-title text-on-surface">Top Cohorts by Attendance</h3>
+<span class="font-caption text-caption text-secondary">Ranked by session presence</span>
+</div>
+<div class="space-y-3">
+<div class="p-space-sm rounded-xl bg-surface-subtle flex items-center justify-between">
+<div class="flex items-center gap-space-sm">
+<span class="w-6 h-6 rounded-full bg-status-active-bg text-status-active-text flex items-center justify-center font-label-sm text-[11px] font-bold">1</span>
+<div>
+<div class="font-body-medium text-body-medium text-on-surface">Full-Stack Alpha (Batch 24A)</div>
+<div class="font-caption text-caption text-secondary">Instructor: Marcus Vance • 28 Students</div>
+</div>
+</div>
+<div class="text-right">
+<div class="font-body-medium text-status-paid-text font-bold">97.8%</div>
+<span class="text-[11px] text-secondary">48 / 50 sessions</span>
+</div>
+</div>
+<div class="p-space-sm rounded-xl bg-surface-subtle flex items-center justify-between">
+<div class="flex items-center gap-space-sm">
+<span class="w-6 h-6 rounded-full bg-surface-container-high text-secondary flex items-center justify-center font-label-sm text-[11px] font-bold">2</span>
+<div>
+<div class="font-body-medium text-body-medium text-on-surface">Data Analytics Evening (Batch 12)</div>
+<div class="font-caption text-caption text-secondary">Instructor: Dr. Emily Chen • 22 Students</div>
+</div>
+</div>
+<div class="text-right">
+<div class="font-body-medium text-status-paid-text font-bold">95.4%</div>
+<span class="text-[11px] text-secondary">36 / 38 sessions</span>
+</div>
+</div>
+<div class="p-space-sm rounded-xl bg-surface-subtle flex items-center justify-between">
+<div class="flex items-center gap-space-sm">
+<span class="w-6 h-6 rounded-full bg-surface-container text-secondary flex items-center justify-center font-label-sm text-[11px] font-bold">3</span>
+<div>
+<div class="font-body-medium text-body-medium text-on-surface">Cloud Architecture Weekend (Batch 08)</div>
+<div class="font-caption text-caption text-secondary">Instructor: Nathan Ross • 20 Students</div>
+</div>
+</div>
+<div class="text-right">
+<div class="font-body-medium text-status-paid-text font-bold">93.9%</div>
+<span class="text-[11px] text-secondary">24 / 26 sessions</span>
+</div>
+</div>
+</div>
+<div class="mt-space-md pt-space-sm flex items-center justify-between">
+<span class="font-caption text-caption text-secondary">Attendance alert triggered for 6 students</span>
+<button class="text-primary hover:text-primary-hover font-label-sm text-label-sm flex items-center gap-1" type="button">
+<span>View Watchlist Details</span>
+<span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+</button>
+</div>
+</div>
+</section>
+<!-- SECTION 4: Certificate Reports -->
+<section class="report-section flex flex-col" id="section-certificates">
+<div class="flex items-center justify-between mb-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="flex items-center justify-center w-8 h-8 rounded-xl bg-surface-container text-primary">
+<span class="material-symbols-outlined text-[20px]">workspace_premium</span>
+</span>
+<div>
+<h2 class="font-headline-md text-headline-md text-on-surface">4. Certificate Reports</h2>
+<p class="font-caption text-caption text-secondary">Verification registry, honors distinction, and pending issuances</p>
+</div>
+</div>
+</div>
+<!-- Certificate Metrics Grid -->
+<div class="grid grid-cols-2 gap-space-sm mb-space-md">
+<div class="bg-surface-card p-space-md rounded-xl shadow-sm flex items-center justify-between">
+<div>
+<div class="font-caption text-caption text-secondary">Certificates Issued</div>
+<div class="font-display text-display text-on-surface mt-1">142</div>
+<div class="text-[11px] text-status-paid-text">94.7% eligible issued</div>
+</div>
+<span class="material-symbols-outlined text-[32px] text-status-paid-text">verified</span>
+</div>
+<div class="bg-surface-card p-space-md rounded-xl shadow-sm flex items-center justify-between">
+<div>
+<div class="font-caption text-caption text-secondary">Pending Issuance</div>
+<div class="font-display text-display text-status-pending-text mt-1">8</div>
+<div class="text-[11px] text-secondary">Requires exam review</div>
+</div>
+<span class="material-symbols-outlined text-[32px] text-status-pending-text">pending_actions</span>
+</div>
+</div>
+<!-- Certificate Issuance Status Summary Panel -->
+<div class="bg-surface-card rounded-xl shadow-sm p-space-lg flex-1 flex flex-col justify-between">
+<div>
+<div class="flex items-center justify-between mb-space-md">
+<h3 class="font-title text-title text-on-surface">Issuance & Honor Summary</h3>
+<span class="px-2 py-0.5 rounded-full bg-status-completed-bg text-status-completed-text font-label-sm text-label-sm">Total Eligible: 150</span>
+</div>
+<div class="space-y-space-sm">
+<!-- Progress Item 1 -->
+<div>
+<div class="flex justify-between font-body-base text-body-base mb-1">
+<span class="text-on-surface flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-tertiary"></span>
+<span>Distinction Honors (Grade > 90%)</span>
+</span>
+<span class="font-body-medium text-on-surface">24 students (16.0%)</span>
+</div>
+<div class="w-full bg-surface-subtle h-2 rounded-full overflow-hidden">
+<div class="bg-tertiary h-2 rounded-full" style="width: 16%;"></div>
+</div>
+</div>
+<!-- Progress Item 2 -->
+<div>
+<div class="flex justify-between font-body-base text-body-base mb-1">
+<span class="text-on-surface flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span>Standard Diplomas Issued</span>
+</span>
+<span class="font-body-medium text-on-surface">118 students (78.7%)</span>
+</div>
+<div class="w-full bg-surface-subtle h-2 rounded-full overflow-hidden">
+<div class="bg-primary h-2 rounded-full" style="width: 78.7%;"></div>
+</div>
+</div>
+<!-- Progress Item 3 -->
+<div>
+<div class="flex justify-between font-body-base text-body-base mb-1">
+<span class="text-on-surface flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-error"></span>
+<span>Under Review / Practical Audit</span>
+</span>
+<span class="font-body-medium text-status-pending-text">8 students (5.3%)</span>
+</div>
+<div class="w-full bg-surface-subtle h-2 rounded-full overflow-hidden">
+<div class="bg-status-pending-text h-2 rounded-full" style="width: 5.3%;"></div>
+</div>
+</div>
+</div>
+</div>
+<div class="mt-space-md pt-space-sm flex items-center justify-between">
+<span class="font-caption text-caption text-secondary">All digital certificates carry QR code verification</span>
+<a class="text-primary hover:text-primary-hover font-label-sm text-label-sm flex items-center gap-1" data-path="certificates" href="#">
+<span>Manage Registry</span>
+<span class="material-symbols-outlined text-[16px]">open_in_new</span>
+</a>
+</div>
+</div>
+</section>
+</div>
+<!-- Operational Audit Footer Banner -->
+<div class="p-space-lg bg-surface-card rounded-xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-space-md">
+<div class="flex items-center gap-space-sm">
+<span class="flex items-center justify-center w-9 h-9 rounded-xl bg-status-paid-bg text-status-paid-text">
+<span class="material-symbols-outlined text-[22px]">verified_user</span>
+</span>
+<div>
+<div class="font-body-medium text-body-medium text-on-surface">Academic Term Verification Completed</div>
+<div class="font-caption text-caption text-secondary">All metrics generated from Central Campus database snapshot timestamp 2024-11-20 08:30:14 UTC.</div>
+</div>
+</div>
+<div class="flex items-center gap-space-xs">
+<button class="h-9 px-space-md bg-surface-page hover:bg-surface-subtle text-on-surface rounded-xl font-body-medium text-body-medium transition-colors" onclick="window.print()" type="button">
+<span class="material-symbols-outlined text-[18px] mr-1 inline-block align-middle">print</span>
+<span>Print Summary</span>
+</button>
+</div>
+</div>
+<!-- Micro-interactions Script -->
+<script>
+    // Tab filtering behavior
+    function switchReportTab(tabId) {
+      const tabs = document.querySelectorAll('.report-nav-tab');
+      tabs.forEach(tab => {
+        tab.classList.remove('bg-primary-container', 'text-on-primary');
+        tab.classList.add('text-secondary');
+      });
+
+      const currentTab = document.getElementById('tab-' + tabId);
+      if (currentTab) {
+        currentTab.classList.remove('text-secondary');
+        currentTab.classList.add('bg-primary-container', 'text-on-primary');
+      }
+
+      const sections = document.querySelectorAll('.report-section');
+      if (tabId === 'all') {
+        sections.forEach(sec => sec.classList.remove('hidden'));
+      } else {
+        sections.forEach(sec => {
+          if (sec.id === 'section-' + tabId) {
+            sec.classList.remove('hidden');
+          } else {
+            sec.classList.add('hidden');
+          }
+        });
+      }
+    }
+
+    // Dropdown toggles
+    const dateRangeBtn = document.getElementById('dateRangeBtn');
+    const dateRangeDropdown = document.getElementById('dateRangeDropdown');
+    const exportDropdownBtn = document.getElementById('exportDropdownBtn');
+    const exportDropdown = document.getElementById('exportDropdown');
+
+    dateRangeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dateRangeDropdown.classList.toggle('hidden');
+      exportDropdown.classList.add('hidden');
+    });
+
+    exportDropdownBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      exportDropdown.classList.toggle('hidden');
+      dateRangeDropdown.classList.add('hidden');
+    });
+
+    document.addEventListener('click', () => {
+      dateRangeDropdown.classList.add('hidden');
+      exportDropdown.classList.add('hidden');
+    });
+
+    function selectDateRange(rangeText) {
+      document.getElementById('dateRangeLabel').textContent = rangeText;
+      dateRangeDropdown.classList.add('hidden');
+    }
+
+    function triggerExport(formatName) {
+      exportDropdown.classList.add('hidden');
+      alert('Generating ' + formatName + ' for: ' + document.getElementById('dateRangeLabel').textContent);
+    }
+  </script>
+</div></div></main></div></body></html>

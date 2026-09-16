@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    # No Docker/containers anywhere in this project's workflow (see PLAN.md
+    # "Local development setup"). GitHub Actions' usual `services:` block
+    # for Postgres/Redis runs them as Docker containers under the hood, so
+    # this installs both as native Linux processes via apt-get instead —
+    # the CI-equivalent of the native-Windows approach used for local dev
+    # (Memurai itself isn't applicable on a Linux runner).
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install PostgreSQL and Redis natively (no Docker)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql redis-server
+          sudo systemctl start postgresql
+          sudo systemctl start redis-server
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+          sudo -u postgres createdb academy_management_saas_ci
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      # next build's own TypeScript check is the "typecheck" step — it also
+      # generates .next/types, which a standalone `tsc --noEmit` depends on
+      # without ever having run a build first.
+      - run: npm run build
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
+          REDIS_URL: redis://localhost:6379
+          MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
+
+      - name: Apply migrations
+        run: node --import=tsx scripts/migrate.ts
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
+          REDIS_URL: redis://localhost:6379
+          MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
+
+      - run: npm test
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
+          REDIS_URL: redis://localhost:6379
+          MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
+
+      # Sanity-checks the seed script itself doesn't crash — not one of
+      # PLAN.md's explicitly-listed CI checks (lint/typecheck/test/
+      # migrations), but cheap and directly exercises this same item's
+      # other deliverable.
+      - name: Seed smoke test
+        run: node --import=tsx scripts/seed.ts
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
+          REDIS_URL: redis://localhost:6379
+          MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}

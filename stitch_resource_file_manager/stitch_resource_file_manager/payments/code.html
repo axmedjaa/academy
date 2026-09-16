@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Afoogy Skill Academy Management System</title><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"surface-card":"#FFFFFF","border-subtle":"#E2E8F0","primary-fixed":"#dbe1ff","inverse-surface":"#213145","on-error-container":"#93000a","surface-dim":"#cbdbf5","secondary":"#565e74","border-strong":"#CBD5E1","on-error":"#ffffff","on-tertiary-fixed-variant":"#005236","tertiary-container":"#007d55","surface-variant":"#d3e4fe","on-surface-variant":"#434655","primary-container":"#2563eb","surface-container-lowest":"#ffffff","status-paid-bg":"#ECFDF5","on-tertiary":"#ffffff","outline":"#737686","status-overdue-text":"#B91C1C","on-surface":"#0b1c30","error":"#ba1a1a","surface-subtle":"#F1F5F9","on-secondary":"#ffffff","inverse-primary":"#b4c5ff","secondary-fixed-dim":"#bec6e0","secondary-container":"#dae2fd","status-active-text":"#1D4ED8","on-background":"#0b1c30","surface-page":"#F8FAFC","tertiary":"#006242","error-container":"#ffdad6","status-active-bg":"#EFF6FF","status-paid-text":"#047857","on-primary-fixed":"#00174b","surface-container":"#e5eeff","primary":"#004ac6","on-primary-fixed-variant":"#003ea8","inverse-on-surface":"#eaf1ff","primary-subtle":"#EFF6FF","primary-fixed-dim":"#b4c5ff","surface-container-high":"#dce9ff","on-tertiary-fixed":"#002113","tertiary-fixed":"#6ffbbe","on-primary-container":"#eeefff","surface-bright":"#f8f9ff","surface-container-highest":"#d3e4fe","status-completed-bg":"#F1F5F9","outline-variant":"#c3c6d7","tertiary-fixed-dim":"#4edea3","on-tertiary-container":"#bdffdb","on-secondary-fixed-variant":"#3f465c","on-secondary-container":"#5c647a","background":"#f8f9ff","surface-container-low":"#eff4ff","status-pending-text":"#B45309","status-completed-text":"#475569","primary-hover":"#1D4ED8","secondary-fixed":"#dae2fd","status-overdue-bg":"#FEF2F2","surface":"#f8f9ff","on-secondary-fixed":"#131b2e","status-pending-bg":"#FFFBEB","surface-tint":"#0053db","on-primary":"#ffffff"},borderRadius:{"DEFAULT":"0.125rem","lg":"0.25rem","xl":"0.5rem","full":"0.75rem"},spacing:{"space-md":"1rem","header-height":"64px","space-sm":"0.75rem","space-2xl":"2rem","space-xl":"1.5rem","space-lg":"1.25rem","space-3xl":"2.5rem","content-max-width":"1400px","space-xs":"0.5rem","space-xxs":"0.25rem","sidebar-width":"260px"},fontFamily:{"body-medium":["Inter"],"caption":["Inter"],"title":["Inter"],"headline-lg":["Inter"],"headline-lg-mobile":["Inter"],"label-md":["Inter"],"display":["Inter"],"headline-md":["Inter"],"body-lg":["Inter"],"body-base":["Inter"],"label-sm":["Inter"]},fontSize:{"body-medium":["14px",{lineHeight:"20px",fontWeight:"500"}],"caption":["12px",{lineHeight:"16px",fontWeight:"400"}],"title":["16px",{lineHeight:"24px",letterSpacing:"-0.01em",fontWeight:"600"}],"headline-lg":["24px",{lineHeight:"32px",letterSpacing:"-0.02em",fontWeight:"600"}],"headline-lg-mobile":["20px",{lineHeight:"28px",letterSpacing:"-0.01em",fontWeight:"600"}],"label-md":["13px",{lineHeight:"18px",fontWeight:"500"}],"display":["30px",{lineHeight:"38px",letterSpacing:"-0.02em",fontWeight:"700"}],"headline-md":["18px",{lineHeight:"26px",letterSpacing:"-0.01em",fontWeight:"600"}],"body-lg":["15px",{lineHeight:"24px",fontWeight:"400"}],"body-base":["14px",{lineHeight:"20px",fontWeight:"400"}],"label-sm":["12px",{lineHeight:"16px",letterSpacing:"0.01em",fontWeight:"600"}]}}}}</script></head><body class="bg-surface-page font-body-base text-body-base text-on-surface antialiased"><aside class="fixed left-0 top-0 h-full w-[260px] bg-surface-card border-r border-border-subtle z-50 flex flex-col justify-between"><div class="flex flex-col flex-1 overflow-y-auto"><div class="h-[64px] px-space-lg flex items-center gap-space-sm border-b border-border-subtle"><img alt="Afoogy Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1UI9PommuezFs_yaIQiTGp92bY5LPa8_lzH2wypd-37mObx7H9DtmBFU4ctm_bbhH9S8yNZT1tXDGTW23LbvR838KEgUAMF7Cm1RpRo5LDmP9DKOoDcbG7yGEI4FR-YHzu5kZ49iecDSI0GS72BpQpbTnTTo5KeWfTdneb2EcgS7SHsi9x-xWOWThZA67f4o6R1lLDSvwzMhoKwMZRE5mZuWd9wTXwRp3UUvKkASJ3G3L04sgJJUUWtMG4"/><div class="flex flex-col"><span class="font-title text-title text-on-surface leading-tight">Afoogy</span><span class="font-caption text-caption text-secondary leading-none">Skill Academy</span></div></div><div class="px-space-md py-space-sm"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">Core Operations</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a aria-current="page" class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl transition-colors bg-primary-container text-on-primary font-body-medium shadow-sm" data-path="dashboard" href="#"><span class="material-symbols-outlined text-[20px]">dashboard</span><span class="font-body-medium text-body-medium">Dashboard</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="students" href="#"><span class="material-symbols-outlined text-[20px]">group</span><span class="font-body-medium text-body-medium">Students</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="programs" href="#"><span class="material-symbols-outlined text-[20px]">school</span><span class="font-body-medium text-body-medium">Programs</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="courses" href="#"><span class="material-symbols-outlined text-[20px]">menu_book</span><span class="font-body-medium text-body-medium">Courses</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="batches" href="#"><span class="material-symbols-outlined text-[20px]">date_range</span><span class="font-body-medium text-body-medium">Batches</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="attendance" href="#"><span class="material-symbols-outlined text-[20px]">fact_check</span><span class="font-body-medium text-body-medium">Attendance</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="payments" href="#"><span class="material-symbols-outlined text-[20px]">payments</span><span class="font-body-medium text-body-medium">Payments</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="certificates" href="#"><span class="material-symbols-outlined text-[20px]">workspace_premium</span><span class="font-body-medium text-body-medium">Certificates</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="staff" href="#"><span class="material-symbols-outlined text-[20px]">badge</span><span class="font-body-medium text-body-medium">Staff</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="reports" href="#"><span class="material-symbols-outlined text-[20px]">bar_chart</span><span class="font-body-medium text-body-medium">Reports</span></a></nav><div class="mt-space-md pt-space-sm border-t border-border-subtle"><div class="text-[11px] font-semibold uppercase tracking-wider text-secondary px-space-xs py-space-xxs mb-space-xxs">System</div><nav class="flex flex-col gap-space-xxs" data-active-classes="bg-primary-container text-on-primary font-body-medium shadow-sm"><a class="flex items-center justify-between px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><div class="flex items-center gap-space-sm"><span class="material-symbols-outlined text-[20px]">notifications</span><span class="font-body-medium text-body-medium">Notifications</span></div><span class="px-1.5 py-0.5 rounded-full bg-status-active-bg text-status-active-text font-label-sm text-[11px]">3</span></a><a class="flex items-center gap-space-sm px-space-sm py-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="settings" href="#"><span class="material-symbols-outlined text-[20px]">settings</span><span class="font-body-medium text-body-medium">Settings</span></a></nav></div></div></div><div class="p-space-md border-t border-border-subtle bg-surface-card"><div class="flex items-center justify-between text-caption font-caption text-secondary"><span>Afoogy ERP v2.4</span><span class="flex items-center gap-1 text-tertiary font-medium"><span class="w-2 h-2 rounded-full bg-tertiary inline-block"></span>Online</span></div></div></aside><div class="pl-[260px]"><header class="fixed top-0 left-[260px] right-0 h-[64px] bg-surface-card/95 backdrop-blur-sm border-b border-border-subtle z-40 px-space-xl flex items-center justify-between shadow-[0_1px_3px_0_rgba(15,23,42,0.04)]"><div class="flex items-center gap-space-md"><div class="flex items-center gap-space-xs text-on-surface"><span class="material-symbols-outlined text-secondary text-[20px]">location_city</span><div class="flex items-center gap-space-xs cursor-pointer group"><span class="font-title text-label-md text-on-surface group-hover:text-primary transition-colors">Central Campus - Main Branch</span><span class="material-symbols-outlined text-secondary text-[18px] group-hover:text-primary transition-colors">expand_more</span></div></div><div class="h-4 w-px bg-border-subtle"></div><span class="font-caption text-caption text-secondary">Academic Year 2024–25</span></div><div class="flex items-center gap-space-lg"><div class="relative w-80"><span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span><input class="w-full h-10 pl-9 pr-3 text-body-base font-body-base bg-surface-page border border-border-subtle rounded-xl placeholder:text-secondary focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 transition-all" placeholder="Search students, batches, receipts..." type="text"/></div><a class="relative p-2 rounded-xl text-on-surface-variant hover:bg-surface-subtle hover:text-on-surface transition-colors" data-path="notifications" href="#"><span class="material-symbols-outlined text-[22px]">notifications</span><span class="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-error rounded-full ring-2 ring-surface-card"></span></a><div class="h-6 w-px bg-border-subtle"></div><div class="flex items-center gap-space-sm pl-space-xs"><img alt="Profile" class="w-8 h-8 rounded-full object-cover ring-1 ring-border-subtle" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDG4MaUhLrG16yJ-OPGo4UE1WsPpyDFwNzP4WlMQJdf6H4Mx2BvsGwxIqBlCKTsUjGIL_0IXtBSKWI5vnrhbOqRAI_lTRH-SefMsm1ISAmKYHHlZnBPA0CQdh3lm4UoauFF3Ndz3vpwphGJDK1eEqbVrnzwll9PiJXhFwPoV8CxWmPR4oJRc97PI8bVXgeLqkyzAmMrrFGx-Jk0f-732l5teuwZ36L6CYfDFEPgsQ4mjAxjUJpMneb-"/><div class="flex flex-col text-left"><span class="font-title text-label-md text-on-surface leading-tight">Sarah Jenkins</span><span class="font-caption text-caption text-secondary leading-none">Academy Manager</span></div><span class="material-symbols-outlined text-secondary text-[18px] cursor-pointer hover:text-on-surface">unfold_more</span></div></div></header><main class="relative pt-[64px] bg-surface-page min-h-screen"><div class="w-full max-w-[1400px] mx-auto p-space-2xl"><div class="flex flex-col w-full">
+<div class="flex flex-col lg:flex-row lg:items-center justify-between gap-space-md mb-space-2xl">
+<div>
+<div class="flex items-center gap-space-xs mb-space-xxs">
+<span class="font-caption text-caption text-secondary uppercase tracking-wider font-semibold">Financial Operations</span>
+<span class="text-secondary text-caption">•</span>
+<span class="font-caption text-caption text-primary font-medium">Manual Ledger</span>
+</div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface">Payments</h1>
+<p class="font-body-base text-body-base text-secondary mt-0.5">Record and track student payments, counter receipts, and offline deposit slips.</p>
+</div>
+<div class="flex items-center gap-space-sm self-start lg:self-auto">
+<button class="h-10 px-space-md rounded-xl bg-surface-card hover:bg-surface-subtle text-on-surface font-body-medium text-body-medium shadow-sm flex items-center gap-space-xs transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px] text-secondary">file_download</span>
+<span>Export Ledger</span>
+</button>
+<button class="h-10 px-space-md rounded-xl bg-primary-container hover:bg-primary-hover text-on-primary font-body-medium text-body-medium shadow-sm flex items-center gap-space-xs transition-colors" onclick="document.getElementById('record-payment-modal').classList.remove('hidden')" type="button">
+<span class="material-symbols-outlined text-[19px]">add</span>
+<span>Record Payment</span>
+</button>
+</div>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-space-lg mb-space-2xl">
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col justify-between relative overflow-hidden">
+<div class="flex items-start justify-between mb-space-sm">
+<span class="font-label-md text-label-md text-secondary">Total Collected (YTD)</span>
+<div class="w-9 h-9 rounded-lg bg-primary-subtle text-primary flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]">account_balance</span>
+</div>
+</div>
+<div>
+<div class="font-display text-display text-on-surface tracking-tight">$184,250</div>
+<div class="flex items-center gap-space-xs mt-space-xs">
+<span class="inline-flex items-center px-1.5 py-0.5 rounded-lg text-[11px] font-semibold bg-status-paid-bg text-status-paid-text">
+<span class="material-symbols-outlined text-[13px] mr-0.5">trending_up</span>+12.4%
+          </span>
+<span class="font-caption text-caption text-secondary">vs. last academic term</span>
+</div>
+</div>
+</div>
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col justify-between relative overflow-hidden">
+<div class="flex items-start justify-between mb-space-sm">
+<span class="font-label-md text-label-md text-secondary">This Month (October)</span>
+<div class="w-9 h-9 rounded-lg bg-surface-subtle text-secondary flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]">calendar_month</span>
+</div>
+</div>
+<div>
+<div class="font-display text-display text-on-surface tracking-tight">$34,800</div>
+<div class="flex items-center justify-between gap-space-xs mt-space-xs">
+<span class="font-caption text-caption text-secondary">Target: $40,000</span>
+<span class="font-label-sm text-label-sm text-on-surface font-semibold">87% achieved</span>
+</div>
+<div class="w-full bg-surface-subtle h-1.5 rounded-full mt-2 overflow-hidden">
+<div class="bg-primary-container h-full rounded-full" style="width: 87%"></div>
+</div>
+</div>
+</div>
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col justify-between relative overflow-hidden">
+<div class="flex items-start justify-between mb-space-sm">
+<span class="font-label-md text-label-md text-secondary">Outstanding Fees</span>
+<div class="w-9 h-9 rounded-lg bg-status-pending-bg text-status-pending-text flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]">pending_actions</span>
+</div>
+</div>
+<div>
+<div class="font-display text-display text-on-surface tracking-tight">$16,400</div>
+<div class="flex items-center gap-space-xs mt-space-xs">
+<span class="inline-flex items-center px-1.5 py-0.5 rounded-lg text-[11px] font-semibold bg-status-pending-bg text-status-pending-text">
+            Needs attention
+          </span>
+<span class="font-caption text-caption text-secondary">Across 28 trainees</span>
+</div>
+</div>
+</div>
+<div class="bg-surface-card rounded-xl p-space-lg shadow-sm flex flex-col justify-between relative overflow-hidden">
+<div class="flex items-start justify-between mb-space-sm">
+<span class="font-label-md text-label-md text-secondary">Today's Collections</span>
+<div class="w-9 h-9 rounded-lg bg-status-active-bg text-status-active-text flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]">point_of_sale</span>
+</div>
+</div>
+<div>
+<div class="font-display text-display text-on-surface tracking-tight">$3,650</div>
+<div class="flex items-center gap-space-xs mt-space-xs">
+<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-[11px] font-semibold bg-status-active-bg text-status-active-text">
+<span class="w-1.5 h-1.5 rounded-full bg-status-active-text animate-pulse"></span> Live Log
+          </span>
+<span class="font-caption text-caption text-secondary">8 transactions today</span>
+</div>
+</div>
+</div>
+</div>
+<div class="bg-surface-card rounded-xl p-space-md shadow-sm mb-space-lg">
+<div class="flex flex-col xl:flex-row gap-space-sm xl:items-center justify-between">
+<div class="relative flex-1 min-w-[280px]">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span>
+<input class="w-full h-10 pl-9 pr-4 text-body-base font-body-base bg-surface-page rounded-lg focus:outline-none focus:bg-surface-card text-on-surface placeholder:text-secondary transition-all" id="table-search" placeholder="Search by student name, receipt code (REC-), or slip ref..." type="text"/>
+</div>
+<div class="flex flex-wrap items-center gap-space-xs">
+<div class="relative">
+<select class="h-10 pl-3 pr-8 text-label-md font-label-md bg-surface-page rounded-lg text-on-surface appearance-none cursor-pointer focus:outline-none focus:bg-surface-subtle">
+<option value="all">All Methods</option>
+<option value="bank">Bank Transfer</option>
+<option value="cash">Counter Cash</option>
+<option value="mobile">Mobile Money</option>
+<option value="pos">Card / POS Slip</option>
+</select>
+<span class="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-secondary text-[18px]">expand_more</span>
+</div>
+<div class="relative">
+<select class="h-10 pl-3 pr-8 text-label-md font-label-md bg-surface-page rounded-lg text-on-surface appearance-none cursor-pointer focus:outline-none focus:bg-surface-subtle">
+<option value="all">All Batches</option>
+<option value="bth-048">BTH-2024-048 (Prod Design)</option>
+<option value="bth-039">BTH-2024-039 (Full-Stack Alpha)</option>
+<option value="bth-014">BTH-2024-014 (Data Science)</option>
+<option value="bth-052">BTH-2024-052 (Cloud Dev)</option>
+</select>
+<span class="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-secondary text-[18px]">expand_more</span>
+</div>
+<div class="relative">
+<select class="h-10 pl-3 pr-8 text-label-md font-label-md bg-surface-page rounded-lg text-on-surface appearance-none cursor-pointer focus:outline-none focus:bg-surface-subtle">
+<option value="oct-2024">This Month (Oct 2024)</option>
+<option value="sep-2024">Last Month (Sep 2024)</option>
+<option value="q3-2024">Q3 Term (Jul - Sep)</option>
+<option value="custom">Custom Date Range</option>
+</select>
+<span class="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-secondary text-[18px]">calendar_today</span>
+</div>
+<div class="relative">
+<select class="h-10 pl-3 pr-8 text-label-md font-label-md bg-surface-page rounded-lg text-on-surface appearance-none cursor-pointer focus:outline-none focus:bg-surface-subtle">
+<option value="all">All Verification</option>
+<option value="verified">Verified</option>
+<option value="pending">Pending Audit</option>
+</select>
+<span class="material-symbols-outlined pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-secondary text-[18px]">expand_more</span>
+</div>
+<button class="h-10 w-10 flex items-center justify-center rounded-lg bg-surface-page hover:bg-surface-subtle text-secondary transition-colors" title="Reset Filters" type="button">
+<span class="material-symbols-outlined text-[18px]">refresh</span>
+</button>
+</div>
+</div>
+</div>
+<div class="bg-surface-card rounded-xl shadow-sm overflow-hidden mb-space-lg">
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-subtle text-secondary font-label-sm text-label-sm uppercase tracking-wider">
+<th class="py-3 px-space-md font-semibold">Receipt / Code</th>
+<th class="py-3 px-space-md font-semibold">Student</th>
+<th class="py-3 px-space-md font-semibold">Program / Batch</th>
+<th class="py-3 px-space-md font-semibold text-right">Amount</th>
+<th class="py-3 px-space-md font-semibold">Method</th>
+<th class="py-3 px-space-md font-semibold">Recorded Time</th>
+<th class="py-3 px-space-md font-semibold">Logged By</th>
+<th class="py-3 px-space-md font-semibold text-center">Status</th>
+<th class="py-3 px-space-md font-semibold text-right">Actions</th>
+</tr>
+</thead>
+<tbody class="divide-y-0 text-body-base font-body-base">
+<tr class="hover:bg-surface-subtle transition-colors group">
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="font-mono text-label-sm font-semibold text-primary">REC-8831</span>
+<span class="material-symbols-outlined text-secondary text-[14px] opacity-0 group-hover:opacity-100 cursor-pointer" title="Copy Code">content_copy</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">REF: GTB-891041</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-full bg-surface-container-high text-primary flex items-center justify-center font-label-sm font-semibold">
+                  AK
+                </div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Amina Karim</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0891</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex flex-col">
+<span class="text-on-surface font-medium text-label-md">Advanced Product Design</span>
+<span class="font-caption text-caption text-secondary">BTH-2024-048</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<span class="font-title text-title text-on-surface font-semibold">$1,200.00</span>
+<span class="block font-caption text-[11px] text-status-paid-text">Term 1 (Full)</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-subtle text-on-surface text-caption font-medium">
+<span class="material-symbols-outlined text-[15px] text-primary">account_balance</span>
+<span>Bank Transfer</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<span class="text-on-surface font-medium block">Today, 02:45 PM</span>
+<span class="font-caption text-caption text-secondary">24 Oct 2024</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-1.5">
+<span class="w-5 h-5 rounded-full bg-secondary-container text-on-secondary-container text-[10px] font-bold flex items-center justify-center">SJ</span>
+<span class="text-secondary text-label-md">Sarah J.</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-lg text-label-sm font-semibold bg-status-paid-bg text-status-paid-text">
+                Verified
+              </span>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<div class="flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="View Audit Receipt" type="button">
+<span class="material-symbols-outlined text-[18px]">receipt_long</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Slip" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-subtle transition-colors group">
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="font-mono text-label-sm font-semibold text-primary">REC-8830</span>
+<span class="material-symbols-outlined text-secondary text-[14px] opacity-0 group-hover:opacity-100 cursor-pointer" title="Copy Code">content_copy</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">Slip #CASH-442</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-full bg-surface-container-high text-tertiary flex items-center justify-center font-label-sm font-semibold">
+                  DL
+                </div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">David Lee</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0902</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex flex-col">
+<span class="text-on-surface font-medium text-label-md">Full-Stack Cohort Alpha</span>
+<span class="font-caption text-caption text-secondary">BTH-2024-039</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<span class="font-title text-title text-on-surface font-semibold">$450.00</span>
+<span class="block font-caption text-[11px] text-secondary">Installment 2/3</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-subtle text-on-surface text-caption font-medium">
+<span class="material-symbols-outlined text-[15px] text-tertiary">payments</span>
+<span>Counter Cash</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<span class="text-on-surface font-medium block">Today, 11:15 AM</span>
+<span class="font-caption text-caption text-secondary">24 Oct 2024</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-1.5">
+<span class="w-5 h-5 rounded-full bg-secondary-container text-on-secondary-container text-[10px] font-bold flex items-center justify-center">OF</span>
+<span class="text-secondary text-label-md">Omar F.</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-lg text-label-sm font-semibold bg-status-paid-bg text-status-paid-text">
+                Verified
+              </span>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<div class="flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="View Audit Receipt" type="button">
+<span class="material-symbols-outlined text-[18px]">receipt_long</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Slip" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-subtle transition-colors group">
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="font-mono text-label-sm font-semibold text-primary">REC-8829</span>
+<span class="material-symbols-outlined text-secondary text-[14px] opacity-0 group-hover:opacity-100 cursor-pointer" title="Copy Code">content_copy</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">MOM-TX-99381</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-full bg-surface-container-high text-primary flex items-center justify-center font-label-sm font-semibold">
+                  MC
+                </div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Marcus Chen</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0774</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex flex-col">
+<span class="text-on-surface font-medium text-label-md">Cybersecurity Specialist</span>
+<span class="font-caption text-caption text-secondary">BTH-2024-022</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<span class="font-title text-title text-on-surface font-semibold">$800.00</span>
+<span class="block font-caption text-[11px] text-secondary">Part Deposit</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-subtle text-on-surface text-caption font-medium">
+<span class="material-symbols-outlined text-[15px] text-primary-container">phone_android</span>
+<span>Mobile Money</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<span class="text-on-surface font-medium block">Today, 09:30 AM</span>
+<span class="font-caption text-caption text-secondary">24 Oct 2024</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-1.5">
+<span class="w-5 h-5 rounded-full bg-secondary-container text-on-secondary-container text-[10px] font-bold flex items-center justify-center">SJ</span>
+<span class="text-secondary text-label-md">Sarah J.</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-lg text-label-sm font-semibold bg-status-pending-bg text-status-pending-text">
+                Pending Audit
+              </span>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<div class="flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Audit Deposit" type="button">
+<span class="material-symbols-outlined text-[18px]">verified</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Slip" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-subtle transition-colors group">
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="font-mono text-label-sm font-semibold text-primary">REC-8828</span>
+<span class="material-symbols-outlined text-secondary text-[14px] opacity-0 group-hover:opacity-100 cursor-pointer" title="Copy Code">content_copy</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">WIRE-CH-8291</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-full bg-surface-container-high text-primary flex items-center justify-center font-label-sm font-semibold">
+                  ER
+                </div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Elena Rostova</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0612</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex flex-col">
+<span class="text-on-surface font-medium text-label-md">Cloud Architect Intensive</span>
+<span class="font-caption text-caption text-secondary">BTH-2024-052</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<span class="font-title text-title text-on-surface font-semibold">$1,200.00</span>
+<span class="block font-caption text-[11px] text-status-paid-text">Term 1 (Full)</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-subtle text-on-surface text-caption font-medium">
+<span class="material-symbols-outlined text-[15px] text-primary">account_balance</span>
+<span>Bank Transfer</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<span class="text-on-surface font-medium block">Yesterday, 04:20 PM</span>
+<span class="font-caption text-caption text-secondary">23 Oct 2024</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-1.5">
+<span class="w-5 h-5 rounded-full bg-secondary-container text-on-secondary-container text-[10px] font-bold flex items-center justify-center">OF</span>
+<span class="text-secondary text-label-md">Omar F.</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-lg text-label-sm font-semibold bg-status-paid-bg text-status-paid-text">
+                Verified
+              </span>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<div class="flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="View Audit Receipt" type="button">
+<span class="material-symbols-outlined text-[18px]">receipt_long</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Slip" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-subtle transition-colors group">
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="font-mono text-label-sm font-semibold text-primary">REC-8827</span>
+<span class="material-symbols-outlined text-secondary text-[14px] opacity-0 group-hover:opacity-100 cursor-pointer" title="Copy Code">content_copy</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">POS-AUTH-4109</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-full bg-surface-container-high text-primary flex items-center justify-center font-label-sm font-semibold">
+                  FA
+                </div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Fatima Al-Zahra</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0518</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex flex-col">
+<span class="text-on-surface font-medium text-label-md">Data Analytics & BI</span>
+<span class="font-caption text-caption text-secondary">BTH-2024-014</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<span class="font-title text-title text-on-surface font-semibold">$600.00</span>
+<span class="block font-caption text-[11px] text-secondary">Registration Fee</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-subtle text-on-surface text-caption font-medium">
+<span class="material-symbols-outlined text-[15px] text-secondary">credit_card</span>
+<span>POS / Terminal</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<span class="text-on-surface font-medium block">Yesterday, 01:10 PM</span>
+<span class="font-caption text-caption text-secondary">23 Oct 2024</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-1.5">
+<span class="w-5 h-5 rounded-full bg-secondary-container text-on-secondary-container text-[10px] font-bold flex items-center justify-center">SJ</span>
+<span class="text-secondary text-label-md">Sarah J.</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-lg text-label-sm font-semibold bg-status-paid-bg text-status-paid-text">
+                Verified
+              </span>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<div class="flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="View Audit Receipt" type="button">
+<span class="material-symbols-outlined text-[18px]">receipt_long</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Slip" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+<tr class="hover:bg-surface-subtle transition-colors group">
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-xs">
+<span class="font-mono text-label-sm font-semibold text-primary">REC-8826</span>
+<span class="material-symbols-outlined text-secondary text-[14px] opacity-0 group-hover:opacity-100 cursor-pointer" title="Copy Code">content_copy</span>
+</div>
+<span class="font-caption text-[11px] text-secondary">Slip #CASH-441</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-space-sm">
+<div class="w-8 h-8 rounded-full bg-surface-container-high text-tertiary flex items-center justify-center font-label-sm font-semibold">
+                  TO
+                </div>
+<div class="flex flex-col">
+<span class="font-body-medium text-body-medium text-on-surface">Tariq Oladipo</span>
+<span class="font-caption text-caption text-secondary">AFG-2024-0419</span>
+</div>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex flex-col">
+<span class="text-on-surface font-medium text-label-md">Full-Stack Cohort Alpha</span>
+<span class="font-caption text-caption text-secondary">BTH-2024-039</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<span class="font-title text-title text-on-surface font-semibold">$350.00</span>
+<span class="block font-caption text-[11px] text-secondary">Late Fee Adj.</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-surface-subtle text-on-surface text-caption font-medium">
+<span class="material-symbols-outlined text-[15px] text-tertiary">payments</span>
+<span>Counter Cash</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md">
+<span class="text-on-surface font-medium block">22 Oct, 10:40 AM</span>
+<span class="font-caption text-caption text-secondary">22 Oct 2024</span>
+</td>
+<td class="py-3.5 px-space-md">
+<div class="flex items-center gap-1.5">
+<span class="w-5 h-5 rounded-full bg-secondary-container text-on-secondary-container text-[10px] font-bold flex items-center justify-center">OF</span>
+<span class="text-secondary text-label-md">Omar F.</span>
+</div>
+</td>
+<td class="py-3.5 px-space-md text-center">
+<span class="inline-flex items-center px-2 py-0.5 rounded-lg text-label-sm font-semibold bg-status-paid-bg text-status-paid-text">
+                Verified
+              </span>
+</td>
+<td class="py-3.5 px-space-md text-right">
+<div class="flex items-center justify-end gap-1">
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="View Audit Receipt" type="button">
+<span class="material-symbols-outlined text-[18px]">receipt_long</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-primary hover:bg-surface-subtle transition-colors" title="Print Slip" type="button">
+<span class="material-symbols-outlined text-[18px]">print</span>
+</button>
+<button class="p-1.5 rounded-lg text-secondary hover:text-on-surface hover:bg-surface-subtle transition-colors" type="button">
+<span class="material-symbols-outlined text-[18px]">more_vert</span>
+</button>
+</div>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="px-space-md py-space-sm bg-surface-card flex flex-col sm:flex-row sm:items-center justify-between gap-space-sm">
+<span class="font-caption text-caption text-secondary">
+        Showing <span class="font-medium text-on-surface">1</span> to <span class="font-medium text-on-surface">6</span> of <span class="font-medium text-on-surface">142</span> payments recorded
+      </span>
+<div class="flex items-center gap-space-xs">
+<button class="h-8 px-3 rounded-lg bg-surface-subtle text-secondary hover:text-on-surface text-label-sm font-semibold flex items-center gap-1 transition-colors disabled:opacity-40" disabled="" type="button">
+<span class="material-symbols-outlined text-[16px]">chevron_left</span>
+<span>Previous</span>
+</button>
+<div class="flex items-center gap-1">
+<button class="w-8 h-8 rounded-lg bg-primary-container text-on-primary font-label-sm font-semibold text-center" type="button">1</button>
+<button class="w-8 h-8 rounded-lg text-secondary hover:bg-surface-subtle hover:text-on-surface font-label-sm font-semibold text-center transition-colors" type="button">2</button>
+<button class="w-8 h-8 rounded-lg text-secondary hover:bg-surface-subtle hover:text-on-surface font-label-sm font-semibold text-center transition-colors" type="button">3</button>
+<span class="px-1 text-secondary">...</span>
+<button class="w-8 h-8 rounded-lg text-secondary hover:bg-surface-subtle hover:text-on-surface font-label-sm font-semibold text-center transition-colors" type="button">15</button>
+</div>
+<button class="h-8 px-3 rounded-lg bg-surface-subtle text-secondary hover:text-on-surface text-label-sm font-semibold flex items-center gap-1 transition-colors" type="button">
+<span>Next</span>
+<span class="material-symbols-outlined text-[16px]">chevron_right</span>
+</button>
+</div>
+</div>
+</div>
+<div class="bg-surface-card rounded-xl p-space-md shadow-sm flex items-start gap-space-sm">
+<div class="p-2 rounded-lg bg-primary-subtle text-primary shrink-0 mt-0.5">
+<span class="material-symbols-outlined text-[20px]">policy</span>
+</div>
+<div class="flex-1">
+<h4 class="font-title text-label-md text-on-surface">Manual Payment Logging & Compliance Policy</h4>
+<p class="font-caption text-caption text-secondary mt-0.5 leading-relaxed">
+        All cash, counter deposits, and direct bank transfers must have a verified stamped receipt, transaction voucher code, or uploaded paper slip copy attached. Discrepancies exceeding $50 require dual-signoff by the Head of Finance before issuing student graduation clearance.
+      </p>
+</div>
+<button class="shrink-0 text-caption font-label-sm text-primary hover:underline self-center" type="button">
+      View Academy Audit Guidelines
+    </button>
+</div>
+<div class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-inverse-surface/40 backdrop-blur-sm" id="record-payment-modal">
+<div class="bg-surface-card rounded-xl max-w-lg w-full p-space-xl shadow-xl animate-in fade-in zoom-in-95 duration-150">
+<div class="flex items-center justify-between pb-space-md mb-space-md">
+<div>
+<h3 class="font-headline-md text-headline-md text-on-surface">Record Student Payment</h3>
+<p class="font-caption text-caption text-secondary">Issue manual counter receipt and register against batch fees.</p>
+</div>
+<button class="w-8 h-8 rounded-lg bg-surface-subtle hover:bg-surface-container-high text-secondary flex items-center justify-center transition-colors" onclick="document.getElementById('record-payment-modal').classList.add('hidden')" type="button">
+<span class="material-symbols-outlined text-[18px]">close</span>
+</button>
+</div>
+<form class="space-y-space-md" onsubmit="event.preventDefault(); document.getElementById('record-payment-modal').classList.add('hidden');">
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1.5">Select Student</label>
+<div class="relative">
+<select class="w-full h-10 pl-3 pr-8 text-body-base bg-surface-page rounded-lg text-on-surface focus:outline-none focus:bg-surface-card transition-colors">
+<option value="">Search by student name or ID...</option>
+<option value="1">Amina Karim (AFG-2024-0891)</option>
+<option value="2">David Lee (AFG-2024-0902)</option>
+<option value="3">Marcus Chen (AFG-2024-0774)</option>
+<option value="4">Elena Rostova (AFG-2024-0612)</option>
+<option value="5">Fatima Al-Zahra (AFG-2024-0518)</option>
+</select>
+<span class="material-symbols-outlined pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-secondary text-[18px]">search</span>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-space-sm">
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1.5">Amount ($ USD)</label>
+<input class="w-full h-10 px-3 text-body-base bg-surface-page rounded-lg text-on-surface focus:outline-none focus:bg-surface-card transition-colors font-medium" placeholder="0.00" step="0.01" type="number"/>
+</div>
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1.5">Payment Method</label>
+<div class="relative">
+<select class="w-full h-10 pl-3 pr-8 text-body-base bg-surface-page rounded-lg text-on-surface focus:outline-none focus:bg-surface-card transition-colors">
+<option value="bank">Bank Transfer</option>
+<option value="cash">Counter Cash</option>
+<option value="mobile">Mobile Money</option>
+<option value="pos">POS Terminal</option>
+</select>
+<span class="material-symbols-outlined pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-secondary text-[18px]">expand_more</span>
+</div>
+</div>
+</div>
+<div class="grid grid-cols-2 gap-space-sm">
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1.5">Bank Ref / Slip Number</label>
+<input class="w-full h-10 px-3 text-body-base bg-surface-page rounded-lg text-on-surface focus:outline-none focus:bg-surface-card transition-colors font-mono" placeholder="e.g. GTB-902148" type="text"/>
+</div>
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1.5">Payment Date</label>
+<input class="w-full h-10 px-3 text-body-base bg-surface-page rounded-lg text-on-surface focus:outline-none focus:bg-surface-card transition-colors" type="date" value="2024-10-24"/>
+</div>
+</div>
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1.5">Installment Allocation</label>
+<div class="relative">
+<select class="w-full h-10 pl-3 pr-8 text-body-base bg-surface-page rounded-lg text-on-surface focus:outline-none focus:bg-surface-card transition-colors">
+<option value="term-1">Term 1 Full Tuition ($1,200.00)</option>
+<option value="inst-1">First Installment ($400.00)</option>
+<option value="inst-2">Second Installment ($400.00)</option>
+<option value="exam">Certification & Exam Fee ($150.00)</option>
+</select>
+<span class="material-symbols-outlined pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-secondary text-[18px]">expand_more</span>
+</div>
+</div>
+<div>
+<label class="block font-label-md text-label-md text-on-surface mb-1.5">Audit Slip / Attachment (Optional)</label>
+<div class="rounded-xl p-space-md bg-surface-page text-center cursor-pointer hover:bg-surface-subtle transition-colors">
+<span class="material-symbols-outlined text-secondary text-[26px]">upload_file</span>
+<span class="block font-caption text-caption text-secondary mt-1">Upload stamped teller or transfer screenshot (PDF, PNG up to 5MB)</span>
+</div>
+</div>
+<div class="pt-space-sm flex items-center justify-end gap-space-sm">
+<button class="h-10 px-space-md rounded-xl bg-surface-subtle hover:bg-surface-container-high text-on-surface font-body-medium text-body-medium transition-colors" onclick="document.getElementById('record-payment-modal').classList.add('hidden')" type="button">
+            Cancel
+          </button>
+<button class="h-10 px-space-md rounded-xl bg-primary-container hover:bg-primary-hover text-on-primary font-body-medium text-body-medium shadow-sm transition-colors flex items-center gap-1.5" type="submit">
+<span class="material-symbols-outlined text-[18px]">check_circle</span>
+<span>Record & Print Slip</span>
+</button>
+</div>
+</form>
+</div>
+</div>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const searchInput = document.getElementById('table-search');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          const val = e.target.value.toLowerCase();
+          const rows = document.querySelectorAll('tbody tr');
+          rows.forEach(row => {
+            const text = row.innerText.toLowerCase();
+            row.style.display = text.includes(val) ? '' : 'none';
+          });
+        });
+      }
+    });
+  </script>
+</div></div></main></div></body></html>
