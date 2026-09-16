@@ -7,6 +7,7 @@ import {
   bigint,
   boolean,
   timestamp,
+  date,
   pgEnum,
   uniqueIndex,
   index,
@@ -781,5 +782,183 @@ export const subscriptionPaymentConsumptions = pgTable(
     index(
       "subscription_payment_consumptions_academy_subscription_id_idx",
     ).on(table.academySubscriptionId),
+  ],
+);
+
+// Phase 2, Item 33. PLAN.md's exact column list (Phase 2 §2): "id,
+// academy_id FK academies NOT NULL, user_id FK users NOT NULL,
+// employee_number text nullable, full_name text NOT NULL, phone text NOT
+// NULL, email text nullable, hire_date date nullable, status
+// enum(active,archived) NOT NULL default active, created_at, updated_at;
+// unique (academy_id, user_id); index (academy_id)."
+//
+// Deliberately no `role` column, even though academy_memberships.role
+// (academyRoleEnum, above) exists and Item 35 is literally named
+// "assignStaffRole": PLAN.md's own literal column list for staff_profiles
+// has no role field, and role/system-access for a staff member is granted
+// through their academy_memberships row, not duplicated here. A
+// staff_profiles row models the *employment record* — who this person is
+// as an employee (employee number, contact details, hire date) — a
+// separate concept from academy_memberships, which grants a user a login
+// and a role in a given academy. The two rows are linked only loosely (via
+// user_id + academy_id, not a direct FK to each other) because PLAN.md
+// never lists one; assignStaffRole (Item 35, not this item) is expected to
+// operate on the caller's existing academy_memberships row for that
+// user/academy. Flagging this here since it's the one place this item's
+// brief asked to double-check the literal column list rather than assume
+// symmetry with academy_memberships.
+export const staffProfiles = pgTable(
+  "staff_profiles",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    employeeNumber: text("employee_number"),
+    fullName: text("full_name").notNull(),
+    phone: text("phone").notNull(),
+    email: text("email"),
+    hireDate: date("hire_date"),
+    // Reuses branchStatusEnum (active/archived) rather than declaring a new,
+    // value-identical two-value enum. This isn't just a coincidental value
+    // match: the Archive & Deactivation Rules table (below, further down
+    // this file's conceptual source — see PLAN.md) lists "Staff" as its own
+    // row with the exact same "archive, never delete, restorable"
+    // active/archived semantics already modeled for "Branches" via
+    // branchStatusEnum — the same lifecycle concept, just a different
+    // entity. Contrast with membershipStatusEnum above, which deliberately
+    // did NOT reuse this enum for a different reason: academy_memberships
+    // isn't one of the Archive & Deactivation Rules entities at all, so
+    // "archived" would have been the wrong word there. Judgment call/minor
+    // naming quirk worth flagging: the underlying Postgres enum type stays
+    // named "branch_status" even though it's now shared by a non-branch
+    // table. Not renamed here (e.g. to a generic "archive_status") to avoid
+    // an unrelated ALTER TYPE migration touching the already-shipped
+    // `branches` table as a side effect of this item's schema addition.
+    status: branchStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Database Constraints & Indexes doesn't restate this one (it lists
+    // staff_branch_assignments' unique constraint but not this table's),
+    // but Phase 2 §2's own literal column list for staff_profiles states
+    // it directly: "unique (academy_id, user_id)" — one employment record
+    // per user per academy.
+    uniqueIndex("staff_profiles_academy_id_user_id_unique").on(
+      table.academyId,
+      table.userId,
+    ),
+    // Phase 2 §2: "index (academy_id)" — also explicitly repeated in the
+    // consolidated Database Constraints & Indexes' index list
+    // ("staff_profiles(academy_id)").
+    index("staff_profiles_academy_id_idx").on(table.academyId),
+  ],
+);
+
+// Phase 2, Item 33. PLAN.md's exact column list (Phase 2 §2): "id,
+// academy_id FK NOT NULL, staff_profile_id FK staff_profiles NOT NULL,
+// branch_id FK branches NOT NULL, created_at; unique
+// (staff_profile_id, branch_id)."
+//
+// The consolidated Database Constraints & Indexes section spells this same
+// constraint as "staff_branch_assignments: unique (staff_id, branch_id)" —
+// a shorthand referring to the same staff_profile_id column Phase 2 §2's
+// own table definition names explicitly (this table has no separate
+// `staff_id` column; PLAN.md's own phase-section column lists are treated
+// as the more authoritative, literal source everywhere else in this file,
+// e.g. academy_subscriptions/academy_usage above, so the same judgment
+// applies here).
+export const staffBranchAssignments = pgTable(
+  "staff_branch_assignments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    staffProfileId: uuid("staff_profile_id")
+      .notNull()
+      .references(() => staffProfiles.id),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex(
+      "staff_branch_assignments_staff_profile_id_branch_id_unique",
+    ).on(table.staffProfileId, table.branchId),
+  ],
+);
+
+// document_type's exhaustive value list is given directly in PLAN.md's
+// Phase 2 §2 staff_documents column list — a closed set, unlike the
+// judgment-call free-text fields elsewhere in this file (academies.type,
+// subscription_payments.payment_method). Kept as its own pgEnum rather
+// than shared with student_documents' similarly-named document_type
+// column (a later, not-yet-built table in this same phase): the two value
+// sets differ — student_documents is id_copy/certificate/other, this one
+// additionally has "contract" — so they aren't the same enum and can't be
+// merged without silently allowing "contract" on a student document.
+export const staffDocumentTypeEnum = pgEnum("staff_document_type", [
+  "id_copy",
+  "certificate",
+  "contract",
+  "other",
+]);
+
+// Phase 2, Item 33. PLAN.md's exact column list (Phase 2 §2): "id,
+// academy_id FK NOT NULL, staff_profile_id FK staff_profiles NOT NULL,
+// document_type enum(id_copy,certificate,contract,other) NOT NULL,
+// file_ref text NOT NULL, uploaded_by FK users NOT NULL, status
+// enum(active,archived) NOT NULL default active, created_at; index
+// (staff_profile_id)." No updated_at: unlike staff_profiles, PLAN.md's
+// literal list for this table ends at created_at (matches the same
+// "follow the literal list, don't assume symmetry with a sibling table"
+// judgment already applied to academy_subscriptions above).
+//
+// file_ref is a plain nullable-free text reference, matching
+// subscription_payments.evidenceFileRef's judgment call above: no
+// lib/storage module exists yet, so this is an interface placeholder, not
+// a real upload — building actual storage/upload handling is out of scope
+// for this schema-only item (and belongs to uploadStaffDocument, Item
+// 35/36, not built here).
+//
+// status reuses branchStatusEnum for the same reason as
+// staffProfiles.status above: "Documents (staff/student)" is its own row
+// in the Archive & Deactivation Rules table sharing the identical
+// active/archived, "frees storage allowance on archive" lifecycle.
+export const staffDocuments = pgTable(
+  "staff_documents",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    staffProfileId: uuid("staff_profile_id")
+      .notNull()
+      .references(() => staffProfiles.id),
+    documentType: staffDocumentTypeEnum("document_type").notNull(),
+    fileRef: text("file_ref").notNull(),
+    uploadedBy: uuid("uploaded_by")
+      .notNull()
+      .references(() => users.id),
+    status: branchStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 2 §2: "index (staff_profile_id)".
+    index("staff_documents_staff_profile_id_idx").on(table.staffProfileId),
   ],
 );

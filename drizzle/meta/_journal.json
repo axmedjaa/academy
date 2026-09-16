@@ -71,6 +71,13 @@
       "when": 1789569721181,
       "tag": "0009_adorable_stryfe",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789571187222,
+      "tag": "0010_unusual_major_mapleleaf",
+      "breakpoints": true
     }
   ]
 }
