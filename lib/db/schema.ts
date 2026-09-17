@@ -1630,3 +1630,176 @@ export const approvalRequests = pgTable(
     index("approval_requests_academy_id_status_idx").on(table.academyId, table.status),
   ],
 );
+
+// Phase 3, Item 48. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, batch_id FK batches NOT NULL, name text NOT NULL,
+// max_marks numeric NOT NULL, exam_date date nullable, status
+// enum(scheduled,marks_entry,completed,archived) NOT NULL default
+// scheduled, created_at, updated_at; index (batch_id))."
+//
+// max_marks nonnegativity: not explicitly stated by PLAN.md for this table
+// (unlike e.g. subscription_plans' max_* columns), but added here by the
+// same judgment call already applied to every other numeric allowance/limit
+// column in this file (see subscription_plans' comment) — a negative
+// max_marks has no meaning and would silently break enterMarks'
+// marks_obtained-vs-max_marks range check (lib/academies/exams.ts) if it
+// ever got past the Zod layer via a direct DB write.
+export const examStatusEnum = pgEnum("exam_status", [
+  "scheduled",
+  "marks_entry",
+  "completed",
+  "archived",
+]);
+
+export const exams = pgTable(
+  "exams",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batches.id),
+    name: text("name").notNull(),
+    maxMarks: numeric("max_marks").notNull(),
+    examDate: date("exam_date"),
+    status: examStatusEnum("status").notNull().default("scheduled"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 3 §2: "index (batch_id)".
+    index("exams_batch_id_idx").on(table.batchId),
+    check("exams_max_marks_nonnegative", sql`${table.maxMarks} >= 0`),
+  ],
+);
+
+// Phase 3, Item 48. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, exam_id FK exams NOT NULL, student_id FK students
+// NOT NULL, batch_id FK batches NOT NULL — denormalized, required for the
+// Phase 5 certificate-eligibility query — marks_obtained numeric nullable,
+// grade_configuration_id FK grade_configurations NOT NULL (snapshotted at
+// publish time, never updated after), grade_band_label text nullable
+// (snapshotted), pass_fail enum(pending,pass,fail) NOT NULL default
+// pending, status enum(draft,marks_entered,submitted,under_review,approved,
+// rejected,published) NOT NULL default draft, entered_by FK users NOT
+// NULL, submitted_at timestamp nullable, approved_by FK users nullable,
+// approved_at timestamp nullable, published_at timestamp nullable,
+// created_at, updated_at; unique (exam_id, student_id); index
+// (academy_id, batch_id), (student_id))."
+//
+// ---------------------------------------------------------------------
+// CRITICAL — grade_configuration_id timing (Item 48's own judgment call,
+// documented here since it directly constrains what Item 49 must do)
+// ---------------------------------------------------------------------
+// This column is NOT NULL, yet PLAN.md's own comment on it says it is
+// "snapshotted at publish time, never updated after" — and publish
+// (publishResults) is Item 49, not this one. The Result Lifecycle table
+// (PLAN.md, Lifecycle & State-Transition Tables) resolves this: the FIRST
+// row this table ever gets is written by `createExam` itself ("— -> Draft
+// | createExam implicitly creates a Draft exam_results row per enrolled
+// student | system, on exam creation"), not by `enterMarks`. Since the
+// column is NOT NULL, `createExam` (lib/academies/exams.ts) must therefore
+// populate it at that same moment — it sets it to the academy's currently
+// `active` grade_configuration (a hard precondition: createExam refuses
+// with an explicit error if the academy has none), NOT a value enterMarks
+// invents later. This is a *working/placeholder* value, not the true
+// snapshot: nothing in this column is immutable until `Published` (see the
+// "Immutable fields once Published" note right after that lifecycle table),
+// so Item 49's publishResults is still free — and, per that same
+// "snapshotted at publish time" wording, still REQUIRED — to overwrite it
+// with whatever configuration is active at the actual moment of publish
+// before locking it. `enterMarks` (Draft -> Marks Entered) never touches
+// this column for a pre-existing row; the one exception is the late-
+// enrollment edge case documented on `enterMarks` itself (lib/academies/
+// exams.ts), where a student enrolled after `createExam` already ran has no
+// row yet — `enterMarks` inserts one there and, needing the same NOT NULL
+// value, applies the identical "academy's current active configuration,
+// hard precondition" rule createExam already uses.
+//
+// pass_fail/grade_band_label are deliberately left at their defaults
+// (`pending`/`null`) by both createExam and enterMarks — PLAN.md's own
+// default for pass_fail is `pending`, and evaluating marks_obtained against
+// grade_bands is described as part of the publish/approval machinery (Item
+// 49), not marks entry. Out of this item's scope by design.
+export const examResultPassFailEnum = pgEnum("exam_result_pass_fail", [
+  "pending",
+  "pass",
+  "fail",
+]);
+
+export const examResultStatusEnum = pgEnum("exam_result_status", [
+  "draft",
+  "marks_entered",
+  "submitted",
+  "under_review",
+  "approved",
+  "rejected",
+  "published",
+]);
+
+export const examResults = pgTable(
+  "exam_results",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    examId: uuid("exam_id")
+      .notNull()
+      .references(() => exams.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    // Denormalized from the exam's own batch_id — PLAN.md's own words:
+    // "required for the Phase 5 certificate-eligibility query" (that later
+    // query needs "does this (student_id, batch_id) have a Published pass
+    // result" without joining through exams at all).
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batches.id),
+    marksObtained: numeric("marks_obtained"),
+    gradeConfigurationId: uuid("grade_configuration_id")
+      .notNull()
+      .references(() => gradeConfigurations.id),
+    gradeBandLabel: text("grade_band_label"),
+    passFail: examResultPassFailEnum("pass_fail").notNull().default("pending"),
+    status: examResultStatusEnum("status").notNull().default("draft"),
+    enteredBy: uuid("entered_by")
+      .notNull()
+      .references(() => users.id),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 3 §2: "unique (exam_id, student_id)".
+    uniqueIndex("exam_results_exam_id_student_id_unique").on(
+      table.examId,
+      table.studentId,
+    ),
+    // Phase 3 §2: "index (academy_id, batch_id), (student_id)".
+    index("exam_results_academy_id_batch_id_idx").on(table.academyId, table.batchId),
+    index("exam_results_student_id_idx").on(table.studentId),
+    // Not stated explicitly by PLAN.md for this column, but added here by
+    // the same nonnegativity judgment call as exams.max_marks above — a
+    // negative marks_obtained has no meaning. The complementary
+    // "marks_obtained <= exam.max_marks" rule is NOT expressed as a DB
+    // constraint (a cross-table check needs a trigger, not a plain `check`
+    // builder) — it's enforced in application logic by
+    // lib/academies/exams.ts's `enterMarks`, documented there.
+    check("exam_results_marks_obtained_nonnegative", sql`${table.marksObtained} >= 0`),
+  ],
+);

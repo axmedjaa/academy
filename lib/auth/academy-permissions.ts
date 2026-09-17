@@ -71,6 +71,7 @@ export const ACADEMY_PERMISSION_LEVELS = [
   "view_edit",
   "view",
   "manage",
+  "enter_marks",
   "none",
 ] as const;
 
@@ -301,3 +302,51 @@ export const ACADEMY_GRADE_BANDS_ACTION = "academy.grade_bands";
 ACADEMY_PERMISSIONS.academy_owner[ACADEMY_GRADE_BANDS_ACTION] = "full";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_GRADE_BANDS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.manager[ACADEMY_GRADE_BANDS_ACTION] = "full";
+
+/**
+ * PLAN.md Phase 3, Item 48 — Master Permission Matrix "Exam mark entry" row:
+ * Full(owner)/Full(admin)/Manage(manager)/—(admissions_officer)/
+ * —(finance_officer)/"Enter marks (assigned batches only)"(trainer), scope
+ * "assigned" for the branch-limited-role column. This is a genuinely NEW
+ * row — not a reuse of ACADEMY_COURSES_BATCHES_ACTION ("Courses / batches")
+ * the way Item 44/45 reused that row for trainer assignment/enrollment/
+ * timetables — because the Master Permission Matrix lists "Exam mark
+ * entry" as its own distinct line with its own distinct cell values
+ * (Trainer's cell here is narrower than "Courses / batches"'s "Manage
+ * assigned": a Trainer may enter marks into an existing exam on their own
+ * assigned batch, but per the same matrix row's literal wording, and per
+ * the Result Lifecycle table's actor column, may NOT create the exam
+ * itself — createExam is Owner/Admin/Manager only, see
+ * lib/academies/exams.ts's `canManage` gate).
+ *
+ * New level: "enter_marks" (added to `AcademyPermissionLevel` above,
+ * additively, per this file's own extension-point convention). Not
+ * reusing "view" (a read-only level everywhere else it's used in this
+ * table — Trainer can definitely WRITE marks, just scoped to their own
+ * batches) or "manage" (which every other row in this table already uses
+ * to mean "can create/edit the parent entity itself" — a Trainer here
+ * explicitly cannot create exams, only enter marks into ones that already
+ * exist, so overloading "manage" would wrongly imply createExam access).
+ * A distinct level lets lib/academies/exams.ts gate `createExam` on
+ * `canManage` (full/manage: Owner/Admin/Manager) and `enterMarks` on a
+ * separate, wider `canEnterMarks` (full/manage/enter_marks) without either
+ * check accidentally admitting the wrong role.
+ *
+ * IMPORTANT — this is NOT the branch-based scoping every other
+ * branch-limited row in this table uses (staff_branch_assignments, via
+ * each file's own `getAssignedBranchIds`/`isBranchLimited`/
+ * `BRANCH_LIMITED_ROLES`). The matrix's "assigned" scope for this
+ * particular row means "batches this Trainer is assigned to teach" via
+ * `batch_trainer_assignments` — exactly the join
+ * lib/academies/batch-assignments.ts's exported `getAssignedBatchIds`
+ * already builds (see that file's own module comment, which calls this
+ * out as its forward-looking reason for existing). lib/academies/exams.ts
+ * imports and calls that function directly for `enterMarks`'s scoping
+ * check; it does NOT add trainer to this file's `BRANCH_LIMITED_ROLES`-style
+ * set or reuse any `staffBranchAssignments` join for this row.
+ */
+export const ACADEMY_EXAMS_ACTION = "academy.exams";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_EXAMS_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_EXAMS_ACTION] = "full";
+ACADEMY_PERMISSIONS.manager[ACADEMY_EXAMS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.trainer[ACADEMY_EXAMS_ACTION] = "enter_marks";

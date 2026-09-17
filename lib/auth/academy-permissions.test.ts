@@ -65,11 +65,11 @@ describe("getAcademyPermissionLevel", () => {
 
   it("returns 'none' for an action nobody has been given a row for yet (future extension point)", () => {
     // "academy.branches"/"academy.staff"/"academy.students" were prior
-    // examples here but are now populated (Phase 2 Items 34/35/38) —
-    // swapped for actions no Phase 2 item has claimed yet (Phase 3+
-    // concerns), to keep testing the fallback itself rather than a
-    // since-populated row.
-    expect(getAcademyPermissionLevel("academy_owner", "academy.courses")).toBe("none");
-    expect(getAcademyPermissionLevel("manager", "academy.exams")).toBe("none");
+    // examples here but are now populated (Phase 2 Items 34/35/38), and
+    // "academy.exams" (Phase 3 Item 48) is now populated too — swapped for
+    // actions no item has claimed yet (Phase 4+ concerns), to keep testing
+    // the fallback itself rather than a since-populated row.
+    expect(getAcademyPermissionLevel("academy_owner", "academy.finance")).toBe("none");
+    expect(getAcademyPermissionLevel("manager", "academy.certificates")).toBe("none");
   });
 });
