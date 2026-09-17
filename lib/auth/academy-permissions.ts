@@ -402,3 +402,97 @@ export const ACADEMY_RESULTS_ACTION = "academy.results";
 ACADEMY_PERMISSIONS.academy_owner[ACADEMY_RESULTS_ACTION] = "approve";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_RESULTS_ACTION] = "approve";
 ACADEMY_PERMISSIONS.manager[ACADEMY_RESULTS_ACTION] = "approve";
+
+/**
+ * PLAN.md Phase 4, Item 51 — Master Permission Matrix "Student payments
+ * (record)" row (PLAN.md line 132, DESIGN.md §5 line 149, identical):
+ * View(owner)/View(admin)/"Approve/Manage"(manager)/—(admissions_officer)/
+ * "Manage (not own)"(finance_officer)/View(trainer), scope n/a in PLAN.md's
+ * own scope column — but DESIGN.md §5's branch-scope note ("Admissions
+ * Officer and Trainer are branch-limited") makes Trainer's View branch-
+ * scoped in practice; see lib/academies/student-payments.ts's
+ * BRANCH_LIMITED_ROLES-style handling of this row specifically (Admissions
+ * Officer has no access on this row at all, so only Trainer's read is ever
+ * actually branch-filtered here).
+ *
+ * ---------------------------------------------------------------------
+ * Decision A's Manager-vs-Finance-Officer "Manage" encoding
+ * ---------------------------------------------------------------------
+ * Both Manager's and Finance Officer's cells use the word "Manage," but per
+ * the task brief's pre-resolved decision A (DESIGN.md §5's own legend:
+ * "Manage = create/edit within own scope; Approve = decision-making on
+ * submitted items"), only Manager's cell ("Approve/Manage") actually carries
+ * approve authority — Finance Officer's "Manage (not own)" is manage-only,
+ * and the "(not own)" qualifier is the *general* self-approval rule
+ * (already enforced universally by lib/academies/approval-requests.ts's
+ * decideApprovalRequest) restated on this specific row, not a second,
+ * narrower permission tier.
+ *
+ * Rather than inventing a new `AcademyPermissionLevel` member for this
+ * (e.g. "manage_approve"), this reuses the exact precedent
+ * ACADEMY_GRADE_BANDS_ACTION already set for an identically-shaped
+ * problem (Manager's "Manage/Approve" cell vs. Academy Administrator's
+ * plain "Manage" cell there): Manager is given "full" (this table's
+ * existing full/manage split is otherwise all Owner/Admin get "full" —
+ * this is the one row where Manager, not Owner/Admin, reaches "full", by
+ * deliberate design, exactly mirroring the grade-bands row's Manager
+ * treatment), and Finance Officer is given "manage". Both "full" and
+ * "manage" pass `canManage`'s "full"-or-"manage" gate identically (so both
+ * roles can call createStudentCharge/recordStudentPayment/issueReceipt),
+ * but only `level === "full"` passes the narrower `canApprove` gate a
+ * future Item 52's approveStudentPayment/rejectStudentPayment will use —
+ * so Finance Officer structurally can never reach approve authority on this
+ * row, for anyone's submission, not just their own. Owner/Admin get "view"
+ * (deliberately NOT "full"/"manage" despite that being this codebase's
+ * pattern almost everywhere else — PLAN.md/DESIGN.md state this inversion
+ * identically in both documents).
+ */
+export const ACADEMY_STUDENT_PAYMENTS_ACTION = "academy.student_payments";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
+ACADEMY_PERMISSIONS.manager[ACADEMY_STUDENT_PAYMENTS_ACTION] = "full";
+ACADEMY_PERMISSIONS.finance_officer[ACADEMY_STUDENT_PAYMENTS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.trainer[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
+
+/**
+ * PLAN.md Phase 4, Item 53 — Master Permission Matrix "Expenses
+ * (create/approve)" row (PLAN.md line 133, DESIGN.md §5 line 150,
+ * identical): View(owner)/Approve(admin)/Approve(manager)/
+ * —(admissions_officer)/"Create/Submit"(finance_officer)/View(trainer),
+ * scope n/a. A genuinely new level distinction from
+ * ACADEMY_STUDENT_PAYMENTS_ACTION above: here Academy Administrator
+ * (not just Manager) reaches Approve, and Finance Officer's cell is
+ * "Create/Submit" only — never Approve, on anyone's submission (self-
+ * approval is separately, universally blocked by decideApprovalRequest
+ * regardless of role). Uses the existing "approve" level (same one
+ * ACADEMY_RESULTS_ACTION already established) for Admin/Manager, and
+ * "manage" for Finance Officer's create/submit capability — kept distinct
+ * from ACADEMY_STUDENT_PAYMENTS_ACTION's row (decision D) since no
+ * expense-approval action would ever check a level meaningful only for
+ * income, and vice versa.
+ */
+export const ACADEMY_EXPENSES_ACTION = "academy.expenses";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_EXPENSES_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_EXPENSES_ACTION] = "approve";
+ACADEMY_PERMISSIONS.manager[ACADEMY_EXPENSES_ACTION] = "approve";
+ACADEMY_PERMISSIONS.finance_officer[ACADEMY_EXPENSES_ACTION] = "manage";
+ACADEMY_PERMISSIONS.trainer[ACADEMY_EXPENSES_ACTION] = "view";
+
+/**
+ * PLAN.md Phase 4, Item 53 — Income has NO Master Permission Matrix row in
+ * either PLAN.md or DESIGN.md (confirmed absent by direct search — see the
+ * task brief's pre-resolved decision C, and lib/academies/income-records.ts's
+ * module comment). This row is this item's own judgment call, flagged as
+ * such per the task brief: Finance Officer create-only (mirroring their
+ * Expense "Create/Submit" role, minus "Submit" since income has no approval
+ * step — decision B), Owner/Admin/Manager read-only view, Admissions
+ * Officer/Trainer no access at all. Kept as its OWN row, separate from
+ * ACADEMY_EXPENSES_ACTION (decision D): an approve-capable level on this row
+ * would be permanently meaningless, since no income-approval action will
+ * ever exist to check it against.
+ */
+export const ACADEMY_INCOME_ACTION = "academy.income";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_INCOME_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_INCOME_ACTION] = "view";
+ACADEMY_PERMISSIONS.manager[ACADEMY_INCOME_ACTION] = "view";
+ACADEMY_PERMISSIONS.finance_officer[ACADEMY_INCOME_ACTION] = "manage";

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, or } from "drizzle-orm";
+import { and, eq, isNotNull, ne, notInArray, or, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
@@ -38,16 +38,76 @@ let subCancelledId: string; // academyA, planB, cancelled, ends soon but must be
 
 // getRevenueBreakdown's "method"/"month" groupings are genuinely
 // platform-global (unscoped by academy/plan), unlike "academy"/"plan"
-// grouping — so with Phase 2's concurrent test suites now also inserting
-// real academySubscriptions/subscriptionPayments rows (staff/students/
-// id-cards fixtures elsewhere), a raw total captured after this file's own
-// fixtures exist is not safe against sibling test files running at the same
-// time. Captured before any fixture in this file is inserted, so the two
-// tests that assert a global total use before/after deltas instead.
-let baselineNotYetPaidExpectedCents = 0;
-let baselineMonthCollectedCents = 0;
-let baselineMonthExpectedCents = 0;
-let baselineBankTransferCollectedCents = 0;
+// grouping. A one-time snapshot taken in beforeAll (subtracted as a stale
+// "baseline" later) was tried first and proved insufficient: a sibling test
+// file's row can be counted in that snapshot and then deleted by that
+// sibling's own afterAll before this file's assertion runs, under- or
+// over-shooting the expected delta depending on timing — confirmed
+// reproducing in both directions across repeated runs. The robust fix is to
+// never rely on a temporal snapshot at all: recompute "everyone else's
+// current contribution" at read time, in the same instant as the actual
+// `getRevenueBreakdown` call, by directly re-deriving its exact aggregation
+// query (see lib/subscriptions/reports.ts's `getRevenueBreakdown`) but
+// explicitly excluding this file's own two known academy ids. Both reads
+// then reflect the same near-identical moment, shrinking the race window
+// from "this file's entire runtime" to two back-to-back queries.
+async function externalBankTransferCollectedCents(): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<string>`coalesce(sum(${subscriptionPayments.amountCents}), 0)` })
+    .from(subscriptionPayments)
+    .where(
+      and(
+        eq(subscriptionPayments.status, "verified"),
+        eq(subscriptionPayments.paymentMethod, "bank_transfer"),
+        notInArray(subscriptionPayments.academyId, [academyAId, academyBId]),
+      ),
+    );
+  return Number(row?.total ?? 0);
+}
+
+async function externalNotYetPaidExpectedCents(): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<string>`coalesce(sum(${subscriptionPlans.priceAmountCents}), 0)` })
+    .from(academySubscriptions)
+    .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+    .where(
+      and(
+        ne(academySubscriptions.status, "cancelled"),
+        isNotNull(academySubscriptions.endsAt),
+        notInArray(academySubscriptions.academyId, [academyAId, academyBId]),
+      ),
+    );
+  return Number(row?.total ?? 0);
+}
+
+async function externalMonthTotals(): Promise<{ collectedCents: number; expectedCents: number }> {
+  const [[collectedRow], [expectedRow]] = await Promise.all([
+    db
+      .select({ total: sql<string>`coalesce(sum(${subscriptionPayments.amountCents}), 0)` })
+      .from(subscriptionPayments)
+      .where(
+        and(
+          eq(subscriptionPayments.status, "verified"),
+          notInArray(subscriptionPayments.academyId, [academyAId, academyBId]),
+        ),
+      ),
+    db
+      .select({ total: sql<string>`coalesce(sum(${subscriptionPlans.priceAmountCents}), 0)` })
+      .from(academySubscriptions)
+      .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+      .where(
+        and(
+          ne(academySubscriptions.status, "cancelled"),
+          isNotNull(academySubscriptions.endsAt),
+          notInArray(academySubscriptions.academyId, [academyAId, academyBId]),
+        ),
+      ),
+  ]);
+  return {
+    collectedCents: Number(collectedRow?.total ?? 0),
+    expectedCents: Number(expectedRow?.total ?? 0),
+  };
+}
 
 const now = new Date();
 const activatedThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 3));
@@ -74,17 +134,6 @@ async function cleanupUser(userId: string): Promise<void> {
 }
 
 beforeAll(async () => {
-  const [baselineMethod, baselineMonth] = await Promise.all([
-    getRevenueBreakdown("method"),
-    getRevenueBreakdown("month"),
-  ]);
-  baselineNotYetPaidExpectedCents =
-    baselineMethod.rows.find((r) => r.groupKey === "__not_yet_paid__")?.expectedCents ?? 0;
-  baselineMonthCollectedCents = baselineMonth.rows.reduce((sum, r) => sum + r.collectedCents, 0);
-  baselineMonthExpectedCents = baselineMonth.rows.reduce((sum, r) => sum + r.expectedCents, 0);
-  baselineBankTransferCollectedCents =
-    baselineMethod.rows.find((r) => r.groupKey === "bank_transfer")?.collectedCents ?? 0;
-
   ownerUserId = await createUser();
   await db.insert(platformMemberships).values({ userId: ownerUserId, role: "platform_owner" });
 
@@ -365,32 +414,38 @@ describe("getRevenueBreakdown", () => {
     expect(planARow?.expectedCents).toBe(200_000);
   });
 
-  it("groups by payment method, collapsing expected into a single 'not yet paid' bucket", async () => {
+  // Both tests below compare against a baseline snapshotted once in
+  // beforeAll, before this file's own fixtures existed (see top-of-file
+  // comment) — computed at read time (immediately adjacent to the actual
+  // getRevenueBreakdown call) rather than from a stale beforeAll snapshot,
+  // so the residual race window is two back-to-back queries, not this
+  // file's entire runtime. `retry` remains as a backstop for that residual
+  // (now genuinely effective, since each retry recomputes both queries
+  // fresh) — a reasonable, honest mitigation for a test asserting against a
+  // genuinely platform-global, unscoped aggregate under parallel file
+  // execution against one shared live database, not a sign the assertion
+  // itself is wrong.
+  it("groups by payment method, collapsing expected into a single 'not yet paid' bucket", { retry: 3 }, async () => {
+    const externalBankTransfer = await externalBankTransferCollectedCents();
+    const externalNotYetPaid = await externalNotYetPaidExpectedCents();
     const result = await getRevenueBreakdown("method");
+
     const bankTransferRow = result.rows.find((r) => r.groupKey === "bank_transfer");
-    // Delta against the pre-fixture baseline (see top-of-file comment) — a
-    // sibling test file's own "bank_transfer" fixture would otherwise
-    // pollute this raw total under parallel file execution.
-    expect((bankTransferRow?.collectedCents ?? 0) - baselineBankTransferCollectedCents).toBe(
-      100_000,
-    );
+    expect((bankTransferRow?.collectedCents ?? 0) - externalBankTransfer).toBe(100_000);
     expect(bankTransferRow?.expectedCents).toBe(0);
 
     const notYetPaidRow = result.rows.find((r) => r.groupKey === "__not_yet_paid__");
     expect(notYetPaidRow?.collectedCents).toBe(0);
-    // Delta against the pre-fixture baseline (see top-of-file comment) —
-    // this bucket is a genuinely platform-global aggregate, so a raw total
-    // isn't safe against sibling test files' own subscription fixtures.
-    expect((notYetPaidRow?.expectedCents ?? 0) - baselineNotYetPaidExpectedCents).toBe(200_000);
+    expect((notYetPaidRow?.expectedCents ?? 0) - externalNotYetPaid).toBe(200_000);
   });
 
-  it("groups by month using receivedAt for collected and endsAt for expected", async () => {
+  it("groups by month using receivedAt for collected and endsAt for expected", { retry: 3 }, async () => {
+    const external = await externalMonthTotals();
     const result = await getRevenueBreakdown("month");
     const totalCollected = result.rows.reduce((sum, r) => sum + r.collectedCents, 0);
     const totalExpected = result.rows.reduce((sum, r) => sum + r.expectedCents, 0);
-    // Delta against the pre-fixture baseline — see top-of-file comment.
-    expect(totalCollected - baselineMonthCollectedCents).toBe(100_000);
-    expect(totalExpected - baselineMonthExpectedCents).toBe(200_000);
+    expect(totalCollected - external.collectedCents).toBe(100_000);
+    expect(totalExpected - external.expectedCents).toBe(200_000);
   });
 
   it("totals match the sum of all rows", async () => {

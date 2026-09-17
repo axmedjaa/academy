@@ -15,6 +15,7 @@ import {
   index,
   check,
   jsonb,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 // Only "active"/"disabled" are used anywhere in PLAN.md (Phase 0 §6, Account &
@@ -1869,5 +1870,259 @@ export const resultCorrections = pgTable(
       "result_corrections_proposed_marks_obtained_nonnegative",
       sql`${table.proposedMarksObtained} >= 0`,
     ),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Finance (Item 51: student_charges/student_payments/receipts;
+// Item 53: income_records/expense_records). PLAN.md Phase 4 §2's exact
+// column lists are quoted on each table below. None of these five tables is
+// ever hard-deleted (Phase 4 §6/§9, Database Constraints & Indexes'
+// deletion-behavior note) — every status column below is append-only/status-
+// driven, and every "reversed"/self-FK column here is declared but the
+// reversal action itself (reverseTransaction/adjustTransaction) is Item 54
+// (Wave 2), not built by this wave.
+// ---------------------------------------------------------------------------
+
+// PLAN.md Phase 4 §2: "student_charges ... status enum(open,partially_paid,
+// paid,cancelled) NOT NULL default open." The Finance Lifecycle table
+// (Lifecycle & State-Transition Tables, Phase 4) derives partially_paid/paid
+// automatically from approved student_payments totals (a side effect of
+// approveStudentPayment, Item 52 — not built by this wave); cancelled is
+// reachable only from open/partially_paid, reason required, never from paid.
+export const studentChargeStatusEnum = pgEnum("student_charge_status", [
+  "open",
+  "partially_paid",
+  "paid",
+  "cancelled",
+]);
+
+export const studentCharges = pgTable(
+  "student_charges",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    description: text("description").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    // PLAN.md: "currency text NOT NULL default academy's default_currency."
+    // That default is a per-academy value (academies.default_currency), not
+    // a fixed literal a DB column default can express — so this column has
+    // no DB-level default and lib/academies/student-payments.ts's
+    // createStudentCharge resolves it from the academy row itself whenever
+    // the caller doesn't supply one explicitly, same judgment call already
+    // documented for the analogous problem elsewhere in this file
+    // (studentIdCards-style per-academy defaults).
+    currency: text("currency").notNull(),
+    dueDate: date("due_date"),
+    status: studentChargeStatusEnum("status").notNull().default("open"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 4 §2: "index (student_id)".
+    index("student_charges_student_id_idx").on(table.studentId),
+    // Not explicitly listed for this table, but every academy-scoped table
+    // elsewhere in this file carries an academy_id lookup index — same
+    // judgment call as e.g. subscription_payments_academy_id_idx.
+    index("student_charges_academy_id_idx").on(table.academyId),
+    check("student_charges_amount_cents_nonnegative", sql`${table.amountCents} >= 0`),
+  ],
+);
+
+// PLAN.md Phase 4 §2: "student_payments ... status
+// enum(pending_approval,approved,rejected,reversed) NOT NULL default
+// pending_approval." method is a genuinely closed set given literally by
+// PLAN.md ("cash,mobile_money,bank_transfer" — unlike
+// subscription_payments.payment_method, which PLAN.md never enumerates), so
+// this is a real pgEnum, not free text.
+export const studentPaymentMethodEnum = pgEnum("student_payment_method", [
+  "cash",
+  "mobile_money",
+  "bank_transfer",
+]);
+
+export const studentPaymentStatusEnum = pgEnum("student_payment_status", [
+  "pending_approval",
+  "approved",
+  "rejected",
+  "reversed",
+]);
+
+export const studentPayments = pgTable(
+  "student_payments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    chargeId: uuid("charge_id").references(() => studentCharges.id),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    method: studentPaymentMethodEnum("method").notNull(),
+    reference: text("reference"),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    status: studentPaymentStatusEnum("status").notNull().default("pending_approval"),
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    // Self-FK (Item 52/54's reversal action populates this on the NEW row it
+    // creates — the original approved row is left untouched, per Phase 4's
+    // "no posted financial record is ever deleted" rule). Declared here per
+    // this item's brief; no reversal logic is built by this wave.
+    reversedPaymentId: uuid("reversed_payment_id").references(
+      (): AnyPgColumn => studentPayments.id,
+    ),
+    reversalReason: text("reversal_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 4 §2: "index (academy_id, created_at), (student_id)".
+    index("student_payments_academy_id_created_at_idx").on(table.academyId, table.createdAt),
+    index("student_payments_student_id_idx").on(table.studentId),
+    check("student_payments_amount_cents_nonnegative", sql`${table.amountCents} >= 0`),
+  ],
+);
+
+// PLAN.md Phase 4 §2: "receipts ... unique student_payment_id; unique
+// (academy_id, receipt_number)." No status column — PLAN.md's Finance
+// Lifecycle table: "issued directly on payment approval (issueReceipt) — no
+// separate approval state ... never reversed directly; reversing the
+// underlying student_payments row leaves the receipt record in place."
+export const receipts = pgTable(
+  "receipts",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    studentPaymentId: uuid("student_payment_id")
+      .notNull()
+      .references(() => studentPayments.id),
+    receiptNumber: text("receipt_number").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    issuedBy: uuid("issued_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("receipts_student_payment_id_unique").on(table.studentPaymentId),
+    uniqueIndex("receipts_academy_id_receipt_number_unique").on(
+      table.academyId,
+      table.receiptNumber,
+    ),
+  ],
+);
+
+// Phase 4, Item 53. PLAN.md Phase 4 §2: "income_records ... status
+// enum(posted,reversed) NOT NULL default posted." No pending/approval state
+// at all — Item 53's pre-resolved decision B: createIncomeRecord writes
+// status="posted" directly; no submitIncomeForApproval/approveIncome/
+// rejectIncome action exists anywhere in PLAN.md's §4 action list.
+export const incomeRecordStatusEnum = pgEnum("income_record_status", [
+  "posted",
+  "reversed",
+]);
+
+export const incomeRecords = pgTable(
+  "income_records",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    category: text("category").notNull(),
+    description: text("description"),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    status: incomeRecordStatusEnum("status").notNull().default("posted"),
+    // Self-FK, declared for Item 54 (Wave 2) — not built by this wave.
+    reversedRecordId: uuid("reversed_record_id").references(
+      (): AnyPgColumn => incomeRecords.id,
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Not explicitly listed for this table, but every academy-scoped table
+    // elsewhere in this file carries an academy_id lookup index.
+    index("income_records_academy_id_idx").on(table.academyId),
+    check("income_records_amount_cents_nonnegative", sql`${table.amountCents} >= 0`),
+  ],
+);
+
+// Phase 4, Item 53. PLAN.md Phase 4 §2: "expense_records ... status
+// enum(draft,pending_approval,approved,rejected,reversed) NOT NULL default
+// draft." The Finance Lifecycle table: draft -> pending_approval via
+// submitExpenseForApproval (Finance Officer), pending_approval -> approved
+// (Academy Administrator or Manager only) / rejected (reason required),
+// approved -> reversed (Item 54, not built by this wave).
+export const expenseRecordStatusEnum = pgEnum("expense_record_status", [
+  "draft",
+  "pending_approval",
+  "approved",
+  "rejected",
+  "reversed",
+]);
+
+export const expenseRecords = pgTable(
+  "expense_records",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    category: text("category").notNull(),
+    description: text("description"),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    submittedBy: uuid("submitted_by")
+      .notNull()
+      .references(() => users.id),
+    status: expenseRecordStatusEnum("status").notNull().default("draft"),
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    rejectionReason: text("rejection_reason"),
+    // Self-FK, declared for Item 54 (Wave 2) — not built by this wave.
+    reversedRecordId: uuid("reversed_record_id").references(
+      (): AnyPgColumn => expenseRecords.id,
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("expense_records_academy_id_idx").on(table.academyId),
+    check("expense_records_amount_cents_nonnegative", sql`${table.amountCents} >= 0`),
   ],
 );
