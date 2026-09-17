@@ -6,6 +6,7 @@ import {
   integer,
   bigint,
   boolean,
+  numeric,
   timestamp,
   date,
   pgEnum,
@@ -1151,5 +1152,298 @@ export const studentIdCards = pgTable(
     // Phase 2 §2: "index (student_id)".
     index("student_id_cards_student_id_idx").on(table.studentId),
     check("student_id_cards_reprint_count_nonnegative", sql`${table.reprintCount} >= 0`),
+  ],
+);
+
+// ===========================================================================
+// Phase 3 — Training Operations
+// ===========================================================================
+
+// Phase 3, Item 43. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, name text NOT NULL, description text nullable,
+// status enum(active,archived) NOT NULL default active, created_at,
+// updated_at; unique (academy_id, name))."
+//
+// status reuses branchStatusEnum (active/archived) rather than a new
+// programs-specific enum — same convention as staffProfiles.status/
+// students.status above: PLAN.md's phase intro line for this table group
+// ("All tables above: status = archived ... is the only removal path")
+// describes the identical archive-never-delete/restorable lifecycle
+// branchStatusEnum already models, and PLAN.md's own column list gives
+// `programs` the literal same two-value set, not a new one.
+export const programs = pgTable(
+  "programs",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    status: branchStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 3 §2: "unique (academy_id, name)".
+    uniqueIndex("programs_academy_id_name_unique").on(table.academyId, table.name),
+  ],
+);
+
+// Phase 3, Item 43. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, program_id FK programs NOT NULL, name text NOT
+// NULL, code text nullable, description text nullable, duration_weeks
+// integer nullable, status enum(active,archived) NOT NULL default active,
+// created_at, updated_at; unique (academy_id, name); index (program_id))."
+//
+// courses are academy-wide, like programs — no branch_id column (only
+// `batches`, below, is branch-scoped; see this item's own brief).
+// status reuses branchStatusEnum for the same reason programs.status does.
+export const courses = pgTable(
+  "courses",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    programId: uuid("program_id")
+      .notNull()
+      .references(() => programs.id),
+    name: text("name").notNull(),
+    code: text("code"),
+    description: text("description"),
+    durationWeeks: integer("duration_weeks"),
+    status: branchStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 3 §2: "unique (academy_id, name)".
+    uniqueIndex("courses_academy_id_name_unique").on(table.academyId, table.name),
+    // Phase 3 §2: "index (program_id)".
+    index("courses_program_id_idx").on(table.programId),
+  ],
+);
+
+// Phase 3, Item 43. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, branch_id FK branches NOT NULL, course_id FK
+// courses NOT NULL, name text NOT NULL, code text NOT NULL, start_date date
+// NOT NULL, end_date date nullable, status
+// enum(planned,active,completed,archived) NOT NULL default planned,
+// created_at, updated_at; unique (academy_id, code); index (course_id),
+// (branch_id))."
+//
+// status is a new 4-value enum (planned/active/completed/archived) — no
+// existing enum in this file matches that set (branchStatusEnum is only
+// active/archived), per this item's own brief.
+export const batchStatusEnum = pgEnum("batch_status", [
+  "planned",
+  "active",
+  "completed",
+  "archived",
+]);
+
+export const batches = pgTable(
+  "batches",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id),
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id),
+    name: text("name").notNull(),
+    code: text("code").notNull(),
+    startDate: date("start_date").notNull(),
+    endDate: date("end_date"),
+    status: batchStatusEnum("status").notNull().default("planned"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 3 §2: "unique (academy_id, code)".
+    uniqueIndex("batches_academy_id_code_unique").on(table.academyId, table.code),
+    // Phase 3 §2: "index (course_id), (branch_id)".
+    index("batches_course_id_idx").on(table.courseId),
+    index("batches_branch_id_idx").on(table.branchId),
+  ],
+);
+
+// Phase 3, Item 46. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, name text NOT NULL, status
+// enum(draft,pending_approval,approved,active,retired) NOT NULL default
+// draft, created_by FK users NOT NULL, approved_by FK users nullable,
+// approved_at timestamp nullable, activated_at timestamp nullable,
+// retired_at timestamp nullable, created_at, updated_at; index
+// (academy_id, status))."
+//
+// The full Draft -> Pending Approval -> Approved -> Active/Retired
+// approval FLOW (submitGradeConfigForApproval/approveGradeConfig) is a
+// later item, not this one — this item only builds the schema + the
+// exclusion-constraint validation + plain-CRUD createGradeConfiguration/
+// updateGradeBands in `draft` status (see lib/academies/
+// grade-configurations.ts's module comment).
+export const gradeConfigurationStatusEnum = pgEnum("grade_configuration_status", [
+  "draft",
+  "pending_approval",
+  "approved",
+  "active",
+  "retired",
+]);
+
+export const gradeConfigurations = pgTable(
+  "grade_configurations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    name: text("name").notNull(),
+    status: gradeConfigurationStatusEnum("status").notNull().default("draft"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 3 §2: "index (academy_id, status)".
+    index("grade_configurations_academy_id_status_idx").on(table.academyId, table.status),
+  ],
+);
+
+// Phase 3, Item 46. PLAN.md's exact column list (Phase 3 §2): "id,
+// grade_configuration_id FK grade_configurations NOT NULL, label text NOT
+// NULL, min_mark numeric NOT NULL, max_mark numeric NOT NULL, is_pass
+// boolean NOT NULL, created_at; check max_mark >= min_mark; exclusion
+// constraint via btree_gist on (grade_configuration_id,
+// numrange(min_mark, max_mark)) — mandatory on every configuration
+// regardless of status, not just active ones."
+//
+// IMPORTANT — read before touching this table: the no-overlap guarantee
+// for grade bands within a configuration is NOT fully expressed by this
+// Drizzle table definition. drizzle-orm 0.45.2 / drizzle-kit 0.31.10 have
+// no declarative builder for a Postgres `EXCLUDE USING gist` constraint
+// (verified: no `ExcludeConstraint`/"EXCLUDE USING" API anywhere in
+// node_modules/drizzle-orm or drizzle-kit) — only `check()`/`uniqueIndex()`
+// are supported, neither of which can express "no two rows for the same
+// grade_configuration_id may have overlapping numeric ranges." The `check`
+// constraint below (max_mark >= min_mark) IS fully expressed here, but the
+// exclusion constraint itself was hand-appended to the generated migration
+// SQL file (drizzle/0013_*.sql — see that file's trailing statements) as:
+//   CREATE EXTENSION IF NOT EXISTS btree_gist;
+//   ALTER TABLE grade_bands ADD CONSTRAINT grade_bands_no_overlap
+//     EXCLUDE USING gist (grade_configuration_id WITH =, numrange(min_mark, max_mark) WITH &&);
+// A future `db:generate` run will NOT know this constraint exists (it's
+// invisible to drizzle-kit's introspection of this schema.ts file), so
+// do not be surprised if a later diff doesn't mention it — check the
+// database/migration SQL directly, not this file alone, when reasoning
+// about grade_bands' actual constraints.
+export const gradeBands = pgTable(
+  "grade_bands",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    gradeConfigurationId: uuid("grade_configuration_id")
+      .notNull()
+      .references(() => gradeConfigurations.id),
+    label: text("label").notNull(),
+    minMark: numeric("min_mark").notNull(),
+    maxMark: numeric("max_mark").notNull(),
+    isPass: boolean("is_pass").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check("grade_bands_max_mark_gte_min_mark", sql`${table.maxMark} >= ${table.minMark}`),
+  ],
+);
+
+// Phase 3, Item 50a. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK academies NOT NULL, entity_type
+// enum(result,grade_configuration,expense,student_payment) NOT NULL,
+// entity_id uuid NOT NULL, requested_by FK users NOT NULL, status
+// enum(pending,approved,rejected) NOT NULL default pending, reason text
+// nullable, decided_by FK users nullable, decided_at timestamp nullable,
+// created_at; index (entity_type, entity_id), (academy_id, status))."
+//
+// Single reusable table for the whole app's approval workflow (Cross-
+// Cutting Architecture Decisions: "single reusable approval_requests
+// table, introduced in Phase 3 (results/grades) and reused in Phase 4
+// (finance)") — entity_type's value list includes `expense`/
+// `student_payment` now even though neither is used until Phase 4, per
+// PLAN.md's own literal column list for this table (not scope creep: the
+// enum values are schema, not behavior — no Phase 4 logic is built here).
+//
+// entity_id is a bare polymorphic uuid with deliberately NO foreign key:
+// it points at a different table depending on entity_type
+// (exam_results/grade_configurations this phase, expense_records/
+// student_payments in Phase 4) — a single FK target isn't possible, and
+// PLAN.md's column list itself gives entity_id no FK reference (contrast
+// with every other *_id column on this table, which are all FKs).
+export const approvalRequestEntityTypeEnum = pgEnum("approval_request_entity_type", [
+  "result",
+  "grade_configuration",
+  "expense",
+  "student_payment",
+]);
+
+export const approvalRequestStatusEnum = pgEnum("approval_request_status", [
+  "pending",
+  "approved",
+  "rejected",
+]);
+
+export const approvalRequests = pgTable(
+  "approval_requests",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    entityType: approvalRequestEntityTypeEnum("entity_type").notNull(),
+    entityId: uuid("entity_id").notNull(),
+    requestedBy: uuid("requested_by")
+      .notNull()
+      .references(() => users.id),
+    status: approvalRequestStatusEnum("status").notNull().default("pending"),
+    reason: text("reason"),
+    decidedBy: uuid("decided_by").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 3 §2: "index (entity_type, entity_id), (academy_id, status)".
+    index("approval_requests_entity_type_entity_id_idx").on(
+      table.entityType,
+      table.entityId,
+    ),
+    index("approval_requests_academy_id_status_idx").on(table.academyId, table.status),
   ],
 );

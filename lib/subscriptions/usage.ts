@@ -6,6 +6,7 @@ import {
   academySubscriptions,
   academyUsage,
   branches,
+  courses,
   staffProfiles,
   students,
   subscriptionPlans,
@@ -130,11 +131,19 @@ async function countActiveStaff(executor: DbClient, academyId: string): Promise<
   return row?.count ?? 0;
 }
 
-// Phase 3 (`courses` table, not yet built). See countActiveStudents.
+// PLAN.md Phase 3, Item 43 — `courses` table now exists and this is the
+// real counter, same shape as countActiveBranches/countActiveStudents/
+// countActiveStaff above: active courses for this academy, straight
+// COUNT(*) against the source-of-truth table (no cached/derived count
+// anywhere else). checkAllowance("courses") now blocks for real once an
+// academy is at its plan's course limit; createCourse (lib/academies/
+// courses.ts) calls it inside the same transaction as the insert.
 async function countCourses(executor: DbClient, academyId: string): Promise<number> {
-  void executor;
-  void academyId;
-  return 0;
+  const [row] = await executor
+    .select({ count: sql<number>`count(*)::int` })
+    .from(courses)
+    .where(and(eq(courses.academyId, academyId), eq(courses.status, "active")));
+  return row?.count ?? 0;
 }
 
 // Phase 2 (academy-owned file storage / upload tracking, not yet built —

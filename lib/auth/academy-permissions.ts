@@ -238,3 +238,66 @@ ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STUDENT_ID_CARDS_ACTION] = "full";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.manager[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.admissions_officer[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";
+
+/**
+ * PLAN.md Phase 3, Item 43 — Master Permission Matrix "Courses / batches"
+ * row: Full(owner)/Full(admin)/Manage(manager)/View(admissions_officer)/
+ * —(finance_officer)/"Manage assigned"(trainer), scope "assigned" for the
+ * two branch-limited roles. Additive row only, mutated in place at the
+ * bottom of this file per the module comment's convention.
+ *
+ * Judgment call on Trainer: unlike every other branch-limited row in this
+ * table so far (Staff/Students/Student ID cards, all "view"-level for
+ * Trainer), the matrix's own cell text for Trainer here is literally
+ * "Manage assigned" — a manage-capable level, not merely a read one. This
+ * is modeled as the "manage" level directly (not a new level), matching
+ * this table's existing convention that "manage" already means "create/
+ * edit within scope" — the scope itself (branch-limited, via a batch's
+ * `branch_id`) is enforced by lib/academies/batches.ts, not by this table.
+ * Programs and courses have no branch_id column at all (see PLAN.md's
+ * schema for those two tables) — they're academy-wide for every role that
+ * can see them, so a Trainer's "manage assigned" only ever bites on
+ * `batches`, never on `createProgram`/`createCourse` (which lib/academies/
+ * programs.ts / courses.ts refuse to a Trainer entirely, since a Trainer
+ * assigned to a specific batch's branch has no meaningful "manage" action
+ * on an academy-wide program/course row).
+ */
+export const ACADEMY_COURSES_BATCHES_ACTION = "academy.courses_batches";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_COURSES_BATCHES_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_COURSES_BATCHES_ACTION] = "full";
+ACADEMY_PERMISSIONS.manager[ACADEMY_COURSES_BATCHES_ACTION] = "manage";
+ACADEMY_PERMISSIONS.admissions_officer[ACADEMY_COURSES_BATCHES_ACTION] = "view";
+ACADEMY_PERMISSIONS.trainer[ACADEMY_COURSES_BATCHES_ACTION] = "manage";
+
+/**
+ * PLAN.md Phase 3, Item 46 — Master Permission Matrix "Grade-band
+ * configuration" row: Full(owner)/Manage(admin)/"Manage/Approve"(manager)/
+ * —/—/—, scope n/a (no branch-limited variant — this row has no
+ * "assigned" scope column entry in the matrix). Additive row only.
+ *
+ * Judgment call: the matrix's Manager cell reads "Manage/Approve" — both
+ * manage AND approve authority in one cell, unlike Academy Administrator's
+ * plain "Manage" (no approve). Rather than inventing a compound level (this
+ * table's `AcademyPermissionLevel` union has no "manage_approve" member,
+ * and adding one would ripple through every existing consumer of that
+ * union for a single row), Manager is given the existing "full" level here
+ * — this table's convention elsewhere already treats "full" and "manage"
+ * as equally create/edit-capable (see e.g. createBranch's `canManage()`
+ * treating both as capable), so the distinguishing fact that actually
+ * matters — Manager can approve, Academy Administrator cannot — is *not*
+ * expressible as a difference between "full" and "manage" anyway. Academy
+ * Owner also reaches Approve authority per the grade-configuration
+ * lifecycle table ("Manager, and Academy Owner via their existing `Full`
+ * authority — not Academy Administrator"), which already has "full" here,
+ * consistent with this choice. This item builds no approval flow itself
+ * (that's a separate, later item — see lib/academies/
+ * grade-configurations.ts's module comment) — the level distinction here
+ * only needs to exist now so that later item can gate `approveGradeConfig`
+ * on `getAcademyPermissionLevel(role, ACADEMY_GRADE_BANDS_ACTION) === "full"`
+ * (Owner/Manager) without redesigning this row, while Academy
+ * Administrator's "manage" level continues to gate plain CRUD only.
+ */
+export const ACADEMY_GRADE_BANDS_ACTION = "academy.grade_bands";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_GRADE_BANDS_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_GRADE_BANDS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.manager[ACADEMY_GRADE_BANDS_ACTION] = "full";
