@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState } from "react";
 import { archiveBatch, createBatch, type BatchFormState } from "@/lib/academies/batches-actions";
 import type { BatchRecord } from "@/lib/academies/batches";
@@ -28,13 +29,14 @@ export function BatchesList({ batches, branches, courses, canManage }: Props) {
             <th style={{ padding: "0.5rem" }}>Code</th>
             <th style={{ padding: "0.5rem" }}>Start date</th>
             <th style={{ padding: "0.5rem" }}>Status</th>
+            <th style={{ padding: "0.5rem" }}>Roster</th>
             {canManage && <th style={{ padding: "0.5rem" }}>Actions</th>}
           </tr>
         </thead>
         <tbody>
           {batches.length === 0 ? (
             <tr>
-              <td colSpan={canManage ? 5 : 4} style={{ padding: "0.5rem", color: "#666" }}>
+              <td colSpan={canManage ? 6 : 5} style={{ padding: "0.5rem", color: "#666" }}>
                 No batches to show.
               </td>
             </tr>
@@ -45,6 +47,9 @@ export function BatchesList({ batches, branches, courses, canManage }: Props) {
                 <td style={{ padding: "0.5rem" }}>{batch.code}</td>
                 <td style={{ padding: "0.5rem" }}>{batch.startDate}</td>
                 <td style={{ padding: "0.5rem" }}>{batch.status}</td>
+                <td style={{ padding: "0.5rem" }}>
+                  <Link href={`/academy/batches/${batch.id}`}>View roster</Link>
+                </td>
                 {canManage && (
                   <td style={{ padding: "0.5rem" }}>
                     <form action={archiveFormAction}>

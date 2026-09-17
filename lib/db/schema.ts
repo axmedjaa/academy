@@ -8,6 +8,7 @@ import {
   boolean,
   numeric,
   timestamp,
+  time,
   date,
   pgEnum,
   uniqueIndex,
@@ -1282,6 +1283,188 @@ export const batches = pgTable(
     // Phase 3 §2: "index (course_id), (branch_id)".
     index("batches_course_id_idx").on(table.courseId),
     index("batches_branch_id_idx").on(table.branchId),
+  ],
+);
+
+// Phase 3, Item 44. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, batch_id FK batches NOT NULL, staff_profile_id FK
+// staff_profiles NOT NULL, assigned_at timestamp NOT NULL, status
+// enum(active,removed) NOT NULL default active, created_at; unique
+// (batch_id, staff_profile_id))."
+//
+// status reuses membershipStatusEnum (active/removed) rather than a new
+// value-identical enum: PLAN.md's own literal value list for this column
+// (active/removed) is exactly membershipStatusEnum's existing two values,
+// and "a trainer's assignment to a batch was removed" is the same
+// active/removed lifecycle concept academyMemberships already models — not
+// the archive/archived lifecycle branchStatusEnum covers for the entities
+// in the Archive & Deactivation Rules table (batch_trainer_assignments is
+// not one of those; Item 44's own brief confirms membershipStatusEnum "can
+// be reused verbatim... same convention Phase 2 used repeatedly").
+//
+// The unique constraint is a PLAIN (batch_id, staff_profile_id) index, not
+// partial/status-scoped — deliberately different from batch_enrollments
+// below, whose brief explicitly calls out "unique (student_id, batch_id)
+// for active enrollment" (a partial index). No such "for active" qualifier
+// appears anywhere in PLAN.md for this table, so re-assigning a previously
+// "removed" trainer to the same batch is modeled as reactivating the same
+// row in place (flipping status back to "active"), not inserting a second
+// row — see lib/academies/batch-assignments.ts's assignTrainerToBatch.
+export const batchTrainerAssignments = pgTable(
+  "batch_trainer_assignments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batches.id),
+    staffProfileId: uuid("staff_profile_id")
+      .notNull()
+      .references(() => staffProfiles.id),
+    assignedAt: timestamp("assigned_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    status: membershipStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("batch_trainer_assignments_batch_id_staff_profile_id_unique").on(
+      table.batchId,
+      table.staffProfileId,
+    ),
+  ],
+);
+
+// Phase 3, Item 44. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, batch_id FK batches NOT NULL, student_id FK
+// students NOT NULL, enrolled_at timestamp NOT NULL, status
+// enum(active,withdrawn,completed) NOT NULL default active, created_at;
+// unique (student_id, batch_id) for active enrollment, per Database
+// Constraints & Indexes; index (academy_id, student_id))."
+//
+// status is a new 3-value set (active/withdrawn/completed) — no existing
+// enum in this file matches it (membershipStatusEnum is only
+// active/removed; batchStatusEnum's four values don't fit either), per this
+// item's own brief.
+//
+// The "unique (student_id, batch_id) for active enrollment" wording
+// (repeated verbatim in the consolidated Database Constraints & Indexes
+// section, line "batch_enrollments: unique (student_id, batch_id) for
+// active enrollments") is a genuine partial unique index — WHERE
+// status = 'active' — not a plain table-wide unique constraint: a withdrawn
+// enrollment must not block the same student from being enrolled in the
+// same batch again later (explicitly required by this item's test list).
+// drizzle-kit 0.31.10 supports a partial index via the builder's `.where()`
+// (verified against node_modules/drizzle-orm/pg-core/indexes.d.ts —
+// `IndexBuilder.where(condition: SQL)`), so this one, unlike grade_bands'
+// exclusion constraint, IS fully expressible declaratively here — no
+// hand-appended migration SQL needed.
+export const batchEnrollmentStatusEnum = pgEnum("batch_enrollment_status", [
+  "active",
+  "withdrawn",
+  "completed",
+]);
+
+export const batchEnrollments = pgTable(
+  "batch_enrollments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batches.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    status: batchEnrollmentStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("batch_enrollments_student_id_batch_id_active_unique")
+      .on(table.studentId, table.batchId)
+      .where(sql`${table.status} = 'active'`),
+    // Phase 3 §2: "index (academy_id, student_id)".
+    index("batch_enrollments_academy_id_student_id_idx").on(
+      table.academyId,
+      table.studentId,
+    ),
+  ],
+);
+
+// Phase 3, Item 45. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, branch_id FK branches NOT NULL, batch_id FK
+// batches NOT NULL, day_of_week enum(mon,tue,wed,thu,fri,sat,sun) NOT NULL,
+// start_time time NOT NULL, end_time time NOT NULL, room text nullable,
+// trainer_staff_profile_id FK staff_profiles nullable, created_at,
+// updated_at; check end_time > start_time; no attendance/check-in column
+// exists on this table or anywhere else — Decision #21)."
+//
+// CRITICAL — Decision #21 (PLAN.md, searched verbatim): no attendance/
+// check-in concept anywhere. This table has no such column by design, and
+// none should ever be added to it or to any sibling table in this phase.
+//
+// day_of_week's exhaustive value list is given directly in PLAN.md's
+// column list (mon..sun) — a closed set, so a real pgEnum, not free text.
+export const dayOfWeekEnum = pgEnum("day_of_week", [
+  "mon",
+  "tue",
+  "wed",
+  "thu",
+  "fri",
+  "sat",
+  "sun",
+]);
+
+export const timetables = pgTable(
+  "timetables",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batches.id),
+    dayOfWeek: dayOfWeekEnum("day_of_week").notNull(),
+    // PLAN.md gives these as bare `time` columns (no timezone) — a weekly
+    // recurring slot ("every Monday 09:00–10:00") is wall-clock time at the
+    // branch's location, not an instant, unlike every `timestamp` column
+    // elsewhere in this file (all declared `{ withTimezone: true }`).
+    // drizzle-orm's pg-core `time()` builder maps directly to Postgres
+    // `time` (no timezone) by default.
+    startTime: time("start_time").notNull(),
+    endTime: time("end_time").notNull(),
+    room: text("room"),
+    trainerStaffProfileId: uuid("trainer_staff_profile_id").references(
+      () => staffProfiles.id,
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("timetables_academy_id_idx").on(table.academyId),
+    index("timetables_branch_id_idx").on(table.branchId),
+    index("timetables_batch_id_idx").on(table.batchId),
+    // PLAN.md §2: "check end_time > start_time".
+    check("timetables_end_time_after_start_time", sql`${table.endTime} > ${table.startTime}`),
   ],
 );
 

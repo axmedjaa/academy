@@ -99,6 +99,13 @@
       "when": 1789622914462,
       "tag": "0013_quiet_amazoness",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789626229180,
+      "tag": "0014_low_anthem",
+      "breakpoints": true
     }
   ]
 }

@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
+  activateGradeConfiguration as activateGradeConfigurationForActor,
+  approveGradeConfig as approveGradeConfigForActor,
   createGradeConfiguration as createGradeConfigurationForActor,
+  rejectGradeConfig as rejectGradeConfigForActor,
+  submitGradeConfigForApproval as submitGradeConfigForApprovalForActor,
   updateGradeBands as updateGradeBandsForActor,
   type CreateGradeConfigurationInput,
   type GradeBandInput,
@@ -11,12 +15,10 @@ import {
 } from "@/lib/academies/grade-configurations";
 
 /**
- * PLAN.md Item 46. No `/academy/grades` page exists yet (that's the later
- * approval-flow item's UI to build — see grade-configurations.ts's module
- * comment) so these server actions have no client component calling them
- * today; they exist so that later item can wire a form up to this item's
- * already-built, already-tested logic without having to write the
- * FormData-parsing glue itself.
+ * PLAN.md Item 46 (createGradeConfiguration/updateGradeBands) plus Item 47's
+ * four lifecycle-transition actions added below. `/academy/grades`
+ * (app/academy/grades/page.tsx + grade-configurations-list.tsx) is Item
+ * 47's page, and it calls every action in this file.
  */
 const UNAUTHENTICATED: GradeConfigActionError = {
   code: "forbidden",
@@ -83,6 +85,89 @@ export async function updateGradeBands(
     gradeConfigurationId,
     parseUpdateGradeBandsFormData(formData),
   );
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/grades");
+  return { ok: true };
+}
+
+/**
+ * PLAN.md Item 47's four lifecycle-transition server actions. Unlike
+ * `createGradeConfiguration`/`updateGradeBands` above (form submissions with
+ * real field data, so they use `useActionState`'s `(prevState, formData)`
+ * shape), these are single confirm-and-fire button actions with at most one
+ * scalar argument each — same direct-call convention as
+ * lib/academies/lifecycle-actions.ts's `activateAcademyAction`/
+ * `suspendAcademyAction`, called straight from the client component
+ * (app/academy/grades/grade-configurations-list.tsx), not via a `<form>`.
+ */
+export type GradeConfigLifecycleActionResult =
+  | { ok: true }
+  | { ok: false; error: GradeConfigActionError };
+
+export async function submitGradeConfigForApprovalAction(
+  gradeConfigurationId: string,
+): Promise<GradeConfigLifecycleActionResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await submitGradeConfigForApprovalForActor(context, gradeConfigurationId);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/grades");
+  return { ok: true };
+}
+
+export async function approveGradeConfigAction(
+  gradeConfigurationId: string,
+): Promise<GradeConfigLifecycleActionResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await approveGradeConfigForActor(context, gradeConfigurationId);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/grades");
+  return { ok: true };
+}
+
+export async function rejectGradeConfigAction(
+  gradeConfigurationId: string,
+  reason: string,
+): Promise<GradeConfigLifecycleActionResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await rejectGradeConfigForActor(context, gradeConfigurationId, reason);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/grades");
+  return { ok: true };
+}
+
+export async function activateGradeConfigurationAction(
+  gradeConfigurationId: string,
+): Promise<GradeConfigLifecycleActionResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await activateGradeConfigurationForActor(context, gradeConfigurationId);
   if (!result.ok) {
     return { ok: false, error: result.error };
   }
