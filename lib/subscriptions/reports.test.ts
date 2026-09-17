@@ -36,6 +36,18 @@ let subActiveId: string; // academyA, planA, active, ends soon (expiring), activ
 let subPastDueId: string; // academyB, planA, past_due, ends 5 days ago (overdue)
 let subCancelledId: string; // academyA, planB, cancelled, ends soon but must be excluded everywhere
 
+// getRevenueBreakdown's "method"/"month" groupings are genuinely
+// platform-global (unscoped by academy/plan), unlike "academy"/"plan"
+// grouping — so with Phase 2's concurrent test suites now also inserting
+// real academySubscriptions/subscriptionPayments rows (staff/students/
+// id-cards fixtures elsewhere), a raw total captured after this file's own
+// fixtures exist is not safe against sibling test files running at the same
+// time. Captured before any fixture in this file is inserted, so the two
+// tests that assert a global total use before/after deltas instead.
+let baselineNotYetPaidExpectedCents = 0;
+let baselineMonthCollectedCents = 0;
+let baselineMonthExpectedCents = 0;
+
 const now = new Date();
 const activatedThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 3));
 const monthKeyThisMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -61,6 +73,15 @@ async function cleanupUser(userId: string): Promise<void> {
 }
 
 beforeAll(async () => {
+  const [baselineMethod, baselineMonth] = await Promise.all([
+    getRevenueBreakdown("method"),
+    getRevenueBreakdown("month"),
+  ]);
+  baselineNotYetPaidExpectedCents =
+    baselineMethod.rows.find((r) => r.groupKey === "__not_yet_paid__")?.expectedCents ?? 0;
+  baselineMonthCollectedCents = baselineMonth.rows.reduce((sum, r) => sum + r.collectedCents, 0);
+  baselineMonthExpectedCents = baselineMonth.rows.reduce((sum, r) => sum + r.expectedCents, 0);
+
   ownerUserId = await createUser();
   await db.insert(platformMemberships).values({ userId: ownerUserId, role: "platform_owner" });
 
@@ -349,15 +370,19 @@ describe("getRevenueBreakdown", () => {
 
     const notYetPaidRow = result.rows.find((r) => r.groupKey === "__not_yet_paid__");
     expect(notYetPaidRow?.collectedCents).toBe(0);
-    expect(notYetPaidRow?.expectedCents).toBe(200_000);
+    // Delta against the pre-fixture baseline (see top-of-file comment) —
+    // this bucket is a genuinely platform-global aggregate, so a raw total
+    // isn't safe against sibling test files' own subscription fixtures.
+    expect((notYetPaidRow?.expectedCents ?? 0) - baselineNotYetPaidExpectedCents).toBe(200_000);
   });
 
   it("groups by month using receivedAt for collected and endsAt for expected", async () => {
     const result = await getRevenueBreakdown("month");
     const totalCollected = result.rows.reduce((sum, r) => sum + r.collectedCents, 0);
     const totalExpected = result.rows.reduce((sum, r) => sum + r.expectedCents, 0);
-    expect(totalCollected).toBe(100_000);
-    expect(totalExpected).toBe(200_000);
+    // Delta against the pre-fixture baseline — see top-of-file comment.
+    expect(totalCollected - baselineMonthCollectedCents).toBe(100_000);
+    expect(totalExpected - baselineMonthExpectedCents).toBe(200_000);
   });
 
   it("totals match the sum of all rows", async () => {

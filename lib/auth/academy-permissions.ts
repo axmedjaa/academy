@@ -195,3 +195,46 @@ ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STAFF_ACTION] = "full";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STAFF_ACTION] = "full";
 ACADEMY_PERMISSIONS.manager[ACADEMY_STAFF_ACTION] = "manage";
 ACADEMY_PERMISSIONS.trainer[ACADEMY_STAFF_ACTION] = "view";
+
+/**
+ * PLAN.md Item 38 — Master Permission Matrix "Students / admissions" row:
+ * Owner Full, Admin Full, Manager Manage, Admissions Officer Manage,
+ * Finance Officer View, Trainer "View assigned" — scope "assigned" for
+ * the two branch-limited roles (Admissions Officer, Trainer). Same
+ * additive-row convention as ACADEMY_STAFF_ACTION directly above: mutated
+ * in place rather than editing the object literal, so this never collides
+ * with another item's own additive row (e.g. Item 40's
+ * "academy.student_id_cards") landing in the same object at the same
+ * time.
+ *
+ * Judgment call on Trainer: the matrix's "View assigned" is a
+ * branch-scoped read, modeled the same way ACADEMY_STAFF_ACTION's Trainer
+ * comment above already treats "View self/assigned" — the unqualified
+ * "view" level for now; lib/academies/register-student.ts documents, at
+ * its own call site, that branch-scoping for *registration* (Admissions
+ * Officer only, since Trainer never reaches "manage" on this row) is
+ * enforced there via staff_branch_assignments.
+ */
+export const ACADEMY_STUDENTS_ACTION = "academy.students";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STUDENTS_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENTS_ACTION] = "full";
+ACADEMY_PERMISSIONS.manager[ACADEMY_STUDENTS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.admissions_officer[ACADEMY_STUDENTS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.finance_officer[ACADEMY_STUDENTS_ACTION] = "view";
+ACADEMY_PERMISSIONS.trainer[ACADEMY_STUDENTS_ACTION] = "view";
+
+/**
+ * PLAN.md Item 40 — Master Permission Matrix "Student ID cards" row:
+ * Full(owner)/Manage(admin)/Manage(manager)/Manage(admissions_officer)/
+ * none(finance_officer)/none(trainer), scope "assigned" for the two
+ * branch-limited roles. Additive row only, mutated in place at the bottom
+ * of this file per the module comment's convention — see
+ * ACADEMY_STAFF_ACTION just above for the identical pattern, so a
+ * concurrently-landing sibling row (e.g. "academy.students") never
+ * collides with this one in the same object-literal edit.
+ */
+export const ACADEMY_STUDENT_ID_CARDS_ACTION = "academy.student_id_cards";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STUDENT_ID_CARDS_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.manager[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.admissions_officer[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";

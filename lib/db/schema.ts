@@ -1085,3 +1085,71 @@ export const studentDocuments = pgTable(
     index("student_documents_student_id_idx").on(table.studentId),
   ],
 );
+
+// Phase 2, Item 40. PLAN.md's exact column list (Phase 2 §2): "id,
+// academy_id FK NOT NULL, student_id FK students NOT NULL, card_number text
+// NOT NULL, photo_file_ref text nullable, issued_at timestamp NOT NULL,
+// issued_by FK users NOT NULL, reprint_count integer NOT NULL default 0,
+// status enum(active,archived) NOT NULL default active, created_at; unique
+// card_number; index (student_id)." No updated_at: PLAN.md's literal list
+// ends at created_at, matching the same "follow the literal list, don't
+// assume symmetry with a sibling table" judgment already applied to
+// staffDocuments/studentDocuments above.
+//
+// card_number's uniqueness is deliberately a single global unique index,
+// not `(academy_id, card_number)` like students.studentNumber — Database
+// Constraints & Indexes states this exactly ("student_id_cards.card_number
+// unique", no academy qualifier, unlike the adjacent
+// "students: (academy_id, student_number) unique" line right above it in
+// that same list) and this item's own brief repeats it explicitly ("it's a
+// single unique constraint, not per-academy"). lib/academies/id-cards.ts's
+// generateCardNumber() retries on a 23505 from this index rather than
+// pre-checking then inserting, the same race-safe pattern
+// lib/academies/branches.ts's isUniqueViolation() documents.
+//
+// photoFileRef is a plain nullable text reference, not a real upload — same
+// interface-placeholder judgment call as staffDocuments.fileRef/
+// studentDocuments.fileRef above (no lib/storage module exists yet).
+//
+// status reuses branchStatusEnum for the same reason staffProfiles.status/
+// students.status did: "Student ID cards" isn't its own line in the
+// Archive & Deactivation Rules table, but the identical active/archived,
+// never-hard-deleted lifecycle is the only one this codebase's schema
+// convention uses anywhere status is a two-value enum, and reprinting a
+// card (issueStudentIdCard again for the same student) is modeled as
+// incrementing reprint_count on a fresh active row rather than archiving
+// the old one — PLAN.md's brief for this item never describes an
+// archive/void action for an individual card, so `status` exists here only
+// for schema-convention consistency with every sibling table in this file,
+// not because a later item is known to flip it.
+export const studentIdCards = pgTable(
+  "student_id_cards",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    cardNumber: text("card_number").notNull(),
+    photoFileRef: text("photo_file_ref"),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull(),
+    issuedBy: uuid("issued_by")
+      .notNull()
+      .references(() => users.id),
+    reprintCount: integer("reprint_count").notNull().default(0),
+    status: branchStatusEnum("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Database Constraints & Indexes: "student_id_cards.card_number unique"
+    // — global, not scoped to academy_id (see the table-level comment above).
+    uniqueIndex("student_id_cards_card_number_unique").on(table.cardNumber),
+    // Phase 2 §2: "index (student_id)".
+    index("student_id_cards_student_id_idx").on(table.studentId),
+    check("student_id_cards_reprint_count_nonnegative", sql`${table.reprintCount} >= 0`),
+  ],
+);

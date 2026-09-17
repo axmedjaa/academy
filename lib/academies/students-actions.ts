@@ -1,0 +1,78 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { getAuthContext } from "@/lib/auth/auth-context";
+import {
+  updateStudent as updateStudentForActor,
+  type StudentActionError,
+  type UpdateStudentInput,
+} from "@/lib/academies/students";
+
+const UNAUTHENTICATED: StudentActionError = {
+  code: "forbidden",
+  message: "You must be signed in.",
+};
+
+export interface StudentFormState {
+  ok: boolean;
+  error?: StudentActionError;
+}
+
+/**
+ * FormData -> UpdateStudentInput. Same "just shape translation, not
+ * validation" convention as lib/academies/branches-actions.ts's
+ * parseBranchFormData — real validation is students.ts's Zod schema, run
+ * again right after this.
+ *
+ * `branchId` is read only when the form actually included that field —
+ * the edit form (app/academy/students/students-list.tsx) only renders a
+ * branch selector for academy-wide (Owner/Admin/Manager) callers, and
+ * deliberately omits the field entirely for branch-limited callers
+ * (Admissions Officer) so their submission never carries a `branchId` key
+ * at all. That matters: `updateStudent` treats *any* `branchId` key
+ * (even one resubmitting the student's current, unchanged branch) as a
+ * transfer attempt and refuses it outright for branch-limited callers —
+ * so `formData.has("branchId")` must gate this, not just an empty-string
+ * check, or a branch-limited caller's own valid edits would fail here.
+ */
+function parseStudentFormData(formData: FormData): UpdateStudentInput {
+  const input: UpdateStudentInput = {
+    fullName: String(formData.get("fullName") ?? ""),
+    dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
+    gender: String(formData.get("gender") ?? ""),
+    phone: String(formData.get("phone") ?? ""),
+    email: String(formData.get("email") ?? ""),
+    guardianName: String(formData.get("guardianName") ?? ""),
+    guardianPhone: String(formData.get("guardianPhone") ?? ""),
+    status: (formData.get("status") as "active" | "archived" | null) ?? undefined,
+  };
+  if (formData.has("branchId")) {
+    input.branchId = String(formData.get("branchId") ?? "");
+  }
+  return input;
+}
+
+/** PLAN.md §4 server action name. Student id is read from the form itself
+ * (a hidden field), never trusted from any other client-suppliable
+ * source; lib/academies/students.ts's updateStudent still re-checks it
+ * belongs to the caller's own academy (and, for branch-limited callers,
+ * their assigned branch) regardless. */
+export async function updateStudent(
+  _prevState: StudentFormState,
+  formData: FormData,
+): Promise<StudentFormState> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const studentId = String(formData.get("studentId") ?? "");
+  const result = await updateStudentForActor(context, studentId, parseStudentFormData(formData));
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/students");
+  revalidatePath("/academy/admissions");
+  return { ok: true };
+}

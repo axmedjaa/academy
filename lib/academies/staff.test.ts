@@ -7,6 +7,8 @@ import {
   academyMemberships,
   academySubscriptions,
   auditLogs,
+  branches,
+  staffBranchAssignments,
   staffProfiles,
   subscriptionPlans,
   users,
@@ -126,6 +128,48 @@ async function createTargetStaff(
   return { staffProfileId: profile.id, userId };
 }
 
+/** Item 36 fixture helper: a bare branches row, bypassing createBranch. */
+async function insertBranchDirect(academyId: string): Promise<string> {
+  const code = `BR-${randomUUID().slice(0, 8)}`;
+  const [row] = await db
+    .insert(branches)
+    .values({ academyId, name: `Branch ${code}`, code })
+    .returning({ id: branches.id });
+  return row.id;
+}
+
+/** Item 36 fixture helper: a fresh staff_profiles row for a given userId
+ * plus staff_branch_assignments rows for it, bypassing assignStaffBranches
+ * — same "tests build fixture data directly" convention as
+ * branches.test.ts's own assignUserToBranches. Only for a userId that
+ * doesn't already have a staff_profiles row in this academy — use
+ * assignBranchesToProfile below for a profile created by createTargetStaff. */
+async function assignUserToBranches(
+  academyId: string,
+  userId: string,
+  branchIds: string[],
+): Promise<string> {
+  const [profile] = await db
+    .insert(staffProfiles)
+    .values({ academyId, userId, fullName: "Branch-Scoped Staff", phone: "+1-555-0200" })
+    .returning({ id: staffProfiles.id });
+
+  await assignBranchesToProfile(academyId, profile.id, branchIds);
+  return profile.id;
+}
+
+/** Item 36 fixture helper: staff_branch_assignments rows for an *existing*
+ * staff_profiles row (e.g. one createTargetStaff already created). */
+async function assignBranchesToProfile(
+  academyId: string,
+  staffProfileId: string,
+  branchIds: string[],
+): Promise<void> {
+  for (const branchId of branchIds) {
+    await db.insert(staffBranchAssignments).values({ academyId, staffProfileId, branchId });
+  }
+}
+
 async function seedActiveStaff(academyId: string, count: number): Promise<void> {
   for (let i = 0; i < count; i += 1) {
     const staffUserId = await createUser();
@@ -169,6 +213,12 @@ afterAll(async () => {
       ),
     );
   for (const academyId of createdAcademyIds) {
+    // Item 36 fixtures (assignUserToBranches/insertBranchDirect): FK order
+    // requires staff_branch_assignments before staff_profiles/branches.
+    await db
+      .delete(staffBranchAssignments)
+      .where(eq(staffBranchAssignments.academyId, academyId));
+    await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(staffProfiles).where(eq(staffProfiles.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
@@ -530,8 +580,8 @@ describe("assignStaffRole", () => {
 });
 
 describe("listStaff — permission matrix (Full/Manage/View may list, Admissions/Finance refused)", () => {
-  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager", "trainer"])(
-    "allows %s to view the staff list",
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
+    "allows %s to view the staff list, unfiltered by branch",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
       await createTargetStaff(academyId);
@@ -540,6 +590,32 @@ describe("listStaff — permission matrix (Full/Manage/View may list, Admissions
       if (result.ok) expect(result.staff.length).toBeGreaterThanOrEqual(1);
     },
   );
+
+  // Trainer's "view" level is branch-scoped (Item 36 — see
+  // getViewableStaffProfileIds in lib/academies/staff.ts): unlike the
+  // academy-wide roles above, a bare setupAcademy("trainer") fixture with
+  // no staff_profiles/branch-assignment rows of its own is correctly
+  // refused *content* (an empty list, not a "forbidden"), so this is
+  // tested as its own case with a real shared-branch fixture rather than
+  // folded into the it.each above. The "trainer sees zero staff when
+  // nothing is shared" and "trainer never sees an unshared staff member"
+  // cases are covered in lib/academies/staff-branch-assignments.test.ts,
+  // alongside the rest of Item 36's branch-scoping/IDOR coverage.
+  it("allows trainer to view the staff list, scoped to their own record plus shared-branch staff", async () => {
+    const { academyId, userId: trainerUserId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const trainerProfileId = await assignUserToBranches(academyId, trainerUserId, [branchId]);
+    const sharedTarget = await createTargetStaff(academyId);
+    await assignBranchesToProfile(academyId, sharedTarget.staffProfileId, [branchId]);
+
+    const result = await listStaff(context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.permissionLevel).toBe("view");
+    const ids = result.staff.map((s) => s.id);
+    expect(ids).toContain(trainerProfileId);
+    expect(ids.length).toBeGreaterThanOrEqual(1);
+  });
 
   it.each<AcademyRole>(["admissions_officer", "finance_officer"])(
     "refuses %s with code 'forbidden'",

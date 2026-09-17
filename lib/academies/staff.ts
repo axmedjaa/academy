@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { academyMemberships, staffProfiles, users } from "@/lib/db/schema";
+import { academyMemberships, staffBranchAssignments, staffProfiles, users } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_STAFF_ACTION,
@@ -534,19 +534,77 @@ export type ListStaffResult =
   | { ok: false; error: StaffActionError };
 
 /**
+ * PLAN.md Phase 2, Item 36 — branch-scoped filter for `listStaff`. Resolves
+ * which `staff_profiles` rows a branch-limited viewer (in practice: Trainer,
+ * whose `academy.staff` permission level is "view" per the Master
+ * Permission Matrix's "View self/assigned" cell — Admissions Officer and
+ * Finance Officer are already refused entirely at "none" and never reach
+ * this) may see: their own record, plus any staff member who shares at
+ * least one assigned branch with them.
+ *
+ * Same join pattern lib/academies/branches.ts's own `getAssignedBranchIds`
+ * uses as its template (staff_profiles -> staff_branch_assignments by
+ * staff_profile_id) — duplicated rather than imported since that file is
+ * this item's read-only reference, not something to couple to. A viewer
+ * with no `staff_profiles` row at all (or one with zero assignments) sees
+ * only themselves-if-they-have-a-profile — an empty/near-empty result, not
+ * an error, mirroring that file's own "assigned to nothing" convention for
+ * branch-limited roles.
+ */
+async function getViewableStaffProfileIds(
+  academyId: string,
+  actorUserId: string,
+): Promise<string[]> {
+  const [viewerProfile] = await db
+    .select({ id: staffProfiles.id })
+    .from(staffProfiles)
+    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, actorUserId)))
+    .limit(1);
+
+  const visible = new Set<string>();
+  if (viewerProfile) visible.add(viewerProfile.id);
+
+  const viewerBranchIds = viewerProfile
+    ? (
+        await db
+          .select({ branchId: staffBranchAssignments.branchId })
+          .from(staffBranchAssignments)
+          .where(eq(staffBranchAssignments.staffProfileId, viewerProfile.id))
+      ).map((row) => row.branchId)
+    : [];
+
+  if (viewerBranchIds.length > 0) {
+    const shared = await db
+      .selectDistinct({ staffProfileId: staffBranchAssignments.staffProfileId })
+      .from(staffBranchAssignments)
+      .where(
+        and(
+          eq(staffBranchAssignments.academyId, academyId),
+          inArray(staffBranchAssignments.branchId, viewerBranchIds),
+        ),
+      );
+    for (const row of shared) visible.add(row.staffProfileId);
+  }
+
+  return Array.from(visible);
+}
+
+/**
  * PLAN.md §3's `/academy/staff` list. Gated by `canViewStaff` (any
  * non-"none" level: Full, Manage, or Trainer's "View") rather than
  * `canManageStaff`, since Trainer can see staff per the matrix even though
  * it can't create/update them.
  *
- * Deliberately NOT branch-scoped: the task brief for this item is explicit
- * that branch assignment (`staff_branch_assignments`) and branch-scoped
- * list filtering are Item 36's job, not this one's. This returns every
- * staff_profiles row for the academy regardless of role — including for
- * Trainer, whose matrix cell ("View self/assigned") really means a
- * narrower "assigned branch(es) only" view once Item 36 exists. Until
- * then this is a simple academy-wide list for every role that can view it
- * at all, exactly as the task brief instructs.
+ * Branch-scoped per Item 36 (Phase 2 §6: "further by branch_id for
+ * branch-limited roles ... academy-wide roles ... skip the branch filter by
+ * design, not by accident"): "full"/"manage" (Owner/Admin/Manager) get
+ * every staff_profiles row for the academy, unfiltered; "view" (Trainer)
+ * gets only their own record plus staff who share at least one assigned
+ * branch with them, via `getViewableStaffProfileIds` above. IDOR-safe by
+ * construction — a staff member outside the viewer's visible set simply
+ * never appears in the list, the same "doesn't exist vs. exists-but-hidden
+ * must be indistinguishable" posture lib/academies/branches.ts uses for its
+ * own branch-limited reads.
  */
 export async function listStaff(actorContext: AuthContext): Promise<ListStaffResult> {
   const access = await checkAcademyAccessForContext(actorContext);
@@ -557,6 +615,19 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
   const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION);
   if (!canViewStaff(level)) {
     return { ok: false, error: FORBIDDEN };
+  }
+
+  let visibleStaffProfileIds: string[] | null = null;
+  if (!canManageStaff(level)) {
+    // "view" is the only remaining non-"none" level today (Trainer) — see
+    // this function's own doc comment.
+    visibleStaffProfileIds = await getViewableStaffProfileIds(
+      access.academyId,
+      actorContext.userId,
+    );
+    if (visibleStaffProfileIds.length === 0) {
+      return { ok: true, permissionLevel: level, staff: [] };
+    }
   }
 
   const rows = await db
@@ -574,7 +645,14 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
         eq(academyMemberships.academyId, staffProfiles.academyId),
       ),
     )
-    .where(eq(staffProfiles.academyId, access.academyId));
+    .where(
+      visibleStaffProfileIds
+        ? and(
+            eq(staffProfiles.academyId, access.academyId),
+            inArray(staffProfiles.id, visibleStaffProfileIds),
+          )
+        : eq(staffProfiles.academyId, access.academyId),
+    );
 
   return {
     ok: true,

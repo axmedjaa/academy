@@ -7,6 +7,7 @@ import {
   academyUsage,
   branches,
   staffProfiles,
+  students,
   subscriptionPlans,
 } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
@@ -100,22 +101,21 @@ async function countActiveBranches(
   return row?.count ?? 0;
 }
 
-// Phase 2 (`students` table, not yet built) will replace this with a real
-// COUNT of active students for the academy. Returning 0 rather than
-// omitting the metric keeps academy_usage's column list exactly as
-// PLAN.md specifies it, and keeps checkAllowance("students") well-defined
-// (current=0 against any positive plan limit is simply never blocking
-// until real students can exist to count).
+// PLAN.md Phase 2, Item 38 — `students` table now exists (Item 37) and
+// this is the real counter, same shape as countActiveBranches/
+// countActiveStaff above: active students for this academy, straight
+// COUNT(*) against the source-of-truth table (no cached/derived count
+// anywhere else). checkAllowance("students") now blocks for real once an
+// academy is at its plan's student limit.
 async function countActiveStudents(
   executor: DbClient,
   academyId: string,
 ): Promise<number> {
-  // Params kept (not dropped) so this matches metricCounters' shared
-  // signature exactly — same "keep the parameter, void it" convention as
-  // hasPermission()'s unused `resource` param (lib/auth/permissions.ts).
-  void executor;
-  void academyId;
-  return 0;
+  const [row] = await executor
+    .select({ count: sql<number>`count(*)::int` })
+    .from(students)
+    .where(and(eq(students.academyId, academyId), eq(students.status, "active")));
+  return row?.count ?? 0;
 }
 
 // PLAN.md Phase 2, Item 35 — `staff_profiles` now exists (Item 33) and
