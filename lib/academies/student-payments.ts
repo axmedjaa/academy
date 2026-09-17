@@ -1,7 +1,14 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { academies, receipts, studentCharges, studentPayments, students } from "@/lib/db/schema";
+import {
+  academies,
+  approvalRequests,
+  receipts,
+  studentCharges,
+  studentPayments,
+  students,
+} from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_STUDENT_PAYMENTS_ACTION,
@@ -11,10 +18,13 @@ import {
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
+import { createApprovalRequest, decideApprovalRequest } from "@/lib/academies/approval-requests";
 
 /**
  * PLAN.md Phase 4, Item 51 — "createStudentCharge, recordStudentPayment,
- * issueReceipt."
+ * issueReceipt." Item 52 — "approveStudentPayment/rejectStudentPayment +
+ * self-approval rejection test" — is also implemented in this file (see
+ * `canApprove`, `approveStudentPayment`, `rejectStudentPayment` below).
  *
  * ---------------------------------------------------------------------
  * Permission gating
@@ -24,14 +34,16 @@ import type { AcademyRole } from "@/lib/auth/roles";
  * = "view", Manager = "full", Finance Officer = "manage", Admissions
  * Officer = no entry ("none"). `canManage`'s "full"-or-"manage" gate below
  * is deliberately the SAME gate for both Manager and Finance Officer —
- * approve-vs-manage-only is a distinction this item never needs to make,
- * since `approveStudentPayment`/`rejectStudentPayment` are explicitly a
- * separate, later item (52) not built here. Owner/Admin (view-only) and
- * Trainer (view-only) are refused on every create/record/issue action in
- * this file — the confirmed inversion from this codebase's usual pattern
- * (Owner/Admin normally reach "full" everywhere else) called out explicitly
- * in this item's own brief and covered by an explicit permission-matrix
- * test in student-payments.test.ts.
+ * both may create/record/issue. `canApprove`'s narrower `level === "full"`
+ * gate (Item 52, further down this file) is a DIFFERENT, stricter gate used
+ * only by `approveStudentPayment`/`rejectStudentPayment`: Finance Officer's
+ * "manage" level passes `canManage` but never `canApprove`, so they can
+ * record a payment but never decide one — not even their own, and not even
+ * someone else's. Owner/Admin (view-only) and Trainer (view-only) are
+ * refused on every action in this file — the confirmed inversion from this
+ * codebase's usual pattern (Owner/Admin normally reach "full" everywhere
+ * else) called out explicitly in this item's own brief and covered by an
+ * explicit permission-matrix test in student-payments.test.ts.
  *
  * ---------------------------------------------------------------------
  * Judgment call: no branch-scoping on the read side
@@ -72,8 +84,43 @@ function canManage(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
 }
 
+/**
+ * PLAN.md Phase 4, Item 52 — `approveStudentPayment`/`rejectStudentPayment`
+ * gate. Per this row's own module comment above (`ACADEMY_STUDENT_PAYMENTS_ACTION`),
+ * only `level === "full"` (Manager) passes — Finance Officer's `"manage"`
+ * level deliberately does NOT reach approve/reject, even for a payment
+ * someone else recorded: the Finance Lifecycle table's `student_payments`
+ * row names Manager as the sole approver ("never the recorder" — and never
+ * Finance Officer at all, regardless of whose submission it is). Owner/Admin
+ * (`"view"`) and everyone else are refused by the same gate.
+ */
+function canApprove(level: AcademyPermissionLevel): boolean {
+  return level === "full";
+}
+
 export interface StudentPaymentsActionError {
-  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "invalid_state";
+  code:
+    | "forbidden"
+    | "validation"
+    | "not_found"
+    | "blocked"
+    | "conflict"
+    | "invalid_state"
+    // Row-locked "already processed" concurrency guard (PLAN.md's
+    // Concurrency & Idempotency table: "Payment verification
+    // (verifySubscriptionPayment, approveStudentPayment) — row-locked status
+    // check — two concurrent calls on the same row: one succeeds, one gets a
+    // clear 'already processed' error") — kept distinct from `invalid_state`
+    // (used elsewhere in this file, e.g. issueReceipt's "must already be
+    // approved" precondition) since this one is specifically about a
+    // payment no longer being in `pending_approval` by the time the row lock
+    // is acquired.
+    | "already_processed"
+    // decideApprovalRequest's (Item 50a) two guard failures, surfaced as-is
+    // rather than collapsed into "forbidden"/"validation" — same convention
+    // as lib/academies/expense-records.ts's ExpenseRecordActionError.
+    | "self_approval"
+    | "already_decided";
   message: string;
 }
 
@@ -152,6 +199,21 @@ export const issueReceiptSchema = z.object({
 });
 
 export type IssueReceiptInput = z.input<typeof issueReceiptSchema>;
+
+/**
+ * Item 52 — same non-empty-reason requirement as
+ * lib/academies/expense-records.ts's `rejectExpenseReasonSchema`. No
+ * `rejection_reason` column exists on `student_payments` (see
+ * lib/db/schema.ts's column list for this table — only `reversal_reason`,
+ * for Item 54's later reversal action), so the reason is persisted onto the
+ * `approval_requests` row only, same convention as this codebase's
+ * `rejectGradeConfig`.
+ */
+export const rejectStudentPaymentReasonSchema = z
+  .string()
+  .trim()
+  .min(1, "A rejection reason is required.")
+  .max(2000);
 
 export interface StudentChargeRecord {
   id: string;
@@ -555,6 +617,24 @@ export async function recordStudentPayment(
       })
       .returning();
 
+    // Item 52's confirmed gap fix: create the `approval_requests` row
+    // (entityType "student_payment") in the same transaction as the insert,
+    // mirroring lib/academies/expense-records.ts's
+    // `submitExpenseForApproval` — without this, a pending payment never
+    // surfaces in DESIGN.md's unified `/academy/finance/approvals` queue.
+    const requestResult = await createApprovalRequest(tx, {
+      academyId,
+      entityType: "student_payment",
+      entityId: row.id,
+      requestedBy: actorContext.userId,
+    });
+    if (!requestResult.ok) {
+      // Unreachable in practice — see grade-configurations.ts's/
+      // expense-records.ts's identical comment on this same defensive
+      // throw: the input we just built is always well-formed.
+      throw new Error(`createApprovalRequest failed unexpectedly: ${requestResult.error.message}`);
+    }
+
     await recordAudit(
       {
         actorUserId: actorContext.userId,
@@ -563,7 +643,7 @@ export async function recordStudentPayment(
         action: "recordStudentPayment",
         entityType: "student_payment",
         entityId: row.id,
-        after: toPaymentRecord(row),
+        after: { ...toPaymentRecord(row), approvalRequestId: requestResult.request.id },
       },
       tx,
     );
@@ -760,4 +840,365 @@ export async function issueReceipt(
   }
 
   throw new Error("issueReceipt: exhausted retry attempts generating a unique receipt number.");
+}
+
+/** Shared by `approveStudentPayment`/`rejectStudentPayment`: the one
+ * `pending` `approval_requests` row for this student payment, if any — same
+ * defensive "treat a missing row as invalid_state, not not_found" convention
+ * as lib/academies/expense-records.ts's `findPendingApprovalRequest`. Reads
+ * through the same transaction executor as the caller so it observes the
+ * row created (or not) inside that same transaction. */
+async function findPendingStudentPaymentApprovalRequest(tx: DbClient, studentPaymentId: string) {
+  const [pending] = await tx
+    .select()
+    .from(approvalRequests)
+    .where(
+      and(
+        eq(approvalRequests.entityType, "student_payment"),
+        eq(approvalRequests.entityId, studentPaymentId),
+        eq(approvalRequests.status, "pending"),
+      ),
+    )
+    .limit(1);
+  return pending ?? null;
+}
+
+/** Maps decideApprovalRequest's own error shape onto this file's error type
+ * — same convention as lib/academies/expense-records.ts's
+ * `mapDecisionError`. */
+function mapDecisionError(error: { code: string; message: string }): StudentPaymentsActionError {
+  if (error.code === "self_approval" || error.code === "already_decided") {
+    return { code: error.code, message: error.message };
+  }
+  return { code: "validation", message: error.message };
+}
+
+function alreadyProcessedError(status: string, verb: "approved" | "rejected"): StudentPaymentsActionError {
+  return {
+    code: "already_processed",
+    message: `This payment has already been ${status} — it can no longer be ${verb}.`,
+  };
+}
+
+/**
+ * PLAN.md's Finance Lifecycle table, `student_charges` row: "`partially_paid`
+ * / `paid` (derived automatically, not a manual transition ...) — see
+ * status-derivation note below," and elsewhere: "Whenever a `student_payments`
+ * row referencing this charge is approved..., the charge's paid-to-date
+ * total is recalculated inside that same approval transaction." This is
+ * that recalculation, called only from `approveStudentPayment` (rejecting or
+ * reversing a payment never increases the approved-paid total, so neither
+ * `rejectStudentPayment` nor Item 54's reversal path needs to call this —
+ * a rejected payment was never counted, and a reversed payment's own
+ * status stops being "approved," which the live re-`SUM` below already
+ * accounts for on its next recalculation, though nothing currently
+ * re-triggers that recalculation on reversal; flagged as a related,
+ * out-of-scope-for-this-fix follow-up in this item's final report, not
+ * silently addressed here).
+ *
+ * Race-safety: locks the `student_charges` row (`SELECT ... FOR UPDATE`)
+ * inside the SAME transaction as `approveStudentPayment`'s own payment-row
+ * lock, before computing the new total — this serializes two concurrent
+ * approvals of two *different* payments linked to the *same* charge, so
+ * neither can read a stale paid-total and overwrite the other's effect
+ * (the classic lost-update race a naive "read total, then write status"
+ * without a row lock would allow).
+ *
+ * Status derivation, per the exact rule given in this fix's own
+ * requirements (matching PLAN.md's `open`/`partially_paid`/`paid` intent):
+ * paidTotal <= 0 -> "open"; 0 < paidTotal < charge.amountCents ->
+ * "partially_paid"; paidTotal >= charge.amountCents -> "paid". Only
+ * `status = "approved"` student_payments rows are ever summed — pending
+ * and rejected rows never contribute, matching the requirement that they
+ * must not count toward the charge's paid amount.
+ *
+ * A charge already `"cancelled"` (a separate, later action — not built by
+ * any item in this phase) is deliberately left untouched: PLAN.md's own
+ * Finance Lifecycle table describes `cancelled` as reachable "only from
+ * `open` or `partially_paid`, never from `paid`," implying it is a
+ * terminal state a later payment approval must not silently revive out of
+ * — recalculating a cancelled charge back to `open`/`partially_paid`/`paid`
+ * would contradict that. This is a judgment call, since no item in this
+ * phase actually builds `cancelChargeAction` yet.
+ */
+async function recalculateStudentChargeStatus(
+  tx: DbClient,
+  chargeId: string,
+  actorUserId: string,
+  actorRole: AcademyRole,
+): Promise<void> {
+  const [charge] = await tx
+    .select()
+    .from(studentCharges)
+    .where(eq(studentCharges.id, chargeId))
+    .for("update");
+  if (!charge || charge.status === "cancelled") return;
+
+  const [sumRow] = await tx
+    .select({ total: sql<string>`coalesce(sum(${studentPayments.amountCents}), 0)` })
+    .from(studentPayments)
+    .where(and(eq(studentPayments.chargeId, chargeId), eq(studentPayments.status, "approved")));
+  const paidTotal = Number(sumRow?.total ?? 0);
+
+  const nextStatus: StudentChargeRecord["status"] =
+    paidTotal <= 0 ? "open" : paidTotal < charge.amountCents ? "partially_paid" : "paid";
+
+  if (nextStatus === charge.status) return;
+
+  const [updated] = await tx
+    .update(studentCharges)
+    .set({ status: nextStatus, updatedAt: new Date() })
+    .where(eq(studentCharges.id, chargeId))
+    .returning();
+
+  await recordAudit(
+    {
+      actorUserId,
+      actorRole,
+      academyId: charge.academyId,
+      action: "recalculateStudentChargeStatus",
+      entityType: "student_charge",
+      entityId: chargeId,
+      before: { status: charge.status },
+      after: { status: updated.status, paidTotalCents: paidTotal },
+    },
+    tx,
+  );
+}
+
+export type ApproveStudentPaymentResult =
+  | { ok: true; payment: StudentPaymentRecord }
+  | { ok: false; error: StudentPaymentsActionError };
+
+/**
+ * PLAN.md Phase 4, Item 52 — `approveStudentPayment`. Finance Lifecycle
+ * table: `pending_approval -> approved`, actor Manager only (`canApprove`'s
+ * `level === "full"` gate — Owner/Admin are View-only, Finance Officer never
+ * reaches approve authority on this row even for someone else's
+ * submission). Delegates the actual decision — including the universal
+ * self-approval block and one-shot-decision guard — to Item 50a's
+ * `decideApprovalRequest`; this function's own added value is the row lock
+ * (PLAN.md's Concurrency & Idempotency table: "Payment verification
+ * (verifySubscriptionPayment, approveStudentPayment) — row-locked status
+ * check — two concurrent calls on the same row: one succeeds, one gets a
+ * clear 'already processed' error" — same `SELECT ... FOR UPDATE` + status
+ * check shape as lib/subscriptions/payments.ts's
+ * `verifySubscriptionPayment`), resolving which pending `approval_requests`
+ * row belongs to this payment, flipping the payment's own
+ * `status`/`approved_by`/`approved_at`, and — when the payment is linked to
+ * a charge — recalculating that charge's `status` (see
+ * `recalculateStudentChargeStatus` above), all in the same transaction as
+ * that decision.
+ */
+export async function approveStudentPayment(
+  actorContext: AuthContext,
+  studentPaymentId: string,
+): Promise<ApproveStudentPaymentResult> {
+  const resolved = await resolveStudentPaymentsAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canApprove(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(studentPaymentId);
+  if (!parsedId.success) {
+    return { ok: false, error: PAYMENT_NOT_FOUND };
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const [payment] = await tx
+      .select()
+      .from(studentPayments)
+      .where(and(eq(studentPayments.id, studentPaymentId), eq(studentPayments.academyId, academyId)))
+      .for("update");
+    if (!payment) {
+      return { kind: "not_found" as const };
+    }
+    if (payment.status !== "pending_approval") {
+      return { kind: "already_processed" as const, status: payment.status };
+    }
+
+    const pending = await findPendingStudentPaymentApprovalRequest(tx, studentPaymentId);
+    if (!pending) {
+      // Unreachable in practice — recordStudentPayment always creates this
+      // row alongside the payment in the same transaction (Item 52's own
+      // gap fix, above).
+      return { kind: "invalid_state" as const };
+    }
+
+    const decision = await decideApprovalRequest(tx, pending.id, {
+      decidedBy: actorContext.userId,
+      status: "approved",
+    });
+    if (!decision.ok) {
+      return { kind: "decision_error" as const, error: decision.error };
+    }
+
+    const [updated] = await tx
+      .update(studentPayments)
+      .set({ status: "approved", approvedBy: actorContext.userId, approvedAt: new Date() })
+      .where(eq(studentPayments.id, studentPaymentId))
+      .returning();
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "approveStudentPayment",
+        entityType: "student_payment",
+        entityId: studentPaymentId,
+        before: { status: payment.status },
+        after: { status: updated.status, approvedBy: updated.approvedBy, approvedAt: updated.approvedAt },
+      },
+      tx,
+    );
+
+    // Requirement gap fix: recalculate the linked charge's status (if any)
+    // in the SAME transaction as this approval — see
+    // recalculateStudentChargeStatus's own module comment for the full
+    // rule and race-safety reasoning.
+    if (updated.chargeId) {
+      await recalculateStudentChargeStatus(tx, updated.chargeId, actorContext.userId, membershipRole);
+    }
+
+    return { kind: "ok" as const, row: updated };
+  });
+
+  if (result.kind === "not_found") {
+    return { ok: false, error: PAYMENT_NOT_FOUND };
+  }
+  if (result.kind === "already_processed") {
+    return { ok: false, error: alreadyProcessedError(result.status, "approved") };
+  }
+  if (result.kind === "invalid_state") {
+    return {
+      ok: false,
+      error: { code: "invalid_state", message: "No pending approval request found for this payment." },
+    };
+  }
+  if (result.kind === "decision_error") {
+    return { ok: false, error: mapDecisionError(result.error) };
+  }
+  return { ok: true, payment: toPaymentRecord(result.row) };
+}
+
+export type RejectStudentPaymentResult =
+  | { ok: true; payment: StudentPaymentRecord }
+  | { ok: false; error: StudentPaymentsActionError };
+
+/**
+ * PLAN.md Phase 4, Item 52 — `rejectStudentPayment`. Finance Lifecycle
+ * table: `pending_approval -> rejected`, "reason required", same approval
+ * authority as `approveStudentPayment`. Same row-lock/`decideApprovalRequest`
+ * delegation, plus persisting the required reason onto the
+ * `approval_requests` row (there is no `rejection_reason` column on
+ * `student_payments` itself — see lib/db/schema.ts's column list; only
+ * `reversal_reason`, for Item 54 — so this follows the same convention as
+ * this codebase's `rejectGradeConfig` rather than `rejectExpense`'s
+ * additional own-table column write).
+ */
+export async function rejectStudentPayment(
+  actorContext: AuthContext,
+  studentPaymentId: string,
+  reason: string,
+): Promise<RejectStudentPaymentResult> {
+  const resolved = await resolveStudentPaymentsAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canApprove(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(studentPaymentId);
+  if (!parsedId.success) {
+    return { ok: false, error: PAYMENT_NOT_FOUND };
+  }
+
+  const parsedReason = rejectStudentPaymentReasonSchema.safeParse(reason);
+  if (!parsedReason.success) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: parsedReason.error.issues[0]?.message ?? "A rejection reason is required.",
+      },
+    };
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const [payment] = await tx
+      .select()
+      .from(studentPayments)
+      .where(and(eq(studentPayments.id, studentPaymentId), eq(studentPayments.academyId, academyId)))
+      .for("update");
+    if (!payment) {
+      return { kind: "not_found" as const };
+    }
+    if (payment.status !== "pending_approval") {
+      return { kind: "already_processed" as const, status: payment.status };
+    }
+
+    const pending = await findPendingStudentPaymentApprovalRequest(tx, studentPaymentId);
+    if (!pending) {
+      // Unreachable in practice — same reasoning as approveStudentPayment's
+      // identical defensive branch above.
+      return { kind: "invalid_state" as const };
+    }
+
+    const decision = await decideApprovalRequest(tx, pending.id, {
+      decidedBy: actorContext.userId,
+      status: "rejected",
+    });
+    if (!decision.ok) {
+      return { kind: "decision_error" as const, error: decision.error };
+    }
+
+    await tx
+      .update(approvalRequests)
+      .set({ reason: parsedReason.data })
+      .where(eq(approvalRequests.id, pending.id));
+
+    const [updated] = await tx
+      .update(studentPayments)
+      .set({ status: "rejected" })
+      .where(eq(studentPayments.id, studentPaymentId))
+      .returning();
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "rejectStudentPayment",
+        entityType: "student_payment",
+        entityId: studentPaymentId,
+        before: { status: payment.status },
+        after: { status: updated.status, rejectionReason: parsedReason.data },
+      },
+      tx,
+    );
+
+    return { kind: "ok" as const, row: updated };
+  });
+
+  if (result.kind === "not_found") {
+    return { ok: false, error: PAYMENT_NOT_FOUND };
+  }
+  if (result.kind === "already_processed") {
+    return { ok: false, error: alreadyProcessedError(result.status, "rejected") };
+  }
+  if (result.kind === "invalid_state") {
+    return {
+      ok: false,
+      error: { code: "invalid_state", message: "No pending approval request found for this payment." },
+    };
+  }
+  if (result.kind === "decision_error") {
+    return { ok: false, error: mapDecisionError(result.error) };
+  }
+  return { ok: true, payment: toPaymentRecord(result.row) };
 }

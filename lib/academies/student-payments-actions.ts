@@ -3,9 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
+  approveStudentPayment as approveStudentPaymentForActor,
   createStudentCharge as createStudentChargeForActor,
   issueReceipt as issueReceiptForActor,
   recordStudentPayment as recordStudentPaymentForActor,
+  rejectStudentPayment as rejectStudentPaymentForActor,
   type CreateStudentChargeInput,
   type RecordStudentPaymentInput,
   type StudentPaymentsActionError,
@@ -13,9 +15,11 @@ import {
 
 /**
  * PLAN.md Phase 4, Item 51's three server actions
- * (createStudentCharge/recordStudentPayment/issueReceipt), thin
+ * (createStudentCharge/recordStudentPayment/issueReceipt) plus Item 52's
+ * two approval actions (approveStudentPayment/rejectStudentPayment), thin
  * `"use server"` wrappers over lib/academies/student-payments.ts — same
- * convention as lib/academies/grade-configurations-actions.ts. Consumed by
+ * convention as lib/academies/expense-records-actions.ts's
+ * approveExpenseAction/rejectExpenseAction. Consumed by
  * app/academy/finance/page.tsx's charges/payments tab client component.
  */
 const UNAUTHENTICATED: StudentPaymentsActionError = {
@@ -108,6 +112,50 @@ export async function issueReceiptAction(studentPaymentId: string): Promise<Issu
   }
 
   const result = await issueReceiptForActor(context, studentPaymentId);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/finance");
+  return { ok: true };
+}
+
+export type StudentPaymentLifecycleActionResult =
+  | { ok: true }
+  | { ok: false; error: StudentPaymentsActionError };
+
+/** Item 52 — single confirm-and-fire button action, same direct-call
+ * convention as lib/academies/expense-records-actions.ts's
+ * `approveExpenseAction`. */
+export async function approveStudentPaymentAction(
+  studentPaymentId: string,
+): Promise<StudentPaymentLifecycleActionResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await approveStudentPaymentForActor(context, studentPaymentId);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/finance");
+  return { ok: true };
+}
+
+/** Item 52 — same convention as
+ * lib/academies/expense-records-actions.ts's `rejectExpenseAction`. */
+export async function rejectStudentPaymentAction(
+  studentPaymentId: string,
+  reason: string,
+): Promise<StudentPaymentLifecycleActionResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await rejectStudentPaymentForActor(context, studentPaymentId, reason);
   if (!result.ok) {
     return { ok: false, error: result.error };
   }

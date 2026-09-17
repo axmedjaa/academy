@@ -124,14 +124,18 @@ afterAll(async () => {
 });
 
 describe("createIncomeRecord — permission matrix", () => {
+  // PLAN.md's Finance Lifecycle table: "posted directly by Manager or
+  // Finance Officer" — corrected in Wave 2 from an earlier guess that gave
+  // Manager view-only (see lib/auth/academy-permissions.ts's module
+  // comment on ACADEMY_INCOME_ACTION).
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", false],
     ["academy_admin", false],
-    ["manager", false],
+    ["manager", true],
     ["admissions_officer", false],
     ["finance_officer", true],
     ["trainer", false],
-  ])("role %s: create allowed = %s (Finance Officer only)", async (role, allowed) => {
+  ])("role %s: create allowed = %s (Manager or Finance Officer)", async (role, allowed) => {
     const { context } = await setupAcademy(role);
     const result = await createIncomeRecord(context, validInput());
     expect(result.ok).toBe(allowed);
@@ -248,7 +252,7 @@ describe("listIncomeRecords — tenant isolation", () => {
     if (result.ok) expect(result.records).toEqual([]);
   });
 
-  it("view-only roles (Owner/Admin/Manager) can list but canCreate is false", async () => {
+  it("view-only roles (Owner/Admin) can list but canCreate is false", async () => {
     const financeOfficer = await setupAcademy("finance_officer");
     await createIncomeRecord(financeOfficer.context, validInput());
 
@@ -261,6 +265,24 @@ describe("listIncomeRecords — tenant isolation", () => {
     if (result.ok) {
       expect(result.records).toHaveLength(1);
       expect(result.canCreate).toBe(false);
+    }
+  });
+
+  // Manager reuses Finance Officer's "manage" level (see the permission
+  // matrix test above) — canCreate must reflect that, unlike Owner/Admin.
+  it("manager can list and canCreate is true", async () => {
+    const financeOfficer = await setupAcademy("finance_officer");
+    await createIncomeRecord(financeOfficer.context, validInput());
+
+    const managerUserId = await createUser();
+    await addMembership(managerUserId, financeOfficer.academyId, "manager");
+    const managerContext: AuthContext = { userId: managerUserId, branchIds: [], academyWide: false };
+
+    const result = await listIncomeRecords(managerContext);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.records).toHaveLength(1);
+      expect(result.canCreate).toBe(true);
     }
   });
 

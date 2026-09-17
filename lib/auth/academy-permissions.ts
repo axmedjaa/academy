@@ -480,19 +480,25 @@ ACADEMY_PERMISSIONS.trainer[ACADEMY_EXPENSES_ACTION] = "view";
 
 /**
  * PLAN.md Phase 4, Item 53 — Income has NO Master Permission Matrix row in
- * either PLAN.md or DESIGN.md (confirmed absent by direct search — see the
- * task brief's pre-resolved decision C, and lib/academies/income-records.ts's
- * module comment). This row is this item's own judgment call, flagged as
- * such per the task brief: Finance Officer create-only (mirroring their
- * Expense "Create/Submit" role, minus "Submit" since income has no approval
- * step — decision B), Owner/Admin/Manager read-only view, Admissions
- * Officer/Trainer no access at all. Kept as its OWN row, separate from
- * ACADEMY_EXPENSES_ACTION (decision D): an approve-capable level on this row
- * would be permanently meaningless, since no income-approval action will
- * ever exist to check it against.
+ * either PLAN.md or DESIGN.md's main matrices, but PLAN.md's "Finance
+ * Lifecycle (Phase 4)" table (Lifecycle & State-Transition Tables) resolves
+ * this directly, verbatim: "`income_records` | `posted` directly by
+ * **Manager or Finance Officer** (no approval step — no dedicated Master
+ * Permission Matrix row exists for income specifically, so this reuses the
+ * same recording capability the matrix already grants those two roles for
+ * `student_payments`, rather than inventing a new permission)." This is no
+ * longer a judgment call (a Wave 1 patch had initially given Manager
+ * "view" only, mirroring Item 53's own then-undiscovered-source guess) —
+ * corrected in Wave 2 once this table was found: Manager gets the same
+ * "manage" (create) level as Finance Officer, matching PLAN.md's literal
+ * "reuses the same recording capability" instruction exactly. Owner/Admin
+ * remain read-only view, Admissions Officer/Trainer no access. Kept as its
+ * OWN row, separate from ACADEMY_EXPENSES_ACTION (decision D): an
+ * approve-capable level on this row would be permanently meaningless, since
+ * no income-approval action will ever exist to check it against.
  */
 export const ACADEMY_INCOME_ACTION = "academy.income";
 ACADEMY_PERMISSIONS.academy_owner[ACADEMY_INCOME_ACTION] = "view";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_INCOME_ACTION] = "view";
-ACADEMY_PERMISSIONS.manager[ACADEMY_INCOME_ACTION] = "view";
+ACADEMY_PERMISSIONS.manager[ACADEMY_INCOME_ACTION] = "manage";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_INCOME_ACTION] = "manage";
