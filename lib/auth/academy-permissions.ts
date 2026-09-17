@@ -502,3 +502,31 @@ ACADEMY_PERMISSIONS.academy_owner[ACADEMY_INCOME_ACTION] = "view";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_INCOME_ACTION] = "view";
 ACADEMY_PERMISSIONS.manager[ACADEMY_INCOME_ACTION] = "manage";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_INCOME_ACTION] = "manage";
+
+/**
+ * PLAN.md Phase 5, Item 57 — Master Permission Matrix "Certificates
+ * (issue/cancel)" row (PLAN.md line 135, DESIGN.md §5 line 151, identical):
+ * Full(owner)/Manage(admin)/Manage(manager)/—(admissions_officer)/
+ * —(finance_officer)/View(trainer), scope "n/a". Both "full" and "manage"
+ * pass `issueCertificate`/`cancelCertificate`'s "full"-or-"manage" gate
+ * identically (lib/academies/certificates.ts's `canManage`) — Owner, Admin,
+ * and Manager may all issue/cancel. Trainer gets "view" only (can list/view
+ * certificates, e.g. for a batch they're assigned to, but never
+ * issue/cancel) — no `canManage` gate ever passes for "view". Admissions
+ * Officer and Finance Officer get no entry at all (their matrix cells are
+ * both "—"), which `getAcademyPermissionLevel` already resolves to "none"
+ * for any action absent from a role's row (see this file's own doc comment
+ * on that fallback), so no explicit assignment is needed for either of
+ * them here — same convention as every other row in this file that skips a
+ * "—" cell rather than writing out an explicit "none".
+ *
+ * No new `AcademyPermissionLevel` member is needed: "full"/"manage"/"view"
+ * all already exist (established by earlier rows in this file), and this
+ * row uses only those three — exactly the levels PLAN.md's/DESIGN.md's
+ * matrix cells name for it.
+ */
+export const ACADEMY_CERTIFICATES_ACTION = "academy.certificates";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_CERTIFICATES_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_CERTIFICATES_ACTION] = "manage";
+ACADEMY_PERMISSIONS.manager[ACADEMY_CERTIFICATES_ACTION] = "manage";
+ACADEMY_PERMISSIONS.trainer[ACADEMY_CERTIFICATES_ACTION] = "view";

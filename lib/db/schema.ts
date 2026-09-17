@@ -2126,3 +2126,103 @@ export const expenseRecords = pgTable(
     check("expense_records_amount_cents_nonnegative", sql`${table.amountCents} >= 0`),
   ],
 );
+
+// Phase 5, Item 56. PLAN.md's exact column list (Phase 5 §2): "id,
+// academy_id FK NOT NULL, student_id FK students NOT NULL, batch_id FK
+// batches NOT NULL — a certificate is issued for a specific batch/course,
+// not just 'the academy,' so eligibility can be checked against that
+// batch's results — certificate_code text NOT NULL, issued_at timestamp
+// NOT NULL, issued_by FK users NOT NULL, status enum(issued,cancelled) NOT
+// NULL default issued, cancelled_at timestamp nullable, cancelled_by FK
+// users nullable, cancellation_reason text nullable, created_at; unique
+// certificate_code; unique (student_id, batch_id) — at most one
+// certificate per completed batch, DB-enforced (Planning Gaps Resolution
+// §7/§15); index (academy_id, student_id))."
+//
+// No `Draft`/`Generated`/`Reissued`/`Expired` states exist (Certificate
+// Lifecycle table, Planning Gaps Resolution §7) — a certificate is
+// immutable data the moment it's issued, so this table has no
+// `updated_at` column (matching the same "no updated_at on
+// insert-then-terminal-flip-only tables" convention already used
+// elsewhere in this file, e.g. `receipts`) even though `cancelCertificate`
+// does flip `status`/`cancelled_at`/`cancelled_by`/`cancellation_reason`
+// in place — those four columns are themselves the full record of that
+// one allowed transition, so a separate generic `updated_at` would be
+// redundant.
+export const certificateStatusEnum = pgEnum("certificate_status", ["issued", "cancelled"]);
+
+export const certificates = pgTable(
+  "certificates",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batches.id),
+    certificateCode: text("certificate_code").notNull(),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    issuedBy: uuid("issued_by")
+      .notNull()
+      .references(() => users.id),
+    status: certificateStatusEnum("status").notNull().default("issued"),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledBy: uuid("cancelled_by").references(() => users.id),
+    cancellationReason: text("cancellation_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 5 §2: "unique certificate_code" — also the hot path for public
+    // verification (PLAN.md's indexes-to-add list calls this out by name:
+    // "certificates(certificate_code) — mirrors the unique constraint but
+    // called out since it's the hot path for public verification"), so a
+    // plain unique index (not a bare column-level `.unique()`) is used here,
+    // same convention as e.g. `academies.slug`.
+    uniqueIndex("certificates_certificate_code_unique").on(table.certificateCode),
+    // Phase 5 §2: "unique (student_id, batch_id)" — at most one certificate
+    // per completed batch, DB-enforced; this is what blocks
+    // `issueCertificate` from ever creating a second certificate for the
+    // same student in the same batch (Certificate Lifecycle table).
+    uniqueIndex("certificates_student_id_batch_id_unique").on(table.studentId, table.batchId),
+    // Phase 5 §2: "index (academy_id, student_id)".
+    index("certificates_academy_id_student_id_idx").on(table.academyId, table.studentId),
+  ],
+);
+
+// Phase 5, Item 57/62. PLAN.md's exact column list (Phase 5 §2):
+// "certificate_verifications (id PK, certificate_id FK certificates NOT
+// NULL, verified_at timestamp NOT NULL, ip text NOT NULL, user_agent text
+// nullable, created_at; index (certificate_id, verified_at))." One row is
+// written per successful public `/verify/[certificateCode]` lookup (a code
+// that resolves to a real certificate) — see lib/academies/certificates.ts's
+// `verifyCertificate` for the deliberate choice not to log lookups for
+// codes that don't exist, to avoid an audit-log-based enumeration side
+// channel.
+export const certificateVerifications = pgTable(
+  "certificate_verifications",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    certificateId: uuid("certificate_id")
+      .notNull()
+      .references(() => certificates.id),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
+    ip: text("ip").notNull(),
+    userAgent: text("user_agent"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 5 §2: "index (certificate_id, verified_at)".
+    index("certificate_verifications_certificate_id_verified_at_idx").on(
+      table.certificateId,
+      table.verifiedAt,
+    ),
+  ],
+);

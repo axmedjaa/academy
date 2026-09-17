@@ -73,6 +73,19 @@ const envSchema = z.object({
     .int()
     .positive()
     .optional(),
+  // Public /verify/[certificateCode] rate limiting (PLAN.md Phase 5, Item
+  // 62: "rate-limited [per IP] and logged" — no threshold given). See
+  // lib/academies/certificate-verify-rate-limit.ts for the default/rationale.
+  CERTIFICATE_VERIFY_RATE_LIMIT_MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  CERTIFICATE_VERIFY_RATE_LIMIT_WINDOW_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
