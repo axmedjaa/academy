@@ -72,6 +72,7 @@ export const ACADEMY_PERMISSION_LEVELS = [
   "view",
   "manage",
   "enter_marks",
+  "approve",
   "none",
 ] as const;
 
@@ -350,3 +351,54 @@ ACADEMY_PERMISSIONS.academy_owner[ACADEMY_EXAMS_ACTION] = "full";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_EXAMS_ACTION] = "full";
 ACADEMY_PERMISSIONS.manager[ACADEMY_EXAMS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.trainer[ACADEMY_EXAMS_ACTION] = "enter_marks";
+
+/**
+ * PLAN.md Phase 3, Item 49 — Master Permission Matrix "Result approve /
+ * reject / publish" row: Approve(owner)/Approve(admin)/Approve(manager)/
+ * —(admissions_officer)/—(finance_officer)/"Submit only"(trainer), scope
+ * n/a. A genuinely NEW row (not a reuse of `ACADEMY_EXAMS_ACTION`) — the
+ * matrix lists it as its own distinct line with its own distinct cell
+ * values, and critically, Academy Administrator's cell here is "Approve"
+ * (unlike the grade-configuration approval row, where Admin is capped at
+ * "Manage" and never reaches Approve — see `ACADEMY_GRADE_BANDS_ACTION`'s
+ * comment). Reusing that row's "full"/"manage" split would have wrongly
+ * excluded Admin from approving/rejecting/publishing results.
+ *
+ * New level: "approve" (added to `AcademyPermissionLevel` above,
+ * additively). Not reusing "full"/"manage": this row's three
+ * approve-capable roles (Owner/Admin/Manager) are otherwise ungraded
+ * relative to each other (there is no separate "manage-only, non-approving"
+ * cell on this row the way the grade-band row distinguishes Admin's
+ * "Manage" from Manager's "Manage/Approve") — a single new level keeps
+ * `lib/academies/results.ts`'s `canApprove` gate a plain
+ * `level === "approve"` check, and avoids overloading "full"/"manage"
+ * (which every other row in this table already uses to mean "can create/
+ * edit the parent entity itself") with a meaning ("can decide on a
+ * submitted item") those levels don't carry anywhere else.
+ *
+ * ---------------------------------------------------------------------
+ * Trainer: deliberately NO entry on this row — reasoning, not an omission
+ * ---------------------------------------------------------------------
+ * The matrix's Trainer cell reads "Submit only." `submitResults` is
+ * explicitly documented (PLAN.md's Result Lifecycle table, `Marks
+ * Entered -> Submitted` row) as using "same actors as [enterMarks]" —
+ * i.e. it is gated on `ACADEMY_EXAMS_ACTION`'s `"enter_marks"` level
+ * (already granted to Trainer above), NOT on this row at all. Trainer
+ * never calls `approveResult`/`rejectResult`/`publishResults` (the three
+ * actions this row actually gates), so there is no capability left on
+ * this row for Trainer to hold: adding e.g. a `"submit"` level here would
+ * be a second, unused gate on an action (`submitResults`) that already has
+ * exactly one gate (`ACADEMY_EXAMS_ACTION`). Leaving Trainer unset here
+ * means `getAcademyPermissionLevel("trainer", ACADEMY_RESULTS_ACTION)`
+ * returns `"none"` — the correct answer, since Trainer has no access to
+ * anything this row actually protects (approve/reject/publish are all
+ * "—" for Trainer on the matrix's own text). This is the same reasoning
+ * PLAN.md's own row 131 ("Result correction request") uses when it says
+ * "Same authority as submit/approve above — no separate role": the
+ * distinct actions on this row are simply gated by whichever row already
+ * covers them, not duplicated onto a new one.
+ */
+export const ACADEMY_RESULTS_ACTION = "academy.results";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_RESULTS_ACTION] = "approve";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_RESULTS_ACTION] = "approve";
+ACADEMY_PERMISSIONS.manager[ACADEMY_RESULTS_ACTION] = "approve";

@@ -1803,3 +1803,71 @@ export const examResults = pgTable(
     check("exam_results_marks_obtained_nonnegative", sql`${table.marksObtained} >= 0`),
   ],
 );
+
+// Phase 3, Item 50b. PLAN.md's exact column list (Phase 3 §2): "id,
+// academy_id FK NOT NULL, original_result_id FK exam_results NOT NULL,
+// requested_by FK users NOT NULL, reason text NOT NULL,
+// proposed_marks_obtained numeric nullable, status
+// enum(requested,approved,rejected,applied) NOT NULL default requested,
+// decided_by FK users nullable, decided_at timestamp nullable, applied_at
+// timestamp nullable, created_at; index (original_result_id)."
+//
+// ---------------------------------------------------------------------
+// Conceptual "Correction Requested" state — NOT a new exam_results.status
+// value
+// ---------------------------------------------------------------------
+// The Result Lifecycle table's "Published -> Correction Requested" row
+// might read as if exam_results.status needs a new enum member, but
+// examResultStatusEnum's literal column list (see the comment on
+// `examResults` above) never changes — "Correction Requested" is derived
+// at read time from "does this result have a `result_corrections` row with
+// status = 'requested'", not a status this table's own enum stores. The
+// underlying exam_results row stays `status = "published"` throughout the
+// whole correction process (request -> decide -> apply); only this table's
+// own `status` column moves through requested/approved/rejected/applied.
+// See lib/academies/result-corrections.ts's module comment for the full
+// reasoning, including how this integrates with `approval_requests`
+// (Item 50a) despite that table's entity_type enum having no
+// "result_correction" value of its own.
+export const resultCorrectionStatusEnum = pgEnum("result_correction_status", [
+  "requested",
+  "approved",
+  "rejected",
+  "applied",
+]);
+
+export const resultCorrections = pgTable(
+  "result_corrections",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    originalResultId: uuid("original_result_id")
+      .notNull()
+      .references(() => examResults.id),
+    requestedBy: uuid("requested_by")
+      .notNull()
+      .references(() => users.id),
+    reason: text("reason").notNull(),
+    proposedMarksObtained: numeric("proposed_marks_obtained"),
+    status: resultCorrectionStatusEnum("status").notNull().default("requested"),
+    decidedBy: uuid("decided_by").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 3 §2: "index (original_result_id)".
+    index("result_corrections_original_result_id_idx").on(table.originalResultId),
+    // Not stated explicitly by PLAN.md for this column, but the same
+    // nonnegativity judgment call as exam_results.marks_obtained above —
+    // applied consistently since a proposed correction is still a mark.
+    check(
+      "result_corrections_proposed_marks_obtained_nonnegative",
+      sql`${table.proposedMarksObtained} >= 0`,
+    ),
+  ],
+);

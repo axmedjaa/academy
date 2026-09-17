@@ -47,6 +47,7 @@ let subCancelledId: string; // academyA, planB, cancelled, ends soon but must be
 let baselineNotYetPaidExpectedCents = 0;
 let baselineMonthCollectedCents = 0;
 let baselineMonthExpectedCents = 0;
+let baselineBankTransferCollectedCents = 0;
 
 const now = new Date();
 const activatedThisMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 3));
@@ -81,6 +82,8 @@ beforeAll(async () => {
     baselineMethod.rows.find((r) => r.groupKey === "__not_yet_paid__")?.expectedCents ?? 0;
   baselineMonthCollectedCents = baselineMonth.rows.reduce((sum, r) => sum + r.collectedCents, 0);
   baselineMonthExpectedCents = baselineMonth.rows.reduce((sum, r) => sum + r.expectedCents, 0);
+  baselineBankTransferCollectedCents =
+    baselineMethod.rows.find((r) => r.groupKey === "bank_transfer")?.collectedCents ?? 0;
 
   ownerUserId = await createUser();
   await db.insert(platformMemberships).values({ userId: ownerUserId, role: "platform_owner" });
@@ -365,7 +368,12 @@ describe("getRevenueBreakdown", () => {
   it("groups by payment method, collapsing expected into a single 'not yet paid' bucket", async () => {
     const result = await getRevenueBreakdown("method");
     const bankTransferRow = result.rows.find((r) => r.groupKey === "bank_transfer");
-    expect(bankTransferRow?.collectedCents).toBe(100_000);
+    // Delta against the pre-fixture baseline (see top-of-file comment) — a
+    // sibling test file's own "bank_transfer" fixture would otherwise
+    // pollute this raw total under parallel file execution.
+    expect((bankTransferRow?.collectedCents ?? 0) - baselineBankTransferCollectedCents).toBe(
+      100_000,
+    );
     expect(bankTransferRow?.expectedCents).toBe(0);
 
     const notYetPaidRow = result.rows.find((r) => r.groupKey === "__not_yet_paid__");
