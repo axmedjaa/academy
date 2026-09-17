@@ -2226,3 +2226,72 @@ export const certificateVerifications = pgTable(
     ),
   ],
 );
+
+// Phase 5, Item 58a (notifications infrastructure only — enqueueNotification
+// is NOT yet wired into any Phase 0-4/Wave-1 trigger point; that's Item 58b,
+// a later wave). PLAN.md's exact column list (Phase 5 §2):
+// "notifications (id PK, academy_id FK nullable — platform-level events have
+// no academy — user_id FK users nullable (recipient), event_type text NOT
+// NULL, channel enum(email,sms,in_app) NOT NULL, template_id text NOT NULL,
+// payload jsonb nullable (redacted per the same rule as audit_logs), status
+// enum(pending,sent,failed) NOT NULL default pending, attempt_count integer
+// NOT NULL default 0, idempotency_key text NOT NULL, last_error text
+// nullable, sent_at timestamp nullable, created_at; unique (idempotency_key,
+// channel); index (status, created_at) for the worker's retry scan —
+// already listed in Database Constraints & Indexes)."
+//
+// academy_id/user_id are both nullable per that column list — a
+// platform-level notification (e.g. a platform_admin-facing alert) may have
+// no academy, and some events may not resolve to a single recipient user at
+// enqueue time.
+export const notificationChannelEnum = pgEnum("notification_channel", [
+  "email",
+  "sms",
+  "in_app",
+]);
+
+export const notificationStatusEnum = pgEnum("notification_status", [
+  "pending",
+  "sent",
+  "failed",
+]);
+
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id").references(() => academies.id),
+    userId: uuid("user_id").references(() => users.id),
+    eventType: text("event_type").notNull(),
+    channel: notificationChannelEnum("channel").notNull(),
+    templateId: text("template_id").notNull(),
+    payload: jsonb("payload"),
+    status: notificationStatusEnum("status").notNull().default("pending"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    // Derived by lib/notifications/notifications.ts as
+    // `${eventType}:${entityId}` — PLAN.md's conceptual idempotency key is
+    // "(event_type, entity_id)" (e.g. ("result.published", exam_result_id)),
+    // but entity_id isn't a literal column on this table (a single event can
+    // fan out to multiple channel rows, each sharing one derived key). See
+    // that module's own comment for the full derivation rationale.
+    idempotencyKey: text("idempotency_key").notNull(),
+    lastError: text("last_error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Phase 5 §2: "unique (idempotency_key, channel)" — this, not a bare
+    // unique on idempotency_key alone, is what lets one event fan out to
+    // multiple channel rows (e.g. in_app + email) while still blocking a
+    // duplicate enqueue of the *same* (event, entity, channel) triple.
+    uniqueIndex("notifications_idempotency_key_channel_unique").on(
+      table.idempotencyKey,
+      table.channel,
+    ),
+    // Phase 5 §2 / Database Constraints & Indexes: "index (status,
+    // created_at) for the worker's retry scan".
+    index("notifications_status_created_at_idx").on(table.status, table.createdAt),
+  ],
+);
