@@ -58,6 +58,11 @@ export interface SignInState {
   error?: SignInError;
 }
 
+// Trusts the first `x-forwarded-for` entry as the client IP. Production
+// deployment assumes a trusted reverse proxy/load balancer sets (and
+// overwrites, never appends to) this header — direct/untrusted access to
+// the app must not be allowed to reach it, or a caller could spoof this
+// value to evade rate limiting.
 function getClientIp(headerList: {
   get(name: string): string | null;
 }): string | undefined {

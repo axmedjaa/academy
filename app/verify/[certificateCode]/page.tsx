@@ -29,6 +29,12 @@ import { verifyCertificate } from "@/lib/academies/certificates";
  * with its own explicit "Cancelled" status, per PLAN.md's explicit rule
  * that a cancelled certificate stays permanently, distinctly visible here.
  */
+// Trusts the first `x-forwarded-for` entry as the client IP for rate
+// limiting (see lib/academies/certificate-verify-rate-limit.ts). Production
+// deployment assumes a trusted reverse proxy/load balancer sets (and
+// overwrites, never appends to) this header — direct/untrusted access to
+// this public route must not be allowed to reach it, or a caller could
+// spoof this value to evade rate limiting.
 function getClientIp(headerList: Awaited<ReturnType<typeof headers>>): string {
   return headerList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
 }

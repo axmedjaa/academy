@@ -21,7 +21,13 @@ import { env } from "@/lib/env";
 const DEFAULT_MAX_ATTEMPTS = 20;
 const DEFAULT_WINDOW_SECONDS = 10 * 60;
 
-/** Per-client-IP rate limit for the public `/verify/[certificateCode]` lookup. */
+/**
+ * Per-client-IP rate limit for the public `/verify/[certificateCode]` lookup.
+ * The `ip` passed in is the first `x-forwarded-for` entry (see the caller,
+ * app/verify/[certificateCode]/page.tsx's `getClientIp`) — production
+ * deployment assumes a trusted reverse proxy/load balancer sets that header,
+ * never a value an untrusted direct caller could spoof to evade this limit.
+ */
 export async function checkCertificateVerifyRateLimit(ip: string): Promise<RateLimitResult> {
   return checkRateLimit(`verify-certificate:${ip}`, {
     maxAttempts: env.CERTIFICATE_VERIFY_RATE_LIMIT_MAX_ATTEMPTS ?? DEFAULT_MAX_ATTEMPTS,
