@@ -2,8 +2,15 @@
 
 import { useActionState, useState } from "react";
 import { runIdCardAction, type IdCardFormState } from "@/lib/academies/id-cards-actions";
+import { Card, EmptyState, ErrorMessage, PrimaryButton } from "@/app/academy/_shell/ui";
+import { color, spacing } from "@/lib/ui/theme";
+import { IdCardVisual } from "./id-card-visual";
 
 const initialState: IdCardFormState = { ok: false };
+
+interface Props {
+  academyName: string;
+}
 
 /**
  * `/academy/id-cards`'s only UI: paste a student id, see whether they
@@ -16,8 +23,13 @@ const initialState: IdCardFormState = { ok: false };
  * bound to `runIdCardAction`, keyed by a hidden `intent` field — see that
  * function's own doc comment for why three separate hooks would show stale
  * results.
+ *
+ * Phase D addition (this wave): once a card is found or issued, the actual
+ * visual card (app/academy/id-cards/id-card-view.tsx) renders instead of
+ * the old plain `<dl>` fields — see that file's module comment for the
+ * card-layout/print details.
  */
-export function IdCardLookup() {
+export function IdCardLookup({ academyName }: Props) {
   const [state, formAction, pending] = useActionState(runIdCardAction, initialState);
   const [studentId, setStudentId] = useState("");
 
@@ -25,13 +37,13 @@ export function IdCardLookup() {
   const shownStudentId = state.studentId ?? studentId;
 
   return (
-    <section style={{ marginTop: "1.5rem" }}>
+    <Card>
       <form
         action={formAction}
-        style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end", flexWrap: "wrap" }}
+        style={{ display: "flex", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap" }}
       >
         <input type="hidden" name="intent" value="lookup" />
-        <label style={{ display: "flex", flexDirection: "column" }}>
+        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
           Student id
           <input
             type="text"
@@ -42,66 +54,52 @@ export function IdCardLookup() {
             style={{ minWidth: 300 }}
           />
         </label>
-        <button type="submit" disabled={pending}>
+        <PrimaryButton type="submit" disabled={pending}>
           {pending ? "Working..." : "Look up"}
-        </button>
+        </PrimaryButton>
       </form>
 
       {state.error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {state.error.message}
-        </p>
+        <div style={{ marginTop: spacing.sm }}>
+          <ErrorMessage message={state.error.message} />
+        </div>
       )}
 
-      {shownStudentId && (
-        <div style={{ marginTop: "1.5rem", borderTop: "1px solid #ddd", paddingTop: "1rem" }}>
+      {shownStudentId && !state.error && (
+        <div style={{ marginTop: spacing.lg, borderTop: `1px solid ${color.border}`, paddingTop: spacing.md }}>
           {card ? (
             <>
-              <h2>Current card</h2>
-              <dl>
-                <dt>Card number</dt>
-                <dd>{card.cardNumber}</dd>
-                <dt>Status</dt>
-                <dd>{card.status}</dd>
-                <dt>Issued at</dt>
-                <dd>{new Date(card.issuedAt).toLocaleString()}</dd>
-                <dt>Reprint count</dt>
-                <dd>{card.reprintCount}</dd>
-              </dl>
-              <form action={formAction}>
+              <IdCardVisual card={card} studentName={state.studentName ?? shownStudentId} academyName={academyName} />
+              <form action={formAction} style={{ marginTop: spacing.sm }}>
                 <input type="hidden" name="intent" value="reprint" />
                 <input type="hidden" name="studentId" value={shownStudentId} />
                 <input type="hidden" name="cardId" value={card.id} />
-                <button type="submit" disabled={pending}>
+                <PrimaryButton type="submit" disabled={pending}>
                   {pending ? "Working..." : "Reprint this card"}
-                </button>
+                </PrimaryButton>
               </form>
             </>
           ) : (
             <>
-              <h2>No card issued yet</h2>
+              <EmptyState message="No card issued yet for this student." />
               <form
                 action={formAction}
-                style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: 420 }}
+                style={{ display: "flex", flexDirection: "column", gap: spacing.sm, maxWidth: 420 }}
               >
                 <input type="hidden" name="intent" value="issue" />
                 <input type="hidden" name="studentId" value={shownStudentId} />
-                <label>
-                  Photo file reference (optional)
-                  <input
-                    type="text"
-                    name="photoFileRef"
-                    style={{ display: "block", width: "100%" }}
-                  />
+                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
+                  Photo URL (optional)
+                  <input type="text" name="photoFileRef" placeholder="https://…" style={{ width: "100%" }} />
                 </label>
-                <button type="submit" disabled={pending}>
+                <PrimaryButton type="submit" disabled={pending} style={{ alignSelf: "flex-start" }}>
                   {pending ? "Working..." : "Issue card"}
-                </button>
+                </PrimaryButton>
               </form>
             </>
           )}
         </div>
       )}
-    </section>
+    </Card>
   );
 }

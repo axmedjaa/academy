@@ -1,5 +1,9 @@
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { academies } from "@/lib/db/schema";
 import { getAuthContext } from "@/lib/auth/auth-context";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { checkIdCardAccess } from "@/lib/academies/id-cards";
 import { IdCardLookup } from "./id-card-lookup";
 
@@ -30,29 +34,31 @@ export default async function AcademyIdCardsPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
+      <div>
         <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
         <p>{result.error.message}</p>
-      </main>
+      </div>
     );
   }
 
+  const access = await checkAcademyAccessForContext(context);
+  const academyName =
+    access.level === "blocked"
+      ? "Academy"
+      : ((await db.select({ name: academies.name }).from(academies).where(eq(academies.id, access.academyId)).limit(1))[0]
+          ?.name ?? "Academy");
+
   return (
-    <main
-      style={{
-        maxWidth: 700,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Student ID cards</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canManage
-          ? "Look up a student by id to issue a new card or reprint their existing one."
-          : "You don't have permission to issue or reprint student ID cards."}
-      </p>
-      {result.canManage && <IdCardLookup />}
-    </main>
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+      <div>
+        <h1 style={{ margin: 0 }}>Student ID cards</h1>
+        <p style={{ margin: 0, marginTop: "0.25rem", color: "#6B7280" }}>
+          {result.canManage
+            ? "Look up a student by id to issue a new card or reprint their existing one."
+            : "You don't have permission to issue or reprint student ID cards."}
+        </p>
+      </div>
+      {result.canManage && <IdCardLookup academyName={academyName} />}
+    </div>
   );
 }

@@ -1,6 +1,9 @@
 "use server";
 
+import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { db } from "@/lib/db";
+import { students } from "@/lib/db/schema";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   getIdCard,
@@ -23,6 +26,23 @@ export interface IdCardFormState {
   /** Echoed back so the client component knows which student the result
    * (or "no card yet") belongs to, across a form round-trip. */
   studentId?: string;
+  /**
+   * Display-only convenience for the visual card preview (Phase D of this
+   * wave — app/academy/id-cards/id-card-visual.tsx). NOT part of
+   * lib/academies/id-cards.ts's own IdCardRecord (that file is left
+   * untouched); resolved here, in the thin "use server" wrapper layer, by a
+   * plain by-id lookup against `students` — safe because by the time this
+   * is populated, `getIdCard`/`issueStudentIdCard`/`reprintStudentIdCard`
+   * has already tenant/branch-scoped and authorized this exact studentId,
+   * so this is a display-field fetch on an already-authorized id, not a
+   * fresh authorization decision.
+   */
+  studentName?: string;
+}
+
+async function resolveStudentName(studentId: string): Promise<string | undefined> {
+  const [row] = await db.select({ fullName: students.fullName }).from(students).where(eq(students.id, studentId)).limit(1);
+  return row?.fullName;
 }
 
 /**
@@ -61,7 +81,7 @@ export async function lookupIdCard(
     return { ok: false, error: result.error, studentId };
   }
 
-  return { ok: true, card: result.card, studentId };
+  return { ok: true, card: result.card, studentId, studentName: await resolveStudentName(studentId) };
 }
 
 /** PLAN.md Item 40 server action name. */
@@ -81,7 +101,12 @@ export async function issueStudentIdCard(
   }
 
   revalidatePath("/academy/id-cards");
-  return { ok: true, card: result.card, studentId: input.studentId };
+  return {
+    ok: true,
+    card: result.card,
+    studentId: input.studentId,
+    studentName: await resolveStudentName(input.studentId),
+  };
 }
 
 /**
@@ -136,5 +161,11 @@ export async function reprintStudentIdCard(
   }
 
   revalidatePath("/academy/id-cards");
-  return { ok: true, card: result.card, studentId };
+  // F1 security fix: resolve the display name from the verified
+  // `result.card.studentId` (the id `reprintStudentIdCardForActor` actually
+  // authorized), never from the client-supplied `studentId` form field —
+  // that field is only echoed back for UI continuity and is not checked
+  // against the card's real owner, so using it here would let a caller
+  // disclose an arbitrary student's name by tampering with a hidden field.
+  return { ok: true, card: result.card, studentId, studentName: await resolveStudentName(result.card.studentId) };
 }
