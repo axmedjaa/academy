@@ -9,6 +9,7 @@ import {
   approvalRequests,
   auditLogs,
   branches,
+  notifications,
   receipts,
   students,
   studentCharges,
@@ -267,6 +268,9 @@ afterAll(async () => {
     await db
       .delete(approvalRequests)
       .where(or(...createdAcademyIds.map((id) => eq(approvalRequests.academyId, id))));
+    await db
+      .delete(notifications)
+      .where(or(...createdAcademyIds.map((id) => eq(notifications.academyId, id))));
   }
   for (const academyId of createdAcademyIds) {
     const paymentRows = await db
@@ -1023,6 +1027,29 @@ describe("issueReceipt", () => {
     const result = await issueReceipt(context, randomUUID());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  // PLAN.md Phase 5, Item 58b — notification wiring.
+  it("enqueues a 'payment.receipt_issued' notification targeted at the issuing actor, without affecting the business outcome", async () => {
+    const { academyId, studentId, creatorUserId, userId, context } = await setupAcademy("manager");
+    const paymentId = await insertPaymentDirect(academyId, studentId, creatorUserId, "approved");
+
+    const result = await issueReceipt(context, paymentId);
+    expect(result.ok).toBe(true); // No regression from adding the enqueue call.
+    if (!result.ok) return;
+
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.idempotencyKey, `payment.receipt_issued:${result.receipt.id}`));
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.eventType).toBe("payment.receipt_issued");
+      expect(row.templateId).toBe("payment.receipt_issued");
+      expect(row.academyId).toBe(academyId);
+      // Recipient: the issuing actor — students have no user_id/login.
+      expect(row.userId).toBe(userId);
+    }
   });
 });
 

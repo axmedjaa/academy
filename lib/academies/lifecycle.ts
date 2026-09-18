@@ -4,6 +4,8 @@ import { db, type DbClient } from "@/lib/db";
 import { academies, academySubscriptions, subscriptionPayments, subscriptionPlans } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
+import { enqueueNotification } from "@/lib/notifications/notifications";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
   GRACE_PERIOD_DAYS,
@@ -210,7 +212,7 @@ export async function activateAcademy(
     return { ok: false, error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid input." } };
   }
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const academy = await fetchAcademyGuardRow(tx, parsed.data);
     if (!academy) {
       return { ok: false, error: { code: "not_found", message: "Academy not found." } } as const;
@@ -302,8 +304,32 @@ export async function activateAcademy(
       tx,
     );
 
-    return { ok: true, subscription: toSubscriptionSummary(updated) };
+    return { ok: true, subscription: toSubscriptionSummary(updated) } as const;
   });
+
+  // Phase 5 Item 58b: fired only after db.transaction above has committed
+  // (never passed `tx`) — a notification-enqueue failure (e.g. Redis down)
+  // must never roll back an already-successful activation. Caught and
+  // logged, never rethrown.
+  if (result.ok) {
+    try {
+      await enqueueNotification({
+        eventType: "academy.activated",
+        entityId: parsed.data,
+        templateId: "academy.activation",
+        academyId: parsed.data,
+        userId: actorContext.userId,
+      });
+    } catch (err) {
+      logger.error("notifications.enqueue_failed", {
+        eventType: "academy.activated",
+        academyId: parsed.data,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +368,7 @@ export async function suspendAcademy(
     return { ok: false, error: { code: "validation", message: parsedReason.error.issues[0]?.message ?? "A reason is required." } };
   }
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const academy = await fetchAcademyGuardRow(tx, parsedId.data);
     if (!academy) {
       return { ok: false, error: { code: "not_found", message: "Academy not found." } } as const;
@@ -402,8 +428,35 @@ export async function suspendAcademy(
       tx,
     );
 
-    return { ok: true, subscription: toSubscriptionSummary(updated) };
+    return { ok: true, subscription: toSubscriptionSummary(updated) } as const;
   });
+
+  // Phase 5 Item 58b: MANDATORY template (academy.suspension) — fired only
+  // after db.transaction above has committed (never passed `tx`), so a
+  // notification-enqueue failure never rolls back an already-successful
+  // suspension. Caught and logged, never rethrown. There is no preference
+  // storage yet to gate this on (see templates.ts's own comment), so it
+  // always fires unconditionally on success, matching "mandatory" as far as
+  // this item can implement it.
+  if (result.ok) {
+    try {
+      await enqueueNotification({
+        eventType: "academy.suspended",
+        entityId: parsedId.data,
+        templateId: "academy.suspension",
+        academyId: parsedId.data,
+        userId: actorContext.userId,
+      });
+    } catch (err) {
+      logger.error("notifications.enqueue_failed", {
+        eventType: "academy.suspended",
+        academyId: parsedId.data,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------

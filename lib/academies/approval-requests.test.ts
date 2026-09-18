@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { academies, approvalRequests, users } from "@/lib/db/schema";
+import { academies, approvalRequests, notifications, users } from "@/lib/db/schema";
 import {
   createApprovalRequest,
   decideApprovalRequest,
@@ -36,6 +36,9 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 afterAll(async () => {
+  for (const academyId of createdAcademyIds) {
+    await db.delete(notifications).where(eq(notifications.academyId, academyId));
+  }
   for (const academyId of createdAcademyIds) {
     await db.delete(approvalRequests).where(eq(approvalRequests.academyId, academyId));
   }
@@ -281,5 +284,114 @@ describe("FK violations", () => {
         decidedAt: new Date(),
       }),
     ).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PLAN.md Phase 5, Item 58b — notification wiring
+// ---------------------------------------------------------------------------
+describe("notification wiring — createApprovalRequest / decideApprovalRequest", () => {
+  const bucketByEntityType = {
+    result: "result",
+    grade_configuration: "result",
+    expense: "finance",
+    student_payment: "finance",
+  } as const;
+
+  for (const entityType of ["result", "grade_configuration", "expense", "student_payment"] as const) {
+    it(`enqueues 'approval_requested' (bucket: ${bucketByEntityType[entityType]}) academy-scoped on createApprovalRequest for entityType "${entityType}"`, async () => {
+      const creatorUserId = await createUser();
+      const academyId = await createAcademy(creatorUserId);
+      const requester = await createUser();
+
+      const created = await createApprovalRequest(db, {
+        academyId,
+        entityType,
+        entityId: randomUUID(),
+        requestedBy: requester,
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      const expectedTemplateId =
+        bucketByEntityType[entityType] === "result"
+          ? "result.approval_requested"
+          : "finance.approval_requested";
+
+      const rows = await db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.eventType, `${entityType}.approval_requested`));
+      const row = rows.find((r) => r.idempotencyKey === `${entityType}.approval_requested:${created.request.id}`);
+      expect(row).toBeDefined();
+      expect(row?.templateId).toBe(expectedTemplateId);
+      expect(row?.academyId).toBe(academyId);
+      // Documented judgment call: academy-scoped, not user-targeted — see
+      // approval-requests.ts's own module comment ("Recipient resolution").
+      expect(row?.userId).toBeNull();
+    });
+
+    it(`enqueues 'approval_decided' (bucket: ${bucketByEntityType[entityType]}) targeted at the requester on decideApprovalRequest for entityType "${entityType}"`, async () => {
+      const creatorUserId = await createUser();
+      const academyId = await createAcademy(creatorUserId);
+      const requester = await createUser();
+      const decider = await createUser();
+
+      const created = await createApprovalRequest(db, {
+        academyId,
+        entityType,
+        entityId: randomUUID(),
+        requestedBy: requester,
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      const decided = await decideApprovalRequest(db, created.request.id, {
+        decidedBy: decider,
+        status: "approved",
+      });
+      expect(decided.ok).toBe(true);
+      if (!decided.ok) return;
+
+      const expectedTemplateId =
+        bucketByEntityType[entityType] === "result"
+          ? "result.approval_decided"
+          : "finance.approval_decided";
+
+      const rows = await db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.eventType, `${entityType}.approval_decided`));
+      const row = rows.find((r) => r.idempotencyKey === `${entityType}.approval_decided:${created.request.id}`);
+      expect(row).toBeDefined();
+      expect(row?.templateId).toBe(expectedTemplateId);
+      expect(row?.academyId).toBe(academyId);
+      // Unambiguous recipient: the original requester.
+      expect(row?.userId).toBe(requester);
+    });
+  }
+
+  it("still succeeds creating/deciding the approval request even though notifications are enqueued (no regression)", async () => {
+    const creatorUserId = await createUser();
+    const academyId = await createAcademy(creatorUserId);
+    const requester = await createUser();
+    const decider = await createUser();
+
+    const created = await createApprovalRequest(db, {
+      academyId,
+      entityType: "result",
+      entityId: randomUUID(),
+      requestedBy: requester,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.request.status).toBe("pending");
+
+    const decided = await decideApprovalRequest(db, created.request.id, {
+      decidedBy: decider,
+      status: "rejected",
+    });
+    expect(decided.ok).toBe(true);
+    if (decided.ok) expect(decided.request.status).toBe("rejected");
   });
 });

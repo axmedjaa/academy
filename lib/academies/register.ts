@@ -6,6 +6,8 @@ import { hashPassword } from "@/lib/auth/password";
 import { passwordSchema } from "@/lib/auth/password";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
+import { enqueueNotification } from "@/lib/notifications/notifications";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
   createAcademySubscription,
@@ -358,6 +360,30 @@ export async function registerAcademy(
         subscriptionStatus: subscriptionResult.status,
       };
     });
+
+    // Phase 5 Item 58b: the onboarding notification. Deliberately fired
+    // AFTER db.transaction above has already resolved (i.e. committed) —
+    // never passed `tx` — so a Redis/enqueue failure can never roll back an
+    // already-successful academy registration. enqueueNotification does its
+    // own DB insert (against the default `db`, a separate statement/
+    // transaction from the one above); a failure there is caught and
+    // logged, never rethrown, matching this item's "never fail or roll back
+    // the underlying business action" rule.
+    try {
+      await enqueueNotification({
+        eventType: "academy.registered",
+        entityId: result.academyId,
+        templateId: "academy.onboarding",
+        academyId: result.academyId,
+        userId: actorContext.userId,
+      });
+    } catch (err) {
+      logger.error("notifications.enqueue_failed", {
+        eventType: "academy.registered",
+        academyId: result.academyId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     return { ok: true, ...result };
   } catch (err) {

@@ -10,6 +10,8 @@ import {
 } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
+import { enqueueNotification } from "@/lib/notifications/notifications";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
   computeLazySubscriptionStatus,
@@ -439,6 +441,49 @@ export async function renewSubscription(
   }
 
   const { subscription, statusBefore, endsAtBefore, consumedPaymentId } = result;
+
+  // Phase 5 Item 58b: fired only after db.transaction above has committed
+  // (never passed `tx`) — a notification-enqueue failure (e.g. Redis down)
+  // must never roll back an already-successful renewal. Caught and logged,
+  // never rethrown.
+  //
+  // Judgment call on entityId: PLAN.md/this item's brief say "entityId = the
+  // subscription id," but a *static* subscriptionId would mean every renewal
+  // after the very first one for a given subscription silently no-ops
+  // (enqueueNotification's idempotency key is `${eventType}:${entityId}` —
+  // see notifications.ts's own module comment) instead of actually
+  // notifying, since the same subscription is renewed repeatedly over its
+  // lifetime. The renewed `renewedAt` instant is folded into entityId (same
+  // reasoning as expiry-reminder-job.ts's own entityId design for the exact
+  // same underlying problem: a static id can never distinguish two
+  // occurrences of a repeatable event) so each distinct renewal produces its
+  // own idempotency key and its own notification, while a genuine duplicate
+  // call/retry of the *same* renewal (same renewedAt) still dedupes.
+  //
+  // Separator is `_`, not `:` — enqueueNotification's own BullMQ jobId is
+  // `${eventType}:${entityId}:${channel}` (notifications.ts), and BullMQ's
+  // Job.validateOptions rejects any custom jobId containing `:` unless it
+  // splits into exactly 3 segments (node_modules/bullmq/dist/esm/classes/
+  // job.js) — a colon inside entityId itself would push that count to 4+
+  // and throw "Custom Id cannot contain :". Verified directly against the
+  // installed package after hitting this at test time.
+  try {
+    await enqueueNotification({
+      eventType: "subscription.renewed",
+      entityId: `${subscription.id}_${(subscription.renewedAt as Date).getTime()}`,
+      templateId: "subscription.renewal",
+      academyId: subscription.academyId,
+      userId: actorContext.userId,
+    });
+  } catch (err) {
+    logger.error("notifications.enqueue_failed", {
+      eventType: "subscription.renewed",
+      academyId: subscription.academyId,
+      subscriptionId: subscription.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return {
     ok: true,
     subscription: {

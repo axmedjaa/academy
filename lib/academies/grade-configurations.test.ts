@@ -10,6 +10,7 @@ import {
   auditLogs,
   gradeBands,
   gradeConfigurations,
+  notifications,
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
@@ -133,6 +134,12 @@ afterAll(async () => {
     await db
       .delete(approvalRequests)
       .where(or(...createdAcademyIds.map((id) => eq(approvalRequests.academyId, id))));
+    // Item 58b: createApprovalRequest/decideApprovalRequest now enqueue a
+    // notification row FK-referencing academies.id (and, for the decision,
+    // users.id) — must be cleared before those tables' own delete below.
+    await db
+      .delete(notifications)
+      .where(or(...createdAcademyIds.map((id) => eq(notifications.academyId, id))));
   }
   for (const academyId of createdAcademyIds) {
     const configs = await db

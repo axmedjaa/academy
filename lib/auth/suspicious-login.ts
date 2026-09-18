@@ -2,6 +2,8 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { sessions } from "@/lib/db/schema";
 import { recordAudit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
+import { enqueueNotification } from "@/lib/notifications/notifications";
 
 export interface CheckSuspiciousLoginMeta {
   ip?: string;
@@ -57,6 +59,38 @@ export async function checkSuspiciousLogin(
     ip,
     userAgent,
   });
+
+  // Phase 5 Item 58b: MANDATORY template (security.new_device_signin). This
+  // function has no transaction of its own (recordAudit above already ran
+  // against the default `db`, not a `tx`), so there's nothing to place this
+  // "after" beyond simply calling it here. A notification-enqueue failure
+  // (e.g. Redis down) must never fail the sign-in flow that called this
+  // function — caught and logged, never rethrown. entityId incorporates the
+  // current instant (not just userId) so repeated suspicious logins by the
+  // same user each get their own notification instead of being deduped
+  // against a single static per-user idempotency key. academyId is
+  // deliberately null: this is a platform/user-level security event, not
+  // scoped to an academy — checkSuspiciousLogin's own parameters have no
+  // academy context to resolve one from.
+  // Separator is `_`, not `:` — see lib/subscriptions/renew.ts's identical
+  // comment: enqueueNotification's BullMQ jobId embeds entityId between two
+  // colons, and BullMQ rejects a custom jobId whose colon count implies more
+  // than 3 segments.
+  try {
+    await enqueueNotification({
+      eventType: "auth.suspicious_login",
+      entityId: `${userId}_${Date.now()}`,
+      templateId: "security.new_device_signin",
+      academyId: null,
+      userId,
+    });
+  } catch (err) {
+    logger.error("notifications.enqueue_failed", {
+      eventType: "auth.suspicious_login",
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return true;
 }

@@ -181,8 +181,14 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
  * reimplemented here rather than imported since that function isn't
  * exported and branches.ts is out of this item's write scope). A caller
  * with no staff_profiles row (or zero assignments) is assigned to nothing.
+ *
+ * Exported (Phase 5, Item 61a) so lib/academies/student-reports.ts can reuse
+ * this exact branch-assignment lookup for its own branch-limited scoping
+ * instead of re-implementing a third copy of the same join — this file
+ * isn't on Item 61's do-not-touch list, and adding `export` here is a
+ * behavior-preserving change (no existing call site is affected).
  */
-async function getAssignedBranchIds(
+export async function getAssignedBranchIds(
   executor: DbClient,
   academyId: string,
   userId: string,
@@ -304,8 +310,15 @@ export type SearchStudentsResult =
  * branches (nothing they could possibly see) or requested an out-of-scope
  * `branchId`, so callers can short-circuit to an empty result without a
  * wasted query.
+ *
+ * Exported (Phase 5, Item 61a) for lib/academies/student-reports.ts to reuse
+ * verbatim — its own conditions are plain `students.academyId`/
+ * `students.branchId` SQL fragments, so they compose unchanged into any
+ * query that joins through the `students` table, not just this file's own
+ * `students`-rooted selects. Additive-only change, no existing behavior
+ * touched.
  */
-async function resolveScope(
+export async function resolveScope(
   academyId: string,
   membershipRole: AcademyRole,
   userId: string,

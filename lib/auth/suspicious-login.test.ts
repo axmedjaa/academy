@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
-import { auditLogs, sessions, users } from "@/lib/db/schema";
+import { auditLogs, notifications, sessions, users } from "@/lib/db/schema";
 import { createSession } from "@/lib/auth/session";
+import { notificationQueue } from "@/lib/notifications/queue";
+import * as notificationsModule from "@/lib/notifications/notifications";
 import { checkSuspiciousLogin } from "./suspicious-login";
+
+// Phase 5 Item 58b failure-isolation test support — see
+// lib/academies/lifecycle.test.ts's identical comment.
+const enqueueNotificationSpy = vi.spyOn(notificationsModule, "enqueueNotification");
 
 let userId: string;
 
@@ -22,6 +28,7 @@ beforeAll(async () => {
 afterEach(async () => {
   await db.delete(auditLogs).where(eq(auditLogs.entityId, userId));
   await db.delete(sessions).where(eq(sessions.userId, userId));
+  await db.delete(notifications).where(eq(notifications.userId, userId));
 });
 
 afterAll(async () => {
@@ -128,5 +135,54 @@ describe("checkSuspiciousLogin", () => {
 
     const rows = await suspiciousAuditRows();
     expect(rows[0].actorRole).toBe("platform_owner");
+  });
+
+  describe("Phase 5 Item 58b — notifications", () => {
+    it("enqueues a MANDATORY security.new_device_signin notification when flagged", async () => {
+      const flagged = await checkSuspiciousLogin(userId, {
+        ip: "203.0.113.1",
+        userAgent: "curl/8.0",
+      });
+      expect(flagged).toBe(true);
+
+      const rows = await db.select().from(notifications).where(eq(notifications.userId, userId));
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.every((r) => r.templateId === "security.new_device_signin")).toBe(true);
+      expect(rows.every((r) => r.eventType === "auth.suspicious_login")).toBe(true);
+      expect(rows.every((r) => r.academyId === null)).toBe(true);
+
+      for (const row of rows) {
+        const idempotencyKey = row.idempotencyKey;
+        const entityId = idempotencyKey.slice("auth.suspicious_login:".length);
+        const job = await notificationQueue.getJob(`auth.suspicious_login:${entityId}:email`);
+        await job?.remove();
+      }
+    });
+
+    it("does not enqueue a notification when the login is not flagged", async () => {
+      await createSession(userId, { ip: "203.0.113.1", userAgent: "curl/8.0" });
+      const flagged = await checkSuspiciousLogin(userId, {
+        ip: "203.0.113.1",
+        userAgent: "curl/8.0",
+      });
+      expect(flagged).toBe(false);
+
+      const rows = await db.select().from(notifications).where(eq(notifications.userId, userId));
+      expect(rows).toHaveLength(0);
+    });
+
+    it("still flags and audit-logs the login even when notification enqueuing fails", async () => {
+      enqueueNotificationSpy.mockImplementationOnce(() => {
+        throw new Error("simulated notification enqueue failure");
+      });
+
+      const flagged = await checkSuspiciousLogin(userId, {
+        ip: "203.0.113.1",
+        userAgent: "curl/8.0",
+      });
+      expect(flagged).toBe(true);
+      expect(await suspiciousAuditRows()).toHaveLength(1);
+      expect(enqueueNotificationSpy).toHaveBeenCalled();
+    });
   });
 });

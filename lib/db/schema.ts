@@ -12,6 +12,7 @@ import {
   date,
   pgEnum,
   uniqueIndex,
+  unique,
   index,
   check,
   jsonb,
@@ -2277,6 +2278,15 @@ export const notifications = pgTable(
     idempotencyKey: text("idempotency_key").notNull(),
     lastError: text("last_error"),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    // Phase 5, Item 59 addition (gap #1 identified during planning — the
+    // Item 58a table PLAN.md specified has no read/unread marker at all,
+    // yet DESIGN.md §9.8 requires "read/unread filter, mark-as-read
+    // (single/bulk)" on `/academy/notifications`). Nullable, default null =
+    // unread; set once, to `now()`, by `markNotificationRead`/
+    // `markNotificationsRead` (lib/notifications/list-notifications.ts).
+    // Additive-only change to an already-shipped (commit b9fe15d) table —
+    // no existing column/behavior touched.
+    readAt: timestamp("read_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -2293,5 +2303,100 @@ export const notifications = pgTable(
     // Phase 5 §2 / Database Constraints & Indexes: "index (status,
     // created_at) for the worker's retry scan".
     index("notifications_status_created_at_idx").on(table.status, table.createdAt),
+    // Item 59 addition: `listNotificationsForUser`'s own-inbox read always
+    // filters on `user_id` and, when `unreadOnly` is requested, on
+    // `read_at IS NULL` too — this composite index serves both the
+    // unfiltered "my notifications, newest first" scan and the unread-only
+    // variant without a second index.
+    index("notifications_user_id_read_at_idx").on(table.userId, table.readAt),
+  ],
+);
+
+// Phase 5, Item 59 — gap #2 identified during planning: no preference-
+// storage table exists anywhere in the schema, yet DESIGN.md §9.8/§9.11
+// require *functioning* preference toggles ("optional event types get a
+// normal toggle; mandatory ones render as a disabled, always-on toggle...
+// never a togglable-looking control that silently does nothing"). A row's
+// absence means "using the default" (enabled, unless the template is
+// mandatory per `MANDATORY_NOTIFICATION_TEMPLATE_IDS` in
+// lib/notifications/templates.ts) — this table only ever stores an explicit
+// override away from that default.
+//
+// ---------------------------------------------------------------------
+// Scoping judgment call: per-user-per-academy, not pure per-user-global
+// ---------------------------------------------------------------------
+// PLAN.md doesn't specify preference scoping at all; this is a documented
+// judgment call. `academy_id` is included (nullable, mirroring
+// `notifications.academy_id`'s own nullability so a platform-level event's
+// preference can be recorded the same way a platform-level notification
+// itself is) rather than making preferences pure per-user-global, because:
+//   1. DESIGN.md §9.11 places the toggle UI *inside* `/academy/settings` —
+//      an academy-scoped screen, not `/account/security` or any other
+//      cross-academy personal-settings screen — so the control's own home
+//      is already academy-scoped.
+//   2. A real user can hold roles (and therefore receive notifications) at
+//      more than one academy (`academy_memberships` has no
+//      one-membership-per-user constraint — see access-gate.ts's own
+//      "ambiguous_academy" comment). A pure per-user-global row would force
+//      "mute result-published emails" to apply identically across every
+//      academy that user belongs to, which is very unlikely to be what
+//      someone toggling a switch inside one specific academy's settings
+//      screen intends.
+// `user_id` (not `academy_id` alone) is still the primary owner column —
+// "preferences belong to the person, not the academy, matching how a
+// user's inbox works" — so this table is best read as "this user's
+// preference, as set from within this academy's settings screen (or, when
+// academy_id is null, for a platform-level template)."
+//
+// ---------------------------------------------------------------------
+// Uniqueness + the "two NULLs are equal" requirement
+// ---------------------------------------------------------------------
+// Constraint: unique (user_id, academy_id, template_id). A plain
+// `uniqueIndex(...).on(...)` (this file's usual convention — see every
+// other unique constraint in this file) does NOT achieve this: Postgres's
+// default unique-index semantics treat two NULLs as *distinct*, so a plain
+// unique index would silently allow multiple platform-level
+// (academy_id IS NULL) preference rows for the same (user_id, template_id)
+// pair — exactly the duplicate-row case this constraint exists to prevent.
+// This table therefore uses the `unique(...).on(...).nullsNotDistinct()`
+// table-constraint builder instead (Postgres 15+'s `NULLS NOT DISTINCT`
+// clause — confirmed available: this environment runs PostgreSQL 18.4),
+// which is the one deviation from this file's `uniqueIndex` convention in
+// this table, done because `uniqueIndex`'s builder in this codebase's
+// installed drizzle-orm/drizzle-kit versions has no `.nullsNotDistinct()`
+// method (only the `unique()` constraint builder does). This is what lets
+// the upsert in `setNotificationPreference`
+// (lib/notifications/preferences.ts) target "the row for this
+// user+template, academy-scoped or platform-level" with an ON CONFLICT
+// clause that actually fires for the NULL-academy case too.
+export const notificationPreferences = pgTable(
+  "notification_preferences",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    academyId: uuid("academy_id").references(() => academies.id),
+    // Not a DB-level enum/FK — validated at the application layer against
+    // `NOTIFICATION_TEMPLATE_IDS` (lib/notifications/templates.ts) by
+    // `setNotificationPreference`'s Zod schema, same "fixed TS-level set,
+    // plain `text` column" convention `notifications.template_id` itself
+    // already uses on this same table family.
+    templateId: text("template_id").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("notification_preferences_user_academy_template_unique")
+      .on(table.userId, table.academyId, table.templateId)
+      .nullsNotDistinct(),
+    // Read path for both getNotificationPreferences (all templates for one
+    // user+academy) and the settings-page upsert lookup.
+    index("notification_preferences_user_id_academy_id_idx").on(table.userId, table.academyId),
   ],
 );

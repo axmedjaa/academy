@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, or } from "drizzle-orm";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
   academies,
@@ -8,12 +8,20 @@ import {
   academySubscriptions,
   auditLogs,
   branches,
+  notifications,
   platformMemberships,
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
 import { resolveAuthContext } from "@/lib/auth/auth-context";
+import { notificationQueue } from "@/lib/notifications/queue";
+import * as notificationsModule from "@/lib/notifications/notifications";
 import { registerAcademy, type RegisterAcademyInput } from "./register";
+
+// Phase 5 Item 58b failure-isolation test support — see lifecycle.test.ts's
+// identical comment: a spy on the real enqueueNotification, overridden only
+// once in the dedicated failure test below.
+const enqueueNotificationSpy = vi.spyOn(notificationsModule, "enqueueNotification");
 
 let ownerUserId: string;
 let adminUserId: string;
@@ -68,6 +76,7 @@ async function cleanupAcademy(academyId: string, ownerId: string): Promise<void>
   await db
     .delete(auditLogs)
     .where(or(eq(auditLogs.academyId, academyId), eq(auditLogs.actorUserId, ownerId)));
+  await db.delete(notifications).where(eq(notifications.academyId, academyId));
   await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
   // academy_subscriptions.academy_id FKs to academies.id — must go before
   // the academies delete below (same ordering concern as auditLogs above).
@@ -280,6 +289,40 @@ describe("registerAcademy — success path", () => {
     expect(audit?.entityId).toBe(result.academyId);
     expect(audit?.actorUserId).toBe(ownerUserId);
     expect(audit?.result).toBe("success");
+  });
+
+  it("Phase 5 Item 58b: enqueues an academy.registered notification on success", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const input = baseInput();
+    const result = await registerAcademy(ownerContext, input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    createdAcademyIds.push(result.academyId);
+
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(and(eq(notifications.academyId, result.academyId), eq(notifications.eventType, "academy.registered")));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.templateId === "academy.onboarding")).toBe(true);
+    expect(rows.every((r) => r.userId === ownerUserId)).toBe(true);
+    expect(rows.every((r) => r.academyId === result.academyId)).toBe(true);
+
+    const job = await notificationQueue.getJob(`academy.registered:${result.academyId}:email`);
+    await job?.remove();
+  });
+
+  it("Phase 5 Item 58b: registration still succeeds even when notification enqueuing fails", async () => {
+    enqueueNotificationSpy.mockImplementationOnce(() => {
+      throw new Error("simulated notification enqueue failure");
+    });
+
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await registerAcademy(ownerContext, baseInput());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    createdAcademyIds.push(result.academyId);
+    expect(enqueueNotificationSpy).toHaveBeenCalled();
   });
 
   it("normalizes blank optional profile fields to null rather than empty strings", async () => {

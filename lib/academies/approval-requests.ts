@@ -2,6 +2,9 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { approvalRequests } from "@/lib/db/schema";
+import { enqueueNotification } from "@/lib/notifications/notifications";
+import type { NotificationTemplateId } from "@/lib/notifications/templates";
+import { logger } from "@/lib/logger";
 
 /**
  * PLAN.md Phase 3, Item 50a — "`approval_requests` ONLY (not
@@ -47,6 +50,88 @@ export type ApprovalRequestEntityType = (typeof APPROVAL_REQUEST_ENTITY_TYPES)[n
 
 export const APPROVAL_REQUEST_STATUSES = ["pending", "approved", "rejected"] as const;
 export type ApprovalRequestStatus = (typeof APPROVAL_REQUEST_STATUSES)[number];
+
+/**
+ * PLAN.md Phase 5, Item 58b — wiring `enqueueNotification` into this
+ * module's two generic mutators, on behalf of every one of its four
+ * consumers (results, grade configuration, expenses, student payments) at
+ * once, rather than duplicating the same enqueue call in each of their own
+ * files.
+ *
+ * ---------------------------------------------------------------------
+ * Template bucket per entity type
+ * ---------------------------------------------------------------------
+ * PLAN.md's notification event catalog (lib/notifications/templates.ts)
+ * has exactly two approval-flavored buckets — "result.*" and "finance.*" —
+ * and no distinct "grade configuration approval" event of its own. Grade
+ * bands are part of the academic/results domain (the same judgment call
+ * lib/auth/academy-permissions.ts's own `ACADEMY_GRADE_BANDS_ACTION`
+ * comment already makes when it discusses that row alongside
+ * `ACADEMY_RESULTS_ACTION`), so "result" and "grade_configuration" both map
+ * to "result.*", and "expense"/"student_payment" both map to "finance.*".
+ * Documented here, once, since PLAN.md never states it verbatim.
+ *
+ * ---------------------------------------------------------------------
+ * Recipient resolution — the real ambiguity, resolved two different ways
+ * ---------------------------------------------------------------------
+ * `createApprovalRequest` (a NEW pending request, notifying whoever could
+ * decide it): this module is deliberately entity-type-agnostic and has "no
+ * gating capability of its own" (see this file's own module comment) — each
+ * of the four consumers holds its own distinct permission row
+ * (`ACADEMY_RESULTS_ACTION`/`ACADEMY_GRADE_BANDS_ACTION`/
+ * `ACADEMY_EXPENSES_ACTION`/`ACADEMY_STUDENT_PAYMENTS_ACTION`) and its own
+ * distinct "approve" predicate (some use `level === "approve"`, some
+ * `level === "full"` — see each consumer file's own `canApprove`). Reaching
+ * into all four of those permission rows from this generic module, just to
+ * resolve a notification recipient, would break the exact separation of
+ * concerns this module's own module comment insists on ("adds nothing to
+ * lib/auth/academy-permissions.ts... each future consumer gates through its
+ * own permission row"). So this deliberately takes PLAN.md's brief's
+ * documented simpler alternative: `userId: null`, `academyId` set — an
+ * academy-scoped notification every member of the academy's decision queue
+ * can see (Item 59's later UI filters by academy membership), rather than a
+ * fragile, per-entity-type permission lookup duplicated into a module that
+ * otherwise knows nothing about permissions at all.
+ *
+ * `decideApprovalRequest` (a request being approved/rejected, notifying the
+ * original submitter): unambiguous — the request's own `requestedBy`
+ * column, already on hand, no permission lookup needed.
+ *
+ * ---------------------------------------------------------------------
+ * Why `enqueueNotification` is called with the default `db` client, never
+ * with `executor`
+ * ---------------------------------------------------------------------
+ * Both functions accept an `executor` that may be a caller's own open
+ * `db.transaction()` (e.g. `submitResults`, `recordStudentPayment`,
+ * `approveResult`, `approveStudentPayment` all call in from inside one).
+ * Postgres aborts an ENTIRE transaction after any statement inside it
+ * errors — a JS `try/catch` around `enqueueNotification` can swallow the
+ * thrown error, but it cannot un-poison that transaction: the caller's very
+ * next statement on that same `tx` would then fail with an unrelated
+ * "current transaction is aborted" error, which is exactly the "must NEVER
+ * cause the underlying business action to fail or roll back" outcome this
+ * item's brief forbids. Calling `enqueueNotification` with the default `db`
+ * client instead runs it on its own separate connection, so any failure
+ * inside it — a bug, a transient DB error, anything not already handled by
+ * `enqueueNotification`'s own internal unique-violation handling — can
+ * never poison the caller's transaction, no matter when it's called
+ * relative to that transaction's commit.
+ *
+ * Trade-off, documented rather than silently accepted: because this runs
+ * before the caller's own transaction necessarily commits, a notification
+ * can in principle be created for an approval-request row that a *later*
+ * statement in that same caller transaction still causes to roll back
+ * (nothing in this module controls when the caller commits). This is
+ * judged strictly preferable to the alternative (poisoning real business
+ * transactions on any notification hiccup) — `entityId` here is never a
+ * foreign key, so a stray notification referencing a since-rolled-back id
+ * is inert, not a referential-integrity problem.
+ */
+function notificationBucketForEntityType(
+  entityType: ApprovalRequestEntityType,
+): "result" | "finance" {
+  return entityType === "result" || entityType === "grade_configuration" ? "result" : "finance";
+}
 
 export interface ApprovalRequestRecord {
   id: string;
@@ -131,6 +216,30 @@ export async function createApprovalRequest(
     })
     .returning();
 
+  // Item 58b — non-critical side effect; never allowed to fail this
+  // function. See the module comment above ("Why enqueueNotification is
+  // called with the default db client") for why `db`, not `executor`, is
+  // used here.
+  try {
+    const bucket = notificationBucketForEntityType(data.entityType);
+    const templateId: NotificationTemplateId =
+      bucket === "result" ? "result.approval_requested" : "finance.approval_requested";
+    await enqueueNotification({
+      eventType: `${data.entityType}.approval_requested`,
+      entityId: row.id,
+      templateId,
+      academyId: data.academyId,
+      userId: null,
+    });
+  } catch (err) {
+    logger.error("Failed to enqueue approval_requested notification", {
+      approvalRequestId: row.id,
+      entityType: data.entityType,
+      academyId: data.academyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return { ok: true, request: toRecord(row) };
 }
 
@@ -207,6 +316,30 @@ export async function decideApprovalRequest(
     .set({ status: data.status, decidedBy: data.decidedBy, decidedAt: new Date() })
     .where(eq(approvalRequests.id, approvalRequestId))
     .returning();
+
+  // Item 58b — non-critical side effect; never allowed to fail this
+  // function. Recipient is unambiguous: the original requester
+  // (`requestedBy`). Same "default db client, not executor" reasoning as
+  // createApprovalRequest above.
+  try {
+    const bucket = notificationBucketForEntityType(updated.entityType);
+    const templateId: NotificationTemplateId =
+      bucket === "result" ? "result.approval_decided" : "finance.approval_decided";
+    await enqueueNotification({
+      eventType: `${updated.entityType}.approval_decided`,
+      entityId: updated.id,
+      templateId,
+      academyId: updated.academyId,
+      userId: updated.requestedBy,
+    });
+  } catch (err) {
+    logger.error("Failed to enqueue approval_decided notification", {
+      approvalRequestId: updated.id,
+      entityType: updated.entityType,
+      academyId: updated.academyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   return { ok: true, request: toRecord(updated) };
 }

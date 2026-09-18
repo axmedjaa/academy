@@ -22,6 +22,8 @@ import {
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
+import { enqueueNotification } from "@/lib/notifications/notifications";
+import { logger } from "@/lib/logger";
 
 /**
  * PLAN.md Phase 3, Item 49 — "Result submit/approve/reject/publish flow
@@ -881,6 +883,54 @@ export async function publishResults(
       },
     };
   }
+
+  // ---------------------------------------------------------------------
+  // Item 58b — `result.published` notifications
+  // ---------------------------------------------------------------------
+  // Granularity: one notification PER published `exam_results` row, not one
+  // per exam/batch — matching how `submitResults` above already creates one
+  // `approval_requests` row per result (a real, per-student decision unit),
+  // and keeping each student's publish event independently idempotent
+  // (`entityId` = that result's own id) rather than collapsing a partial
+  // `studentIds`-scoped publish call into one shared examId key.
+  //
+  // Recipient: `userId: null` (academy-scoped, not student-targeted).
+  // `lib/db/schema.ts`'s `students` table has no `user_id` column — students
+  // are not platform users with logins in this system (only staff/owners
+  // via `academy_memberships` are), so there is no user account to target
+  // directly. Item 59's later notifications UI can filter this
+  // academy-scoped row appropriately (e.g. surfaced to staff, or paired with
+  // an out-of-band parent/student communication channel this phase doesn't
+  // build).
+  //
+  // Called with the default `db` client (never `tx`) AFTER this function's
+  // own transaction has already committed (this line only runs once
+  // `result.outcome === "ok"`, past every early-return above) — see
+  // lib/academies/approval-requests.ts's module comment ("Why
+  // enqueueNotification is called with the default db client") for the full
+  // reasoning: a notification-layer failure must never be able to poison or
+  // roll back the results transaction, and here it's not even a poisoning
+  // risk since publishResults' own transaction has already committed by
+  // this point.
+  for (const publishedResult of result.results) {
+    try {
+      await enqueueNotification({
+        eventType: "result.published",
+        entityId: publishedResult.id,
+        templateId: "result.published",
+        academyId,
+        userId: null,
+      });
+    } catch (err) {
+      logger.error("Failed to enqueue result.published notification", {
+        resultId: publishedResult.id,
+        examId,
+        academyId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return { ok: true, results: result.results };
 }
 

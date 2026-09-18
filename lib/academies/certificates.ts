@@ -23,6 +23,8 @@ import { evaluateGradeBand } from "@/lib/academies/results";
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
+import { enqueueNotification } from "@/lib/notifications/notifications";
+import { logger } from "@/lib/logger";
 
 /**
  * PLAN.md Phase 5, Item 57 — "`issueCertificate` (eligibility: published
@@ -531,6 +533,31 @@ export async function issueCertificate(
       if (result.kind === "duplicate") {
         return { ok: false, error: DUPLICATE_CERTIFICATE };
       }
+
+      // Item 58b — `certificate.issued` notification. Recipient: the
+      // issuing actor (`actorContext.userId`). Called with the default `db`
+      // client, after this attempt's transaction has already committed
+      // (only reached once `result.kind === "ok"`) — see
+      // lib/academies/approval-requests.ts's module comment ("Why
+      // enqueueNotification is called with the default db client") for why
+      // a notification failure must never affect the already-committed
+      // business outcome.
+      try {
+        await enqueueNotification({
+          eventType: "certificate.issued",
+          entityId: result.row.id,
+          templateId: "certificate.issued",
+          academyId,
+          userId: actorContext.userId,
+        });
+      } catch (err) {
+        logger.error("Failed to enqueue certificate.issued notification", {
+          certificateId: result.row.id,
+          academyId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       return { ok: true, certificate: toCertificateRecord(result.row) };
     } catch (err) {
       if (isUniqueViolation(err)) {
@@ -643,6 +670,29 @@ export async function cancelCertificate(
   if (result.kind === "already_cancelled") {
     return { ok: false, error: ALREADY_CANCELLED };
   }
+
+  // Item 58b — `certificate.cancelled` notification. Recipient: the
+  // cancelling actor (`actorContext.userId`). Called with the default `db`
+  // client, after `cancelCertificate`'s own transaction has already
+  // committed (only reached once `result.kind === "ok"`) — same "why db,
+  // not tx" reasoning as `issueCertificate` above and
+  // lib/academies/approval-requests.ts's module comment.
+  try {
+    await enqueueNotification({
+      eventType: "certificate.cancelled",
+      entityId: result.row.id,
+      templateId: "certificate.cancelled",
+      academyId,
+      userId: actorContext.userId,
+    });
+  } catch (err) {
+    logger.error("Failed to enqueue certificate.cancelled notification", {
+      certificateId: result.row.id,
+      academyId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   return { ok: true, certificate: toCertificateRecord(result.row) };
 }
 

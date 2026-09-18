@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { eq, inArray, or } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { and, eq, inArray, or } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
   academies,
   academySubscriptions,
   auditLogs,
+  notifications,
   platformMemberships,
   subscriptionPayments,
   subscriptionPlans,
@@ -13,6 +14,8 @@ import {
 } from "@/lib/db/schema";
 import { resolveAuthContext } from "@/lib/auth/auth-context";
 import { GRACE_PERIOD_DAYS, type SubscriptionStatus } from "@/lib/subscriptions/state-machine";
+import { notificationQueue } from "@/lib/notifications/queue";
+import * as notificationsModule from "@/lib/notifications/notifications";
 import {
   activateAcademy,
   cancelAcademy,
@@ -20,6 +23,21 @@ import {
   reactivateAcademy,
   suspendAcademy,
 } from "./lifecycle";
+
+// Phase 5 Item 58b failure-isolation test support: a real spy (not a full
+// module mock) on the actual enqueueNotification, so every test still
+// exercises the real DB/BullMQ enqueue path by default — only the one
+// dedicated "still succeeds even if notifications enqueue fails" test below
+// overrides it once via mockImplementationOnce, then it reverts to calling
+// straight through.
+const enqueueNotificationSpy = vi.spyOn(notificationsModule, "enqueueNotification");
+
+async function getNotificationRows(academyId: string, eventType: string) {
+  return db
+    .select()
+    .from(notifications)
+    .where(and(eq(notifications.academyId, academyId), eq(notifications.eventType, eventType)));
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -173,6 +191,9 @@ afterAll(async () => {
       ),
     );
 
+  if (createdAcademyIds.length > 0) {
+    await db.delete(notifications).where(inArray(notifications.academyId, createdAcademyIds));
+  }
   if (createdPaymentIds.length > 0) {
     await db.delete(subscriptionPayments).where(inArray(subscriptionPayments.id, createdPaymentIds));
   }
@@ -295,6 +316,43 @@ describe("activateAcademy", () => {
     expect(audit?.actorUserId).toBe(ownerUserId);
   });
 
+  it("Phase 5 Item 58b: enqueues an academy.activation notification on success", async () => {
+    const academyId = await createAcademy({ approved: true });
+    const subscriptionId = await createSubscription(academyId, paidPlanId, { status: "draft" });
+    await createVerifiedPayment(academyId, subscriptionId);
+
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await activateAcademy(ownerContext, academyId);
+    expect(result.ok).toBe(true);
+
+    const rows = await getNotificationRows(academyId, "academy.activated");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.templateId === "academy.activation")).toBe(true);
+    expect(rows.every((r) => r.userId === ownerUserId)).toBe(true);
+    expect(rows.every((r) => r.academyId === academyId)).toBe(true);
+
+    const job = await notificationQueue.getJob(`academy.activated:${academyId}:email`);
+    await job?.remove();
+  });
+
+  it("Phase 5 Item 58b: activation still succeeds even when notification enqueuing fails", async () => {
+    enqueueNotificationSpy.mockImplementationOnce(() => {
+      throw new Error("simulated notification enqueue failure");
+    });
+
+    const academyId = await createAcademy({ approved: true });
+    const subscriptionId = await createSubscription(academyId, paidPlanId, { status: "draft" });
+    await createVerifiedPayment(academyId, subscriptionId);
+
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await activateAcademy(ownerContext, academyId);
+    expect(result.ok).toBe(true);
+
+    const row = await getSubscriptionRow(subscriptionId);
+    expect(row?.status).toBe("active");
+    expect(enqueueNotificationSpy).toHaveBeenCalled();
+  });
+
   it("activates a free plan (Trial source) with no payment required", async () => {
     const academyId = await createAcademy({ approved: true });
     const subscriptionId = await createSubscription(academyId, freePlanId, {
@@ -391,6 +449,45 @@ describe("suspendAcademy", () => {
       expect(audit?.reason).toBe("terms of service violation");
     },
   );
+
+  it("Phase 5 Item 58b: enqueues a MANDATORY academy.suspension notification on success", async () => {
+    const academyId = await createAcademy({ approved: true });
+    await createSubscription(academyId, freePlanId, { status: "active" });
+
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await suspendAcademy(ownerContext, academyId, "policy violation");
+    expect(result.ok).toBe(true);
+
+    const rows = await getNotificationRows(academyId, "academy.suspended");
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.templateId === "academy.suspension")).toBe(true);
+    expect(rows.every((r) => r.userId === ownerUserId)).toBe(true);
+    expect(rows.every((r) => r.academyId === academyId)).toBe(true);
+
+    const job = await notificationQueue.getJob(`academy.suspended:${academyId}:email`);
+    await job?.remove();
+  });
+
+  it("Phase 5 Item 58b: a suspension still succeeds even when notification enqueuing fails", async () => {
+    enqueueNotificationSpy.mockImplementationOnce(() => {
+      throw new Error("simulated notification enqueue failure");
+    });
+
+    const academyId = await createAcademy({ approved: true });
+    const subscriptionId = await createSubscription(academyId, freePlanId, { status: "active" });
+
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await suspendAcademy(ownerContext, academyId, "policy violation");
+    expect(result.ok).toBe(true);
+
+    const row = await getSubscriptionRow(subscriptionId);
+    expect(row?.status).toBe("suspended");
+
+    // Since the mocked call threw synchronously rather than actually
+    // enqueuing, no notification row/BullMQ job exists for this one to
+    // clean up.
+    expect(enqueueNotificationSpy).toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

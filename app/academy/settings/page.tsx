@@ -1,8 +1,10 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAcademySettings, getOwnAcademyUsage } from "@/lib/academies/settings";
+import { getNotificationPreferences } from "@/lib/notifications/preferences";
 import { AcademySettingsForm } from "./settings-form";
 import { AcademyUsageWidget } from "./academy-usage-widget";
+import { NotificationPreferencesSection } from "./notification-preferences-section";
 
 /**
  * PLAN.md Item 41: `/academy/settings` — expanded profile fields (direct
@@ -41,6 +43,16 @@ export default async function AcademySettingsPage() {
     getOwnAcademyUsage(context),
   ]);
 
+  // Phase 5, Item 59 addition (additive — the rest of this page/its two
+  // existing reads above are untouched): DESIGN.md §9.11's "Notification
+  // Settings | C (toggle list) | Per §9.8" row. Only fetched once the
+  // academy id is known (needs `settingsResult.academy.id`); a failed
+  // `settingsResult` already short-circuits the whole page below, so this
+  // read is skipped rather than attempted against a nonexistent academyId.
+  const preferencesResult = settingsResult.ok
+    ? await getNotificationPreferences(context, settingsResult.academy.id)
+    : null;
+
   if (!settingsResult.ok) {
     return (
       <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
@@ -73,6 +85,13 @@ export default async function AcademySettingsPage() {
         academy={settingsResult.academy}
         permissionLevel={settingsResult.permissionLevel}
       />
+
+      {preferencesResult?.ok ? (
+        <NotificationPreferencesSection
+          academyId={settingsResult.academy.id}
+          preferences={preferencesResult.preferences}
+        />
+      ) : null}
     </main>
   );
 }

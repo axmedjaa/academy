@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { eq, or } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
   academies,
   academySubscriptions,
   auditLogs,
+  notifications,
   platformAdminPermissions,
   platformMemberships,
   subscriptionPaymentConsumptions,
@@ -14,7 +15,13 @@ import {
   users,
 } from "@/lib/db/schema";
 import { resolveAuthContext } from "@/lib/auth/auth-context";
+import { notificationQueue } from "@/lib/notifications/queue";
+import * as notificationsModule from "@/lib/notifications/notifications";
 import { renewSubscription, listPlatformSubscriptions, EXPIRING_SOON_WINDOW_DAYS } from "./renew";
+
+// Phase 5 Item 58b failure-isolation test support — see
+// lib/academies/lifecycle.test.ts's identical comment.
+const enqueueNotificationSpy = vi.spyOn(notificationsModule, "enqueueNotification");
 
 let ownerUserId: string;
 let adminUserId: string;
@@ -151,6 +158,7 @@ afterAll(async () => {
       .where(eq(subscriptionPaymentConsumptions.subscriptionPaymentId, paymentId));
   }
   await db.delete(subscriptionPayments).where(eq(subscriptionPayments.academyId, academyId));
+  await db.delete(notifications).where(eq(notifications.academyId, academyId));
   await db
     .delete(academySubscriptions)
     .where(eq(academySubscriptions.academyId, academyId));
@@ -435,6 +443,82 @@ describe("renewSubscription — audit trail", () => {
     expect((audit?.context as { consumedSubscriptionPaymentId: string })?.consumedSubscriptionPaymentId).toBe(
       paymentId,
     );
+  });
+});
+
+describe("renewSubscription — notifications (Phase 5 Item 58b)", () => {
+  it("enqueues a subscription.renewed notification on success", async () => {
+    const subscriptionId = await createSubscription({ status: "active", endsAt: new Date(Date.now() + 5 * DAY_MS) });
+    await createPayment({ subscriptionId, status: "verified" });
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await renewSubscription(ownerContext, { subscriptionId });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // academyId is a single shared fixture across this whole test file (see
+    // top-of-file beforeAll), so other tests' own successful renewals of
+    // *different* subscriptions also land rows here — filter down to this
+    // specific renewal's own idempotency key, not just eventType/academyId.
+    const expectedEntityId = `${subscriptionId}_${result.subscription.renewedAt.getTime()}`;
+    const expectedIdempotencyKey = `subscription.renewed:${expectedEntityId}`;
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.idempotencyKey, expectedIdempotencyKey));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.templateId === "subscription.renewal")).toBe(true);
+    expect(rows.every((r) => r.userId === ownerUserId)).toBe(true);
+    expect(rows.every((r) => r.academyId === academyId)).toBe(true);
+
+    const job = await notificationQueue.getJob(`subscription.renewed:${expectedEntityId}:email`);
+    await job?.remove();
+  });
+
+  it("a second, later renewal of the SAME subscription produces its own distinct notification (entityId incorporates renewedAt)", async () => {
+    const subscriptionId = await createSubscription({ status: "active", endsAt: new Date(Date.now() + 5 * DAY_MS) });
+    await createPayment({ subscriptionId, status: "verified" });
+    const ownerContext = await resolveAuthContext(ownerUserId);
+
+    const first = await renewSubscription(ownerContext, { subscriptionId });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    await createPayment({ subscriptionId, status: "verified" });
+    const second = await renewSubscription(ownerContext, { subscriptionId });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+
+    expect(second.subscription.renewedAt.getTime()).not.toBe(first.subscription.renewedAt.getTime());
+
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.academyId, academyId));
+    const matching = rows.filter((r) => r.eventType === "subscription.renewed");
+    const idempotencyKeys = new Set(matching.map((r) => r.idempotencyKey));
+    // Two distinct renewal events -> two distinct idempotency keys (one per
+    // channel per event) rather than the second renewal being silently
+    // deduped against the first.
+    expect(idempotencyKeys.size).toBeGreaterThanOrEqual(2);
+
+    for (const renewedAt of [first.subscription.renewedAt, second.subscription.renewedAt]) {
+      const entityId = `${subscriptionId}_${renewedAt.getTime()}`;
+      const job = await notificationQueue.getJob(`subscription.renewed:${entityId}:email`);
+      await job?.remove();
+    }
+  });
+
+  it("renewal still succeeds even when notification enqueuing fails", async () => {
+    enqueueNotificationSpy.mockImplementationOnce(() => {
+      throw new Error("simulated notification enqueue failure");
+    });
+
+    const subscriptionId = await createSubscription({ status: "active", endsAt: new Date(Date.now() + 5 * DAY_MS) });
+    await createPayment({ subscriptionId, status: "verified" });
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await renewSubscription(ownerContext, { subscriptionId });
+    expect(result.ok).toBe(true);
+    expect(enqueueNotificationSpy).toHaveBeenCalled();
   });
 });
 

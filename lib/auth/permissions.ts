@@ -10,16 +10,34 @@ import type { AuthContext } from "@/lib/auth/auth-context";
  * membership is the authoritative rule, not its size — never summarize
  * this as a count anywhere (PLAN.md's own instruction, restated here).
  *
- * plans.manage / platform.revenue.view / platform.staff.manage are named
- * capability identifiers; the rest are the literal server-action names
- * PLAN.md itself uses for these actions (Phase 1, not yet built) — using
- * the same names now means those actions won't need a different
- * capability identifier when they're implemented.
+ * plans.manage / platform.revenue.view / platform.staff.manage /
+ * platform.settings.manage are named capability identifiers; the rest are
+ * the literal server-action names PLAN.md itself uses for these actions
+ * (Phase 1, not yet built) — using the same names now means those actions
+ * won't need a different capability identifier when they're implemented.
+ *
+ * `platform.settings.manage` (Phase 5, Item 61b, `/platform/settings`):
+ * PLAN.md's Master Permission Matrix closes the grantable-capability list
+ * to exactly three entries (`recordSubscriptionPayment`, `queryAuditLogs`,
+ * `getPlatformReports` — see lib/platform-staff/capabilities.ts's
+ * `GRANTABLE_CAPABILITIES`); global platform feature switches are not among
+ * them, and DESIGN.md's `/platform/settings` row gives no role breakdown at
+ * all (unlike `/platform/staff`/`/platform/plans`/the revenue view, each of
+ * which spells out "owner only" explicitly). Rather than leaving that
+ * silent and letting `hasPermission` fall through to "any capability string
+ * a platform_admin happens to have a grant row for" (which nothing in this
+ * codebase can currently produce for this capability anyway, since it's not
+ * in `GRANTABLE_CAPABILITIES`), this is an explicit judgment call: treat it
+ * the same as this codebase's other platform-wide, no-scope levers (plan
+ * pricing, staff/grant management) and require `platform_owner`. Flagged
+ * here as a genuine PLAN.md/DESIGN.md gap, not a discovered rule — worth
+ * confirming against a future, more explicit spec update.
  */
 export const UNGRANTABLE_CAPABILITIES = new Set([
   "plans.manage",
   "platform.revenue.view",
   "platform.staff.manage",
+  "platform.settings.manage",
   "registerAcademy",
   "approveAcademy",
   "activateAcademy",

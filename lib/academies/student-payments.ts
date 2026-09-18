@@ -19,6 +19,8 @@ import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 import { createApprovalRequest, decideApprovalRequest } from "@/lib/academies/approval-requests";
+import { enqueueNotification } from "@/lib/notifications/notifications";
+import { logger } from "@/lib/logger";
 
 /**
  * PLAN.md Phase 4, Item 51 — "createStudentCharge, recordStudentPayment,
@@ -830,6 +832,34 @@ export async function issueReceipt(
           error: { code: "conflict", message: "A receipt has already been issued for this payment." },
         };
       }
+
+      // Item 58b — `payment.receipt_issued` notification. Recipient:
+      // `actorContext.userId` (whoever issued the receipt) — students carry
+      // no `user_id`/login in this system (see lib/db/schema.ts's `students`
+      // table), so "the payer" is never a resolvable platform user; the
+      // issuing staff member is the only real recipient available. Called
+      // with the default `db` client, after this attempt's transaction has
+      // already committed (this line only runs once `result.kind === "ok"`)
+      // — see lib/academies/approval-requests.ts's module comment ("Why
+      // enqueueNotification is called with the default db client") for why
+      // a notification failure must never be allowed to affect the
+      // already-committed business outcome.
+      try {
+        await enqueueNotification({
+          eventType: "payment.receipt_issued",
+          entityId: result.row.id,
+          templateId: "payment.receipt_issued",
+          academyId,
+          userId: actorContext.userId,
+        });
+      } catch (err) {
+        logger.error("Failed to enqueue payment.receipt_issued notification", {
+          receiptId: result.row.id,
+          academyId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       return { ok: true, receipt: toReceiptRecord(result.row) };
     } catch (err) {
       if (isUniqueViolation(err)) {

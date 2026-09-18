@@ -16,6 +16,7 @@ import {
   exams,
   gradeBands,
   gradeConfigurations,
+  notifications,
   programs,
   resultCorrections,
   students,
@@ -284,6 +285,10 @@ afterAll(async () => {
   for (const academyId of createdAcademyIds) {
     await db.delete(resultCorrections).where(eq(resultCorrections.academyId, academyId));
     await db.delete(approvalRequests).where(eq(approvalRequests.academyId, academyId));
+    // Item 58b: createApprovalRequest/decideApprovalRequest now enqueue a
+    // notification row FK-referencing academies.id — must be cleared before
+    // that table's own delete below.
+    await db.delete(notifications).where(eq(notifications.academyId, academyId));
     await db.delete(examResults).where(eq(examResults.academyId, academyId));
     await db.delete(exams).where(eq(exams.academyId, academyId));
     const configs = await db

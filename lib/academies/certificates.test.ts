@@ -17,6 +17,7 @@ import {
   exams,
   gradeBands,
   gradeConfigurations,
+  notifications,
   programs,
   students,
   subscriptionPlans,
@@ -309,6 +310,7 @@ afterAll(async () => {
         );
     }
     await db.delete(certificates).where(eq(certificates.academyId, academyId));
+    await db.delete(notifications).where(eq(notifications.academyId, academyId));
     await db.delete(examResults).where(eq(examResults.academyId, academyId));
     await db.delete(exams).where(eq(exams.academyId, academyId));
     const configs = await db
@@ -600,6 +602,56 @@ describe("cancelCertificate — non-destructive cancellation", () => {
 
     const row = await fetchCertificateRow(issued.certificate.id);
     expect(row.status).toBe("issued");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PLAN.md Phase 5, Item 58b — notification wiring.
+// ---------------------------------------------------------------------------
+describe("notification wiring — issueCertificate / cancelCertificate", () => {
+  it("issueCertificate enqueues a 'certificate.issued' notification targeted at the issuing actor, without affecting the business outcome", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+
+    const issued = await issueCertificate(setup.context, studentId, batchId);
+    expect(issued.ok).toBe(true); // No regression from adding the enqueue call.
+    if (!issued.ok) return;
+
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.idempotencyKey, `certificate.issued:${issued.certificate.id}`));
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.eventType).toBe("certificate.issued");
+      expect(row.templateId).toBe("certificate.issued");
+      expect(row.academyId).toBe(setup.academyId);
+      expect(row.userId).toBe(setup.userId);
+    }
+  });
+
+  it("cancelCertificate enqueues a 'certificate.cancelled' notification targeted at the cancelling actor, without affecting the business outcome", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+    const issued = await issueCertificate(setup.context, studentId, batchId);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+
+    const cancelled = await cancelCertificate(setup.context, issued.certificate.id, "Issued in error");
+    expect(cancelled.ok).toBe(true); // No regression from adding the enqueue call.
+    if (!cancelled.ok) return;
+
+    const rows = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.idempotencyKey, `certificate.cancelled:${issued.certificate.id}`));
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.eventType).toBe("certificate.cancelled");
+      expect(row.templateId).toBe("certificate.cancelled");
+      expect(row.academyId).toBe(setup.academyId);
+      expect(row.userId).toBe(setup.userId);
+    }
   });
 });
 

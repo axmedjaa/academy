@@ -17,6 +17,7 @@ import {
   exams,
   gradeBands,
   gradeConfigurations,
+  notifications,
   programs,
   staffBranchAssignments,
   staffProfiles,
@@ -327,6 +328,7 @@ afterAll(async () => {
       ),
     );
   for (const academyId of createdAcademyIds) {
+    await db.delete(notifications).where(eq(notifications.academyId, academyId));
     await db.delete(approvalRequests).where(eq(approvalRequests.academyId, academyId));
     await db.delete(examResults).where(eq(examResults.academyId, academyId));
     await db.delete(exams).where(eq(exams.academyId, academyId));
@@ -863,6 +865,47 @@ describe("publishResults — grade evaluation correctness", () => {
     const result = await publishResults(setup.context, examId);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("invalid_state");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PLAN.md Phase 5, Item 58b — notification wiring.
+// ---------------------------------------------------------------------------
+describe("publishResults — notification wiring", () => {
+  it("enqueues one academy-scoped 'result.published' notification per published result, without affecting the business outcome", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const student2 = await insertStudentDirect(setup.academyId, setup.branchId, setup.creatorUserId);
+    await enrollStudentDirect(setup.academyId, setup.batchId, student2);
+    const examId = await insertExamDirect(setup.academyId, setup.batchId);
+    const resultId1 = await insertExamResultDirect(
+      setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId,
+      { status: "approved", marksObtained: 70, approvedBy: setup.creatorUserId, approvedAt: new Date() },
+    );
+    const resultId2 = await insertExamResultDirect(
+      setup.academyId, examId, student2, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId,
+      { status: "approved", marksObtained: 60, approvedBy: setup.creatorUserId, approvedAt: new Date() },
+    );
+
+    const result = await publishResults(setup.context, examId);
+    expect(result.ok).toBe(true); // No regression from adding the enqueue call.
+    if (!result.ok) return;
+    expect(result.results.map((r) => r.status)).toEqual(["published", "published"]);
+
+    for (const resultId of [resultId1, resultId2]) {
+      const rows = await db
+        .select()
+        .from(notifications)
+        .where(eq(notifications.idempotencyKey, `result.published:${resultId}`));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(row.eventType).toBe("result.published");
+        expect(row.templateId).toBe("result.published");
+        expect(row.academyId).toBe(setup.academyId);
+        // Documented judgment call: academy-scoped, not student-targeted —
+        // students have no user_id/login in this system.
+        expect(row.userId).toBeNull();
+      }
+    }
   });
 });
 
