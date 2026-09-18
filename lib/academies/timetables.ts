@@ -242,11 +242,16 @@ export async function createTimetableEntry(
 
   const result = await db.transaction(async (tx) => {
     const [batch] = await tx
-      .select({ id: batches.id })
+      .select({ id: batches.id, branchId: batches.branchId })
       .from(batches)
       .where(and(eq(batches.id, data.batchId), eq(batches.academyId, academyId)))
       .limit(1);
     if (!batch) return { outcome: "batch_not_found" as const };
+    // A batch that exists but belongs to a DIFFERENT branch within the same
+    // academy must be refused identically to a nonexistent batch — the
+    // caller's branch scope for data.branchId was already verified above,
+    // but that says nothing about which branch the batch itself belongs to.
+    if (batch.branchId !== data.branchId) return { outcome: "batch_not_found" as const };
 
     const [row] = await tx
       .insert(timetables)

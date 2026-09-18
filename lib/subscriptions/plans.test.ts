@@ -211,6 +211,19 @@ describe("updateSubscriptionPlan", () => {
     }
   });
 
+  it("returns a validation error for a malformed plan id instead of throwing", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await updateSubscriptionPlan(
+      ownerContext,
+      "not-a-uuid",
+      validPlanInput(),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
+    }
+  });
+
   it("updates plan fields and does not change isActive", async () => {
     const ownerContext = await resolveAuthContext(ownerUserId);
     const result = await updateSubscriptionPlan(
@@ -272,6 +285,15 @@ describe("setPlanActive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("not_found");
+    }
+  });
+
+  it("returns a validation error for a malformed plan id instead of throwing", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await setPlanActive(ownerContext, "not-a-uuid", false);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
     }
   });
 });

@@ -337,6 +337,17 @@ export async function verifySubscriptionPayment(
   );
   if (forbidden) return { ok: false, error: forbidden };
 
+  const parsedPaymentId = z.string().uuid("A valid payment is required").safeParse(paymentId);
+  if (!parsedPaymentId.success) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: parsedPaymentId.error.issues[0]?.message ?? "Invalid input.",
+      },
+    };
+  }
+
   const parsed = reasonInputSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -430,6 +441,17 @@ export async function rejectSubscriptionPayment(
     "Only the platform owner can reject subscription payments.",
   );
   if (forbidden) return { ok: false, error: forbidden };
+
+  const parsedPaymentId = z.string().uuid("A valid payment is required").safeParse(paymentId);
+  if (!parsedPaymentId.success) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: parsedPaymentId.error.issues[0]?.message ?? "Invalid input.",
+      },
+    };
+  }
 
   const parsed = reasonInputSchema.safeParse(input);
   if (!parsed.success) {
@@ -525,6 +547,17 @@ export async function reverseSubscriptionPayment(
     "Only the platform owner can reverse subscription payments.",
   );
   if (forbidden) return { ok: false, error: forbidden };
+
+  const parsedPaymentId = z.string().uuid("A valid payment is required").safeParse(paymentId);
+  if (!parsedPaymentId.success) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: parsedPaymentId.error.issues[0]?.message ?? "Invalid input.",
+      },
+    };
+  }
 
   const parsed = reasonInputSchema.safeParse(input);
   if (!parsed.success) {

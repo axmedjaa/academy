@@ -73,6 +73,20 @@ const envSchema = z.object({
     .int()
     .positive()
     .optional(),
+  // TOTP enrollment-verification rate limiting (security finding #6): keyed
+  // by userId, not IP (see lib/auth/mfa-enrollment-rate-limit.ts for the
+  // rationale). Same "no threshold specified" gap as the other rate limits
+  // above; defaults mirror MFA_CHALLENGE_RATE_LIMIT_* (5 attempts / 900s).
+  MFA_ENROLLMENT_RATE_LIMIT_MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  MFA_ENROLLMENT_RATE_LIMIT_WINDOW_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
   // Public /verify/[certificateCode] rate limiting (PLAN.md Phase 5, Item
   // 62: "rate-limited [per IP] and logged" — no threshold given). See
   // lib/academies/certificate-verify-rate-limit.ts for the default/rationale.

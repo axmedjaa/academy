@@ -1,9 +1,14 @@
 import { randomUUID, createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import * as OTPAuth from "otpauth";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { mfaRecoveryCodes, mfaTotpCredentials, users } from "@/lib/db/schema";
+import {
+  auditLogs,
+  mfaRecoveryCodes,
+  mfaTotpCredentials,
+  users,
+} from "@/lib/db/schema";
 import {
   enrollMfaForUser,
   hasVerifiedMfaCredential,
@@ -11,6 +16,35 @@ import {
   verifyMfaChallenge,
   verifyMfaEnrollmentForUser,
 } from "./mfa";
+
+async function auditRowsFor(actorUserId: string, action: string) {
+  return db
+    .select()
+    .from(auditLogs)
+    .where(
+      and(eq(auditLogs.actorUserId, actorUserId), eq(auditLogs.action, action)),
+    );
+}
+
+/** Creates a throwaway user for a single test, returning its id. */
+async function insertTestUser(label: string): Promise<string> {
+  const [user] = await db
+    .insert(users)
+    .values({
+      email: `mfa-audit-${label}-${randomUUID()}@example.com`,
+      passwordHash: "not-a-real-hash",
+    })
+    .returning({ id: users.id });
+  return user.id;
+}
+
+/** Full teardown for a throwaway user created via insertTestUser, in FK order. */
+async function deleteTestUser(id: string): Promise<void> {
+  await db.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, id));
+  await db.delete(auditLogs).where(eq(auditLogs.actorUserId, id));
+  await db.delete(mfaTotpCredentials).where(eq(mfaTotpCredentials.userId, id));
+  await db.delete(users).where(eq(users.id, id));
+}
 
 let userId: string;
 
@@ -38,6 +72,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await db.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, userId));
+  // Audit rows now reference this user as actorUserId (security finding
+  // #1) — delete them before the user row to satisfy the FK.
+  await db.delete(auditLogs).where(eq(auditLogs.actorUserId, userId));
   await db
     .delete(mfaTotpCredentials)
     .where(eq(mfaTotpCredentials.userId, userId));
@@ -56,6 +93,41 @@ describe("enrollMfaForUser", () => {
     const first = await enrollMfaForUser(userId);
     const second = await enrollMfaForUser(userId);
     expect(second.secretBase32).toBe(first.secretBase32);
+  });
+
+  // Security finding #1.
+  it("writes an audit row for a fresh enrollment, never containing the secret/otpauth URL/QR data URL", async () => {
+    const freshUserId = await insertTestUser("enroll-fresh");
+
+    const result = await enrollMfaForUser(freshUserId);
+
+    const rows = await auditRowsFor(freshUserId, "enrollMfa");
+    expect(rows.length).toBe(1);
+    expect(rows[0].entityType).toBe("mfa_credential");
+    expect(rows[0].actorUserId).toBe(freshUserId);
+
+    const serialized = JSON.stringify({
+      before: rows[0].before,
+      after: rows[0].after,
+      context: rows[0].context,
+    });
+    expect(serialized).not.toContain(result.secretBase32);
+    expect(serialized).not.toContain(result.otpauthUrl);
+    expect(serialized).not.toContain(result.qrCodeDataUrl);
+
+    await deleteTestUser(freshUserId);
+  });
+
+  it("does not write a second audit row when resuming an existing unverified enrollment", async () => {
+    const freshUserId = await insertTestUser("enroll-resume");
+
+    await enrollMfaForUser(freshUserId);
+    await enrollMfaForUser(freshUserId);
+
+    const rows = await auditRowsFor(freshUserId, "enrollMfa");
+    expect(rows.length).toBe(1);
+
+    await deleteTestUser(freshUserId);
   });
 });
 
@@ -95,6 +167,50 @@ describe("verifyMfaEnrollmentForUser", () => {
     for (const row of rows) {
       expect(row.codeHash).toMatch(/^[a-f0-9]{64}$/); // sha256 hex digest
     }
+  });
+
+  // Security finding #1.
+  it("writes an audit row on success, never containing the plaintext code or recovery codes", async () => {
+    const freshUserId = await insertTestUser("verify-success");
+    const { secretBase32 } = await enrollMfaForUser(freshUserId);
+    const code = currentCodeFor(secretBase32);
+
+    const result = await verifyMfaEnrollmentForUser(freshUserId, code);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+
+    const rows = await auditRowsFor(freshUserId, "verifyMfaEnrollment");
+    expect(rows.length).toBe(1);
+    expect(rows[0].entityType).toBe("mfa_credential");
+    expect(rows[0].after).toMatchObject({
+      verified: true,
+      recoveryCodesGenerated: 10,
+    });
+
+    const serialized = JSON.stringify({
+      before: rows[0].before,
+      after: rows[0].after,
+      context: rows[0].context,
+    });
+    expect(serialized).not.toContain(code);
+    for (const recoveryCode of result.recoveryCodes) {
+      expect(serialized).not.toContain(recoveryCode);
+    }
+
+    await deleteTestUser(freshUserId);
+  });
+
+  it("writes no audit row for an invalid code", async () => {
+    const freshUserId = await insertTestUser("verify-invalid");
+    await enrollMfaForUser(freshUserId);
+
+    const result = await verifyMfaEnrollmentForUser(freshUserId, "000000");
+    expect(result.ok).toBe(false);
+
+    const rows = await auditRowsFor(freshUserId, "verifyMfaEnrollment");
+    expect(rows.length).toBe(0);
+
+    await deleteTestUser(freshUserId);
   });
 
   it("rejects verification once already verified (no pending enrollment left)", async () => {
@@ -167,6 +283,9 @@ describe("verifyMfaChallenge", () => {
     await db
       .delete(mfaRecoveryCodes)
       .where(eq(mfaRecoveryCodes.userId, challengeUserId));
+    await db
+      .delete(auditLogs)
+      .where(eq(auditLogs.actorUserId, challengeUserId));
     await db
       .delete(mfaTotpCredentials)
       .where(eq(mfaTotpCredentials.userId, challengeUserId));
@@ -251,6 +370,10 @@ describe("regenerateRecoveryCodesForUser", () => {
       expect(result.error.code).toBe("NOT_ENROLLED");
     }
 
+    // Security finding #1: the NOT_ENROLLED failure path writes no audit row.
+    const rows = await auditRowsFor(freshUser.id, "regenerateRecoveryCodes");
+    expect(rows.length).toBe(0);
+
     await db.delete(users).where(eq(users.id, freshUser.id));
   });
 
@@ -298,7 +421,27 @@ describe("regenerateRecoveryCodesForUser", () => {
     );
     expect(newCodeResult.ok).toBe(true);
 
+    // Security finding #1: success writes an audit row containing only a
+    // count, never the plaintext codes (old or new).
+    const rows = await auditRowsFor(regenUserId, "regenerateRecoveryCodes");
+    expect(rows.length).toBe(1);
+    expect(rows[0].entityType).toBe("mfa_recovery_codes");
+    expect(rows[0].after).toMatchObject({ regeneratedCount: 10 });
+
+    const serialized = JSON.stringify({
+      before: rows[0].before,
+      after: rows[0].after,
+      context: rows[0].context,
+    });
+    for (const recoveryCode of [
+      ...enrollResult.recoveryCodes,
+      ...regenResult.recoveryCodes,
+    ]) {
+      expect(serialized).not.toContain(recoveryCode);
+    }
+
     await db.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, regenUserId));
+    await db.delete(auditLogs).where(eq(auditLogs.actorUserId, regenUserId));
     await db
       .delete(mfaTotpCredentials)
       .where(eq(mfaTotpCredentials.userId, regenUserId));

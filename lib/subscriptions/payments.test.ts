@@ -320,6 +320,17 @@ describe("verifySubscriptionPayment", () => {
     }
   });
 
+  it("returns a validation error for a malformed payment id instead of throwing", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await verifySubscriptionPayment(ownerContext, "not-a-uuid", {
+      reason: "Confirmed",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
+    }
+  });
+
   it("verifies a pending payment when the actor is platform_owner", async () => {
     const ownerContext = await resolveAuthContext(ownerUserId);
     const result = await verifySubscriptionPayment(ownerContext, paymentId, {
@@ -418,6 +429,17 @@ describe("rejectSubscriptionPayment", () => {
     }
   });
 
+  it("returns a validation error for a malformed payment id instead of throwing", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await rejectSubscriptionPayment(ownerContext, "not-a-uuid", {
+      reason: "Not a real payment",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
+    }
+  });
+
   it("cannot reject an already-verified payment", async () => {
     const ownerContext = await resolveAuthContext(ownerUserId);
     await verifySubscriptionPayment(ownerContext, paymentId, { reason: "Confirmed" });
@@ -461,6 +483,17 @@ describe("reverseSubscriptionPayment", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("forbidden");
+    }
+  });
+
+  it("returns a validation error for a malformed payment id instead of throwing", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await reverseSubscriptionPayment(ownerContext, "not-a-uuid", {
+      reason: "Chargeback",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
     }
   });
 

@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { academies, incomeRecords } from "@/lib/db/schema";
+import { academies, branches, incomeRecords } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_INCOME_ACTION,
@@ -53,6 +53,14 @@ export interface IncomeRecordActionError {
 const FORBIDDEN: IncomeRecordActionError = {
   code: "forbidden",
   message: "You don't have permission to view or manage this academy's income records.",
+};
+
+// Same IDOR-safe wording as lib/academies/branches.ts's own NOT_FOUND — a
+// branchId belonging to a different academy must look identical to a
+// nonexistent one.
+const BRANCH_NOT_FOUND: IncomeRecordActionError = {
+  code: "not_found",
+  message: "Branch not found.",
 };
 
 export const createIncomeRecordSchema = z.object({
@@ -125,6 +133,22 @@ async function resolveCurrency(
     .where(eq(academies.id, academyId))
     .limit(1);
   return academy?.defaultCurrency ?? "USD";
+}
+
+// Same per-file local copy as lib/academies/batches.ts's
+// branchExistsInAcademy — verifies a client-supplied branchId actually
+// belongs to the caller's own academy, not just that it exists somewhere.
+async function branchExistsInAcademy(
+  executor: DbClient,
+  academyId: string,
+  branchId: string,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ id: branches.id })
+    .from(branches)
+    .where(and(eq(branches.id, branchId), eq(branches.academyId, academyId)))
+    .limit(1);
+  return Boolean(row);
 }
 
 interface ResolvedIncomeAccess {
@@ -206,6 +230,16 @@ export async function createIncomeRecord(
   const data = parsed.data;
 
   const result = await db.transaction(async (tx) => {
+    // Verify a supplied branchId actually belongs to this academy before
+    // writing anything — the bare FK only proves the branch exists
+    // *somewhere*. No record is created when this fails.
+    if (data.branchId !== undefined) {
+      const branchOk = await branchExistsInAcademy(tx, academyId, data.branchId);
+      if (!branchOk) {
+        return { outcome: "invalid_branch" as const };
+      }
+    }
+
     const currency = await resolveCurrency(tx, academyId, data.currency);
 
     const [row] = await tx
@@ -234,8 +268,11 @@ export async function createIncomeRecord(
       tx,
     );
 
-    return row;
+    return { outcome: "ok" as const, row };
   });
 
-  return { ok: true, record: toRecord(result) };
+  if (result.outcome === "invalid_branch") {
+    return { ok: false, error: BRANCH_NOT_FOUND };
+  }
+  return { ok: true, record: toRecord(result.row) };
 }

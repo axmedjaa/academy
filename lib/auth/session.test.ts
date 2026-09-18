@@ -1,19 +1,29 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { sessions, users } from "@/lib/db/schema";
+import { auditLogs, sessions, users } from "@/lib/db/schema";
 import {
   createSession,
   generateSessionToken,
   hashSessionToken,
   listActiveSessionsForUser,
   revokeAllOtherSessionsForUser,
+  revokeAllSessionsForUser,
   revokeSession,
   revokeSessionForUser,
   sessionCookieOptions,
   validateSessionToken,
 } from "./session";
+
+async function auditRowsFor(actorUserId: string, action: string) {
+  return db
+    .select()
+    .from(auditLogs)
+    .where(
+      and(eq(auditLogs.actorUserId, actorUserId), eq(auditLogs.action, action)),
+    );
+}
 
 let testUserId: string;
 let otherUserId: string;
@@ -39,6 +49,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Audit rows now reference these users as actorUserId (security finding
+  // #1) — delete them first so the FK on audit_logs.actor_user_id doesn't
+  // block deleting the users below.
+  await db.delete(auditLogs).where(eq(auditLogs.actorUserId, testUserId));
+  await db.delete(auditLogs).where(eq(auditLogs.actorUserId, otherUserId));
   await db.delete(sessions).where(eq(sessions.userId, testUserId));
   await db.delete(sessions).where(eq(sessions.userId, otherUserId));
   await db.delete(users).where(eq(users.id, testUserId));
@@ -183,6 +198,83 @@ describe("revokeSessionForUser", () => {
 
     expect(nonexistentResult).toEqual(otherUsersResult);
   });
+
+  // Security finding #1.
+  it("writes an audit row on success with the right action/entityType/entityId/actorUserId", async () => {
+    const { session } = await createSession(testUserId);
+
+    const result = await revokeSessionForUser(testUserId, session.id);
+    expect(result.ok).toBe(true);
+
+    const rows = await auditRowsFor(testUserId, "revokeSession");
+    const row = rows.find((r) => r.entityId === session.id);
+    expect(row).toBeDefined();
+    expect(row?.entityType).toBe("session");
+    expect(row?.actorUserId).toBe(testUserId);
+  });
+
+  it("writes no audit row when the IDOR check blocks the revoke", async () => {
+    const { session } = await createSession(otherUserId);
+    const before = await auditRowsFor(testUserId, "revokeSession");
+
+    const result = await revokeSessionForUser(testUserId, session.id);
+    expect(result.ok).toBe(false);
+
+    const after = await auditRowsFor(testUserId, "revokeSession");
+    expect(after.length).toBe(before.length);
+  });
+
+  it("writes no audit row for a nonexistent session ID", async () => {
+    const before = await auditRowsFor(testUserId, "revokeSession");
+
+    const result = await revokeSessionForUser(
+      testUserId,
+      "00000000-0000-0000-0000-000000000000",
+    );
+    expect(result.ok).toBe(false);
+
+    const after = await auditRowsFor(testUserId, "revokeSession");
+    expect(after.length).toBe(before.length);
+  });
+});
+
+describe("revokeAllSessionsForUser", () => {
+  it("revokes every active session for the user", async () => {
+    const a = await createSession(testUserId);
+    const b = await createSession(testUserId);
+
+    await revokeAllSessionsForUser(testUserId);
+
+    expect(await validateSessionToken(a.token)).toBeNull();
+    expect(await validateSessionToken(b.token)).toBeNull();
+  });
+
+  // Security finding #1: one summary row per call, not one per session.
+  it("writes exactly ONE audit row per call, even when multiple sessions are revoked", async () => {
+    await createSession(testUserId);
+    await createSession(testUserId);
+    await createSession(testUserId);
+
+    const before = await auditRowsFor(testUserId, "revokeAllSessions");
+    await revokeAllSessionsForUser(testUserId);
+    const after = await auditRowsFor(testUserId, "revokeAllSessions");
+
+    expect(after.length).toBe(before.length + 1);
+    const newRow = after[after.length - 1];
+    expect(newRow.entityType).toBe("session");
+    const context = newRow.context as { count?: number } | null;
+    expect(context?.count).toBeGreaterThanOrEqual(3);
+  });
+
+  it("writes no audit row when there are no active sessions to revoke", async () => {
+    await revokeAllSessionsForUser(testUserId); // ensure none active
+    const before = await auditRowsFor(testUserId, "revokeAllSessions");
+
+    await revokeAllSessionsForUser(testUserId);
+    const after = await auditRowsFor(testUserId, "revokeAllSessions");
+
+    expect(after.length).toBe(before.length);
+  });
 });
 
 describe("revokeAllOtherSessionsForUser", () => {
@@ -205,5 +297,22 @@ describe("revokeAllOtherSessionsForUser", () => {
     await revokeAllOtherSessionsForUser(testUserId, mine.session.id);
 
     expect(await validateSessionToken(theirs.token)).not.toBeNull();
+  });
+
+  // Security finding #1: one summary row per call, not one per session.
+  it("writes exactly ONE audit row per call, even when multiple sessions are revoked", async () => {
+    const current = await createSession(testUserId);
+    await createSession(testUserId);
+    await createSession(testUserId);
+
+    const before = await auditRowsFor(testUserId, "revokeAllOtherSessions");
+    await revokeAllOtherSessionsForUser(testUserId, current.session.id);
+    const after = await auditRowsFor(testUserId, "revokeAllOtherSessions");
+
+    expect(after.length).toBe(before.length + 1);
+    const newRow = after[after.length - 1];
+    expect(newRow.entityType).toBe("session");
+    const context = newRow.context as { count?: number } | null;
+    expect(context?.count).toBeGreaterThanOrEqual(2);
   });
 });

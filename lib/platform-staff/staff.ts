@@ -151,6 +151,20 @@ export async function grantPlatformPermission(
   const forbidden = await requireStaffManagePermission(actorContext);
   if (forbidden) return { ok: false, error: forbidden };
 
+  const parsedTargetUserId = z
+    .string()
+    .uuid("Enter a valid account id.")
+    .safeParse(targetUserId);
+  if (!parsedTargetUserId.success) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: parsedTargetUserId.error.issues[0]?.message ?? "Invalid input.",
+      },
+    };
+  }
+
   if (UNGRANTABLE_CAPABILITIES.has(capability) || !isGrantableCapability(capability)) {
     return {
       ok: false,
@@ -189,19 +203,25 @@ export async function grantPlatformPermission(
     };
   }
 
-  await db
+  const [granted] = await db
     .insert(platformAdminPermissions)
     .values({ userId: targetUserId, capability })
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ userId: platformAdminPermissions.userId });
 
-  await recordAudit({
-    actorUserId: actorContext.userId,
-    actorRole: actorContext.platformRole,
-    action: "grantPlatformPermission",
-    entityType: "platform_admin_permission",
-    entityId: targetUserId,
-    after: { capability },
-  });
+  // Only write an audit row when a row was actually inserted — if the
+  // capability was already granted, onConflictDoNothing() skipped the
+  // insert and this is a no-op that must not be logged as a fresh grant.
+  if (granted) {
+    await recordAudit({
+      actorUserId: actorContext.userId,
+      actorRole: actorContext.platformRole,
+      action: "grantPlatformPermission",
+      entityType: "platform_admin_permission",
+      entityId: targetUserId,
+      after: { capability },
+    });
+  }
 
   return { ok: true };
 }
@@ -218,23 +238,43 @@ export async function revokePlatformPermission(
   const forbidden = await requireStaffManagePermission(actorContext);
   if (forbidden) return { ok: false, error: forbidden };
 
-  await db
+  const parsedTargetUserId = z
+    .string()
+    .uuid("Enter a valid account id.")
+    .safeParse(targetUserId);
+  if (!parsedTargetUserId.success) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: parsedTargetUserId.error.issues[0]?.message ?? "Invalid input.",
+      },
+    };
+  }
+
+  const [revoked] = await db
     .delete(platformAdminPermissions)
     .where(
       and(
         eq(platformAdminPermissions.userId, targetUserId),
         eq(platformAdminPermissions.capability, capability),
       ),
-    );
+    )
+    .returning({ userId: platformAdminPermissions.userId });
 
-  await recordAudit({
-    actorUserId: actorContext.userId,
-    actorRole: actorContext.platformRole,
-    action: "revokePlatformPermission",
-    entityType: "platform_admin_permission",
-    entityId: targetUserId,
-    before: { capability },
-  });
+  // Only write an audit row when a row was actually deleted — revoking a
+  // capability that was never granted is a no-op and must not be logged as
+  // a real revocation.
+  if (revoked) {
+    await recordAudit({
+      actorUserId: actorContext.userId,
+      actorRole: actorContext.platformRole,
+      action: "revokePlatformPermission",
+      entityType: "platform_admin_permission",
+      entityId: targetUserId,
+      before: { capability },
+    });
+  }
 
   return { ok: true };
 }

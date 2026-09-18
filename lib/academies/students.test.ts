@@ -382,6 +382,26 @@ describe("updateStudent — permission matrix", () => {
     if (result.ok) expect(result.student.branchId).toBe(branchB);
   });
 
+  it("rejects transferring a student to a branch belonging to a DIFFERENT academy, and leaves the student unchanged", async () => {
+    const { academyId, userId, context } = await setupAcademy("manager");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId);
+
+    const other = await setupAcademy("academy_owner");
+    const otherAcademyBranch = await insertBranchDirect(other.academyId);
+
+    const result = await updateStudent(context, student.id, {
+      fullName: student.fullName,
+      branchId: otherAcademyBranch,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const [reloaded] = await db.select().from(students).where(eq(students.id, student.id));
+    expect(reloaded.branchId).toBe(branchId);
+    expect(reloaded.fullName).toBe(student.fullName);
+  });
+
   it("admissions_officer (branch-limited) is refused if the update includes a branchId, even unchanged", async () => {
     const owner = await setupAcademy("academy_owner");
     const branchId = await insertBranchDirect(owner.academyId);

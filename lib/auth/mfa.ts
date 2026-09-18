@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import { db } from "@/lib/db";
 import { mfaRecoveryCodes, mfaTotpCredentials, users } from "@/lib/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/auth/mfa-encryption";
+import { recordAudit } from "@/lib/audit";
 
 const ISSUER = "Academy Management SaaS";
 const RECOVERY_CODE_COUNT = 10;
@@ -87,9 +88,25 @@ export async function enrollMfaForUser(userId: string): Promise<EnrollMfaResult>
     secretBase32 = decryptSecret(existing.secretEncrypted);
   } else {
     secretBase32 = new OTPAuth.Secret({ size: 20 }).base32;
-    await db.insert(mfaTotpCredentials).values({
-      userId,
-      secretEncrypted: encryptSecret(secretBase32),
+    const [inserted] = await db
+      .insert(mfaTotpCredentials)
+      .values({
+        userId,
+        secretEncrypted: encryptSecret(secretBase32),
+      })
+      .returning({ id: mfaTotpCredentials.id });
+
+    // Security finding #1: audited only here, on the "mint a fresh
+    // secret" branch — resuming an existing unverified enrollment
+    // (the `existing` branch above) is not a new mutation and must not
+    // be audited a second time. Never include secretBase32/otpauthUrl
+    // (it embeds the secret)/qrCodeDataUrl — those are the credential
+    // secret itself, computed below, after this audit call.
+    await recordAudit({
+      actorUserId: userId,
+      action: "enrollMfa",
+      entityType: "mfa_credential",
+      entityId: inserted.id,
     });
   }
 
@@ -178,6 +195,22 @@ export async function verifyMfaEnrollmentForUser(
         codeHash: hashRecoveryCode(recoveryCode),
       })),
     );
+
+    // Security finding #1: audited only on this success path, inside the
+    // same transaction (passed `tx`, not `db`) so the audit write commits
+    // or rolls back atomically with the mutation it protects. Never
+    // include the plaintext `code` parameter or any recoveryCodes string —
+    // only a count.
+    await recordAudit(
+      {
+        actorUserId: userId,
+        action: "verifyMfaEnrollment",
+        entityType: "mfa_credential",
+        entityId: credential.id,
+        after: { verified: true, recoveryCodesGenerated: recoveryCodes.length },
+      },
+      tx,
+    );
   });
 
   return { ok: true, recoveryCodes };
@@ -225,6 +258,21 @@ export async function regenerateRecoveryCodesForUser(
         userId,
         codeHash: hashRecoveryCode(recoveryCode),
       })),
+    );
+
+    // Security finding #1: audited only on this success path (the
+    // NOT_ENROLLED early-return above never reaches here), inside the same
+    // transaction via `tx`. Never include the plaintext recovery codes —
+    // only a count.
+    await recordAudit(
+      {
+        actorUserId: userId,
+        action: "regenerateRecoveryCodes",
+        entityType: "mfa_recovery_codes",
+        entityId: userId,
+        after: { regeneratedCount: recoveryCodes.length },
+      },
+      tx,
     );
   });
 

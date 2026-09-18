@@ -3,6 +3,7 @@ import { and, desc, eq, gt, isNull, ne } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { sessions } from "@/lib/db/schema";
 import { env } from "@/lib/env";
+import { recordAudit } from "@/lib/audit";
 
 export const SESSION_COOKIE_NAME = "session";
 
@@ -102,12 +103,37 @@ export async function revokeSession(sessionId: string): Promise<void> {
  * PLAN.md, but used by resetPassword (Item 8) — a completed password reset
  * should invalidate any session that might exist under the old credentials,
  * the same way logout already does for a single session.
+ *
+ * Security finding #1: this is a bulk `UPDATE ... WHERE`, not a per-row
+ * loop, so it writes exactly ONE summary audit row rather than one row per
+ * session revoked — `.returning({ id: sessions.id })` is added only to get
+ * an accurate affected-row count for that summary row's `context.count`;
+ * it doesn't add a separate query or change which rows are updated, and
+ * the rows returned are discarded rather than changing this function's
+ * `Promise<void>` return contract. `entityId` is set to `userId` (rather
+ * than omitted) so the row still names a concrete entity even though many
+ * sessions were touched. `actorUserId`/`actorRole` reasoning: this is a
+ * self-service, account-level action taking a bare `userId` with no
+ * `AuthContext` — the actor is definitionally the same user, so
+ * `actorRole`/`academyId` are omitted rather than threading new context
+ * through every call site just to populate them.
  */
 export async function revokeAllSessionsForUser(userId: string): Promise<void> {
-  await db
+  const revoked = await db
     .update(sessions)
     .set({ revokedAt: new Date() })
-    .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+    .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+    .returning({ id: sessions.id });
+
+  if (revoked.length === 0) return;
+
+  await recordAudit({
+    actorUserId: userId,
+    action: "revokeAllSessions",
+    entityType: "session",
+    entityId: userId,
+    context: { count: revoked.length },
+  });
 }
 
 export interface SessionSummary {
@@ -181,15 +207,32 @@ export async function revokeSessionForUser(
   }
 
   await revokeSession(sessionId);
+
+  // Security finding #1: audited only on this success path — the
+  // IDOR-blocked/nonexistent branch above is a no-op, not a real mutation,
+  // so it deliberately writes no audit row. `actorUserId` is `userId`
+  // (self-service session management has no separate actor to record).
+  await recordAudit({
+    actorUserId: userId,
+    action: "revokeSession",
+    entityType: "session",
+    entityId: sessionId,
+  });
+
   return { ok: true };
 }
 
-/** Used by "Sign out of all other sessions" — excludes the caller's own current session. */
+/**
+ * Used by "Sign out of all other sessions" — excludes the caller's own
+ * current session. Same bulk-audit treatment as revokeAllSessionsForUser
+ * above: one summary row (not one per session), `entityId` set to `userId`,
+ * `context.count` from the cheap `.returning()` affected-row count.
+ */
 export async function revokeAllOtherSessionsForUser(
   userId: string,
   currentSessionId: string,
 ): Promise<void> {
-  await db
+  const revoked = await db
     .update(sessions)
     .set({ revokedAt: new Date() })
     .where(
@@ -198,7 +241,18 @@ export async function revokeAllOtherSessionsForUser(
         ne(sessions.id, currentSessionId),
         isNull(sessions.revokedAt),
       ),
-    );
+    )
+    .returning({ id: sessions.id });
+
+  if (revoked.length === 0) return;
+
+  await recordAudit({
+    actorUserId: userId,
+    action: "revokeAllOtherSessions",
+    entityType: "session",
+    entityId: userId,
+    context: { count: revoked.length },
+  });
 }
 
 /**

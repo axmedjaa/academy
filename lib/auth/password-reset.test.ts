@@ -2,7 +2,7 @@ import { randomBytes, createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { passwordResetTokens, sessions, users } from "@/lib/db/schema";
+import { auditLogs, passwordResetTokens, sessions, users } from "@/lib/db/schema";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { createSession, validateSessionToken } from "@/lib/auth/session";
 import { applyPasswordReset, issuePasswordResetToken } from "./password-reset";
@@ -37,6 +37,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Security finding #1: applyPasswordReset's revokeAllSessionsForUser call
+  // now writes a "revokeAllSessions" audit_logs row (actor_user_id ==
+  // activeUserId), which must be cleaned up before the user row can be
+  // deleted (audit_logs.actor_user_id has a NOT NULL... FK to users.id).
+  await db.delete(auditLogs).where(eq(auditLogs.actorUserId, activeUserId));
   await db.delete(sessions).where(eq(sessions.userId, activeUserId));
   await db
     .delete(passwordResetTokens)

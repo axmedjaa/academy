@@ -24,6 +24,7 @@ import {
   verifyPendingMfaToken,
 } from "@/lib/auth/mfa-pending";
 import { checkMfaChallengeRateLimit } from "@/lib/auth/mfa-challenge-rate-limit";
+import { checkMfaEnrollmentRateLimit } from "@/lib/auth/mfa-enrollment-rate-limit";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
 import {
   SESSION_COOKIE_NAME,
@@ -78,7 +79,8 @@ const verifyMfaEnrollmentSchema = z.object({
 
 export type VerifyMfaEnrollmentFormError =
   | VerifyMfaEnrollmentError
-  | { code: "VALIDATION_ERROR"; message: string };
+  | { code: "VALIDATION_ERROR"; message: string }
+  | { code: "RATE_LIMITED"; message: string };
 
 export interface VerifyMfaEnrollmentState {
   ok: boolean;
@@ -93,6 +95,22 @@ export async function verifyMfaEnrollment(
   const userId = await resolveMfaFlowUserId();
   if (!userId) {
     redirect("/login");
+  }
+
+  // Security finding #6: rate limit repeated TOTP enrollment-verification
+  // attempts, keyed by userId (see lib/auth/mfa-enrollment-rate-limit.ts —
+  // this is an already-identified, signed-in account action, unlike
+  // challengeMfa's pre-auth IP key below). Mirrors challengeMfa's own
+  // rate-limit check/rejection shape exactly. Never logs the code itself.
+  const rateLimit = await checkMfaEnrollmentRateLimit(userId);
+  if (!rateLimit.allowed) {
+    return {
+      ok: false,
+      error: {
+        code: "RATE_LIMITED",
+        message: `Too many attempts. Try again in ${rateLimit.retryAfterSeconds}s.`,
+      },
+    };
   }
 
   const parsed = verifyMfaEnrollmentSchema.safeParse({

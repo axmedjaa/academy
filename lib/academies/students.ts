@@ -1,7 +1,7 @@
 import { and, count, desc, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { staffBranchAssignments, staffProfiles, students, studentDocuments } from "@/lib/db/schema";
+import { branches, staffBranchAssignments, staffProfiles, students, studentDocuments } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_STUDENTS_ACTION,
@@ -86,6 +86,14 @@ const FORBIDDEN: StudentActionError = {
 const NOT_FOUND: StudentActionError = {
   code: "not_found",
   message: "Student not found.",
+};
+
+// Same IDOR-safe wording as lib/academies/branches.ts's own NOT_FOUND —
+// a branchId belonging to a different academy must look identical to a
+// nonexistent one.
+const BRANCH_NOT_FOUND: StudentActionError = {
+  code: "not_found",
+  message: "Branch not found.",
 };
 
 function optionalText(maxLength = 500) {
@@ -206,6 +214,22 @@ export async function getAssignedBranchIds(
     .where(eq(staffBranchAssignments.staffProfileId, profile.id));
 
   return assignments.map((row) => row.branchId);
+}
+
+// Same per-file local copy as lib/academies/batches.ts's
+// branchExistsInAcademy — verifies a client-supplied branchId actually
+// belongs to the caller's own academy, not just that it exists somewhere.
+async function branchExistsInAcademy(
+  executor: DbClient,
+  academyId: string,
+  branchId: string,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ id: branches.id })
+    .from(branches)
+    .where(and(eq(branches.id, branchId), eq(branches.academyId, academyId)))
+    .limit(1);
+  return Boolean(row);
 }
 
 interface ResolvedStudentAccess {
@@ -539,12 +563,23 @@ export async function updateStudent(
       .from(students)
       .where(and(eq(students.id, studentId), eq(students.academyId, academyId)))
       .limit(1);
-    if (!existing) return null;
+    if (!existing) return { outcome: "not_found" as const };
 
     if (branchLimited) {
       const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
       if (!assignedIds.includes(existing.branchId)) {
-        return null;
+        return { outcome: "not_found" as const };
+      }
+    }
+
+    // Academy-wide caller transferring the student: verify the target
+    // branch actually belongs to this academy before writing anything —
+    // the bare FK only proves the branch exists *somewhere*. No change is
+    // made to the student row when this fails.
+    if (!branchLimited && data.branchId !== undefined) {
+      const branchOk = await branchExistsInAcademy(tx, academyId, data.branchId);
+      if (!branchOk) {
+        return { outcome: "invalid_branch" as const };
       }
     }
 
@@ -580,13 +615,16 @@ export async function updateStudent(
       tx,
     );
 
-    return updated;
+    return { outcome: "ok" as const, student: updated };
   });
 
-  if (!result) {
+  if (result.outcome === "not_found") {
     return { ok: false, error: NOT_FOUND };
   }
-  return { ok: true, student: toRecord(result) };
+  if (result.outcome === "invalid_branch") {
+    return { ok: false, error: BRANCH_NOT_FOUND };
+  }
+  return { ok: true, student: toRecord(result.student) };
 }
 
 // ---------------------------------------------------------------------

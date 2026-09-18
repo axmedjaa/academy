@@ -251,6 +251,102 @@ describe("grantPlatformPermission — authorization", () => {
   });
 });
 
+describe("grantPlatformPermission — id validation", () => {
+  it("returns a validation error for a malformed target id instead of throwing", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await grantPlatformPermission(
+      ownerContext,
+      "not-a-uuid",
+      "queryAuditLogs",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
+    }
+  });
+});
+
+describe("grantPlatformPermission — audit no-op behavior", () => {
+  it("writes an audit row for a fresh grant", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+
+    const beforeCount = (
+      await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityId, adminUserId),
+            eq(auditLogs.action, "grantPlatformPermission"),
+          ),
+        )
+    ).length;
+
+    const result = await grantPlatformPermission(
+      ownerContext,
+      adminUserId,
+      "queryAuditLogs",
+    );
+    expect(result.ok).toBe(true);
+
+    const afterCount = (
+      await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityId, adminUserId),
+            eq(auditLogs.action, "grantPlatformPermission"),
+          ),
+        )
+    ).length;
+    expect(afterCount).toBe(beforeCount + 1);
+  });
+
+  it("does not write a second audit row when granting an already-granted capability", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const first = await grantPlatformPermission(
+      ownerContext,
+      adminUserId,
+      "queryAuditLogs",
+    );
+    expect(first.ok).toBe(true);
+
+    const beforeCount = (
+      await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityId, adminUserId),
+            eq(auditLogs.action, "grantPlatformPermission"),
+          ),
+        )
+    ).length;
+
+    const second = await grantPlatformPermission(
+      ownerContext,
+      adminUserId,
+      "queryAuditLogs",
+    );
+    expect(second.ok).toBe(true);
+
+    const afterCount = (
+      await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityId, adminUserId),
+            eq(auditLogs.action, "grantPlatformPermission"),
+          ),
+        )
+    ).length;
+
+    expect(afterCount).toBe(beforeCount);
+  });
+});
+
 describe("revokePlatformPermission", () => {
   it("removes a previously granted capability", async () => {
     const ownerContext = await resolveAuthContext(ownerUserId);
@@ -286,6 +382,93 @@ describe("revokePlatformPermission", () => {
     if (!result.ok) {
       expect(result.error.code).toBe("forbidden");
     }
+  });
+
+  it("returns a validation error for a malformed target id instead of throwing", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const result = await revokePlatformPermission(
+      ownerContext,
+      "not-a-uuid",
+      "queryAuditLogs",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
+    }
+  });
+
+  it("writes an audit row when a real grant is revoked", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    await grantPlatformPermission(ownerContext, adminUserId, "queryAuditLogs");
+
+    const beforeCount = (
+      await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityId, adminUserId),
+            eq(auditLogs.action, "revokePlatformPermission"),
+          ),
+        )
+    ).length;
+
+    const result = await revokePlatformPermission(
+      ownerContext,
+      adminUserId,
+      "queryAuditLogs",
+    );
+    expect(result.ok).toBe(true);
+
+    const afterCount = (
+      await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityId, adminUserId),
+            eq(auditLogs.action, "revokePlatformPermission"),
+          ),
+        )
+    ).length;
+    expect(afterCount).toBe(beforeCount + 1);
+  });
+
+  it("does not write an audit row when revoking a capability that was never granted", async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+
+    const beforeCount = (
+      await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityId, adminUserId),
+            eq(auditLogs.action, "revokePlatformPermission"),
+          ),
+        )
+    ).length;
+
+    const result = await revokePlatformPermission(
+      ownerContext,
+      adminUserId,
+      "queryAuditLogs",
+    );
+    expect(result.ok).toBe(true);
+
+    const afterCount = (
+      await db
+        .select({ id: auditLogs.id })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityId, adminUserId),
+            eq(auditLogs.action, "revokePlatformPermission"),
+          ),
+        )
+    ).length;
+
+    expect(afterCount).toBe(beforeCount);
   });
 });
 

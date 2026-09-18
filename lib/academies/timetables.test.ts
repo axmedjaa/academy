@@ -328,6 +328,45 @@ describe("createTimetableEntry — validation", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
+  it("creates an entry when the batch's own branch matches the supplied branchId", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+
+    const result = await createTimetableEntry(context, {
+      branchId,
+      batchId,
+      dayOfWeek: "thu",
+      startTime: "09:00",
+      endTime: "10:00",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.entry.branchId).toBe(branchId);
+      expect(result.entry.batchId).toBe(batchId);
+    }
+  });
+
+  it("rejects a batchId whose actual branch differs from the supplied (in-scope) branchId, and creates no entry", async () => {
+    const { academyId, context, branchId, courseId } = await setupAcademy("academy_owner");
+    const otherBranchId = await insertBranchDirect(academyId);
+    const otherBranchBatchId = await insertBatchDirect(academyId, otherBranchId, courseId);
+
+    const result = await createTimetableEntry(context, {
+      branchId,
+      batchId: otherBranchBatchId,
+      dayOfWeek: "fri",
+      startTime: "09:00",
+      endTime: "10:00",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const entries = await db
+      .select()
+      .from(timetables)
+      .where(eq(timetables.batchId, otherBranchBatchId));
+    expect(entries).toHaveLength(0);
+  });
+
   it("does not persist any attendance/check-in field — schema has none", () => {
     const columns = Object.keys(timetables);
     expect(columns.some((c) => /attend|check.?in/i.test(c))).toBe(false);

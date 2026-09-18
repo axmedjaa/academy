@@ -8,6 +8,7 @@ import {
   academySubscriptions,
   approvalRequests,
   auditLogs,
+  branches,
   expenseRecords,
   notifications,
   subscriptionPlans,
@@ -147,6 +148,18 @@ async function fetchApprovalRequestForExpense(expenseRecordId: string) {
   return row;
 }
 
+async function insertBranchDirect(academyId: string): Promise<string> {
+  const [row] = await db
+    .insert(branches)
+    .values({
+      academyId,
+      name: `Branch ${randomUUID().slice(0, 8)}`,
+      code: `BR-${randomUUID().slice(0, 8)}`,
+    })
+    .returning({ id: branches.id });
+  return row.id;
+}
+
 function validInput(overrides: Partial<CreateExpenseRecordInput> = {}): CreateExpenseRecordInput {
   return {
     category: "Office supplies",
@@ -177,6 +190,7 @@ afterAll(async () => {
   }
   for (const academyId of createdAcademyIds) {
     await db.delete(expenseRecords).where(eq(expenseRecords.academyId, academyId));
+    await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
   }
@@ -232,6 +246,30 @@ describe("createExpenseRecord — permission matrix", () => {
     const result = await createExpenseRecord(context, validInput({ amountCents: -1 }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("creates a record when branchId belongs to the caller's own academy", async () => {
+    const { academyId, context } = await setupAcademy("finance_officer");
+    const branchId = await insertBranchDirect(academyId);
+
+    const result = await createExpenseRecord(context, validInput({ branchId }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.record.branchId).toBe(branchId);
+  });
+
+  it("rejects a branchId belonging to a DIFFERENT academy and creates no record", async () => {
+    const { context } = await setupAcademy("finance_officer");
+    const other = await setupAcademy("finance_officer");
+    const otherAcademyBranch = await insertBranchDirect(other.academyId);
+
+    const before = await db.select().from(expenseRecords);
+
+    const result = await createExpenseRecord(context, validInput({ branchId: otherAcademyBranch }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const after = await db.select().from(expenseRecords);
+    expect(after).toHaveLength(before.length);
   });
 });
 

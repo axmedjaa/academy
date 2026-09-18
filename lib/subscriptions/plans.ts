@@ -215,6 +215,17 @@ export async function updateSubscriptionPlan(
   const forbidden = await requirePlansManagePermission(actorContext);
   if (forbidden) return { ok: false, error: forbidden };
 
+  const parsedPlanId = z.string().uuid("A valid plan is required").safeParse(planId);
+  if (!parsedPlanId.success) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: parsedPlanId.error.issues[0]?.message ?? "Invalid input.",
+      },
+    };
+  }
+
   const parsed = planInputSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -293,6 +304,17 @@ export async function setPlanActive(
 ): Promise<SetPlanActiveResult> {
   const forbidden = await requirePlansManagePermission(actorContext);
   if (forbidden) return { ok: false, error: forbidden };
+
+  const parsedPlanId = z.string().uuid("A valid plan is required").safeParse(planId);
+  if (!parsedPlanId.success) {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: parsedPlanId.error.issues[0]?.message ?? "Invalid input.",
+      },
+    };
+  }
 
   const result = await db.transaction(async (tx) => {
     const [existing] = await tx

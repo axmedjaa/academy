@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { academies, approvalRequests, expenseRecords } from "@/lib/db/schema";
+import { academies, approvalRequests, branches, expenseRecords } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_EXPENSES_ACTION,
@@ -91,6 +91,14 @@ const NOT_FOUND: ExpenseRecordActionError = {
   message: "Expense record not found.",
 };
 
+// Same IDOR-safe wording as lib/academies/branches.ts's own NOT_FOUND — a
+// branchId belonging to a different academy must look identical to a
+// nonexistent one.
+const BRANCH_NOT_FOUND: ExpenseRecordActionError = {
+  code: "not_found",
+  message: "Branch not found.",
+};
+
 export const createExpenseRecordSchema = z.object({
   branchId: z.string().uuid("Invalid branch id").optional(),
   category: z.string().trim().min(1, "Category is required").max(200),
@@ -174,6 +182,22 @@ async function resolveCurrency(
     .where(eq(academies.id, academyId))
     .limit(1);
   return academy?.defaultCurrency ?? "USD";
+}
+
+// Same per-file local copy as lib/academies/batches.ts's
+// branchExistsInAcademy — verifies a client-supplied branchId actually
+// belongs to the caller's own academy, not just that it exists somewhere.
+async function branchExistsInAcademy(
+  executor: DbClient,
+  academyId: string,
+  branchId: string,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ id: branches.id })
+    .from(branches)
+    .where(and(eq(branches.id, branchId), eq(branches.academyId, academyId)))
+    .limit(1);
+  return Boolean(row);
 }
 
 interface ResolvedExpenseAccess {
@@ -262,6 +286,16 @@ export async function createExpenseRecord(
   const data = parsed.data;
 
   const result = await db.transaction(async (tx) => {
+    // Verify a supplied branchId actually belongs to this academy before
+    // writing anything — the bare FK only proves the branch exists
+    // *somewhere*. No record is created when this fails.
+    if (data.branchId !== undefined) {
+      const branchOk = await branchExistsInAcademy(tx, academyId, data.branchId);
+      if (!branchOk) {
+        return { outcome: "invalid_branch" as const };
+      }
+    }
+
     const currency = await resolveCurrency(tx, academyId, data.currency);
 
     const [row] = await tx
@@ -290,10 +324,13 @@ export async function createExpenseRecord(
       tx,
     );
 
-    return row;
+    return { outcome: "ok" as const, row };
   });
 
-  return { ok: true, record: toRecord(result) };
+  if (result.outcome === "invalid_branch") {
+    return { ok: false, error: BRANCH_NOT_FOUND };
+  }
+  return { ok: true, record: toRecord(result.row) };
 }
 
 export type SubmitExpenseForApprovalResult =
