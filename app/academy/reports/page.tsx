@@ -4,6 +4,7 @@ import { getStudentReports, type StudentReportsData } from "@/lib/academies/stud
 import { getAcademicReports, type AcademicReportsData } from "@/lib/academies/academic-reports";
 import { getFinanceReports } from "@/lib/academies/finance-reports";
 import { FinanceReportsView } from "@/app/academy/finance-reports/finance-reports-view";
+import { ReportExportButton } from "./report-export-button";
 
 /**
  * PLAN.md Phase 5, Item 61a — `/academy/reports` hub (DESIGN.md §9.9: "hub
@@ -12,15 +13,17 @@ import { FinanceReportsView } from "@/app/academy/finance-reports/finance-report
  * never replaces the table. Export button (§11.6 scope)").
  *
  * ---------------------------------------------------------------------
- * Export button: deliberately NOT built here
+ * Export button (PLAN.md Item 60)
  * ---------------------------------------------------------------------
- * PLAN.md Item 60 (`exportData` + export UI) is a separate, not-yet-built
- * item this task is explicitly told not to touch. Below is a clearly
- * labeled placeholder comment at the one spot the button would go, per the
- * task brief's "leave a clearly-commented placeholder or simply omit it"
- * instruction — no export UI, no client wiring, nothing that would need
- * undoing when Item 60 lands.
+ * Each tab renders a real Export CSV button, wired through
+ * `lib/export/export-data-actions.ts` -> `lib/export/export-data.ts`'s
+ * `exportData`, reusing this SAME tab's already-fetched filters (never a
+ * second, separately-filtered query) — see `ReportExportButton`
+ * (./report-export-button.tsx) for the Student/Academic tabs. The Finance
+ * tab gets its export button for free: it renders `FinanceReportsView`
+ * verbatim, and that component now has one built in.
  *
+
  * ---------------------------------------------------------------------
  * Finance tab: reuse, not duplicate — and NOT a replacement for
  * `/academy/finance-reports`
@@ -220,9 +223,10 @@ async function StudentTab({
         emptyMessage="No students match these filters."
       />
 
-      {/* Export button placeholder — PLAN.md Item 60 (exportData), a
-          separate, later item this task must not build. Intentionally no
-          button here yet. */}
+      <ReportExportButton
+        kind="student"
+        filters={{ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined, branchId: branchId || undefined }}
+      />
     </div>
   );
 }
@@ -295,9 +299,15 @@ async function AcademicTab({
         emptyMessage="No published, graded results match these filters."
       />
 
-      {/* Export button placeholder — PLAN.md Item 60 (exportData), a
-          separate, later item this task must not build. Intentionally no
-          button here yet. */}
+      <ReportExportButton
+        kind="academic"
+        filters={{
+          dateFrom: dateFrom || undefined,
+          dateTo: dateTo || undefined,
+          batchId: batchId || undefined,
+          courseId: courseId || undefined,
+        }}
+      />
     </div>
   );
 }
@@ -329,9 +339,6 @@ async function FinanceTab({
         both routes coexist for now (see this page&apos;s module comment).
       </p>
       <FinanceReportsView initialReport={result.report} />
-      {/* Export button placeholder — PLAN.md Item 60 (exportData), a
-          separate, later item this task must not build. Intentionally no
-          button here yet. */}
     </div>
   );
 }

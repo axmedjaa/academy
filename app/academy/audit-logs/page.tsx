@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAuditLogsForOwnAcademy } from "@/lib/academies/audit-logs-actions";
 import type { AuditResult } from "@/lib/audit-query";
+import { AuditLogExportButton } from "./audit-log-export-button";
 
 /**
  * PLAN.md Item 42: `/academy/audit-logs`, Owner/Admin only, hard-scoped to
@@ -113,6 +114,17 @@ export default async function AcademyAuditLogsPage({
             </label>
             <button type="submit">Filter</button>
           </form>
+
+          <AuditLogExportButton
+            filters={{
+              actorRole: actorRole || undefined,
+              action: action || undefined,
+              branchId: branchId || undefined,
+              result: result || undefined,
+              createdFrom: createdFrom || undefined,
+              createdTo: createdTo || undefined,
+            }}
+          />
 
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>

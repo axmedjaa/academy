@@ -6,13 +6,16 @@ import type {
   AmountByCurrency,
   FinanceReportsData,
 } from "@/lib/academies/finance-reports";
+import { exportFinanceReportAction } from "@/lib/export/export-data-actions";
+import { downloadExportContent } from "@/lib/export/download-file";
 
 interface Props {
   initialReport: FinanceReportsData;
 }
 
 /**
- * PLAN.md Phase 4, Item 55 — client filter shell for `/academy/finance-reports`.
+ * PLAN.md Phase 4, Item 55 — client filter shell for `/academy/finance-reports`
+ * (also reused verbatim by `/academy/reports`'s Finance tab).
  *
  * `branchId` is a plain text field, not a `<select>` sourced from
  * lib/academies/branches.ts's `listBranches` — see finance-reports.ts's own
@@ -20,9 +23,10 @@ interface Props {
  * different permission row (`academy.branches`) that Finance Officer, the
  * role this report matters most for, has no access to at all.
  *
- * CSV export is explicitly out of scope here — DESIGN.md's "Custom +
- * export" pairing for this row is `exportData`, a Phase 5 action
- * (`app/academy/finance-reports/...` only renders the on-screen report).
+ * PLAN.md Phase 5, Item 60 — the Export button below sends this view's
+ * *current* filter state (not just the initial one) to
+ * `exportFinanceReportAction`, so exporting after adjusting filters exports
+ * exactly what's on screen, never the unfiltered report.
  */
 export function FinanceReportsView({ initialReport }: Props) {
   const [report, setReport] = useState(initialReport);
@@ -32,6 +36,7 @@ export function FinanceReportsView({ initialReport }: Props) {
   const [status, setStatus] = useState("");
   const [method, setMethod] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   function applyFilters() {
@@ -62,6 +67,29 @@ export function FinanceReportsView({ initialReport }: Props) {
     startTransition(async () => {
       const result = await getFinanceReportsAction({});
       if (result.ok) setReport(result.report);
+    });
+  }
+
+  function handleExport() {
+    setError(null);
+    setIsExporting(true);
+    startTransition(async () => {
+      const result = await exportFinanceReportAction(
+        {
+          dateFrom: dateFrom || undefined,
+          dateTo: dateTo || undefined,
+          branchId: branchId.trim() || undefined,
+          status: status.trim() || undefined,
+          method: (method || undefined) as "cash" | "mobile_money" | "bank_transfer" | undefined,
+        },
+        "csv",
+      );
+      setIsExporting(false);
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
+      }
+      downloadExportContent(result.content, result.filename, result.format);
     });
   }
 
@@ -123,6 +151,9 @@ export function FinanceReportsView({ initialReport }: Props) {
         </button>
         <button type="button" onClick={resetFilters}>
           Reset
+        </button>
+        <button type="button" onClick={handleExport} disabled={isExporting}>
+          {isExporting ? "Exporting..." : "Export CSV"}
         </button>
       </fieldset>
 

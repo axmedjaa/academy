@@ -10,7 +10,8 @@
     "db:generate": "drizzle-kit generate",
     "migrate": "node --env-file=.env.local --import=tsx scripts/migrate.ts",
     "seed": "node --env-file=.env.local --import=tsx scripts/seed.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "argon2": "^0.45.1",
@@ -27,6 +28,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "^24",
     "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",

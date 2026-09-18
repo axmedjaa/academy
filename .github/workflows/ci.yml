@@ -67,3 +67,23 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
           REDIS_URL: redis://localhost:6379
           MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
+
+      # Phase 5, Item 65 — full Playwright coverage. Runs after migrations
+      # are applied and only chromium is installed (this repo's own
+      # playwright.config.ts only defines a chromium project), matching
+      # this job's existing "native processes, no Docker" convention:
+      # --with-deps installs the OS-level libraries Chromium needs via
+      # apt-get, the same way the Postgres/Redis step above does.
+      # playwright.config.ts's own webServer starts `npm run dev` itself
+      # and its globalSetup seeds the two-academy E2E fixture
+      # (e2e/fixtures/seed-e2e.ts) against this same CI database — no
+      # separate seed step needed here.
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E (Playwright)
+        run: npm run test:e2e
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
+          REDIS_URL: redis://localhost:6379
+          MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
