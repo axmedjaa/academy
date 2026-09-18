@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useState, useTransition } from "react";
 import {
   createStudentChargeAction,
   issueReceiptAction,
@@ -8,8 +8,11 @@ import {
   type StudentPaymentsFormState,
 } from "@/lib/academies/student-payments-actions";
 import type { StudentChargeRecord, StudentPaymentRecord } from "@/lib/academies/student-payments";
+import { adjustStudentPaymentAction, reverseStudentPaymentAction } from "@/lib/academies/finance-reversals-actions";
 
 const initialState: StudentPaymentsFormState = { ok: false };
+
+const SELF_APPROVAL_TOOLTIP = "You can't approve a transaction you recorded.";
 
 interface Props {
   charges: StudentChargeRecord[];
@@ -18,9 +21,18 @@ interface Props {
    * create/record/issue controls — Owner/Admin/Trainer are read-only here,
    * per this row's confirmed View/View/Full/—/Manage/View matrix. */
   canManage: boolean;
+  /** Confirmed Phase 4 audit gap fix: Manager-only ("full" level exactly —
+   * Finance Officer's "manage" does not reach this). Gates Reverse/Adjust,
+   * which lib/academies/finance-reversals.ts's `canReversePayment` requires
+   * the exact same level for. */
+  canApprove: boolean;
+  /** For the self-reversal visual-disable + tooltip (DESIGN.md §9.6/§11.7)
+   * — the backend (`reverseStudentPayment`/`adjustStudentPayment`) already
+   * refuses this unconditionally; this is presentation only. */
+  currentUserId: string;
 }
 
-export function FinanceChargesPayments({ charges, payments, canManage }: Props) {
+export function FinanceChargesPayments({ charges, payments, canManage, canApprove, currentUserId }: Props) {
   const [tab, setTab] = useState<"charges" | "payments">("charges");
   const [createChargeState, createChargeFormAction, creatingCharge] = useActionState(
     createStudentChargeAction,
@@ -33,6 +45,14 @@ export function FinanceChargesPayments({ charges, payments, canManage }: Props) 
   const [issuingId, setIssuingId] = useState<string | null>(null);
   const [issueError, setIssueError] = useState<string | null>(null);
 
+  const [isReversalPending, startReversalTransition] = useTransition();
+  const [reversalError, setReversalError] = useState<string | null>(null);
+  const [reversalRowId, setReversalRowId] = useState<string | null>(null);
+  const [reversalMode, setReversalMode] = useState<"reverse" | "adjust" | null>(null);
+  const [reversalReason, setReversalReason] = useState("");
+  const [adjustAmount, setAdjustAmount] = useState("");
+  const [reversedIds, setReversedIds] = useState<Set<string>>(new Set());
+
   async function handleIssueReceipt(paymentId: string) {
     setIssuingId(paymentId);
     setIssueError(null);
@@ -41,6 +61,37 @@ export function FinanceChargesPayments({ charges, payments, canManage }: Props) 
     if (!result.ok) {
       setIssueError(result.error.message);
     }
+  }
+
+  function startReversal(paymentId: string, mode: "reverse" | "adjust") {
+    setReversalError(null);
+    setReversalRowId(paymentId);
+    setReversalMode(mode);
+    setReversalReason("");
+    setAdjustAmount("");
+  }
+
+  function cancelReversal() {
+    setReversalRowId(null);
+    setReversalMode(null);
+    setReversalReason("");
+    setAdjustAmount("");
+  }
+
+  function confirmReversal(paymentId: string) {
+    setReversalError(null);
+    startReversalTransition(async () => {
+      const result =
+        reversalMode === "adjust"
+          ? await adjustStudentPaymentAction(paymentId, reversalReason.trim(), Number(adjustAmount))
+          : await reverseStudentPaymentAction(paymentId, reversalReason.trim());
+      if (!result.ok) {
+        setReversalError(result.error.message);
+        return;
+      }
+      setReversedIds((prev) => new Set(prev).add(paymentId));
+      cancelReversal();
+    });
   }
 
   return (
@@ -152,41 +203,123 @@ export function FinanceChargesPayments({ charges, payments, canManage }: Props) 
                 <th style={{ padding: "0.5rem" }}>Method</th>
                 <th style={{ padding: "0.5rem" }}>Status</th>
                 {canManage && <th style={{ padding: "0.5rem" }}>Receipt</th>}
+                {canApprove && <th style={{ padding: "0.5rem" }}>Reverse / Adjust</th>}
               </tr>
             </thead>
             <tbody>
               {payments.length === 0 ? (
                 <tr>
-                  <td colSpan={canManage ? 5 : 4} style={{ padding: "0.5rem", color: "#666" }}>
+                  <td
+                    colSpan={4 + (canManage ? 1 : 0) + (canApprove ? 1 : 0)}
+                    style={{ padding: "0.5rem", color: "#666" }}
+                  >
                     No payments to show.
                   </td>
                 </tr>
               ) : (
-                payments.map((payment) => (
-                  <tr key={payment.id} style={{ borderBottom: "1px solid #eee" }}>
-                    <td style={{ padding: "0.5rem" }}>{payment.studentId}</td>
-                    <td style={{ padding: "0.5rem" }}>{payment.amountCents}</td>
-                    <td style={{ padding: "0.5rem" }}>{payment.method}</td>
-                    <td style={{ padding: "0.5rem" }}>{payment.status}</td>
-                    {canManage && (
+                payments.map((payment) => {
+                  const alreadyReversedThisSession = reversedIds.has(payment.id);
+                  const isSelfRecorded = payment.recordedBy === currentUserId;
+                  const canReverseThisRow =
+                    canApprove && payment.status === "approved" && !alreadyReversedThisSession;
+                  return (
+                    <tr key={payment.id} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.5rem" }}>{payment.studentId}</td>
+                      <td style={{ padding: "0.5rem" }}>{payment.amountCents}</td>
+                      <td style={{ padding: "0.5rem" }}>{payment.method}</td>
                       <td style={{ padding: "0.5rem" }}>
-                        <button
-                          type="button"
-                          disabled={payment.status !== "approved" || issuingId === payment.id}
-                          onClick={() => handleIssueReceipt(payment.id)}
-                        >
-                          {issuingId === payment.id ? "Issuing..." : "Issue receipt"}
-                        </button>
+                        {alreadyReversedThisSession ? "reversed" : payment.status}
                       </td>
-                    )}
-                  </tr>
-                ))
+                      {canManage && (
+                        <td style={{ padding: "0.5rem" }}>
+                          <button
+                            type="button"
+                            disabled={payment.status !== "approved" || issuingId === payment.id}
+                            onClick={() => handleIssueReceipt(payment.id)}
+                          >
+                            {issuingId === payment.id ? "Issuing..." : "Issue receipt"}
+                          </button>
+                        </td>
+                      )}
+                      {canApprove && (
+                        <td style={{ padding: "0.5rem" }}>
+                          {!canReverseThisRow ? (
+                            "—"
+                          ) : reversalRowId === payment.id ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", minWidth: 220 }}>
+                              {reversalMode === "adjust" && (
+                                <input
+                                  type="number"
+                                  placeholder="Corrected amount (cents)"
+                                  min={0}
+                                  value={adjustAmount}
+                                  onChange={(event) => setAdjustAmount(event.target.value)}
+                                />
+                              )}
+                              <input
+                                type="text"
+                                placeholder="Reason (required)"
+                                value={reversalReason}
+                                onChange={(event) => setReversalReason(event.target.value)}
+                              />
+                              <div style={{ display: "flex", gap: "0.35rem" }}>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    isReversalPending ||
+                                    reversalReason.trim() === "" ||
+                                    (reversalMode === "adjust" && adjustAmount.trim() === "")
+                                  }
+                                  onClick={() => confirmReversal(payment.id)}
+                                >
+                                  {isReversalPending
+                                    ? "Working..."
+                                    : reversalMode === "adjust"
+                                      ? "Confirm adjustment"
+                                      : "Confirm reversal"}
+                                </button>
+                                <button type="button" onClick={cancelReversal}>
+                                  Back
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div
+                              style={{ display: "flex", gap: "0.35rem" }}
+                              title={isSelfRecorded ? SELF_APPROVAL_TOOLTIP : undefined}
+                            >
+                              <button
+                                type="button"
+                                disabled={isSelfRecorded}
+                                onClick={() => startReversal(payment.id, "reverse")}
+                              >
+                                Reverse
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isSelfRecorded}
+                                onClick={() => startReversal(payment.id, "adjust")}
+                              >
+                                Adjust
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
           {issueError && (
             <p role="alert" style={{ color: "crimson" }}>
               {issueError}
+            </p>
+          )}
+          {reversalError && (
+            <p role="alert" style={{ color: "crimson" }}>
+              {reversalError}
             </p>
           )}
 

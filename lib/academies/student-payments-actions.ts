@@ -141,6 +141,7 @@ export async function approveStudentPaymentAction(
   }
 
   revalidatePath("/academy/finance");
+  revalidatePath("/academy/finance/approvals");
   return { ok: true };
 }
 
@@ -161,5 +162,6 @@ export async function rejectStudentPaymentAction(
   }
 
   revalidatePath("/academy/finance");
+  revalidatePath("/academy/finance/approvals");
   return { ok: true };
 }

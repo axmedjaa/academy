@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listStudentCharges, listStudentPayments } from "@/lib/academies/student-payments";
 import { listIncomeRecords } from "@/lib/academies/income-records";
@@ -9,8 +10,10 @@ import { FinanceIncomeExpenses } from "./finance-income-expenses";
 /**
  * PLAN.md Phase 4, Item 51 — `/academy/finance` (Charges/Payments tabs),
  * extended by Item 53 with Income/Expenses tabs. DESIGN.md §9.6 also lists
- * a dashboard tab, an approvals queue, and finance reports — out of scope
- * (approvals is Item 52's page, reports is Item 55's).
+ * a dashboard tab, an approvals queue, and finance reports — the approvals
+ * queue now lives at its own dedicated `/academy/finance/approvals` route
+ * (confirmed Phase 4 audit gap fix; linked from here when the caller can
+ * approve), and reports remain Item 55's separate page.
  *
  * Same gating shape as app/academy/branches/page.tsx: the `/academy/*`
  * layout already ran a base subscription/membership check but has no
@@ -79,11 +82,18 @@ export default async function AcademyFinancePage() {
         Student charges, manual payment recording, receipts, and income/expense records. Not a
         general ledger — every payment is manually recorded after the fact.
       </p>
+      {paymentsResult.ok && paymentsResult.canApprove && (
+        <p>
+          <Link href="/academy/finance/approvals">View pending student-payment approvals →</Link>
+        </p>
+      )}
       {chargesResult.ok && paymentsResult.ok && (
         <FinanceChargesPayments
           charges={chargesResult.charges}
           payments={paymentsResult.payments}
           canManage={chargesResult.canManage}
+          canApprove={paymentsResult.canApprove}
+          currentUserId={context.userId}
         />
       )}
       <FinanceIncomeExpenses
@@ -92,6 +102,7 @@ export default async function AcademyFinancePage() {
         expenses={expensesResult.ok ? expensesResult.records : null}
         expenseCanCreate={expensesResult.ok ? expensesResult.canCreate : false}
         expenseCanApprove={expensesResult.ok ? expensesResult.canApprove : false}
+        currentUserId={context.userId}
       />
     </main>
   );

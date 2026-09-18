@@ -6,11 +6,14 @@ import {
   academies,
   academyMemberships,
   academySubscriptions,
+  approvalRequests,
   auditLogs,
   branches,
   expenseRecords,
   incomeRecords,
+  notifications,
   receipts,
+  studentCharges,
   students,
   studentPayments,
   subscriptionPlans,
@@ -26,6 +29,7 @@ import {
   reverseIncomeRecord,
   reverseStudentPayment,
 } from "./finance-reversals";
+import { approveStudentPayment, recordStudentPayment } from "./student-payments";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -113,12 +117,14 @@ async function insertPaymentDirect(
   recordedByUserId: string,
   status: "pending_approval" | "approved" | "rejected" | "reversed" = "approved",
   amountCents = 5_000,
+  chargeId?: string,
 ): Promise<string> {
   const [row] = await db
     .insert(studentPayments)
     .values({
       academyId,
       studentId,
+      chargeId,
       amountCents,
       currency: "USD",
       method: "cash",
@@ -129,6 +135,29 @@ async function insertPaymentDirect(
       approvedAt: status === "approved" ? new Date() : undefined,
     })
     .returning({ id: studentPayments.id });
+  return row.id;
+}
+
+/** Same shape as student-payments.test.ts's own `insertChargeDirect` — this
+ * file didn't need `student_charges` at all until the confirmed Phase 4
+ * audit gap fix (charge-status recalculation on reversal/adjustment). */
+async function insertChargeDirect(
+  academyId: string,
+  studentId: string,
+  creatorUserId: string,
+  amountCents = 10_000,
+): Promise<string> {
+  const [row] = await db
+    .insert(studentCharges)
+    .values({
+      academyId,
+      studentId,
+      description: "Tuition",
+      amountCents,
+      currency: "USD",
+      createdBy: creatorUserId,
+    })
+    .returning({ id: studentCharges.id });
   return row.id;
 }
 
@@ -251,6 +280,10 @@ afterAll(async () => {
       .set({ reversedPaymentId: null })
       .where(eq(studentPayments.academyId, academyId));
     await db.delete(studentPayments).where(eq(studentPayments.academyId, academyId));
+    // Added alongside the charge-recalculation-on-reversal tests — payments
+    // reference charges (never the reverse), so this must run after the
+    // studentPayments delete above.
+    await db.delete(studentCharges).where(eq(studentCharges.academyId, academyId));
 
     await db
       .update(incomeRecords)
@@ -264,6 +297,15 @@ afterAll(async () => {
       .where(eq(expenseRecords.academyId, academyId));
     await db.delete(expenseRecords).where(eq(expenseRecords.academyId, academyId));
 
+    // Added alongside the charge-recalculation-on-reversal tests — those
+    // use the real recordStudentPayment (unlike this file's other,
+    // direct-insert-only tests), which creates a genuine approval_requests
+    // row (and, via createApprovalRequest's own notification side effect, a
+    // notifications row) per PLAN.md Item 52's confirmed gap fix. Both must
+    // be deleted before the academy itself, same FK-ordering reasoning as
+    // every other table in this teardown.
+    await db.delete(approvalRequests).where(eq(approvalRequests.academyId, academyId));
+    await db.delete(notifications).where(eq(notifications.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
     await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
@@ -454,6 +496,177 @@ describe("reverseStudentPayment — mechanics, state, reason, self-reversal, aud
     const result = await reverseStudentPayment(manager.context, randomUUID(), "N/A");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
+// =============================================================================
+// Confirmed Phase 4 post-implementation audit gap fix — reversing/adjusting
+// a charge-linked student payment must recalculate the linked
+// student_charges.status the same way approveStudentPayment already does.
+// Uses the REAL recordStudentPayment/approveStudentPayment functions (not
+// insertPaymentDirect) to build up the "approved, charge-linked" starting
+// state, since the recalculation only ever runs inside those functions'
+// own transactions — a direct insert of an "approved" row would never have
+// triggered it in the first place, which would make requirement 1 below
+// untestable as a REGRESSION check (it would trivially pass even if the
+// approval-side recalculation itself were broken).
+// =============================================================================
+describe("reversal/adjustment recalculates the linked student_charges.status (Phase 4 audit gap fix)", () => {
+  it("1. sanity check: an approved, charge-linked payment makes the charge paid/partially_paid as appropriate (pre-existing approveStudentPayment behavior, unchanged)", async () => {
+    const recorder = await setupAcademy("manager");
+    const approver = await addActingUser(recorder.academyId, "manager");
+    const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
+
+    const partial = await recordStudentPayment(recorder.context, {
+      studentId: recorder.studentId,
+      chargeId,
+      amountCents: 4_000,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(partial.ok).toBe(true);
+    if (!partial.ok) return;
+    await approveStudentPayment(approver.context, partial.payment.id);
+
+    let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
+    expect(charge.status).toBe("partially_paid");
+
+    const rest = await recordStudentPayment(recorder.context, {
+      studentId: recorder.studentId,
+      chargeId,
+      amountCents: 6_000,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(rest.ok).toBe(true);
+    if (!rest.ok) return;
+    await approveStudentPayment(approver.context, rest.payment.id);
+
+    [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
+    expect(charge.status).toBe("paid");
+  });
+
+  it("2. reversing a fully-paid charge's only approved payment recalculates the charge back to 'open'", async () => {
+    const recorder = await setupAcademy("manager");
+    const approver = await addActingUser(recorder.academyId, "manager");
+    const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
+
+    const payment = await recordStudentPayment(recorder.context, {
+      studentId: recorder.studentId,
+      chargeId,
+      amountCents: 10_000,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(payment.ok).toBe(true);
+    if (!payment.ok) return;
+    await approveStudentPayment(approver.context, payment.payment.id);
+
+    let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
+    expect(charge.status).toBe("paid");
+
+    // Reversed by a THIRD user (not the recorder, not required to be the
+    // same approver) — any Manager who isn't the recorder may reverse.
+    const reverser = await addActingUser(recorder.academyId, "manager");
+    const reversed = await reverseStudentPayment(reverser.context, payment.payment.id, "Bounced cheque.");
+    expect(reversed.ok).toBe(true);
+
+    [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
+    expect(charge.status).toBe("open");
+  });
+
+  it("3. adjusting an approved payment down to a smaller corrected amount recalculates the charge from 'paid' to 'partially_paid'", async () => {
+    const recorder = await setupAcademy("manager");
+    const approver = await addActingUser(recorder.academyId, "manager");
+    const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
+
+    const payment = await recordStudentPayment(recorder.context, {
+      studentId: recorder.studentId,
+      chargeId,
+      amountCents: 10_000,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(payment.ok).toBe(true);
+    if (!payment.ok) return;
+    await approveStudentPayment(approver.context, payment.payment.id);
+
+    let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
+    expect(charge.status).toBe("paid");
+
+    // adjustStudentPayment flips the ORIGINAL to "reversed" (per this
+    // file's own module comment: an adjustment never leaves a live
+    // "approved" row) — the corrected 4,000 lands on a new row that is
+    // itself born "reversed", so it never counts toward the charge either.
+    // The charge's paid total after this adjustment is therefore 0, not
+    // 4,000 — matching the module comment's "adjustX only fixes the audit
+    // trail's record, it does not re-inject money into any report" rule.
+    const reverser = await addActingUser(recorder.academyId, "manager");
+    const adjusted = await adjustStudentPayment(reverser.context, payment.payment.id, "Recorded wrong amount.", 4_000);
+    expect(adjusted.ok).toBe(true);
+
+    [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
+    expect(charge.status).toBe("open");
+  });
+
+  it("4. reversing one of several approved payments on the same charge leaves the charge reflecting the correct remaining aggregate", async () => {
+    const recorder = await setupAcademy("manager");
+    const approver = await addActingUser(recorder.academyId, "manager");
+    const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
+
+    const first = await recordStudentPayment(recorder.context, {
+      studentId: recorder.studentId,
+      chargeId,
+      amountCents: 3_000,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await approveStudentPayment(approver.context, first.payment.id);
+
+    const second = await recordStudentPayment(recorder.context, {
+      studentId: recorder.studentId,
+      chargeId,
+      amountCents: 4_000,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    await approveStudentPayment(approver.context, second.payment.id);
+
+    const third = await recordStudentPayment(recorder.context, {
+      studentId: recorder.studentId,
+      chargeId,
+      amountCents: 3_000,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(third.ok).toBe(true);
+    if (!third.ok) return;
+    await approveStudentPayment(approver.context, third.payment.id);
+
+    let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
+    expect(charge.status).toBe("paid"); // 3,000 + 4,000 + 3,000 = 10,000
+
+    // Reverse only the middle (4,000) payment — 3,000 + 3,000 = 6,000 remains
+    // approved, which is > 0 and < 10,000 -> partially_paid.
+    const reverser = await addActingUser(recorder.academyId, "manager");
+    const reversed = await reverseStudentPayment(reverser.context, second.payment.id, "Duplicate entry.");
+    expect(reversed.ok).toBe(true);
+
+    [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
+    expect(charge.status).toBe("partially_paid");
+  });
+
+  it("5. reversing a payment with no linked charge (chargeId null) succeeds with no recalculation attempted", async () => {
+    const { academyId, studentId, recorderUserId } = await setupAcademy("manager");
+    const manager = await addActingUser(academyId, "manager");
+    const paymentId = await insertPaymentDirect(academyId, studentId, recorderUserId, "approved", 5_000);
+
+    const result = await reverseStudentPayment(manager.context, paymentId, "No charge attached.");
+    expect(result.ok).toBe(true);
   });
 });
 

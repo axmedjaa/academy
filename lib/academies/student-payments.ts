@@ -412,7 +412,19 @@ export async function listStudentCharges(
 }
 
 export type ListStudentPaymentsResult =
-  | { ok: true; payments: StudentPaymentRecord[]; canManage: boolean }
+  | {
+      ok: true;
+      payments: StudentPaymentRecord[];
+      canManage: boolean;
+      /** UI-gap fix (Phase 4 audit, Item 52): whether this caller can
+       * approve/reject/reverse/adjust a payment — `canApprove`'s stricter
+       * "full" (Manager)-only gate, distinct from `canManage`'s
+       * "full"-or-"manage" (also Finance Officer). Exposed here the same
+       * way `listExpenseRecords` already exposes both its `canCreate` and
+       * `canApprove` flags, so the UI can decide what to render without
+       * re-deriving the permission level itself. */
+      canApprove: boolean;
+    }
   | { ok: false; error: StudentPaymentsActionError };
 
 export async function listStudentPayments(
@@ -433,7 +445,12 @@ export async function listStudentPayments(
     .from(studentPayments)
     .where(and(...conditions));
 
-  return { ok: true, payments: rows.map(toPaymentRecord), canManage: canManage(permissionLevel) };
+  return {
+    ok: true,
+    payments: rows.map(toPaymentRecord),
+    canManage: canManage(permissionLevel),
+    canApprove: canApprove(permissionLevel),
+  };
 }
 
 export type GetReceiptResult =
@@ -916,15 +933,28 @@ function alreadyProcessedError(status: string, verb: "approved" | "rejected"): S
  * status-derivation note below," and elsewhere: "Whenever a `student_payments`
  * row referencing this charge is approved..., the charge's paid-to-date
  * total is recalculated inside that same approval transaction." This is
- * that recalculation, called only from `approveStudentPayment` (rejecting or
- * reversing a payment never increases the approved-paid total, so neither
- * `rejectStudentPayment` nor Item 54's reversal path needs to call this —
- * a rejected payment was never counted, and a reversed payment's own
- * status stops being "approved," which the live re-`SUM` below already
- * accounts for on its next recalculation, though nothing currently
- * re-triggers that recalculation on reversal; flagged as a related,
- * out-of-scope-for-this-fix follow-up in this item's final report, not
- * silently addressed here).
+ * that recalculation, called from `approveStudentPayment` below AND —
+ * confirmed Phase 4 post-implementation audit gap fix — from
+ * `lib/academies/finance-reversals.ts`'s `reverseStudentPayment`/
+ * `adjustStudentPayment` once a charge-linked payment's status stops being
+ * `"approved"`. A rejected payment was never counted in the first place
+ * (`rejectStudentPayment` still doesn't call this — nothing changes for it
+ * to recalculate), but a *reversed* payment WAS counted and must be
+ * removed from the charge's paid total, which only happens by re-running
+ * this same live re-`SUM`. Exported (not file-local) specifically so that
+ * caller can reuse it rather than duplicating the recalculation logic.
+ *
+ * ---------------------------------------------------------------------
+ * Why the fix lives here as an export, not as new logic in
+ * finance-reversals.ts
+ * ---------------------------------------------------------------------
+ * This function's status-derivation rule, race-safety (row lock), and
+ * "leave a cancelled charge alone" exception are all specific to
+ * `student_charges` and already fully correct — duplicating any of that
+ * in finance-reversals.ts would risk the two copies drifting apart. The
+ * only thing finance-reversals.ts needs is "recalculate this charge, from
+ * inside my own transaction, after this reversal/adjustment" — exactly
+ * this function's existing signature.
  *
  * Race-safety: locks the `student_charges` row (`SELECT ... FOR UPDATE`)
  * inside the SAME transaction as `approveStudentPayment`'s own payment-row
@@ -951,7 +981,7 @@ function alreadyProcessedError(status: string, verb: "approved" | "rejected"): S
  * would contradict that. This is a judgment call, since no item in this
  * phase actually builds `cancelChargeAction` yet.
  */
-async function recalculateStudentChargeStatus(
+export async function recalculateStudentChargeStatus(
   tx: DbClient,
   chargeId: string,
   actorUserId: string,

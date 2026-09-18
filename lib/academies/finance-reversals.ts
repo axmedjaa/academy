@@ -13,6 +13,7 @@ import {
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
+import { recalculateStudentChargeStatus } from "@/lib/academies/student-payments";
 
 /**
  * PLAN.md Phase 4, Item 54 — `reverseTransaction`/`adjustTransaction` for
@@ -167,6 +168,24 @@ import type { AcademyRole } from "@/lib/auth/roles";
  * insert a linked row — the second transaction blocks on the lock, then
  * (after the first commits) re-reads `"reversed"` and is refused with
  * `invalid_state`.
+ *
+ * =========================================================================
+ * Confirmed Phase 4 post-implementation audit gap fix — charge-status
+ * recalculation on payment reversal/adjustment
+ * =========================================================================
+ * `approveStudentPayment` (lib/academies/student-payments.ts) recalculates
+ * a charge-linked payment's `student_charges.status` inside its own
+ * transaction, but until this fix, reversing or adjusting that same
+ * payment never re-triggered that recalculation — the charge could keep
+ * reading `"paid"`/`"partially_paid"` after the payment funding that status
+ * was reversed. `reverseOrAdjustStudentPaymentInternal` below now calls the
+ * SAME exported `recalculateStudentChargeStatus` helper (reused, not
+ * duplicated) whenever the reversed/adjusted payment has a `chargeId`,
+ * inside the same transaction as the reversal itself — exactly mirroring
+ * how `approveStudentPayment` already calls it. Only `student_payments` has
+ * a linked-charge concept; `income_records`/`expense_records` have no
+ * analogous derived-status entity, so neither of their reversal paths needs
+ * an equivalent call.
  */
 
 export interface FinanceReversalError {
@@ -326,6 +345,15 @@ async function reverseOrAdjustStudentPaymentInternal(
       },
       tx,
     );
+
+    // Confirmed Phase 4 audit gap fix — see this file's module comment.
+    // The reversed/adjusted payment no longer counts as "approved," so the
+    // linked charge (if any) must be re-derived in the same transaction,
+    // exactly as approveStudentPayment already does on the opposite
+    // transition.
+    if (original.chargeId) {
+      await recalculateStudentChargeStatus(tx, original.chargeId, actorContext.userId, membershipRole);
+    }
 
     return { kind: "ok" as const, original: updatedOriginal, reversal };
   });
