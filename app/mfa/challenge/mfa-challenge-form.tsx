@@ -1,28 +1,30 @@
 "use client";
 
 import { useState, useActionState } from "react";
+import { challengeMfa, type ChallengeMfaState } from "@/lib/auth/mfa-actions";
 import {
-  challengeMfa,
-  type ChallengeMfaState,
-} from "@/lib/auth/mfa-actions";
+  AuthErrorBanner,
+  fieldInputStyle,
+  fieldLabelStyle,
+  formColumnStyle,
+  PrimaryButton,
+  SecondaryButton,
+} from "@/lib/ui/auth-components";
+import { spacing } from "@/lib/ui/theme";
 
 const initialState: ChallengeMfaState = { ok: false };
 
+/** Pure restyle — `challengeMfa`'s TOTP/recovery-code mode toggle and
+ * rate-limited/error handling are unchanged. */
 export function MfaChallengeForm() {
-  const [state, formAction, pending] = useActionState(
-    challengeMfa,
-    initialState,
-  );
+  const [state, formAction, pending] = useActionState(challengeMfa, initialState);
   const [mode, setMode] = useState<"totp" | "recovery">("totp");
 
   return (
-    <form
-      action={formAction}
-      style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}
-    >
+    <form action={formAction} style={formColumnStyle}>
       <input type="hidden" name="mode" value={mode} />
       {mode === "totp" ? (
-        <label>
+        <label style={fieldLabelStyle}>
           6-digit code
           <input
             type="text"
@@ -32,41 +34,25 @@ export function MfaChallengeForm() {
             maxLength={6}
             required
             autoComplete="one-time-code"
-            style={{ display: "block", width: "100%" }}
+            style={{ ...fieldInputStyle, textAlign: "center", letterSpacing: "0.3em", fontSize: "1.1rem" }}
           />
         </label>
       ) : (
-        <label>
+        <label style={fieldLabelStyle}>
           Recovery code
-          <input
-            type="text"
-            name="code"
-            placeholder="XXXXX-XXXXX"
-            required
-            autoComplete="off"
-            style={{ display: "block", width: "100%" }}
-          />
+          <input type="text" name="code" placeholder="XXXXX-XXXXX" required autoComplete="off" style={fieldInputStyle} />
         </label>
       )}
 
-      {state.error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {state.error.message}
-        </p>
-      )}
+      {state.error && <AuthErrorBanner code={state.error.code} message={state.error.message} />}
 
-      <button type="submit" disabled={pending}>
+      <PrimaryButton type="submit" disabled={pending}>
         {pending ? "Verifying..." : "Verify"}
-      </button>
+      </PrimaryButton>
 
-      <button
-        type="button"
-        onClick={() => setMode(mode === "totp" ? "recovery" : "totp")}
-      >
-        {mode === "totp"
-          ? "Use a recovery code instead"
-          : "Use your authenticator app instead"}
-      </button>
+      <SecondaryButton type="button" style={{ width: "100%", marginTop: spacing.xxs }} onClick={() => setMode(mode === "totp" ? "recovery" : "totp")}>
+        {mode === "totp" ? "Use a recovery code instead" : "Use your authenticator app instead"}
+      </SecondaryButton>
     </form>
   );
 }

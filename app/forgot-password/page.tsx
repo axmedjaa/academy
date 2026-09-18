@@ -1,55 +1,49 @@
 "use client";
 
 import { useActionState } from "react";
+import { requestPasswordReset, type ForgotPasswordState } from "@/lib/auth/actions";
 import {
-  requestPasswordReset,
-  type ForgotPasswordState,
-} from "@/lib/auth/actions";
+  AuthCard,
+  AuthErrorBanner,
+  AuthLink,
+  fieldInputStyle,
+  fieldLabelStyle,
+  formColumnStyle,
+  PrimaryButton,
+  SuccessBanner,
+} from "@/lib/ui/auth-components";
 
 const initialState: ForgotPasswordState = { ok: false };
 
+/**
+ * DESIGN.md §7: `/forgot-password` — "C. Single email field; neutral
+ * confirmation regardless of whether the email exists (§11.8)." Pure
+ * restyle — `requestPasswordReset` (lib/auth/actions.ts) is unchanged and
+ * still returns the identical neutral message whether or not the account
+ * exists; this page only renders it.
+ */
 export default function ForgotPasswordPage() {
-  const [state, formAction, pending] = useActionState(
-    requestPasswordReset,
-    initialState,
-  );
+  const [state, formAction, pending] = useActionState(requestPasswordReset, initialState);
 
   return (
-    <main
-      style={{
-        maxWidth: 360,
-        margin: "4rem auto",
-        fontFamily: "system-ui, sans-serif",
-      }}
-    >
-      <h1>Forgot password</h1>
+    <AuthCard title="Forgot password" subtitle="We'll email you a link to reset it">
       {state.ok && state.message ? (
-        <p role="status">{state.message}</p>
+        <SuccessBanner message={state.message} />
       ) : (
-        <form
-          action={formAction}
-          style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}
-        >
-          <label>
+        <form action={formAction} style={formColumnStyle}>
+          <label style={fieldLabelStyle}>
             Email
-            <input
-              type="email"
-              name="email"
-              required
-              autoComplete="email"
-              style={{ display: "block", width: "100%" }}
-            />
+            <input type="email" name="email" required autoComplete="email" style={fieldInputStyle} />
           </label>
-          {state.error && (
-            <p role="alert" style={{ color: "crimson" }}>
-              {state.error.message}
-            </p>
-          )}
-          <button type="submit" disabled={pending}>
+          {state.error && <AuthErrorBanner code={state.error.code} message={state.error.message} />}
+          <PrimaryButton type="submit" disabled={pending}>
             {pending ? "Sending..." : "Send reset link"}
-          </button>
+          </PrimaryButton>
         </form>
       )}
-    </main>
+      <div style={{ textAlign: "center", marginTop: "1rem" }}>
+        <AuthLink href="/login">Back to sign in</AuthLink>
+      </div>
+    </AuthCard>
   );
 }

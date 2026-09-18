@@ -2,8 +2,13 @@ import { redirect } from "next/navigation";
 import { resolveMfaFlowUserId } from "@/lib/auth/mfa-flow-identity";
 import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
 import { enrollMfa } from "@/lib/auth/mfa-actions";
+import { AuthCard } from "@/lib/ui/auth-components";
 import { MfaSetupForm } from "./mfa-setup-form";
 
+/** DESIGN.md §7: `/mfa/setup` (Platform Owner only, forced on first login)
+ * — "C. QR code + manual-entry fallback code + 6-digit confirmation input."
+ * Pure restyle — gating (`resolveMfaFlowUserId`, `hasVerifiedMfaCredential`)
+ * and `enrollMfa()` are unchanged. */
 export default async function MfaSetupPage() {
   // Reached either via the forced first-login redirect (pending cookie,
   // no session yet) or voluntarily by an already-signed-in user.
@@ -21,15 +26,8 @@ export default async function MfaSetupPage() {
   const { secretBase32, qrCodeDataUrl } = await enrollMfa();
 
   return (
-    <main
-      style={{
-        maxWidth: 420,
-        margin: "4rem auto",
-        fontFamily: "system-ui, sans-serif",
-      }}
-    >
-      <h1>Set up two-factor authentication</h1>
+    <AuthCard title="Set up two-factor authentication" maxWidth={440}>
       <MfaSetupForm secretBase32={secretBase32} qrCodeDataUrl={qrCodeDataUrl} />
-    </main>
+    </AuthCard>
   );
 }

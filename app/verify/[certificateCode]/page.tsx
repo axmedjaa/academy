@@ -1,5 +1,8 @@
 import { headers } from "next/headers";
 import { verifyCertificate } from "@/lib/academies/certificates";
+import { AuthLogo } from "@/lib/ui/auth-components";
+import { color, radius, spacing } from "@/lib/ui/theme";
+import { VerifyLookupForm } from "../lookup-form";
 
 /**
  * PLAN.md Phase 5, Item 62 — `/verify/[certificateCode]`. DESIGN.md §10:
@@ -11,15 +14,31 @@ import { verifyCertificate } from "@/lib/academies/certificates";
  * zero inherited navigation by construction; no route group is needed to
  * opt out of anything.
  *
+ * ---------------------------------------------------------------------
+ * Visual redesign (this wave) — Stitch reference vs. DESIGN.md conflict
+ * ---------------------------------------------------------------------
+ * `stitch_resource_file_manager/.../verify_certificate/code.html` is the
+ * one Stitch mockup that exists for any public/auth route. It is used here
+ * ONLY for its structural language (centered "Registry Lookup" input box,
+ * an official-looking result panel with a status banner) — NOT verbatim:
+ * that mockup (a) wraps the content in the full authenticated dashboard
+ * sidebar/header shell, which directly contradicts DESIGN.md §10's "no app
+ * chrome, no navigation" and is dropped entirely, and (b) invents a large
+ * amount of fictional content (QR code, SHA-256 "ledger hash", cohort/grade
+ * percentage, signatory names, Print/PDF/Share buttons) that has no backing
+ * field anywhere in `verifyCertificate`'s real return type
+ * (`PublicCertificateVerification`: studentName/programName/issuedAt/status
+ * only). None of that fictional content is reproduced — DESIGN.md's exact,
+ * minimal field list wins per this task's "DESIGN.md is authoritative on
+ * conflict" rule. No print/PDF/download functionality is added, per this
+ * task's explicit constraint.
+ *
  * Server Component: reads `headers()` directly (no client-side fetch),
  * extracting the client IP the same way lib/auth/actions.ts's
  * `getClientIp` does (first `x-forwarded-for` entry), and passes both IP
  * and user-agent straight into `verifyCertificate`, which does its own
- * rate-limiting and lookup. This page never queries the database itself —
- * every field it can possibly render is already limited to whatever
- * `verifyCertificate`'s `PublicCertificateVerification` type exposes
- * (studentName/programName/issuedAt/status), so there is no separate
- * leakage surface to audit here beyond that function's own.
+ * rate-limiting and lookup — this call and its inputs are completely
+ * unchanged from before this restyle.
  *
  * Not-found and rate-limited both render a generic message and neither one
  * is styled or worded to look like a "yes, a certificate exists but..."
@@ -47,66 +66,156 @@ function formatDate(date: Date): string {
   }).format(date);
 }
 
-const PAGE_STYLE = {
-  maxWidth: 480,
-  margin: "4rem auto",
-  padding: "0 1rem",
-  fontFamily: "system-ui, sans-serif",
-} as const;
-
 export default async function VerifyCertificatePage({
   params,
 }: {
   params: Promise<{ certificateCode: string }>;
 }) {
   const { certificateCode } = await params;
+  const decodedCode = decodeURIComponent(certificateCode);
   const headerList = await headers();
   const ip = getClientIp(headerList);
   const userAgent = headerList.get("user-agent") ?? undefined;
 
-  const result = await verifyCertificate(decodeURIComponent(certificateCode), ip, userAgent);
-
-  if (!result.ok) {
-    const message =
-      result.error.code === "rate_limited"
-        ? "Too many verification attempts from this location. Please try again later."
-        : "No certificate was found for this code. Please check the code and try again.";
-    return (
-      <main style={PAGE_STYLE}>
-        <h1>Certificate Verification</h1>
-        <p role="alert">{message}</p>
-      </main>
-    );
-  }
-
-  const { certificate } = result;
-  const isValid = certificate.status === "valid";
+  const result = await verifyCertificate(decodedCode, ip, userAgent);
 
   return (
-    <main style={PAGE_STYLE}>
-      <h1>Certificate Verification</h1>
-      <p
+    <div style={{ minHeight: "100vh", backgroundColor: color.bg, padding: `${spacing.xxl} ${spacing.md}` }}>
+      <div style={{ maxWidth: 560, margin: "0 auto" }}>
+        <AuthLogo />
+        <div style={{ textAlign: "center", marginBottom: spacing.xl }}>
+          <h1 style={{ margin: 0, fontSize: "1.6rem", color: color.text }}>Verify Certificate</h1>
+          <p style={{ margin: 0, marginTop: spacing.xxs, fontSize: "0.9rem", color: color.textMuted }}>
+            Enter a certificate code to check whether it was genuinely issued by this academy.
+          </p>
+        </div>
+
+        <VerifyLookupForm initialCode={decodedCode} />
+
+        <div style={{ marginTop: spacing.xl }}>
+          {!result.ok ? (
+            <div
+              role="alert"
+              style={{
+                backgroundColor: color.card,
+                border: `1px solid ${color.border}`,
+                borderRadius: radius.card,
+                boxShadow: "0 1px 3px 0 rgba(15, 23, 42, 0.06)",
+                padding: spacing.lg,
+                textAlign: "center",
+                color: color.textMuted,
+              }}
+            >
+              {result.error.code === "rate_limited"
+                ? "Too many verification attempts from this location. Please try again later."
+                : "No certificate was found for this code. Please check the code and try again."}
+            </div>
+          ) : (
+            <VerificationResult
+              studentName={result.certificate.studentName}
+              programName={result.certificate.programName}
+              issuedAt={result.certificate.issuedAt}
+              status={result.certificate.status}
+              certificateCode={decodedCode}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VerificationResult({
+  studentName,
+  programName,
+  issuedAt,
+  status,
+  certificateCode,
+}: {
+  studentName: string;
+  programName: string;
+  issuedAt: Date;
+  status: "valid" | "cancelled";
+  certificateCode: string;
+}) {
+  const isValid = status === "valid";
+  const bannerBg = isValid ? color.statusGreenBg : color.statusSlateBg;
+  const bannerFg = isValid ? color.statusGreen : color.statusSlate;
+
+  return (
+    <div
+      style={{
+        backgroundColor: color.card,
+        border: `1px solid ${color.border}`,
+        borderRadius: radius.card,
+        boxShadow: "0 1px 3px 0 rgba(15, 23, 42, 0.06)",
+        overflow: "hidden",
+      }}
+    >
+      <div
         style={{
-          display: "inline-block",
-          padding: "0.25rem 0.75rem",
-          borderRadius: 999,
-          fontWeight: 600,
-          color: isValid ? "#075e2a" : "#7a1717",
-          backgroundColor: isValid ? "#e3f6e8" : "#fbe6e6",
+          backgroundColor: bannerBg,
+          color: bannerFg,
+          padding: spacing.md,
+          display: "flex",
+          alignItems: "center",
+          gap: spacing.sm,
+          fontWeight: 700,
         }}
       >
-        {isValid ? "Valid" : "Cancelled"}
-      </p>
-      <dl>
-        <dt style={{ fontWeight: 600, marginTop: "1rem" }}>Student Name</dt>
-        <dd style={{ margin: 0 }}>{certificate.studentName}</dd>
+        <span
+          aria-hidden="true"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: "50%",
+            backgroundColor: bannerFg,
+            color: "#fff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "0.9rem",
+          }}
+        >
+          {isValid ? "✓" : "–"}
+        </span>
+        {isValid ? "Valid Certificate" : "Certificate Cancelled"}
+      </div>
 
-        <dt style={{ fontWeight: 600, marginTop: "1rem" }}>Program</dt>
-        <dd style={{ margin: 0 }}>{certificate.programName}</dd>
-
-        <dt style={{ fontWeight: 600, marginTop: "1rem" }}>Issue Date</dt>
-        <dd style={{ margin: 0 }}>{formatDate(certificate.issuedAt)}</dd>
+      <dl style={{ padding: spacing.lg, margin: 0, display: "flex", flexDirection: "column", gap: spacing.md }}>
+        <div>
+          <dt style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.04em", color: color.textMuted }}>
+            Student Name
+          </dt>
+          <dd style={{ margin: 0, marginTop: "0.2rem", fontSize: "1.1rem", fontWeight: 600, color: color.text }}>
+            {studentName}
+          </dd>
+        </div>
+        <div>
+          <dt style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.04em", color: color.textMuted }}>
+            Program
+          </dt>
+          <dd style={{ margin: 0, marginTop: "0.2rem", fontSize: "1rem", color: color.text }}>{programName}</dd>
+        </div>
+        <div style={{ display: "flex", gap: spacing.xl }}>
+          <div>
+            <dt style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.04em", color: color.textMuted }}>
+              Issue Date
+            </dt>
+            <dd style={{ margin: 0, marginTop: "0.2rem", fontSize: "0.95rem", color: color.text }}>
+              {formatDate(issuedAt)}
+            </dd>
+          </div>
+          <div>
+            <dt style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.04em", color: color.textMuted }}>
+              Certificate Code
+            </dt>
+            <dd style={{ margin: 0, marginTop: "0.2rem", fontSize: "0.85rem", fontFamily: "monospace", color: color.text }}>
+              {certificateCode}
+            </dd>
+          </div>
+        </div>
       </dl>
-    </main>
+    </div>
   );
 }
