@@ -1,10 +1,11 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
   batchEnrollments,
   batchTrainerAssignments,
   batches,
+  courses,
   staffBranchAssignments,
   staffProfiles,
   students,
@@ -891,4 +892,118 @@ export async function listMyAssignedBatches(
 
   const batchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
   return { ok: true, batchIds };
+}
+
+// ===========================================================================
+// Simple course/enrollment model — display enrichment + single-course-at-a-
+// time editing, both built entirely on the existing Student -> Batch ->
+// Course relationship above (batch_enrollments + batches.course_id). No new
+// table, no new relationship — see lib/academies/courses.ts's
+// listCourseEnrollments for the course-centric counterpart of this same
+// join, kept here instead since this direction (student -> their course(s))
+// is naturally an enrollment-domain read.
+// ===========================================================================
+
+export interface StudentActiveCourse {
+  batchId: string;
+  batchName: string;
+  courseName: string;
+}
+
+/**
+ * Batch-fetches each given student's ACTIVE enrollment(s) (course + batch
+ * name), for the `/academy/students` list's "Course" column. Not
+ * separately access-gated — every caller today already resolved
+ * `searchStudents`/`checkAcademyAccessForContext` before reaching this, and
+ * it takes an academyId directly (not an AuthContext) purely as a display
+ * enrichment, same shape as e.g. listBatchEnrollments's joined display
+ * fields (studentFullName/studentNumber) being UI convenience, not their
+ * own authorization decision.
+ */
+export async function getActiveCoursesForStudents(
+  academyId: string,
+  studentIds: string[],
+): Promise<Map<string, StudentActiveCourse[]>> {
+  const result = new Map<string, StudentActiveCourse[]>();
+  if (studentIds.length === 0) return result;
+
+  const rows = await db
+    .select({
+      studentId: batchEnrollments.studentId,
+      batchId: batches.id,
+      batchName: batches.name,
+      courseName: courses.name,
+    })
+    .from(batchEnrollments)
+    .innerJoin(batches, eq(batches.id, batchEnrollments.batchId))
+    .innerJoin(courses, eq(courses.id, batches.courseId))
+    .where(
+      and(
+        eq(batchEnrollments.academyId, academyId),
+        eq(batchEnrollments.status, "active"),
+        inArray(batchEnrollments.studentId, studentIds),
+      ),
+    );
+
+  for (const row of rows) {
+    const existing = result.get(row.studentId) ?? [];
+    existing.push({ batchId: row.batchId, batchName: row.batchName, courseName: row.courseName });
+    result.set(row.studentId, existing);
+  }
+  return result;
+}
+
+export type UpdateStudentEnrollmentResult = { ok: true } | { ok: false; error: BatchAssignmentActionError };
+
+/**
+ * "Change this student's course" — the admin-facing edit action referenced
+ * by PLAN's "update a student's enrollment if the existing system supports
+ * editing students." Reuses `enrollStudentInBatch`/`withdrawStudentFromBatch`
+ * unmodified: withdraws every currently-active enrollment for the student,
+ * then (if a new batch was chosen) enrolls into it — plain orchestration of
+ * two already-existing, already-tested actions, no new enrollment logic.
+ * Passing an empty/undefined `newBatchId` just withdraws, leaving the
+ * student with no active course (this action's own access/scope checks are
+ * inherited entirely from the two functions it calls).
+ */
+export async function updateStudentEnrollment(
+  actorContext: AuthContext,
+  studentId: string,
+  newBatchId: string | undefined,
+): Promise<UpdateStudentEnrollmentResult> {
+  const resolved = await resolveScopeAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId } = resolved.access;
+
+  const parsedStudentId = z.string().uuid().safeParse(studentId);
+  if (!parsedStudentId.success) return { ok: false, error: STUDENT_NOT_FOUND };
+
+  const activeEnrollments = await db
+    .select({ id: batchEnrollments.id, batchId: batchEnrollments.batchId })
+    .from(batchEnrollments)
+    .where(
+      and(
+        eq(batchEnrollments.studentId, studentId),
+        eq(batchEnrollments.academyId, academyId),
+        eq(batchEnrollments.status, "active"),
+      ),
+    );
+
+  for (const enrollment of activeEnrollments) {
+    if (enrollment.batchId === newBatchId) {
+      // Already enrolled in the requested batch — nothing to change.
+      return { ok: true };
+    }
+    const withdrawResult = await withdrawStudentFromBatch(actorContext, enrollment.id);
+    if (!withdrawResult.ok) return withdrawResult;
+  }
+
+  if (!newBatchId) {
+    return { ok: true };
+  }
+
+  const enrollResult = await enrollStudentInBatch(actorContext, { batchId: newBatchId, studentId });
+  if (!enrollResult.ok) return enrollResult;
+
+  return { ok: true };
 }

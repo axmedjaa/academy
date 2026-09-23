@@ -2,9 +2,20 @@
 
 import { useActionState, useState } from "react";
 import { updateStudent, type StudentFormState } from "@/lib/academies/students-actions";
+import {
+  updateStudentEnrollment,
+  type BatchAssignmentFormState,
+} from "@/lib/academies/batch-assignments-actions";
 import type { StudentRecord } from "@/lib/academies/students";
+import type { StudentActiveCourse } from "@/lib/academies/batch-assignments";
 
 const initialState: StudentFormState = { ok: false };
+const initialEnrollmentState: BatchAssignmentFormState = { ok: false };
+
+interface CourseOption {
+  batchId: string;
+  label: string;
+}
 
 interface Props {
   students: StudentRecord[];
@@ -18,13 +29,25 @@ interface Props {
    * branch-limited caller must never submit a `branchId` field at all, so
    * the edit form omits the control entirely rather than disabling it. */
   showBranchField: boolean;
+  /** Each student's currently active course(s), for the "Course" column —
+   * see lib/academies/batch-assignments.ts's getActiveCoursesForStudents. */
+  coursesByStudent: Map<string, StudentActiveCourse[]>;
+  /** Every non-archived batch, labeled with its course name, for the
+   * "change course" select — same shape as the registration form's course
+   * picker (app/academy/students/new/student-form.tsx). */
+  courseOptions: CourseOption[];
 }
 
-export function StudentsList({ students, canManage, showBranchField }: Props) {
+export function StudentsList({ students, canManage, showBranchField, coursesByStudent, courseOptions }: Props) {
   const [updateState, updateFormAction, updating] = useActionState(updateStudent, initialState);
+  const [enrollmentState, enrollmentFormAction, updatingEnrollment] = useActionState(
+    updateStudentEnrollment,
+    initialEnrollmentState,
+  );
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const editingStudent = students.find((student) => student.id === editingId) ?? null;
+  const editingStudentCourses = editingStudent ? (coursesByStudent.get(editingStudent.id) ?? []) : [];
 
   return (
     <section>
@@ -37,13 +60,14 @@ export function StudentsList({ students, canManage, showBranchField }: Props) {
             <th style={{ padding: "0.5rem" }}>Phone</th>
             <th style={{ padding: "0.5rem" }}>Email</th>
             <th style={{ padding: "0.5rem" }}>Guardian</th>
+            <th style={{ padding: "0.5rem" }}>Course</th>
             {canManage && <th style={{ padding: "0.5rem" }}>Actions</th>}
           </tr>
         </thead>
         <tbody>
           {students.length === 0 ? (
             <tr>
-              <td colSpan={canManage ? 7 : 6} style={{ padding: "0.5rem", color: "#666" }}>
+              <td colSpan={canManage ? 8 : 7} style={{ padding: "0.5rem", color: "#666" }}>
                 No students to show.
               </td>
             </tr>
@@ -56,6 +80,9 @@ export function StudentsList({ students, canManage, showBranchField }: Props) {
                 <td style={{ padding: "0.5rem" }}>{student.phone ?? "—"}</td>
                 <td style={{ padding: "0.5rem" }}>{student.email ?? "—"}</td>
                 <td style={{ padding: "0.5rem" }}>{student.guardianName ?? "—"}</td>
+                <td style={{ padding: "0.5rem" }}>
+                  {(coursesByStudent.get(student.id) ?? []).map((c) => c.courseName).join(", ") || "—"}
+                </td>
                 {canManage && (
                   <td style={{ padding: "0.5rem" }}>
                     <button type="button" onClick={() => setEditingId(student.id)}>
@@ -174,6 +201,43 @@ export function StudentsList({ students, canManage, showBranchField }: Props) {
               </button>
             </div>
           </form>
+
+          <div style={{ marginTop: "1rem" }}>
+            <h3 style={{ fontSize: "1rem" }}>Course</h3>
+            <p style={{ margin: 0, color: "#666" }}>
+              Current: {editingStudentCourses.map((c) => c.courseName).join(", ") || "No course selected"}
+            </p>
+            <form
+              action={enrollmentFormAction}
+              style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end", marginTop: "0.5rem", maxWidth: 420 }}
+            >
+              <input type="hidden" name="studentId" value={editingStudent.id} />
+              <label style={{ flex: 1 }}>
+                Change course
+                <select
+                  name="batchId"
+                  defaultValue={editingStudentCourses[0]?.batchId ?? ""}
+                  style={{ display: "block", width: "100%" }}
+                >
+                  <option value="">No course</option>
+                  {courseOptions.map((option) => (
+                    <option key={option.batchId} value={option.batchId}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button type="submit" disabled={updatingEnrollment}>
+                {updatingEnrollment ? "Saving..." : "Save course"}
+              </button>
+            </form>
+            {enrollmentState.error && (
+              <p role="alert" style={{ color: "crimson" }}>
+                {enrollmentState.error.message}
+              </p>
+            )}
+            {enrollmentState.ok && <p style={{ color: "green" }}>Course updated.</p>}
+          </div>
         </>
       )}
     </section>

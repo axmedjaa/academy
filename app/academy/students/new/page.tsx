@@ -3,6 +3,8 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { ACADEMY_STUDENTS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { listBranches } from "@/lib/academies/branches";
+import { listBatches } from "@/lib/academies/batches";
+import { listCourses } from "@/lib/academies/courses";
 import { StudentForm } from "./student-form";
 
 /**
@@ -59,6 +61,20 @@ export default async function NewStudentPage() {
   const branchesResult = await listBranches(context);
   const branches = branchesResult.ok ? branchesResult.branches : [];
 
+  // Course selection at registration time is really a batch selection (see
+  // student-form.tsx's module comment on why) — best-effort, same
+  // "non-fatal if the caller can't list them" convention as branches
+  // above: joined here, in the page, rather than teaching batches.ts or
+  // courses.ts about each other, since this is presentation-only.
+  const [batchesResult, coursesResult] = await Promise.all([listBatches(context), listCourses(context)]);
+  const courseNameById = new Map((coursesResult.ok ? coursesResult.courses : []).map((c) => [c.id, c.name]));
+  const courseOptions = (batchesResult.ok ? batchesResult.batches : [])
+    .filter((batch) => batch.status !== "archived")
+    .map((batch) => ({
+      batchId: batch.id,
+      label: `${courseNameById.get(batch.courseId) ?? "Unknown course"} — ${batch.name}`,
+    }));
+
   return (
     <main
       style={{
@@ -75,7 +91,10 @@ export default async function NewStudentPage() {
           assign one first.
         </p>
       ) : (
-        <StudentForm branches={branches.map((branch) => ({ id: branch.id, name: branch.name }))} />
+        <StudentForm
+          branches={branches.map((branch) => ({ id: branch.id, name: branch.name }))}
+          courseOptions={courseOptions}
+        />
       )}
     </main>
   );

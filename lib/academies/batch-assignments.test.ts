@@ -24,11 +24,13 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import {
   assignTrainerToBatch,
   enrollStudentInBatch,
+  getActiveCoursesForStudents,
   getAssignedBatchIds,
   listBatchEnrollments,
   listBatchTrainerAssignments,
   listMyAssignedBatches,
   unassignTrainerFromBatch,
+  updateStudentEnrollment,
   withdrawStudentFromBatch,
 } from "./batch-assignments";
 
@@ -640,5 +642,99 @@ describe("listBatchTrainerAssignments / listBatchEnrollments — branch scoping"
     const result = await listBatchTrainerAssignments(context, other.batchId);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
+// Simple course/enrollment model — the student registration form's
+// "Course" select and the `/academy/students` list's "Course" column both
+// build on these two functions.
+describe("getActiveCoursesForStudents", () => {
+  it("returns each student's active-enrollment course/batch names, keyed by studentId", async () => {
+    const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    const otherStudentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    expect(enrolled.ok).toBe(true);
+
+    const result = await getActiveCoursesForStudents(academyId, [studentId, otherStudentId]);
+    expect(result.get(studentId)).toHaveLength(1);
+    expect(result.get(studentId)?.[0].batchId).toBe(batchId);
+    expect(result.get(otherStudentId) ?? []).toEqual([]);
+  });
+
+  it("excludes withdrawn enrollments", async () => {
+    const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    expect(enrolled.ok).toBe(true);
+    if (!enrolled.ok) return;
+    const withdrawn = await withdrawStudentFromBatch(context, enrolled.enrollment.id);
+    expect(withdrawn.ok).toBe(true);
+
+    const result = await getActiveCoursesForStudents(academyId, [studentId]);
+    expect(result.get(studentId) ?? []).toEqual([]);
+  });
+
+  it("returns an empty map for an empty studentIds list", async () => {
+    const result = await getActiveCoursesForStudents(randomUUID(), []);
+    expect(result.size).toBe(0);
+  });
+});
+
+describe("updateStudentEnrollment", () => {
+  it("enrolls a not-yet-enrolled student into the chosen batch", async () => {
+    const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await updateStudentEnrollment(context, studentId, batchId);
+    expect(result.ok).toBe(true);
+
+    const active = await getActiveCoursesForStudents(academyId, [studentId]);
+    expect(active.get(studentId)?.[0].batchId).toBe(batchId);
+  });
+
+  it("withdraws the old batch and enrolls into the new one when changing course", async () => {
+    const { academyId, branchId, courseId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    const secondBatchId = await insertBatchDirect(academyId, branchId, courseId);
+
+    const first = await updateStudentEnrollment(context, studentId, batchId);
+    expect(first.ok).toBe(true);
+
+    const changed = await updateStudentEnrollment(context, studentId, secondBatchId);
+    expect(changed.ok).toBe(true);
+
+    const active = await getActiveCoursesForStudents(academyId, [studentId]);
+    expect(active.get(studentId)).toHaveLength(1);
+    expect(active.get(studentId)?.[0].batchId).toBe(secondBatchId);
+  });
+
+  it("withdraws without enrolling anywhere when given no batchId", async () => {
+    const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const enrolled = await updateStudentEnrollment(context, studentId, batchId);
+    expect(enrolled.ok).toBe(true);
+
+    const cleared = await updateStudentEnrollment(context, studentId, undefined);
+    expect(cleared.ok).toBe(true);
+
+    const active = await getActiveCoursesForStudents(academyId, [studentId]);
+    expect(active.get(studentId) ?? []).toEqual([]);
+  });
+
+  it("is a no-op when the student is already enrolled in the requested batch", async () => {
+    const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const first = await updateStudentEnrollment(context, studentId, batchId);
+    expect(first.ok).toBe(true);
+    const second = await updateStudentEnrollment(context, studentId, batchId);
+    expect(second.ok).toBe(true);
+
+    const active = await getActiveCoursesForStudents(academyId, [studentId]);
+    expect(active.get(studentId)).toHaveLength(1);
   });
 });

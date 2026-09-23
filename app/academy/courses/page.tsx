@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listCourses } from "@/lib/academies/courses";
 import { listPrograms } from "@/lib/academies/programs";
+import { listStaff } from "@/lib/academies/staff";
 import { CoursesList } from "./courses-list";
 
 /**
@@ -33,10 +34,17 @@ export default async function AcademyCoursesPage() {
   const programsResult = await listPrograms(context);
   const programs = programsResult.ok ? programsResult.programs : [];
 
+  // Best-effort, same convention: populates the "Instructor" select. Any
+  // active staff member may be picked (not filtered to a "trainer" role) —
+  // the simple model doesn't otherwise restrict who can be a course's
+  // instructor.
+  const staffResult = await listStaff(context);
+  const instructors = staffResult.ok ? staffResult.staff.filter((s) => s.status === "active") : [];
+
   return (
     <main
       style={{
-        maxWidth: 900,
+        maxWidth: 1000,
         margin: "2rem auto",
         fontFamily: "system-ui, sans-serif",
         padding: "0 1rem",
@@ -48,7 +56,12 @@ export default async function AcademyCoursesPage() {
           ? "You can create, edit, and archive courses."
           : "You can view this academy's courses."}
       </p>
-      <CoursesList courses={result.courses} programs={programs} canManage={result.canManage} />
+      <CoursesList
+        courses={result.courses}
+        programs={programs}
+        instructors={instructors.map((s) => ({ id: s.id, fullName: s.fullName }))}
+        canManage={result.canManage}
+      />
     </main>
   );
 }

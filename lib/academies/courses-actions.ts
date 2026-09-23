@@ -28,6 +28,10 @@ function parseCourseFormData(formData: FormData): CreateCourseInput | UpdateCour
     code: String(formData.get("code") ?? ""),
     description: String(formData.get("description") ?? ""),
     durationWeeks: String(formData.get("durationWeeks") ?? ""),
+    startDate: String(formData.get("startDate") ?? ""),
+    endDate: String(formData.get("endDate") ?? ""),
+    imageRef: String(formData.get("imageRef") ?? ""),
+    instructorId: String(formData.get("instructorId") ?? ""),
   };
 }
 

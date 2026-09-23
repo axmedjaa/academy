@@ -148,6 +148,13 @@
       "when": 1789709991898,
       "tag": "0020_nappy_hex",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790152779223,
+      "tag": "0021_strong_george_stacy",
+      "breakpoints": true
     }
   ]
 }

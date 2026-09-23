@@ -1221,6 +1221,31 @@ export const courses = pgTable(
     description: text("description"),
     durationWeeks: integer("duration_weeks"),
     status: branchStatusEnum("status").notNull().default("active"),
+    // Simple course/enrollment model extension (post-LMS-revert) — a
+    // course-level schedule window, distinct from (and independent of)
+    // batches.start_date/end_date: a batch is one scheduled *offering* of a
+    // course (an academy may run several cohorts of the same course), while
+    // these two columns represent the course's own overall dates as shown
+    // on its admin summary card. Nullable: existing courses predate this
+    // column and have no meaningful default; new/edited courses are
+    // expected to set both via the course form, but the DB does not force
+    // it (same nullable-with-encouraged-UI-requirement convention as every
+    // other optional business field in this table, e.g. description/code).
+    startDate: date("start_date"),
+    endDate: date("end_date"),
+    // Plain externally-hosted-URL text field — same convention as
+    // academies.logoRef / student_id_cards.photoFileRef (no real upload
+    // pipeline anywhere in this codebase; a course image is just a URL the
+    // admin pastes in, rendered via a plain <img>).
+    imageRef: text("image_ref"),
+    // Reuses the existing staff/instructor identity (staffProfiles) rather
+    // than inventing a separate "instructor" concept — instructor
+    // assignment already exists at the *batch* level
+    // (batch_trainer_assignments), but this is the course's own single
+    // primary-instructor field for the simplified admin summary view the
+    // client asked for ("Instructor: Ahmed" on the course card). Nullable —
+    // a course may not have an instructor assigned yet.
+    instructorId: uuid("instructor_id").references(() => staffProfiles.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

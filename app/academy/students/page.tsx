@@ -1,6 +1,10 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { searchStudents } from "@/lib/academies/students";
+import { getActiveCoursesForStudents } from "@/lib/academies/batch-assignments";
+import { listBatches } from "@/lib/academies/batches";
+import { listCourses } from "@/lib/academies/courses";
 import { StudentsList } from "./students-list";
 
 /**
@@ -63,6 +67,30 @@ export default async function AcademyStudentsPage({
   const { data, canManage, membershipRole } = result;
   const branchLimited = membershipRole === "admissions_officer" || membershipRole === "trainer";
 
+  // Display enrichment for the "Course" column + "change course" control —
+  // same "page re-resolves its own academyId, no channel exists to receive
+  // it from searchStudents" reasoning as this file's own module comment.
+  // Best-effort: on any failure, the course column/control simply doesn't
+  // populate rather than failing the whole page.
+  const access = await checkAcademyAccessForContext(context);
+  const academyId = access.level !== "blocked" ? access.academyId : null;
+
+  const [coursesByStudent, batchesResult, coursesResult] = academyId
+    ? await Promise.all([
+        getActiveCoursesForStudents(academyId, data.rows.map((s) => s.id)),
+        listBatches(context),
+        listCourses(context),
+      ])
+    : [new Map(), null, null];
+
+  const courseNameById = new Map((coursesResult?.ok ? coursesResult.courses : []).map((c) => [c.id, c.name]));
+  const courseOptions = (batchesResult?.ok ? batchesResult.batches : [])
+    .filter((batch) => batch.status !== "archived")
+    .map((batch) => ({
+      batchId: batch.id,
+      label: `${courseNameById.get(batch.courseId) ?? "Unknown course"} — ${batch.name}`,
+    }));
+
   return (
     <main
       style={{
@@ -116,6 +144,8 @@ export default async function AcademyStudentsPage({
         students={data.rows}
         canManage={canManage}
         showBranchField={!branchLimited}
+        coursesByStudent={coursesByStudent}
+        courseOptions={courseOptions}
       />
 
       <p style={{ marginTop: "1rem" }}>

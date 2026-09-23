@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { courses, programs } from "@/lib/db/schema";
+import { batchEnrollments, batches, courses, programs, staffProfiles, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_COURSES_BATCHES_ACTION,
@@ -57,6 +57,12 @@ const PROGRAM_NOT_FOUND: CourseActionError = {
   message: "Program not found.",
 };
 
+// Same IDOR-safe convention, for the new instructorId FK.
+const INSTRUCTOR_NOT_FOUND: CourseActionError = {
+  code: "not_found",
+  message: "Instructor not found.",
+};
+
 function optionalText(maxLength = 2000) {
   return z
     .string()
@@ -67,23 +73,58 @@ function optionalText(maxLength = 2000) {
     .transform((value) => (value && value.length > 0 ? value : undefined));
 }
 
-export const createCourseSchema = z.object({
-  programId: z.string().uuid("Select a program"),
-  name: z.string().trim().min(1, "Course name is required").max(200),
-  code: optionalText(50),
-  description: optionalText(2000),
-  durationWeeks: z
-    .union([z.number(), z.string()])
+// Plain "YYYY-MM-DD" string, same convention as register-student.ts's
+// dateOfBirth / batches.ts's startDate for a `date` (not `timestamp`)
+// column — optional (nullable at the DB level; see schema.ts's comment on
+// why these two columns aren't NOT NULL), not required, matching every
+// other non-identity field on this form (description/code/durationWeeks).
+function optionalDate(maxLength = 20) {
+  return z
+    .string()
+    .trim()
+    .max(maxLength)
     .optional()
-    .transform((value) => {
-      if (value === undefined || value === "") return undefined;
-      const parsed = typeof value === "number" ? value : Number(value);
-      return Number.isFinite(parsed) ? parsed : undefined;
-    })
-    .refine((value) => value === undefined || (Number.isInteger(value) && value >= 0), {
-      message: "Duration (weeks) must be a nonnegative whole number",
-    }),
-});
+    .or(z.literal(""))
+    .transform((value) => (value && value.length > 0 ? value : undefined));
+}
+
+export const createCourseSchema = z
+  .object({
+    programId: z.string().uuid("Select a program"),
+    name: z.string().trim().min(1, "Course name is required").max(200),
+    code: optionalText(50),
+    description: optionalText(2000),
+    durationWeeks: z
+      .union([z.number(), z.string()])
+      .optional()
+      .transform((value) => {
+        if (value === undefined || value === "") return undefined;
+        const parsed = typeof value === "number" ? value : Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      })
+      .refine((value) => value === undefined || (Number.isInteger(value) && value >= 0), {
+        message: "Duration (weeks) must be a nonnegative whole number",
+      }),
+    startDate: optionalDate(),
+    endDate: optionalDate(),
+    // Plain externally-hosted-URL text field — same convention as
+    // academies.logoRef / student_id_cards.photoFileRef (validated only as
+    // "looks like a URL if provided," never uploaded/stored as a file).
+    imageRef: optionalText(500),
+    instructorId: z
+      .string()
+      .trim()
+      .optional()
+      .or(z.literal(""))
+      .transform((value) => (value && value.length > 0 ? value : undefined))
+      .refine((value) => value === undefined || z.string().uuid().safeParse(value).success, {
+        message: "Select a valid instructor",
+      }),
+  })
+  .refine((value) => !value.startDate || !value.endDate || value.endDate >= value.startDate, {
+    message: "End date must be on or after the start date",
+    path: ["endDate"],
+  });
 
 export type CreateCourseInput = z.input<typeof createCourseSchema>;
 export type UpdateCourseInput = CreateCourseInput;
@@ -96,6 +137,10 @@ export interface CourseRecord {
   code: string | null;
   description: string | null;
   durationWeeks: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  imageRef: string | null;
+  instructorId: string | null;
   status: "active" | "archived";
   createdAt: Date;
 }
@@ -109,9 +154,35 @@ function toRecord(row: typeof courses.$inferSelect): CourseRecord {
     code: row.code,
     description: row.description,
     durationWeeks: row.durationWeeks,
+    startDate: row.startDate,
+    endDate: row.endDate,
+    imageRef: row.imageRef,
+    instructorId: row.instructorId,
     status: row.status,
     createdAt: row.createdAt,
   };
+}
+
+/** Display-only enrichment used by listCourses/getCourse — the instructor's
+ * name, resolved via the existing staffProfiles identity (never a second
+ * "instructor" concept). `null` when a course has no instructorId set. */
+export interface CourseWithInstructor extends CourseRecord {
+  instructorName: string | null;
+}
+
+async function attachInstructorNames(rows: CourseRecord[]): Promise<CourseWithInstructor[]> {
+  const instructorIds = [...new Set(rows.map((r) => r.instructorId).filter((id): id is string => id !== null))];
+  if (instructorIds.length === 0) {
+    return rows.map((r) => ({ ...r, instructorName: null }));
+  }
+
+  const staffRows = await db
+    .select({ id: staffProfiles.id, fullName: staffProfiles.fullName })
+    .from(staffProfiles)
+    .where(inArray(staffProfiles.id, instructorIds));
+  const nameById = new Map(staffRows.map((s) => [s.id, s.fullName]));
+
+  return rows.map((r) => ({ ...r, instructorName: r.instructorId ? (nameById.get(r.instructorId) ?? null) : null }));
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -172,8 +243,23 @@ async function programExistsInAcademy(
   return Boolean(row);
 }
 
+/** Same IDOR-safe tenant check as programExistsInAcademy — an instructor is
+ * just a staffProfiles row, reused unmodified (no new "instructor" table). */
+async function instructorExistsInAcademy(
+  executor: DbClient,
+  academyId: string,
+  instructorId: string,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ id: staffProfiles.id })
+    .from(staffProfiles)
+    .where(and(eq(staffProfiles.id, instructorId), eq(staffProfiles.academyId, academyId)))
+    .limit(1);
+  return Boolean(row);
+}
+
 export type ListCoursesResult =
-  | { ok: true; courses: CourseRecord[]; canManage: boolean }
+  | { ok: true; courses: CourseWithInstructor[]; canManage: boolean }
   | { ok: false; error: CourseActionError };
 
 export async function listCourses(actorContext: AuthContext): Promise<ListCoursesResult> {
@@ -185,13 +271,13 @@ export async function listCourses(actorContext: AuthContext): Promise<ListCourse
 
   return {
     ok: true,
-    courses: rows.map(toRecord),
+    courses: await attachInstructorNames(rows.map(toRecord)),
     canManage: canManageCourses(membershipRole, permissionLevel),
   };
 }
 
 export type GetCourseResult =
-  | { ok: true; course: CourseRecord }
+  | { ok: true; course: CourseWithInstructor }
   | { ok: false; error: CourseActionError };
 
 export async function getCourse(
@@ -216,7 +302,66 @@ export async function getCourse(
     return { ok: false, error: NOT_FOUND };
   }
 
-  return { ok: true, course: toRecord(row) };
+  const [withInstructor] = await attachInstructorNames([toRecord(row)]);
+  return { ok: true, course: withInstructor };
+}
+
+export interface CourseEnrollmentRow {
+  studentId: string;
+  studentFullName: string;
+  studentNumber: string;
+  batchId: string;
+  batchName: string;
+  status: "active" | "withdrawn" | "completed";
+}
+
+export type ListCourseEnrollmentsResult =
+  | { ok: true; enrollments: CourseEnrollmentRow[] }
+  | { ok: false; error: CourseActionError };
+
+/**
+ * Admin-only "who's enrolled in this course" view (DESIGN's course-details
+ * page). Reuses the existing Student -> Batch -> Course relationship
+ * exactly as already built (batch_enrollments + batches.course_id) —
+ * aggregates across every batch of this course rather than introducing a
+ * direct course<->student table. Every status is included (not just
+ * "active") so the admin sees the full picture, same "full history, not
+ * just the live state" convention as listBatchEnrollments in
+ * lib/academies/batch-assignments.ts.
+ */
+export async function listCourseEnrollments(
+  actorContext: AuthContext,
+  courseId: string,
+): Promise<ListCourseEnrollmentsResult> {
+  const resolved = await resolveCourseAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId } = resolved.access;
+
+  const parsedId = z.string().uuid().safeParse(courseId);
+  if (!parsedId.success) return { ok: false, error: NOT_FOUND };
+
+  const [course] = await db
+    .select({ id: courses.id })
+    .from(courses)
+    .where(and(eq(courses.id, courseId), eq(courses.academyId, academyId)))
+    .limit(1);
+  if (!course) return { ok: false, error: NOT_FOUND };
+
+  const rows = await db
+    .select({
+      studentId: students.id,
+      studentFullName: students.fullName,
+      studentNumber: students.studentNumber,
+      batchId: batches.id,
+      batchName: batches.name,
+      status: batchEnrollments.status,
+    })
+    .from(batchEnrollments)
+    .innerJoin(batches, eq(batches.id, batchEnrollments.batchId))
+    .innerJoin(students, eq(students.id, batchEnrollments.studentId))
+    .where(and(eq(batches.courseId, courseId), eq(batches.academyId, academyId)));
+
+  return { ok: true, enrollments: rows };
 }
 
 class AllowanceLimitReached extends Error {
@@ -235,6 +380,7 @@ class AllowanceCheckFailure extends Error {
 }
 
 class ProgramNotFoundSignal extends Error {}
+class InstructorNotFoundSignal extends Error {}
 
 export type CreateCourseResult =
   | { ok: true; course: CourseRecord }
@@ -274,6 +420,9 @@ export async function createCourse(
       if (!programOk) {
         throw new ProgramNotFoundSignal();
       }
+      if (data.instructorId && !(await instructorExistsInAcademy(tx, academyId, data.instructorId))) {
+        throw new InstructorNotFoundSignal();
+      }
 
       const allowance = await checkAllowance(academyId, "courses", tx);
       if (!allowance.ok) {
@@ -292,6 +441,10 @@ export async function createCourse(
           code: data.code,
           description: data.description,
           durationWeeks: data.durationWeeks,
+          startDate: data.startDate,
+          endDate: data.endDate,
+          imageRef: data.imageRef,
+          instructorId: data.instructorId,
         })
         .returning();
 
@@ -315,6 +468,9 @@ export async function createCourse(
   } catch (err) {
     if (err instanceof ProgramNotFoundSignal) {
       return { ok: false, error: PROGRAM_NOT_FOUND };
+    }
+    if (err instanceof InstructorNotFoundSignal) {
+      return { ok: false, error: INSTRUCTOR_NOT_FOUND };
     }
     if (err instanceof AllowanceLimitReached) {
       return {
@@ -382,6 +538,9 @@ export async function updateCourse(
       if (!programOk) {
         throw new ProgramNotFoundSignal();
       }
+      if (data.instructorId && !(await instructorExistsInAcademy(tx, academyId, data.instructorId))) {
+        throw new InstructorNotFoundSignal();
+      }
 
       const [updated] = await tx
         .update(courses)
@@ -391,6 +550,10 @@ export async function updateCourse(
           code: data.code,
           description: data.description,
           durationWeeks: data.durationWeeks,
+          startDate: data.startDate ?? null,
+          endDate: data.endDate ?? null,
+          imageRef: data.imageRef ?? null,
+          instructorId: data.instructorId ?? null,
           updatedAt: new Date(),
         })
         .where(eq(courses.id, courseId))
@@ -420,6 +583,9 @@ export async function updateCourse(
   } catch (err) {
     if (err instanceof ProgramNotFoundSignal) {
       return { ok: false, error: PROGRAM_NOT_FOUND };
+    }
+    if (err instanceof InstructorNotFoundSignal) {
+      return { ok: false, error: INSTRUCTOR_NOT_FOUND };
     }
     if (isUniqueViolation(err)) {
       return {

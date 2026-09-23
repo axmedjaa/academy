@@ -9,12 +9,21 @@ import {
   auditLogs,
   courses,
   programs,
+  staffProfiles,
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
-import { archiveCourse, createCourse, listCourses, updateCourse, type CreateCourseInput } from "./courses";
+import {
+  archiveCourse,
+  createCourse,
+  getCourse,
+  listCourseEnrollments,
+  listCourses,
+  updateCourse,
+  type CreateCourseInput,
+} from "./courses";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -121,6 +130,7 @@ afterAll(async () => {
     );
   for (const academyId of createdAcademyIds) {
     await db.delete(courses).where(eq(courses.academyId, academyId));
+    await db.delete(staffProfiles).where(eq(staffProfiles.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
@@ -266,5 +276,132 @@ describe("listCourses — tenant isolation", () => {
     const result = await listCourses(context);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.courses).toEqual([]);
+  });
+});
+
+// Simple course/enrollment model — start/end dates, image, and instructor.
+describe("createCourse / updateCourse — dates, image, and instructor", () => {
+  async function insertInstructor(academyId: string, userId: string, fullName: string): Promise<string> {
+    const [row] = await db
+      .insert(staffProfiles)
+      .values({ academyId, userId, fullName, phone: "+1-555-0100" })
+      .returning({ id: staffProfiles.id });
+    return row.id;
+  }
+
+  it("saves start date, end date, image URL, and instructor on create", async () => {
+    const { context, programId, academyId, userId } = await setupAcademy("academy_owner");
+    const instructorId = await insertInstructor(academyId, userId, "Ahmed");
+
+    const result = await createCourse(
+      context,
+      validInput(programId, {
+        startDate: "2026-10-01",
+        endDate: "2026-12-30",
+        imageRef: "https://example.com/web-development.jpg",
+        instructorId,
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.course.startDate).toBe("2026-10-01");
+    expect(result.course.endDate).toBe("2026-12-30");
+    expect(result.course.imageRef).toBe("https://example.com/web-development.jpg");
+    expect(result.course.instructorId).toBe(instructorId);
+  });
+
+  it("rejects an end date before the start date", async () => {
+    const { context, programId } = await setupAcademy("academy_owner");
+    const result = await createCourse(
+      context,
+      validInput(programId, { startDate: "2026-12-30", endDate: "2026-10-01" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("rejects an instructor from a different academy with code 'not_found'", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherInstructorId = await insertInstructor(other.academyId, other.userId, "Outsider");
+
+    const { context, programId } = await setupAcademy("academy_owner");
+    const result = await createCourse(context, validInput(programId, { instructorId: otherInstructorId }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("creates a course with no dates/image/instructor (all optional)", async () => {
+    const { context, programId } = await setupAcademy("academy_owner");
+    const result = await createCourse(context, validInput(programId));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.course.startDate).toBeNull();
+    expect(result.course.endDate).toBeNull();
+    expect(result.course.imageRef).toBeNull();
+    expect(result.course.instructorId).toBeNull();
+  });
+
+  it("listCourses/getCourse resolve the instructor's display name", async () => {
+    const { context, programId, academyId, userId } = await setupAcademy("academy_owner");
+    const instructorId = await insertInstructor(academyId, userId, "Ahmed Instructor");
+    const created = await createCourse(context, validInput(programId, { instructorId }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const listed = await listCourses(context);
+    expect(listed.ok).toBe(true);
+    if (listed.ok) {
+      const found = listed.courses.find((c) => c.id === created.course.id);
+      expect(found?.instructorName).toBe("Ahmed Instructor");
+    }
+
+    const fetched = await getCourse(context, created.course.id);
+    expect(fetched.ok).toBe(true);
+    if (fetched.ok) expect(fetched.course.instructorName).toBe("Ahmed Instructor");
+  });
+
+  it("updateCourse can clear a previously-set instructor/dates/image", async () => {
+    const { context, programId, academyId, userId } = await setupAcademy("academy_owner");
+    const instructorId = await insertInstructor(academyId, userId, "Ahmed");
+    const created = await createCourse(
+      context,
+      validInput(programId, { instructorId, startDate: "2026-10-01", endDate: "2026-12-30", imageRef: "https://example.com/a.jpg" }),
+    );
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const updated = await updateCourse(context, created.course.id, validInput(programId));
+    expect(updated.ok).toBe(true);
+    if (updated.ok) {
+      expect(updated.course.instructorId).toBeNull();
+      expect(updated.course.startDate).toBeNull();
+      expect(updated.course.endDate).toBeNull();
+      expect(updated.course.imageRef).toBeNull();
+    }
+  });
+});
+
+describe("listCourseEnrollments", () => {
+  it("returns not_found for a course in another academy", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherCourse = await createCourse(other.context, validInput(other.programId));
+    expect(otherCourse.ok).toBe(true);
+    if (!otherCourse.ok) return;
+
+    const { context } = await setupAcademy("academy_owner");
+    const result = await listCourseEnrollments(context, otherCourse.course.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("returns an empty list for a course with no batches/enrollments yet", async () => {
+    const { context, programId } = await setupAcademy("academy_owner");
+    const created = await createCourse(context, validInput(programId));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const result = await listCourseEnrollments(context, created.course.id);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.enrollments).toEqual([]);
   });
 });
