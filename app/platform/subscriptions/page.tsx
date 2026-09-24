@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { listPlatformSubscriptions } from "@/lib/subscriptions/renew";
 import { SubscriptionsManager } from "./subscriptions-manager";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 const RENEW_CAPABILITY = "renewSubscription";
 
@@ -31,27 +32,15 @@ export default async function PlatformSubscriptionsPage() {
   const allowed = await hasPermission(context, RENEW_CAPABILITY);
 
   if (!allowed) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const subscriptions = await listPlatformSubscriptions();
 
   return (
-    <main
-      style={{
-        maxWidth: 1200,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Subscriptions</h1>
+    <div className={PAGE_WRAP}>
+      <PageHeader title="Subscriptions" />
       <SubscriptionsManager subscriptions={subscriptions} />
-    </main>
+    </div>
   );
 }

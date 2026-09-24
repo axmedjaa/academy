@@ -1,7 +1,7 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { branches, staffBranchAssignments, staffProfiles } from "@/lib/db/schema";
+import { auditLogs, batches, branches, staffBranchAssignments, staffProfiles, students, timetables } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   getAcademyPermissionLevel,
@@ -56,7 +56,7 @@ function canManage(level: AcademyPermissionLevel): boolean {
 }
 
 export interface BranchActionError {
-  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "allowance";
+  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "allowance" | "ineligible";
   message: string;
 }
 
@@ -189,14 +189,21 @@ async function resolveBranchAccess(
 }
 
 export type ListBranchesResult =
-  | { ok: true; branches: BranchRecord[]; permissionLevel: AcademyPermissionLevel; canManage: boolean }
+  | {
+      ok: true;
+      branches: (BranchRecord & { deletionEligibility: BranchDeletionEligibilitySummary })[];
+      permissionLevel: AcademyPermissionLevel;
+      canManage: boolean;
+    }
   | { ok: false; error: BranchActionError };
 
 /**
  * `/academy/branches`'s list read. Academy-wide roles (full/manage) get
  * every branch in the academy; branch-limited roles (view, per the matrix's
  * "assigned" scope) get only the branches they're assigned to via
- * staff_branch_assignments.
+ * staff_branch_assignments. Delete-eligibility is computed server-side
+ * here (never in the UI) and handed down as plain data for the table's
+ * Delete button to render.
  */
 export async function listBranches(actorContext: AuthContext): Promise<ListBranchesResult> {
   const resolved = await resolveBranchAccess(actorContext);
@@ -217,9 +224,33 @@ export async function listBranches(actorContext: AuthContext): Promise<ListBranc
     rows = await db.select().from(branches).where(eq(branches.academyId, academyId));
   }
 
+  const branchIds = rows.map((row) => row.id);
+  const [studentCountRows, batchCountRows] = branchIds.length
+    ? await Promise.all([
+        db
+          .select({ branchId: students.branchId, count: sql<number>`count(*)::int` })
+          .from(students)
+          .where(inArray(students.branchId, branchIds))
+          .groupBy(students.branchId),
+        db
+          .select({ branchId: batches.branchId, count: sql<number>`count(*)::int` })
+          .from(batches)
+          .where(inArray(batches.branchId, branchIds))
+          .groupBy(batches.branchId),
+      ])
+    : [[], []];
+  const studentCountByBranch = new Map(studentCountRows.map((r) => [r.branchId, r.count]));
+  const batchCountByBranch = new Map(batchCountRows.map((r) => [r.branchId, r.count]));
+
   return {
     ok: true,
-    branches: rows.map(toRecord),
+    branches: rows.map((row) => {
+      const reasons = buildBranchDeletionReasons({
+        studentCount: studentCountByBranch.get(row.id) ?? 0,
+        batchCount: batchCountByBranch.get(row.id) ?? 0,
+      });
+      return { ...toRecord(row), deletionEligibility: { eligible: reasons.length === 0, reasons } };
+    }),
     permissionLevel,
     canManage: canManage(permissionLevel),
   };
@@ -566,4 +597,196 @@ export async function archiveBranch(
     return { ok: false, error: NOT_FOUND };
   }
   return { ok: true, branch: toRecord(result) };
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * Permanent branch deletion — narrow, eligibility-gated, distinct from
+ * archiveBranch
+ * ---------------------------------------------------------------------
+ * Direct inbound FKs to `branches` (lib/db/schema.ts): staffBranchAssignments,
+ * students.branch_id (NOT NULL), batches.branch_id (NOT NULL),
+ * timetables.branch_id (NOT NULL). A student or batch ever having existed
+ * under this branch is real operational/historical fact — either one
+ * blocks deletion outright, matching this codebase's other entity-delete
+ * functions' "any row blocks" convention (and transitively guaranteeing no
+ * enrollment/exam/certificate/financial history is ever reachable from
+ * this deletion, since all of those hang off a student or a batch).
+ *
+ * staffBranchAssignments and timetables are treated as safely disposable —
+ * pure assignment/scheduling metadata with no standalone value once the
+ * branch itself is gone, same judgment lib/academies/delete-academy.ts's
+ * own disposable-data list already made for both at the whole-academy
+ * scale.
+ */
+export interface BranchDeletionEligibilitySummary {
+  eligible: boolean;
+  reasons: string[];
+}
+
+export interface BranchDeletionEligibility extends BranchDeletionEligibilitySummary {
+  branchId: string;
+  branchName: string;
+  studentCount: number;
+  batchCount: number;
+}
+
+export type GetBranchDeletionEligibilityResult =
+  | { ok: true; eligibility: BranchDeletionEligibility }
+  | { ok: false; error: BranchActionError };
+
+async function countBranchDependents(
+  executor: DbClient,
+  branchId: string,
+): Promise<{ studentCount: number; batchCount: number }> {
+  const [[studentRow], [batchRow]] = await Promise.all([
+    executor.select({ count: sql<number>`count(*)::int` }).from(students).where(eq(students.branchId, branchId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(batches).where(eq(batches.branchId, branchId)),
+  ]);
+  return { studentCount: studentRow?.count ?? 0, batchCount: batchRow?.count ?? 0 };
+}
+
+function buildBranchDeletionReasons(counts: { studentCount: number; batchCount: number }): string[] {
+  const reasons: string[] = [];
+  if (counts.studentCount > 0) {
+    reasons.push(`${counts.studentCount} student${counts.studentCount === 1 ? "" : "s"} belong to this branch`);
+  }
+  if (counts.batchCount > 0) {
+    reasons.push(`${counts.batchCount} batch${counts.batchCount === 1 ? "" : "es"} belong to this branch`);
+  }
+  return reasons;
+}
+
+/** Read-only preview for the UI's Delete button — `deleteBranch` below
+ * re-runs the identical check itself, inside the deletion transaction, as
+ * the actual authority. */
+export async function getBranchDeletionEligibility(
+  actorContext: AuthContext,
+  branchId: string,
+): Promise<GetBranchDeletionEligibilityResult> {
+  const resolved = await resolveBranchAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, permissionLevel } = resolved.access;
+
+  if (!canManage(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(branchId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const [branch] = await db
+    .select({ id: branches.id, name: branches.name })
+    .from(branches)
+    .where(and(eq(branches.id, branchId), eq(branches.academyId, academyId)))
+    .limit(1);
+  if (!branch) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const counts = await countBranchDependents(db, branch.id);
+  const reasons = buildBranchDeletionReasons(counts);
+
+  return {
+    ok: true,
+    eligibility: { branchId: branch.id, branchName: branch.name, eligible: reasons.length === 0, reasons, ...counts },
+  };
+}
+
+export type DeleteBranchResult =
+  | { ok: true; branchId: string }
+  | { ok: false; error: BranchActionError };
+
+/**
+ * Eligibility is re-verified from scratch INSIDE this transaction, on a
+ * row locked with `for("update")` — a student could be registered or a
+ * batch created against this branch between the UI's preview and this
+ * call, and this is the check that actually decides whether the delete
+ * proceeds. `confirmedName` must equal the branch's exact current name,
+ * re-checked here (not just a UI affordance), same convention as
+ * lib/academies/delete-academy.ts's deleteAcademy. Audited before the row
+ * is removed, same convention as this codebase's other entity-delete
+ * functions.
+ */
+export async function deleteBranch(
+  actorContext: AuthContext,
+  branchId: string,
+  confirmedName: string,
+): Promise<DeleteBranchResult> {
+  const resolved = await resolveBranchAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManage(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(branchId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(branches)
+      .where(and(eq(branches.id, branchId), eq(branches.academyId, academyId)))
+      .for("update");
+    if (!existing) {
+      return { ok: false, error: NOT_FOUND };
+    }
+
+    if (confirmedName !== existing.name) {
+      return {
+        ok: false,
+        error: { code: "validation", message: "Type the exact branch name to confirm permanent deletion." },
+      };
+    }
+
+    const counts = await countBranchDependents(tx, existing.id);
+    const reasons = buildBranchDeletionReasons(counts);
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "ineligible",
+          message: `This branch cannot be permanently deleted because ${reasons.join(", ")}. Archive it instead.`,
+        },
+      };
+    }
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "deleteBranch",
+        entityType: "branch",
+        entityId: branchId,
+        branchId,
+        before: toRecord(existing),
+      },
+      tx,
+    );
+
+    // Disposable dependent data only — guaranteed by the eligibility check
+    // above that no student/batch was ever attached to this branch.
+    await tx.delete(staffBranchAssignments).where(eq(staffBranchAssignments.branchId, branchId));
+    await tx.delete(timetables).where(eq(timetables.branchId, branchId));
+
+    // Preserve every historical audit row that ever referenced this branch
+    // (including the "deleteBranch" row just inserted above) by detaching
+    // the FK rather than deleting them — same convention as
+    // lib/academies/delete-academy.ts's deleteAcademy for
+    // auditLogs.academyId. auditLogs.branchId is nullable specifically for
+    // this; without this step the branches row below would violate
+    // audit_logs' own FK constraint.
+    await tx.update(auditLogs).set({ branchId: null }).where(eq(auditLogs.branchId, branchId));
+
+    await tx.delete(branches).where(eq(branches.id, branchId));
+
+    return { ok: true, branchId };
+  });
 }

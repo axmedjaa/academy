@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { getPlatformSettings, PLATFORM_SETTINGS_CAPABILITY } from "@/lib/platform/settings";
+import { Badge, PAGE_WRAP, PageHeader, PageMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Phase 5, Item 61b — `/platform/settings` (DESIGN.md: "Global
@@ -35,111 +36,72 @@ export default async function PlatformSettingsPage() {
   const allowed = await hasPermission(context, PLATFORM_SETTINGS_CAPABILITY);
 
   if (!allowed) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const settings = getPlatformSettings();
 
   return (
-    <main
-      style={{
-        maxWidth: 700,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Platform settings</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        Global, platform-wide feature switches — separate from any single
-        academy&apos;s own plan or settings.
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Platform settings"
+        description="Global, platform-wide feature switches — separate from any single academy's own plan or settings."
+      />
 
-      <div
-        role="status"
-        style={{
-          border: "1px solid #f0c36d",
-          background: "#fff8e6",
-          borderRadius: 8,
-          padding: "0.85rem 1rem",
-          margin: "1rem 0",
-          fontSize: "0.9rem",
-        }}
-      >
-        These switches are currently <strong>read-only</strong>. Persisting a
-        change requires a small schema addition that hasn&apos;t landed yet —
-        the values below reflect this server&apos;s current environment
+      <div role="status" className="mb-4 rounded-control border border-warning/30 bg-warning-bg px-4 py-3 text-sm text-warning">
+        These switches are currently <strong>read-only</strong>. Persisting a change requires a small schema
+        addition that hasn&apos;t landed yet — the values below reflect this server&apos;s current environment
         configuration, not a database row that can be edited from here.
       </div>
 
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ textAlign: "left", padding: "0.5rem 0" }}>Switch</th>
-            <th style={{ textAlign: "left", padding: "0.5rem 0" }}>Current value</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style={{ padding: "0.5rem 0" }}>
-              SMS enabled platform-wide
-              <div style={{ color: "#777", fontSize: "0.8rem" }}>
-                Independent of any academy&apos;s own plan-level SMS allowance.
-              </div>
-            </td>
-            <td style={{ padding: "0.5rem 0" }}>
-              <StatusBadge on={settings.smsGloballyEnabled} />
-            </td>
-          </tr>
-          <tr>
-            <td style={{ padding: "0.5rem 0" }}>
-              New academy registrations open
-              <div style={{ color: "#777", fontSize: "0.8rem" }}>
-                Whether the platform is currently accepting new academy sign-ups.
-              </div>
-            </td>
-            <td style={{ padding: "0.5rem 0" }}>
-              <StatusBadge on={settings.newAcademyRegistrationsOpen} />
-            </td>
-          </tr>
-          <tr>
-            <td style={{ padding: "0.5rem 0" }}>
-              Maintenance mode
-              <div style={{ color: "#777", fontSize: "0.8rem" }}>
-                Platform-wide maintenance banner/lockout.
-              </div>
-            </td>
-            <td style={{ padding: "0.5rem 0" }}>
-              <StatusBadge on={settings.maintenanceMode} activeIsWarning />
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </main>
+      <Section>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={th}>Switch</th>
+              <th className={th}>Current value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className={trHover}>
+              <td className={td}>
+                SMS enabled platform-wide
+                <div className="mt-0.5 text-xs text-muted">
+                  Independent of any academy&apos;s own plan-level SMS allowance.
+                </div>
+              </td>
+              <td className={td}>
+                <SwitchBadge on={settings.smsGloballyEnabled} />
+              </td>
+            </tr>
+            <tr className={trHover}>
+              <td className={td}>
+                New academy registrations open
+                <div className="mt-0.5 text-xs text-muted">
+                  Whether the platform is currently accepting new academy sign-ups.
+                </div>
+              </td>
+              <td className={td}>
+                <SwitchBadge on={settings.newAcademyRegistrationsOpen} />
+              </td>
+            </tr>
+            <tr className={trHover}>
+              <td className={td}>
+                Maintenance mode
+                <div className="mt-0.5 text-xs text-muted">Platform-wide maintenance banner/lockout.</div>
+              </td>
+              <td className={td}>
+                <SwitchBadge on={settings.maintenanceMode} activeIsWarning />
+              </td>
+            </tr>
+          </tbody>
+        </TableWrap>
+      </Section>
+    </div>
   );
 }
 
-function StatusBadge({ on, activeIsWarning }: { on: boolean; activeIsWarning?: boolean }) {
+function SwitchBadge({ on, activeIsWarning }: { on: boolean; activeIsWarning?: boolean }) {
   const warning = activeIsWarning && on;
-  const color = warning ? "#b06a00" : on ? "#1a7f37" : "#666";
-  const background = warning ? "#fff3d6" : on ? "#e6f6ea" : "#f0f0f0";
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "0.15rem 0.6rem",
-        borderRadius: 999,
-        fontSize: "0.8rem",
-        color,
-        background,
-      }}
-    >
-      {on ? "On" : "Off"}
-    </span>
-  );
+  return <Badge label={on ? "On" : "Off"} tone={warning ? "amber" : on ? "green" : "gray"} />;
 }

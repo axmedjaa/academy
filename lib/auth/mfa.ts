@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import { db } from "@/lib/db";
 import { mfaRecoveryCodes, mfaTotpCredentials, users } from "@/lib/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/auth/mfa-encryption";
+import { verifyMfaEmailOtp } from "@/lib/auth/mfa-email-otp";
 import { recordAudit } from "@/lib/audit";
 
 const ISSUER = "Academy Management SaaS";
@@ -279,7 +280,7 @@ export async function regenerateRecoveryCodesForUser(
   return { ok: true, recoveryCodes };
 }
 
-export type MfaChallengeMode = "totp" | "recovery";
+export type MfaChallengeMode = "totp" | "recovery" | "email";
 
 export interface MfaChallengeError {
   code: "INVALID_CODE";
@@ -363,6 +364,11 @@ async function validateRecoveryCodeChallenge(
  * initial setup. Called on every subsequent login for an enrolled
  * platform_owner, per PLAN.md's "require challengeMfa before issuing a
  * session."
+ *
+ * "email" is an ADDITIONAL method alongside "totp" (never a replacement) —
+ * see lib/auth/mfa-email-otp.ts's own doc comments for why it refuses to
+ * validate anything for an account without a verified TOTP credential
+ * (email OTP is not its own enrollment path).
  */
 export async function verifyMfaChallenge(
   userId: string,
@@ -372,7 +378,9 @@ export async function verifyMfaChallenge(
   const valid =
     mode === "totp"
       ? await validateTotpChallenge(userId, code)
-      : await validateRecoveryCodeChallenge(userId, code);
+      : mode === "recovery"
+        ? await validateRecoveryCodeChallenge(userId, code)
+        : await verifyMfaEmailOtp(userId, code);
 
   return valid ? { ok: true } : { ok: false, error: INVALID_MFA_CODE };
 }

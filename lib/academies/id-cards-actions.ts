@@ -81,7 +81,17 @@ export async function lookupIdCard(
     return { ok: false, error: result.error, studentId };
   }
 
-  return { ok: true, card: result.card, studentId, studentName: await resolveStudentName(studentId) };
+  // Use the resolved UUID (result.studentId), never the raw form field, for
+  // both the display-name lookup and what's echoed back into the hidden
+  // field a subsequent "issue card" submission uses — the raw value may be
+  // a studentNumber (e.g. "STD-E2E-A-001"), and `resolveStudentName` looks
+  // up strictly by the `students.id` UUID column.
+  return {
+    ok: true,
+    card: result.card,
+    studentId: result.studentId,
+    studentName: await resolveStudentName(result.studentId),
+  };
 }
 
 /** PLAN.md Item 40 server action name. */
@@ -101,11 +111,14 @@ export async function issueStudentIdCard(
   }
 
   revalidatePath("/academy/id-cards");
+  // Use the resolved UUID (result.card.studentId), never the raw form
+  // field — same reasoning as lookupIdCard above, and the same pattern
+  // reprintStudentIdCard below already uses for its own display-name fetch.
   return {
     ok: true,
     card: result.card,
-    studentId: input.studentId,
-    studentName: await resolveStudentName(input.studentId),
+    studentId: result.card.studentId,
+    studentName: await resolveStudentName(result.card.studentId),
   };
 }
 

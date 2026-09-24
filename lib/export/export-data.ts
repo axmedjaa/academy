@@ -128,8 +128,11 @@ export interface ExportDataError {
   // underlying `searchStudents` error type (`StudentActionError`) — a
   // search never actually returns it (that code is `getStudent`'s alone),
   // but the union is widened here so a future change to that shared error
-  // type can never fail to compile against this one.
-  code: "blocked" | "forbidden" | "validation" | "not_found" | "too_many_rows";
+  // type can never fail to compile against this one. "ineligible" is the
+  // same story for StudentActionError's newer deleteStudent-only code —
+  // searchStudents/exportStudentList never produce it either, but it must
+  // still typecheck against this union for the same reason.
+  code: "blocked" | "forbidden" | "validation" | "not_found" | "too_many_rows" | "ineligible";
   message: string;
 }
 

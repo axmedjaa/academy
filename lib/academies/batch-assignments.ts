@@ -1,11 +1,13 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
   batchEnrollments,
   batchTrainerAssignments,
   batches,
+  certificates,
   courses,
+  examResults,
   staffBranchAssignments,
   staffProfiles,
   students,
@@ -119,8 +121,18 @@ function canManage(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
 }
 
+/** Stricter than `canManage`/withdraw: Trainer holds "manage" on this
+ * action for their own assigned batches, but permanent deletion is
+ * deliberately narrower than the reversible withdraw action — only
+ * Owner/Admin/Manager (the three academy-wide roles) may ever delete an
+ * enrollment, matching the same restriction already applied to Programs/
+ * Courses/Batches/Students/Staff. */
+function canDeleteEnrollment(role: AcademyRole, level: AcademyPermissionLevel): boolean {
+  return canManage(level) && role !== "trainer";
+}
+
 export interface BatchAssignmentActionError {
-  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "invalid_transition";
+  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "invalid_transition" | "ineligible";
   message: string;
 }
 
@@ -818,19 +830,216 @@ export async function withdrawStudentFromBatch(
   return { ok: true, enrollment: toEnrollmentRecord(result.row) };
 }
 
+/**
+ * ---------------------------------------------------------------------
+ * Permanent enrollment deletion — narrow, eligibility-gated, distinct
+ * from withdrawStudentFromBatch
+ * ---------------------------------------------------------------------
+ * `batch_enrollments.id` has no inbound FK anywhere in the schema (grep
+ * confirmed), so deleting a row can never violate a foreign key — but
+ * `exam_results` and `certificates` both carry the same (student_id,
+ * batch_id) pair independently (denormalized, not FK-linked to the
+ * enrollment row itself), so a student's real academic participation in a
+ * batch can still be reachable even after the enrollment row that
+ * recorded it is gone. Deletion is refused whenever either exists for
+ * this exact (student_id, batch_id) pair — the same "zero protected
+ * history" boundary this codebase's other five entity-delete functions
+ * already use, applied here at the (student, batch) granularity instead
+ * of a single owning row. Eligible regardless of the enrollment's own
+ * status (active/withdrawn/completed) — unlike withdraw, which only ever
+ * applies to an active row, delete is about permanently erasing a
+ * mistaken/test record, not about ending a real one.
+ */
+export interface EnrollmentDeletionEligibility {
+  enrollmentId: string;
+  eligible: boolean;
+  reasons: string[];
+  examResultCount: number;
+  certificateCount: number;
+}
+
+export type GetEnrollmentDeletionEligibilityResult =
+  | { ok: true; eligibility: EnrollmentDeletionEligibility }
+  | { ok: false; error: BatchAssignmentActionError };
+
+async function countEnrollmentHistory(
+  executor: DbClient,
+  studentId: string,
+  batchId: string,
+): Promise<{ examResultCount: number; certificateCount: number }> {
+  const [[examResultRow], [certificateRow]] = await Promise.all([
+    executor
+      .select({ count: sql<number>`count(*)::int` })
+      .from(examResults)
+      .where(and(eq(examResults.studentId, studentId), eq(examResults.batchId, batchId))),
+    executor
+      .select({ count: sql<number>`count(*)::int` })
+      .from(certificates)
+      .where(and(eq(certificates.studentId, studentId), eq(certificates.batchId, batchId))),
+  ]);
+  return {
+    examResultCount: examResultRow?.count ?? 0,
+    certificateCount: certificateRow?.count ?? 0,
+  };
+}
+
+function buildEnrollmentDeletionReasons(counts: { examResultCount: number; certificateCount: number }): string[] {
+  const reasons: string[] = [];
+  if (counts.examResultCount > 0) {
+    reasons.push(`${counts.examResultCount} exam result${counts.examResultCount === 1 ? "" : "s"} exist for this student in this batch`);
+  }
+  if (counts.certificateCount > 0) {
+    reasons.push(`${counts.certificateCount} certificate${counts.certificateCount === 1 ? "" : "s"} exist for this student in this batch`);
+  }
+  return reasons;
+}
+
+/** Read-only preview for the UI's Delete button — `deleteBatchEnrollment`
+ * below re-runs the identical check itself, inside the deletion
+ * transaction, as the actual authority. */
+export async function getEnrollmentDeletionEligibility(
+  actorContext: AuthContext,
+  enrollmentId: string,
+): Promise<GetEnrollmentDeletionEligibilityResult> {
+  const resolved = await resolveScopeAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canDeleteEnrollment(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(enrollmentId);
+  if (!parsedId.success) {
+    return { ok: false, error: ENROLLMENT_NOT_FOUND };
+  }
+
+  const [existing] = await db
+    .select({ enrollment: batchEnrollments, branchId: batches.branchId })
+    .from(batchEnrollments)
+    .innerJoin(batches, eq(batches.id, batchEnrollments.batchId))
+    .where(and(eq(batchEnrollments.id, enrollmentId), eq(batchEnrollments.academyId, academyId)))
+    .limit(1);
+  if (!existing) {
+    return { ok: false, error: ENROLLMENT_NOT_FOUND };
+  }
+  if (isBranchLimited(membershipRole)) {
+    const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
+    if (!assignedIds.includes(existing.branchId)) {
+      return { ok: false, error: ENROLLMENT_NOT_FOUND };
+    }
+  }
+
+  const counts = await countEnrollmentHistory(db, existing.enrollment.studentId, existing.enrollment.batchId);
+  const reasons = buildEnrollmentDeletionReasons(counts);
+
+  return {
+    ok: true,
+    eligibility: { enrollmentId: existing.enrollment.id, eligible: reasons.length === 0, reasons, ...counts },
+  };
+}
+
+export type DeleteEnrollmentResult =
+  | { ok: true; enrollmentId: string }
+  | { ok: false; error: BatchAssignmentActionError };
+
+/**
+ * Eligibility is re-verified from scratch INSIDE this transaction, on a
+ * row locked with `for("update")` — a mark could be entered or a
+ * certificate issued between the UI's preview and this call, and this is
+ * the check that actually decides whether the delete proceeds. Audited
+ * before the row is removed, same convention as this codebase's other
+ * entity-delete functions.
+ */
+export async function deleteBatchEnrollment(
+  actorContext: AuthContext,
+  enrollmentId: string,
+): Promise<DeleteEnrollmentResult> {
+  const resolved = await resolveScopeAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canDeleteEnrollment(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(enrollmentId);
+  if (!parsedId.success) {
+    return { ok: false, error: ENROLLMENT_NOT_FOUND };
+  }
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ enrollment: batchEnrollments, branchId: batches.branchId })
+      .from(batchEnrollments)
+      .innerJoin(batches, eq(batches.id, batchEnrollments.batchId))
+      .where(and(eq(batchEnrollments.id, enrollmentId), eq(batchEnrollments.academyId, academyId)))
+      .for("update");
+    if (!existing) {
+      return { ok: false, error: ENROLLMENT_NOT_FOUND };
+    }
+    if (isBranchLimited(membershipRole)) {
+      const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
+      if (!assignedIds.includes(existing.branchId)) {
+        return { ok: false, error: ENROLLMENT_NOT_FOUND };
+      }
+    }
+
+    const counts = await countEnrollmentHistory(tx, existing.enrollment.studentId, existing.enrollment.batchId);
+    const reasons = buildEnrollmentDeletionReasons(counts);
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "ineligible",
+          message: `This enrollment cannot be permanently deleted because ${reasons.join(", ")}. Withdraw it instead.`,
+        },
+      };
+    }
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "deleteBatchEnrollment",
+        entityType: "batch_enrollment",
+        entityId: enrollmentId,
+        branchId: existing.branchId,
+        before: toEnrollmentRecord(existing.enrollment),
+      },
+      tx,
+    );
+
+    await tx.delete(batchEnrollments).where(eq(batchEnrollments.id, enrollmentId));
+
+    return { ok: true, enrollmentId };
+  });
+}
+
 export interface BatchEnrollmentRosterRow extends BatchEnrollmentRecord {
   studentFullName: string;
   studentNumber: string;
 }
 
 export type ListBatchEnrollmentsResult =
-  | { ok: true; enrollments: BatchEnrollmentRosterRow[]; canManage: boolean }
+  | {
+      ok: true;
+      enrollments: (BatchEnrollmentRosterRow & { deletionEligibility: { eligible: boolean; reasons: string[] } })[];
+      canManage: boolean;
+      /** Narrower than `canManage` — Trainer can withdraw within their own
+       * assigned branch but must never see a Delete action at all
+       * (permission-absent, not disabled — see `canDeleteEnrollment`). */
+      canDelete: boolean;
+    }
   | { ok: false; error: BatchAssignmentActionError };
 
 /** Roster read: every enrollment (all statuses, for a full history view)
  * for one batch, scoped the same way getBatch is. Joined to students for a
  * display name/number — UI-only convenience, not used by any authorization
- * decision. */
+ * decision. Delete-eligibility is computed server-side here (one grouped
+ * query for the whole roster, never per-row in the UI) and handed down as
+ * plain data for the roster's Delete button to render. */
 export async function listBatchEnrollments(
   actorContext: AuthContext,
   batchId: string,
@@ -855,14 +1064,41 @@ export async function listBatchEnrollments(
     .innerJoin(students, eq(students.id, batchEnrollments.studentId))
     .where(eq(batchEnrollments.batchId, batchId));
 
+  const studentIds = rows.map((row) => row.enrollment.studentId);
+  const [examResultRows, certificateRows] = studentIds.length
+    ? await Promise.all([
+        db
+          .select({ studentId: examResults.studentId, count: sql<number>`count(*)::int` })
+          .from(examResults)
+          .where(and(eq(examResults.batchId, batchId), inArray(examResults.studentId, studentIds)))
+          .groupBy(examResults.studentId),
+        db
+          .select({ studentId: certificates.studentId, count: sql<number>`count(*)::int` })
+          .from(certificates)
+          .where(and(eq(certificates.batchId, batchId), inArray(certificates.studentId, studentIds)))
+          .groupBy(certificates.studentId),
+      ])
+    : [[], []];
+  const examResultByStudent = new Map(examResultRows.map((r) => [r.studentId, r.count]));
+  const certificateByStudent = new Map(certificateRows.map((r) => [r.studentId, r.count]));
+
   return {
     ok: true,
-    enrollments: rows.map((row) => ({
-      ...toEnrollmentRecord(row.enrollment),
-      studentFullName: row.studentFullName,
-      studentNumber: row.studentNumber,
-    })),
+    enrollments: rows.map((row) => {
+      const counts = {
+        examResultCount: examResultByStudent.get(row.enrollment.studentId) ?? 0,
+        certificateCount: certificateByStudent.get(row.enrollment.studentId) ?? 0,
+      };
+      const reasons = buildEnrollmentDeletionReasons(counts);
+      return {
+        ...toEnrollmentRecord(row.enrollment),
+        studentFullName: row.studentFullName,
+        studentNumber: row.studentNumber,
+        deletionEligibility: { eligible: reasons.length === 0, reasons },
+      };
+    }),
     canManage: canManage(permissionLevel),
+    canDelete: canDeleteEnrollment(membershipRole, permissionLevel),
   };
 }
 

@@ -9,6 +9,7 @@ import {
 import type { TimetableEntryWithBatch } from "@/lib/academies/timetables";
 import type { BranchRecord } from "@/lib/academies/branches";
 import type { BatchRecord } from "@/lib/academies/batches";
+import { Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 const initialState: TimetableFormState = { ok: false };
@@ -37,114 +38,109 @@ export function TimetableList({ entries, branches, batches, canManage }: Props) 
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
+    <div className="flex flex-col gap-8">
       <section>
-        <h2>Entries</h2>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <h2 className="mb-3 text-lg font-semibold text-ink">Entries</h2>
+        <TableWrap>
           <thead>
             <tr>
-              <th style={{ textAlign: "left" }}>Batch</th>
-              <th style={{ textAlign: "left" }}>Day</th>
-              <th style={{ textAlign: "left" }}>Time</th>
-              <th style={{ textAlign: "left" }}>Room</th>
-              {canManage && <th />}
+              <th className={th}>Batch</th>
+              <th className={th}>Day</th>
+              <th className={th}>Time</th>
+              <th className={th}>Room</th>
+              {canManage && <th className={th}>Actions</th>}
             </tr>
           </thead>
           <tbody>
             {entries.length === 0 && (
               <tr>
-                <td colSpan={canManage ? 5 : 4}>No timetable entries yet.</td>
+                <td colSpan={canManage ? 5 : 4} className={`${td} text-center text-muted`}>
+                  No timetable entries yet.
+                </td>
               </tr>
             )}
             {entries.map((entry) => (
-              <tr key={entry.id}>
-                <td>{entry.batchName}</td>
-                <td>{entry.dayOfWeek}</td>
-                <td>
+              <tr key={entry.id} className={trHover}>
+                <td className={`${td} font-medium`}>{entry.batchName}</td>
+                <td className={`${td} capitalize`}>{entry.dayOfWeek}</td>
+                <td className={td}>
                   {entry.startTime}–{entry.endTime}
                 </td>
-                <td>{entry.room ?? "—"}</td>
+                <td className={td}>{entry.room ?? "—"}</td>
                 {canManage && (
-                  <td>
-                    <button
+                  <td className={td}>
+                    <Button
                       type="button"
+                      variant="danger"
+                      className="px-2.5 py-1 text-xs"
                       disabled={isPending}
                       onClick={() => handleDelete(entry.id, entry.batchId)}
                     >
                       Delete
-                    </button>
+                    </Button>
                   </td>
                 )}
               </tr>
             ))}
           </tbody>
-        </table>
+        </TableWrap>
         {deleteError && (
-          <p role="alert" style={{ color: "crimson" }}>
-            {deleteError}
-          </p>
+          <div className="mt-2">
+            <ErrorMessage message={deleteError} />
+          </div>
         )}
       </section>
 
       {canManage && (
         <section>
-          <h2>Add entry</h2>
-          <form
-            action={createFormAction}
-            style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: 360 }}
-          >
-            <label>
-              Branch
-              <select name="branchId" required style={{ display: "block", width: "100%" }}>
-                {branches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Batch
-              <select name="batchId" required style={{ display: "block", width: "100%" }}>
-                {batches.map((batch) => (
-                  <option key={batch.id} value={batch.id}>
-                    {batch.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Day
-              <select name="dayOfWeek" required style={{ display: "block", width: "100%" }}>
-                {DAYS.map((day) => (
-                  <option key={day} value={day}>
-                    {day}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Start time
-              <input type="time" name="startTime" required style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              End time
-              <input type="time" name="endTime" required style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Room (optional)
-              <input type="text" name="room" style={{ display: "block", width: "100%" }} />
-            </label>
-            {createState.error && (
-              <p role="alert" style={{ color: "crimson" }}>
-                {createState.error.message}
-              </p>
-            )}
-            {createState.ok && <p style={{ color: "green" }}>Entry created.</p>}
-            <button type="submit" disabled={createPending}>
-              {createPending ? "Creating..." : "Add entry"}
-            </button>
-          </form>
+          <h2 className="mb-3 text-lg font-semibold text-ink">Add entry</h2>
+          <Section>
+            <form action={createFormAction} className="flex max-w-md flex-col gap-3">
+              <Field label="Branch">
+                <select name="branchId" required className={inputClass}>
+                  {branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Batch">
+                <select name="batchId" required className={inputClass}>
+                  {batches.map((batch) => (
+                    <option key={batch.id} value={batch.id}>
+                      {batch.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Day">
+                <select name="dayOfWeek" required className={inputClass}>
+                  {DAYS.map((day) => (
+                    <option key={day} value={day}>
+                      {day}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <Field label="Start time">
+                  <input type="time" name="startTime" required className={inputClass} />
+                </Field>
+                <Field label="End time">
+                  <input type="time" name="endTime" required className={inputClass} />
+                </Field>
+              </div>
+              <Field label="Room (optional)">
+                <input type="text" name="room" className={inputClass} />
+              </Field>
+              {createState.error && <ErrorMessage message={createState.error.message} />}
+              {createState.ok && <p className="text-sm font-medium text-success">Entry created.</p>}
+              <Button type="submit" disabled={createPending} className="self-start">
+                {createPending ? "Creating..." : "Add entry"}
+              </Button>
+            </form>
+          </Section>
         </section>
       )}
     </div>

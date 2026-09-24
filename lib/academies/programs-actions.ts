@@ -5,9 +5,12 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   archiveProgram as archiveProgramForActor,
   createProgram as createProgramForActor,
+  deleteProgram as deleteProgramForActor,
+  getProgramDeletionEligibility as getProgramDeletionEligibilityForActor,
   restoreProgram as restoreProgramForActor,
   updateProgram as updateProgramForActor,
   type CreateProgramInput,
+  type GetProgramDeletionEligibilityResult,
   type ProgramActionError,
   type UpdateProgramInput,
 } from "@/lib/academies/programs";
@@ -103,6 +106,39 @@ export async function setProgramStatus(
     status === "archived"
       ? await archiveProgramForActor(context, programId)
       : await restoreProgramForActor(context, programId);
+  if (!result.ok) {
+    return result;
+  }
+
+  revalidatePath("/academy/programs");
+  return { ok: true };
+}
+
+/** Read-only preview for the programs table's Delete button. */
+export async function getProgramDeletionEligibility(
+  programId: string,
+): Promise<GetProgramDeletionEligibilityResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  return getProgramDeletionEligibilityForActor(context, programId);
+}
+
+/** Plain-callable permanent-deletion action, for the programs table's
+ * "Delete" row action. `confirmedName` must equal the program's exact
+ * current name — re-checked server-side here (not just a UI affordance),
+ * same convention as lib/academies/delete-academy.ts's deleteAcademy. */
+export async function deleteProgram(
+  programId: string,
+  confirmedName: string,
+): Promise<{ ok: true } | { ok: false; error: ProgramActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await deleteProgramForActor(context, programId, confirmedName);
   if (!result.ok) {
     return result;
   }

@@ -5,10 +5,13 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   archiveCourse as archiveCourseForActor,
   createCourse as createCourseForActor,
+  deleteCourse as deleteCourseForActor,
+  getCourseDeletionEligibility as getCourseDeletionEligibilityForActor,
   restoreCourse as restoreCourseForActor,
   updateCourse as updateCourseForActor,
   type CourseActionError,
   type CreateCourseInput,
+  type GetCourseDeletionEligibilityResult,
   type UpdateCourseInput,
 } from "@/lib/academies/courses";
 
@@ -107,6 +110,38 @@ export async function setCourseStatus(
     status === "archived"
       ? await archiveCourseForActor(context, courseId)
       : await restoreCourseForActor(context, courseId);
+  if (!result.ok) {
+    return result;
+  }
+
+  revalidatePath("/academy/courses");
+  return { ok: true };
+}
+
+/** Read-only preview for the courses table's Delete button. */
+export async function getCourseDeletionEligibility(
+  courseId: string,
+): Promise<GetCourseDeletionEligibilityResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  return getCourseDeletionEligibilityForActor(context, courseId);
+}
+
+/** Plain-callable permanent-deletion action. `confirmedName` must equal
+ * the course's exact current name — re-checked server-side here, same
+ * convention as lib/academies/delete-academy.ts's deleteAcademy. */
+export async function deleteCourse(
+  courseId: string,
+  confirmedName: string,
+): Promise<{ ok: true } | { ok: false; error: CourseActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await deleteCourseForActor(context, courseId, confirmedName);
   if (!result.ok) {
     return result;
   }

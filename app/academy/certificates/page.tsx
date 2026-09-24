@@ -4,8 +4,9 @@ import { db } from "@/lib/db";
 import { batches, courses, programs, students } from "@/lib/db/schema";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listCertificates } from "@/lib/academies/certificates";
-import { ErrorMessage } from "@/app/academy/_shell/ui";
-import { color, spacing } from "@/lib/ui/theme";
+import { searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
+import { listBatches } from "@/lib/academies/batches";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { CertificatesList, type CertificateRow } from "./certificates-list";
 
 /**
@@ -26,6 +27,20 @@ import { CertificatesList, type CertificateRow } from "./certificates-list";
  * join `verifyCertificate` already performs internally, just done here at
  * the page layer so lib/academies/certificates.ts's audited, tested return
  * shape is never modified for a display-only convenience).
+ *
+ * Restyled onto the shared Tailwind shell (PAGE_WRAP/PageHeader/
+ * PageMessage) to match every other `/academy/*` page — this page
+ * previously predated that pass and still used the old inline-style/Card
+ * primitives.
+ *
+ * Student/batch pickers (this wave): the Issue form used to take raw
+ * "Student id"/"Batch id" text fields, which only ever accepted the UUID —
+ * but the only identifiers a caller can actually see/copy elsewhere in the
+ * app are the student's studentNumber and the batch's code (same gap fixed
+ * for lib/academies/certificates.ts's issueCertificate, which now accepts
+ * either form). `searchStudents`/`listBatches` back `<select>` pickers here
+ * instead, same pattern as app/academy/finance/page.tsx's own student
+ * picker and app/academy/batches/[batchId]/page.tsx's studentOptions.
  */
 export default async function AcademyCertificatesPage() {
   const context = await getAuthContext();
@@ -36,10 +51,10 @@ export default async function AcademyCertificatesPage() {
   const result = await listCertificates(context);
   if (!result.ok) {
     return (
-      <div>
-        <h1 style={{ color: color.text }}>Certificates</h1>
-        <ErrorMessage message={result.error.message} />
-      </div>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
@@ -63,6 +78,21 @@ export default async function AcademyCertificatesPage() {
   const studentNameById = new Map(studentRows.map((row) => [row.id, row.fullName]));
   const batchInfoById = new Map(batchRows.map((row) => [row.id, row]));
 
+  let studentOptions: { id: string; fullName: string; studentNumber: string }[] = [];
+  let batchOptions: { id: string; name: string; code: string }[] = [];
+  if (result.canManage) {
+    const [studentPickerResult, batchPickerResult] = await Promise.all([
+      searchStudents(context, { status: "active" }, { pageSize: STUDENTS_MAX_PAGE_SIZE }),
+      listBatches(context),
+    ]);
+    studentOptions = studentPickerResult.ok
+      ? studentPickerResult.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber }))
+      : [];
+    batchOptions = batchPickerResult.ok
+      ? batchPickerResult.batches.map((batch) => ({ id: batch.id, name: batch.name, code: batch.code }))
+      : [];
+  }
+
   const rows: CertificateRow[] = result.certificates.map((certificate) => ({
     id: certificate.id,
     certificateCode: certificate.certificateCode,
@@ -78,16 +108,21 @@ export default async function AcademyCertificatesPage() {
   }));
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: spacing.xl }}>
-      <div>
-        <h1 style={{ margin: 0, color: color.text }}>Certificates</h1>
-        <p style={{ margin: 0, marginTop: spacing.xxs, color: color.textMuted }}>
-          {result.canManage
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Certificates"
+        description={
+          result.canManage
             ? "Issue and cancel completion certificates for eligible students."
-            : "View certificates issued by this academy."}
-        </p>
-      </div>
-      <CertificatesList certificates={rows} canManage={result.canManage} />
+            : "View certificates issued by this academy."
+        }
+      />
+      <CertificatesList
+        certificates={rows}
+        canManage={result.canManage}
+        studentOptions={studentOptions}
+        batchOptions={batchOptions}
+      />
     </div>
   );
 }

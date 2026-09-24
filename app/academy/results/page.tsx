@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listResults } from "@/lib/academies/results";
 import { ResultsList } from "./results-list";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 49: `/academy/results` — minimal UI, logic+tests are this
@@ -23,31 +24,26 @@ export default async function AcademyResultsPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 1000,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Results</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canApprove
-          ? "You can approve, reject, and publish submitted results."
-          : result.canSubmit
-            ? "You can submit marks-entered results for review."
-            : "You can view results in your scope."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Results"
+        description={
+          result.canApprove
+            ? "You can approve, reject, and publish submitted results."
+            : result.canSubmit
+              ? "You can submit marks-entered results for review."
+              : "You can view results in your scope."
+        }
+      />
       <ResultsList results={result.results} canSubmit={result.canSubmit} canApprove={result.canApprove} />
-    </main>
+    </div>
   );
 }

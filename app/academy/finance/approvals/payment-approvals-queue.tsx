@@ -6,15 +6,20 @@ import {
   rejectStudentPaymentAction,
 } from "@/lib/academies/student-payments-actions";
 import type { StudentPaymentRecord } from "@/lib/academies/student-payments";
-import { Card, EmptyState, ErrorMessage, PrimaryButton, SecondaryButton } from "@/app/academy/_shell/ui";
-import { color, spacing } from "@/lib/ui/theme";
+import { Button, ErrorMessage, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 
 interface Props {
   payments: StudentPaymentRecord[];
+  /** studentId -> "Full Name (STD-XXXX)" — see page.tsx's own comment. */
+  studentLabels: Record<string, string>;
   currentUserId: string;
 }
 
 const SELF_APPROVAL_TOOLTIP = "You can't approve a transaction you recorded.";
+
+function formatMoney(amountCents: number, currency: string): string {
+  return `${currency} ${(amountCents / 100).toFixed(2)}`;
+}
 
 /**
  * DESIGN.md §3 "Approval queue": "a filtered list view (submitted-but-
@@ -37,7 +42,7 @@ const SELF_APPROVAL_TOOLTIP = "You can't approve a transaction you recorded.";
  * correct; this local update is just what makes THIS render immediately
  * reflect the outcome without a full round trip.
  */
-export function PaymentApprovalsQueue({ payments: initialPayments, currentUserId }: Props) {
+export function PaymentApprovalsQueue({ payments: initialPayments, studentLabels, currentUserId }: Props) {
   const [payments, setPayments] = useState(initialPayments);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -71,91 +76,92 @@ export function PaymentApprovalsQueue({ payments: initialPayments, currentUserId
   }
 
   return (
-    <Card>
+    <Section>
       {error && (
-        <div style={{ marginBottom: spacing.sm }}>
+        <div className="mb-3">
           <ErrorMessage message={error} />
         </div>
       )}
       {payments.length === 0 ? (
-        <EmptyState message="No student payments are waiting for a decision." />
+        <p className="py-6 text-center text-sm text-muted">No student payments are waiting for a decision.</p>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: `1px solid ${color.border}` }}>
-                <th style={{ padding: "0.4rem 0" }}>Student</th>
-                <th style={{ padding: "0.4rem 0" }}>Amount</th>
-                <th style={{ padding: "0.4rem 0" }}>Method</th>
-                <th style={{ padding: "0.4rem 0" }}>Received</th>
-                <th style={{ padding: "0.4rem 0" }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payments.map((payment) => {
-                const isSelfRecorded = payment.recordedBy === currentUserId;
-                return (
-                  <tr key={payment.id} style={{ borderBottom: `1px solid ${color.border}` }}>
-                    <td style={{ padding: "0.5rem 0" }}>{payment.studentId}</td>
-                    <td style={{ padding: "0.5rem 0" }}>
-                      {payment.currency} {(payment.amountCents / 100).toFixed(2)}
-                    </td>
-                    <td style={{ padding: "0.5rem 0" }}>{payment.method.replace("_", " ")}</td>
-                    <td style={{ padding: "0.5rem 0" }}>{payment.receivedAt.toLocaleDateString()}</td>
-                    <td style={{ padding: "0.5rem 0" }}>
-                      {rejectingId === payment.id ? (
-                        <div style={{ display: "flex", gap: spacing.xs, alignItems: "center", flexWrap: "wrap" }}>
-                          <input
-                            type="text"
-                            placeholder="Rejection reason"
-                            value={rejectReason}
-                            onChange={(event) => setRejectReason(event.target.value)}
-                            style={{ minWidth: 200 }}
-                          />
-                          <PrimaryButton
-                            type="button"
-                            disabled={isPending || rejectReason.trim() === ""}
-                            onClick={() => handleReject(payment.id)}
-                          >
-                            Confirm reject
-                          </PrimaryButton>
-                          <SecondaryButton
-                            type="button"
-                            onClick={() => {
-                              setRejectingId(null);
-                              setRejectReason("");
-                            }}
-                          >
-                            Back
-                          </SecondaryButton>
-                        </div>
-                      ) : (
-                        <div style={{ display: "flex", gap: spacing.xs, alignItems: "center" }}>
-                          <PrimaryButton
-                            type="button"
-                            disabled={isPending || isSelfRecorded}
-                            title={isSelfRecorded ? SELF_APPROVAL_TOOLTIP : undefined}
-                            onClick={() => handleApprove(payment.id)}
-                          >
-                            Approve
-                          </PrimaryButton>
-                          <SecondaryButton
-                            type="button"
-                            disabled={isPending}
-                            onClick={() => setRejectingId(payment.id)}
-                          >
-                            Reject
-                          </SecondaryButton>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={th}>Student</th>
+              <th className={th}>Amount</th>
+              <th className={th}>Method</th>
+              <th className={th}>Received</th>
+              <th className={th}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {payments.map((payment) => {
+              const isSelfRecorded = payment.recordedBy === currentUserId;
+              return (
+                <tr key={payment.id} className={trHover}>
+                  <td className={`${td} font-medium`}>{studentLabels[payment.studentId] ?? payment.studentId}</td>
+                  <td className={td}>{formatMoney(payment.amountCents, payment.currency)}</td>
+                  <td className={td}>{payment.method.replace("_", " ")}</td>
+                  <td className={td}>{payment.receivedAt.toLocaleDateString()}</td>
+                  <td className={td}>
+                    {rejectingId === payment.id ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="text"
+                          placeholder="Rejection reason"
+                          value={rejectReason}
+                          onChange={(event) => setRejectReason(event.target.value)}
+                          className={`${inputClass} w-48 py-1.5`}
+                        />
+                        <Button
+                          type="button"
+                          className="px-2.5 py-1 text-xs"
+                          disabled={isPending || rejectReason.trim() === ""}
+                          onClick={() => handleReject(payment.id)}
+                        >
+                          Confirm reject
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="px-2.5 py-1 text-xs"
+                          onClick={() => {
+                            setRejectingId(null);
+                            setRejectReason("");
+                          }}
+                        >
+                          Back
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-2" title={isSelfRecorded ? SELF_APPROVAL_TOOLTIP : undefined}>
+                        <Button
+                          type="button"
+                          className="px-2.5 py-1 text-xs"
+                          disabled={isPending || isSelfRecorded}
+                          onClick={() => handleApprove(payment.id)}
+                        >
+                          Approve
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="px-2.5 py-1 text-xs"
+                          disabled={isPending}
+                          onClick={() => setRejectingId(payment.id)}
+                        >
+                          Reject
+                        </Button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </TableWrap>
       )}
-    </Card>
+    </Section>
   );
 }

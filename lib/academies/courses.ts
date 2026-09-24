@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { batchEnrollments, batches, courses, programs, staffProfiles, students } from "@/lib/db/schema";
@@ -35,7 +35,7 @@ function canManageCourses(role: AcademyRole, level: AcademyPermissionLevel): boo
 }
 
 export interface CourseActionError {
-  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "allowance";
+  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "allowance" | "ineligible";
   message: string;
 }
 
@@ -258,20 +258,49 @@ async function instructorExistsInAcademy(
   return Boolean(row);
 }
 
+export interface CourseDeletionEligibilitySummary {
+  eligible: boolean;
+  reasons: string[];
+}
+
 export type ListCoursesResult =
-  | { ok: true; courses: CourseWithInstructor[]; canManage: boolean }
+  | {
+      ok: true;
+      courses: (CourseWithInstructor & { deletionEligibility: CourseDeletionEligibilitySummary })[];
+      canManage: boolean;
+    }
   | { ok: false; error: CourseActionError };
 
+/** Bulk batch-count-by-course, for the courses list's Delete button — one
+ * grouped query for the whole visible list rather than N+1. */
+async function countBatchesByCourseIds(courseIds: string[]): Promise<Map<string, number>> {
+  if (courseIds.length === 0) return new Map();
+  const rows = await db
+    .select({ courseId: batches.courseId, count: sql<number>`count(*)::int` })
+    .from(batches)
+    .where(inArray(batches.courseId, courseIds))
+    .groupBy(batches.courseId);
+  return new Map(rows.map((row) => [row.courseId, row.count]));
+}
+
+/** Delete-eligibility is computed server-side here (never in the UI, per
+ * this task's own "don't duplicate eligibility logic in the client" rule)
+ * and handed down as plain data for the table's Delete button to render. */
 export async function listCourses(actorContext: AuthContext): Promise<ListCoursesResult> {
   const resolved = await resolveCourseAccess(actorContext);
   if (!resolved.ok) return resolved;
   const { academyId, membershipRole, permissionLevel } = resolved.access;
 
   const rows = await db.select().from(courses).where(eq(courses.academyId, academyId));
+  const withInstructor = await attachInstructorNames(rows.map(toRecord));
+  const batchCountByCourseId = await countBatchesByCourseIds(withInstructor.map((c) => c.id));
 
   return {
     ok: true,
-    courses: await attachInstructorNames(rows.map(toRecord)),
+    courses: withInstructor.map((course) => {
+      const reasons = buildCourseDeletionReasons(batchCountByCourseId.get(course.id) ?? 0);
+      return { ...course, deletionEligibility: { eligible: reasons.length === 0, reasons } };
+    }),
     canManage: canManageCourses(membershipRole, permissionLevel),
   };
 }
@@ -741,4 +770,180 @@ export async function restoreCourse(
     }
     throw err;
   }
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * Permanent course deletion — narrow, eligibility-gated, distinct from
+ * archiveCourse
+ * ---------------------------------------------------------------------
+ * `batches.course_id` is the course's only inbound FK (see
+ * lib/db/schema.ts) — a course with zero batches has never had any
+ * enrollment, exam, result, or certificate reachable through it (every one
+ * of those tables hangs off a batch, not the course directly), so "zero
+ * batches" alone is a sufficient, sound proxy for "no protected academic
+ * or financial history exists under this course," matching this task's
+ * explicit "If the course has batches ... refuse deletion" rule. Batches
+ * are never deleted to force this check to pass (that would be exactly
+ * the "delete dependents just to make the parent deletable" this task
+ * forbids) — the caller must archive/complete every batch (or there must
+ * never have been one) before a course becomes eligible.
+ *
+ * Course allowance stays correct automatically: `checkAllowance('courses')`
+ * (lib/subscriptions/usage.ts) is a live `COUNT(status='active')` query,
+ * not a cached counter, so a deleted row simply stops being counted on the
+ * very next check — no separate bookkeeping needed, same as archiving.
+ */
+export interface CourseDeletionEligibility {
+  courseId: string;
+  courseName: string;
+  eligible: boolean;
+  reasons: string[];
+  batchCount: number;
+}
+
+export type GetCourseDeletionEligibilityResult =
+  | { ok: true; eligibility: CourseDeletionEligibility }
+  | { ok: false; error: CourseActionError };
+
+async function countCourseBatches(executor: DbClient, courseId: string): Promise<number> {
+  const [row] = await executor
+    .select({ count: sql<number>`count(*)::int` })
+    .from(batches)
+    .where(eq(batches.courseId, courseId));
+  return row?.count ?? 0;
+}
+
+function buildCourseDeletionReasons(batchCount: number): string[] {
+  const reasons: string[] = [];
+  if (batchCount > 0) {
+    reasons.push(`${batchCount} batch${batchCount === 1 ? "" : "es"} ${batchCount === 1 ? "is" : "are"} attached to this course`);
+  }
+  return reasons;
+}
+
+/** Read-only preview for the UI's Delete button — `deleteCourse` below
+ * re-runs the identical check itself, inside the deletion transaction, as
+ * the actual authority. */
+export async function getCourseDeletionEligibility(
+  actorContext: AuthContext,
+  courseId: string,
+): Promise<GetCourseDeletionEligibilityResult> {
+  const resolved = await resolveCourseAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManageCourses(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(courseId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const [course] = await db
+    .select({ id: courses.id, name: courses.name })
+    .from(courses)
+    .where(and(eq(courses.id, courseId), eq(courses.academyId, academyId)))
+    .limit(1);
+  if (!course) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const batchCount = await countCourseBatches(db, course.id);
+  const reasons = buildCourseDeletionReasons(batchCount);
+
+  return {
+    ok: true,
+    eligibility: {
+      courseId: course.id,
+      courseName: course.name,
+      eligible: reasons.length === 0,
+      reasons,
+      batchCount,
+    },
+  };
+}
+
+export type DeleteCourseResult =
+  | { ok: true; courseId: string }
+  | { ok: false; error: CourseActionError };
+
+/**
+ * Eligibility is re-verified from scratch INSIDE this transaction, on a
+ * row locked with `for("update")` — a batch could be created against this
+ * course between the UI's preview and this call, and this is the check
+ * that actually decides whether the delete proceeds. Audited before the
+ * row is removed, same convention as deleteAcademy/deleteExam/
+ * deleteProgram.
+ */
+export async function deleteCourse(
+  actorContext: AuthContext,
+  courseId: string,
+  confirmedName: string,
+): Promise<DeleteCourseResult> {
+  const resolved = await resolveCourseAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManageCourses(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(courseId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(courses)
+      .where(and(eq(courses.id, courseId), eq(courses.academyId, academyId)))
+      .for("update");
+    if (!existing) {
+      return { ok: false, error: NOT_FOUND };
+    }
+
+    // Re-checked against the row's CURRENT name, under the same lock —
+    // never trusts a name the caller fetched earlier via the eligibility
+    // preview, same convention as lib/academies/delete-academy.ts's
+    // deleteAcademy.
+    if (confirmedName !== existing.name) {
+      return {
+        ok: false,
+        error: { code: "validation", message: "Type the exact course name to confirm permanent deletion." },
+      };
+    }
+
+    const batchCount = await countCourseBatches(tx, existing.id);
+    const reasons = buildCourseDeletionReasons(batchCount);
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "ineligible",
+          message: `This course cannot be permanently deleted because ${reasons.join(", ")}. Archive it instead.`,
+        },
+      };
+    }
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "deleteCourse",
+        entityType: "course",
+        entityId: courseId,
+        before: toRecord(existing),
+      },
+      tx,
+    );
+
+    await tx.delete(courses).where(eq(courses.id, courseId));
+
+    return { ok: true, courseId };
+  });
 }

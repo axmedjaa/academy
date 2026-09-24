@@ -5,6 +5,7 @@ import {
   registerStudent,
   type RegisterStudentFormState,
 } from "@/lib/academies/register-student-actions";
+import { Button, ErrorMessage, Field, inputClass } from "@/app/academy/_shell/ui";
 
 const initialState: RegisterStudentFormState = { ok: false };
 
@@ -33,13 +34,9 @@ export function StudentForm({ branches, courseOptions }: StudentFormProps) {
   const [state, formAction, pending] = useActionState(registerStudent, initialState);
 
   return (
-    <form
-      action={formAction}
-      style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: 420 }}
-    >
-      <label>
-        Branch
-        <select name="branchId" required defaultValue="" style={{ display: "block", width: "100%" }}>
+    <form action={formAction} className="flex flex-col gap-3">
+      <Field label="Branch">
+        <select name="branchId" required defaultValue="" className={inputClass}>
           <option value="" disabled>
             Select a branch
           </option>
@@ -49,38 +46,36 @@ export function StudentForm({ branches, courseOptions }: StudentFormProps) {
             </option>
           ))}
         </select>
-      </label>
-      <label>
-        Full name
-        <input type="text" name="fullName" required style={{ display: "block", width: "100%" }} />
-      </label>
-      <label>
-        Date of birth
-        <input type="date" name="dateOfBirth" style={{ display: "block", width: "100%" }} />
-      </label>
-      <label>
-        Gender
-        <input type="text" name="gender" style={{ display: "block", width: "100%" }} />
-      </label>
-      <label>
-        Phone
-        <input type="text" name="phone" style={{ display: "block", width: "100%" }} />
-      </label>
-      <label>
-        Email
-        <input type="email" name="email" style={{ display: "block", width: "100%" }} />
-      </label>
-      <label>
-        Guardian name
-        <input type="text" name="guardianName" style={{ display: "block", width: "100%" }} />
-      </label>
-      <label>
-        Guardian phone
-        <input type="text" name="guardianPhone" style={{ display: "block", width: "100%" }} />
-      </label>
-      <label>
-        Course
-        <select name="batchId" defaultValue="" style={{ display: "block", width: "100%" }}>
+      </Field>
+      <Field label="Full name">
+        <input type="text" name="fullName" required className={inputClass} />
+      </Field>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Date of birth">
+          <input type="date" name="dateOfBirth" className={inputClass} />
+        </Field>
+        <Field label="Gender">
+          <input type="text" name="gender" className={inputClass} />
+        </Field>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Phone">
+          <input type="text" name="phone" className={inputClass} />
+        </Field>
+        <Field label="Email">
+          <input type="email" name="email" className={inputClass} />
+        </Field>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Guardian name">
+          <input type="text" name="guardianName" className={inputClass} />
+        </Field>
+        <Field label="Guardian phone">
+          <input type="text" name="guardianPhone" className={inputClass} />
+        </Field>
+      </div>
+      <Field label="Course">
+        <select name="batchId" defaultValue="" className={inputClass}>
           <option value="">No course selected yet</option>
           {courseOptions.map((option) => (
             <option key={option.batchId} value={option.batchId}>
@@ -88,23 +83,21 @@ export function StudentForm({ branches, courseOptions }: StudentFormProps) {
             </option>
           ))}
         </select>
-      </label>
+      </Field>
 
-      {state.error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {state.error.message}
-        </p>
-      )}
+      {state.error && <ErrorMessage message={state.error.message} />}
       {state.enrollmentWarning && (
-        <p role="alert" style={{ color: "#b45309" }}>
+        <p role="alert" className="rounded-control border border-warning/30 bg-warning-bg px-3 py-2 text-sm text-warning">
           {state.enrollmentWarning}
         </p>
       )}
-      {state.ok && !state.enrollmentWarning && <p style={{ color: "green" }}>Student registered.</p>}
+      {state.ok && !state.enrollmentWarning && (
+        <p className="text-sm font-medium text-success">Student registered.</p>
+      )}
 
-      <button type="submit" disabled={pending}>
+      <Button type="submit" disabled={pending} className="self-start">
         {pending ? "Registering..." : "Register student"}
-      </button>
+      </Button>
     </form>
   );
 }

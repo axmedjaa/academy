@@ -1,7 +1,19 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { batches, branches, courses, staffBranchAssignments, staffProfiles } from "@/lib/db/schema";
+import {
+  batchEnrollments,
+  batchTrainerAssignments,
+  batches,
+  branches,
+  certificates,
+  courses,
+  examResults,
+  exams,
+  staffBranchAssignments,
+  staffProfiles,
+  timetables,
+} from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_COURSES_BATCHES_ACTION,
@@ -45,8 +57,18 @@ function canManage(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
 }
 
+/** Stricter than `canManage`/archive: Trainer holds "manage" on this
+ * action for their own assigned batches (see this file's module comment),
+ * but permanent deletion is deliberately narrower than archive — only
+ * Owner/Admin/Manager (the three academy-wide roles) may ever delete a
+ * batch, matching the same restriction already applied to Programs/
+ * Courses (canManagePrograms/canManageCourses exclude Trainer outright). */
+function canDeleteBatch(role: AcademyRole, level: AcademyPermissionLevel): boolean {
+  return canManage(level) && role !== "trainer";
+}
+
 export interface BatchActionError {
-  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict";
+  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "ineligible";
   message: string;
 }
 
@@ -214,8 +236,23 @@ async function branchExistsInAcademy(
   return Boolean(row);
 }
 
+export interface BatchDeletionEligibilitySummary {
+  eligible: boolean;
+  reasons: string[];
+}
+
 export type ListBatchesResult =
-  | { ok: true; batches: BatchRecord[]; canManage: boolean }
+  | {
+      ok: true;
+      batches: (BatchRecord & { deletionEligibility: BatchDeletionEligibilitySummary })[];
+      canManage: boolean;
+      /** Narrower than `canManage` — see `canDeleteBatch`'s own comment.
+       * The UI renders the Delete action only when this is true (never a
+       * disabled Delete for a role that can never reach it at all, per
+       * DESIGN.md §"Rule for building any screen": permission-absent
+       * controls are omitted entirely, not shown disabled). */
+      canDelete: boolean;
+    }
   | { ok: false; error: BatchActionError };
 
 /**
@@ -244,10 +281,23 @@ export async function listBatches(actorContext: AuthContext): Promise<ListBatche
     rows = await db.select().from(batches).where(eq(batches.academyId, academyId));
   }
 
+  const countsByBatchId = await countBatchDependentsBulk(rows.map((row) => row.id));
+
   return {
     ok: true,
-    batches: rows.map(toRecord),
+    batches: rows.map((row) => {
+      const counts = countsByBatchId.get(row.id) ?? {
+        enrollmentCount: 0,
+        examCount: 0,
+        examResultCount: 0,
+        certificateCount: 0,
+        cancelledCertificateCount: 0,
+      };
+      const reasons = buildBatchDeletionReasons(counts);
+      return { ...toRecord(row), deletionEligibility: { eligible: reasons.length === 0, reasons } };
+    }),
     canManage: canManage(permissionLevel),
+    canDelete: canDeleteBatch(membershipRole, permissionLevel),
   };
 }
 
@@ -647,4 +697,284 @@ export async function restoreBatch(
     return { ok: false, error: NOT_FOUND };
   }
   return { ok: true, batch: toRecord(result) };
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * Permanent batch deletion — narrow, eligibility-gated, distinct from
+ * archiveBatch
+ * ---------------------------------------------------------------------
+ * Direct inbound FKs to `batches` (lib/db/schema.ts): batchTrainerAssignments,
+ * batchEnrollments, timetables, exams (batchId), examResults (batchId,
+ * denormalized), certificates (batchId). Enrollments/exams/results/
+ * certificates are protected — any row blocks deletion outright, matching
+ * this task's explicit "batch with enrollment/exam/result/certificate
+ * blocked" rule (an exam always implies zero-or-more exam_results, but
+ * both are reported separately here for a clearer reason list, same style
+ * as the student/staff eligibility messages).
+ *
+ * batchTrainerAssignments and timetables are treated as safely disposable
+ * — scheduling/staffing metadata with no standalone meaning once the batch
+ * itself is gone, the same judgment lib/academies/delete-academy.ts's own
+ * disposable-data list already made for `timetables` at the whole-academy
+ * scale. They are deleted explicitly, by name, inside the same transaction
+ * — never a blind cascade.
+ */
+export interface BatchDeletionEligibility {
+  batchId: string;
+  batchName: string;
+  eligible: boolean;
+  reasons: string[];
+  enrollmentCount: number;
+  examCount: number;
+  examResultCount: number;
+  certificateCount: number;
+  /** How many of `certificateCount` are specifically cancelled — broken
+   * out only so the blocking reason can say so explicitly (see
+   * `buildBatchDeletionReasons`'s own comment on why a cancelled
+   * certificate still blocks deletion). */
+  cancelledCertificateCount: number;
+}
+
+export type GetBatchDeletionEligibilityResult =
+  | { ok: true; eligibility: BatchDeletionEligibility }
+  | { ok: false; error: BatchActionError };
+
+type BatchDependentCounts = {
+  enrollmentCount: number;
+  examCount: number;
+  examResultCount: number;
+  certificateCount: number;
+  cancelledCertificateCount: number;
+};
+
+/** Bulk per-batch dependent counts, for the batches list's Delete button —
+ * four grouped queries for the whole visible list rather than N+1. */
+async function countBatchDependentsBulk(batchIds: string[]): Promise<Map<string, BatchDependentCounts>> {
+  if (batchIds.length === 0) return new Map();
+  const [enrollmentRows, examRows, examResultRows, certificateRows, cancelledCertificateRows] = await Promise.all([
+    db.select({ batchId: batchEnrollments.batchId, count: sql<number>`count(*)::int` }).from(batchEnrollments).where(inArray(batchEnrollments.batchId, batchIds)).groupBy(batchEnrollments.batchId),
+    db.select({ batchId: exams.batchId, count: sql<number>`count(*)::int` }).from(exams).where(inArray(exams.batchId, batchIds)).groupBy(exams.batchId),
+    db.select({ batchId: examResults.batchId, count: sql<number>`count(*)::int` }).from(examResults).where(inArray(examResults.batchId, batchIds)).groupBy(examResults.batchId),
+    db.select({ batchId: certificates.batchId, count: sql<number>`count(*)::int` }).from(certificates).where(inArray(certificates.batchId, batchIds)).groupBy(certificates.batchId),
+    db
+      .select({ batchId: certificates.batchId, count: sql<number>`count(*)::int` })
+      .from(certificates)
+      .where(and(inArray(certificates.batchId, batchIds), eq(certificates.status, "cancelled")))
+      .groupBy(certificates.batchId),
+  ]);
+  const enrollmentByBatch = new Map(enrollmentRows.map((r) => [r.batchId, r.count]));
+  const examByBatch = new Map(examRows.map((r) => [r.batchId, r.count]));
+  const examResultByBatch = new Map(examResultRows.map((r) => [r.batchId, r.count]));
+  const certificateByBatch = new Map(certificateRows.map((r) => [r.batchId, r.count]));
+  const cancelledCertificateByBatch = new Map(cancelledCertificateRows.map((r) => [r.batchId, r.count]));
+
+  const result = new Map<string, BatchDependentCounts>();
+  for (const batchId of batchIds) {
+    result.set(batchId, {
+      enrollmentCount: enrollmentByBatch.get(batchId) ?? 0,
+      examCount: examByBatch.get(batchId) ?? 0,
+      examResultCount: examResultByBatch.get(batchId) ?? 0,
+      certificateCount: certificateByBatch.get(batchId) ?? 0,
+      cancelledCertificateCount: cancelledCertificateByBatch.get(batchId) ?? 0,
+    });
+  }
+  return result;
+}
+
+async function countBatchDependents(
+  executor: DbClient,
+  batchId: string,
+): Promise<BatchDependentCounts> {
+  const [[enrollmentRow], [examRow], [examResultRow], [certificateRow], [cancelledCertificateRow]] = await Promise.all([
+    executor.select({ count: sql<number>`count(*)::int` }).from(batchEnrollments).where(eq(batchEnrollments.batchId, batchId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(exams).where(eq(exams.batchId, batchId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(examResults).where(eq(examResults.batchId, batchId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(certificates).where(eq(certificates.batchId, batchId)),
+    executor
+      .select({ count: sql<number>`count(*)::int` })
+      .from(certificates)
+      .where(and(eq(certificates.batchId, batchId), eq(certificates.status, "cancelled"))),
+  ]);
+  return {
+    enrollmentCount: enrollmentRow?.count ?? 0,
+    examCount: examRow?.count ?? 0,
+    examResultCount: examResultRow?.count ?? 0,
+    certificateCount: certificateRow?.count ?? 0,
+    cancelledCertificateCount: cancelledCertificateRow?.count ?? 0,
+  };
+}
+
+function buildBatchDeletionReasons(counts: {
+  enrollmentCount: number;
+  examCount: number;
+  examResultCount: number;
+  certificateCount: number;
+  cancelledCertificateCount: number;
+}): string[] {
+  const reasons: string[] = [];
+  if (counts.enrollmentCount > 0) {
+    reasons.push(`${counts.enrollmentCount} student enrollment${counts.enrollmentCount === 1 ? "" : "s"} exist`);
+  }
+  if (counts.examCount > 0) {
+    reasons.push(`${counts.examCount} exam${counts.examCount === 1 ? "" : "s"} exist`);
+  }
+  if (counts.examResultCount > 0) {
+    reasons.push(`${counts.examResultCount} exam result${counts.examResultCount === 1 ? "" : "s"} exist`);
+  }
+  if (counts.certificateCount > 0) {
+    const activeCount = counts.certificateCount - counts.cancelledCertificateCount;
+    // Explicit about cancelled certificates specifically — cancelling one
+    // does NOT free up the batch for deletion, since a cancelled
+    // certificate must stay permanently verifiable (DESIGN.md's
+    // "cancelled/invalid" state on /verify/[code], never a 404) just like
+    // an issued one, and certificates.batch_id is a NOT NULL FK with no
+    // cascade — the batch row has to keep existing for that to work.
+    if (counts.cancelledCertificateCount > 0 && activeCount > 0) {
+      reasons.push(
+        `${counts.certificateCount} certificates exist for this batch (${activeCount} issued, ${counts.cancelledCertificateCount} cancelled) — certificates remain permanently verifiable even after cancellation, so this batch can't be deleted while any exist`,
+      );
+    } else if (counts.cancelledCertificateCount > 0) {
+      reasons.push(
+        `${counts.cancelledCertificateCount} cancelled certificate${counts.cancelledCertificateCount === 1 ? "" : "s"} still exist${counts.cancelledCertificateCount === 1 ? "s" : ""} for this batch — certificates remain permanently verifiable even after cancellation, so this batch can't be deleted while any exist`,
+      );
+    } else {
+      reasons.push(`${counts.certificateCount} certificate${counts.certificateCount === 1 ? "" : "s"} exist for this batch`);
+    }
+  }
+  return reasons;
+}
+
+/** Read-only preview for the UI's Delete button — `deleteBatch` below
+ * re-runs the identical check itself, inside the deletion transaction, as
+ * the actual authority. */
+export async function getBatchDeletionEligibility(
+  actorContext: AuthContext,
+  batchId: string,
+): Promise<GetBatchDeletionEligibilityResult> {
+  const resolved = await resolveBatchAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canDeleteBatch(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(batchId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const [batch] = await db
+    .select({ id: batches.id, name: batches.name })
+    .from(batches)
+    .where(and(eq(batches.id, batchId), eq(batches.academyId, academyId)))
+    .limit(1);
+  if (!batch) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const counts = await countBatchDependents(db, batch.id);
+  const reasons = buildBatchDeletionReasons(counts);
+
+  return {
+    ok: true,
+    eligibility: {
+      batchId: batch.id,
+      batchName: batch.name,
+      eligible: reasons.length === 0,
+      reasons,
+      ...counts,
+    },
+  };
+}
+
+export type DeleteBatchResult =
+  | { ok: true; batchId: string }
+  | { ok: false; error: BatchActionError };
+
+/**
+ * Eligibility is re-verified from scratch INSIDE this transaction, on a
+ * row locked with `for("update")` — a student could be enrolled or an exam
+ * created between the UI's preview and this call, and this is the check
+ * that actually decides whether the delete proceeds. Audited before the
+ * row is removed, same convention as deleteAcademy/deleteExam/
+ * deleteProgram/deleteCourse. No branch-scoping check is needed here (see
+ * `canDeleteBatch`'s own comment) — every role that ever reaches this
+ * point is academy-wide, never branch-limited.
+ */
+export async function deleteBatch(
+  actorContext: AuthContext,
+  batchId: string,
+  confirmedName: string,
+): Promise<DeleteBatchResult> {
+  const resolved = await resolveBatchAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canDeleteBatch(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(batchId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(batches)
+      .where(and(eq(batches.id, batchId), eq(batches.academyId, academyId)))
+      .for("update");
+    if (!existing) {
+      return { ok: false, error: NOT_FOUND };
+    }
+
+    // Re-checked against the row's CURRENT name, under the same lock —
+    // never trusts a name the caller fetched earlier via the eligibility
+    // preview, same convention as lib/academies/delete-academy.ts's
+    // deleteAcademy.
+    if (confirmedName !== existing.name) {
+      return {
+        ok: false,
+        error: { code: "validation", message: "Type the exact batch name to confirm permanent deletion." },
+      };
+    }
+
+    const counts = await countBatchDependents(tx, existing.id);
+    const reasons = buildBatchDeletionReasons(counts);
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "ineligible",
+          message: `This batch cannot be permanently deleted because ${reasons.join(", ")}. Archive it instead.`,
+        },
+      };
+    }
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "deleteBatch",
+        entityType: "batch",
+        entityId: batchId,
+        branchId: existing.branchId,
+        before: toRecord(existing),
+      },
+      tx,
+    );
+
+    // Disposable dependent data only — guaranteed by the eligibility check
+    // above that no enrollment/exam/result/certificate exists to reach
+    // through either of these.
+    await tx.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.batchId, batchId));
+    await tx.delete(timetables).where(eq(timetables.batchId, batchId));
+    await tx.delete(batches).where(eq(batches.id, batchId));
+
+    return { ok: true, batchId };
+  });
 }

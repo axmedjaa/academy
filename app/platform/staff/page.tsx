@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission, UNGRANTABLE_CAPABILITIES } from "@/lib/auth/permissions";
 import { listPlatformStaff } from "@/lib/platform-staff/staff";
 import { PlatformStaffManager } from "./platform-staff-manager";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 const STAFF_MANAGE_CAPABILITY = "platform.staff.manage";
 
@@ -26,30 +27,21 @@ export default async function PlatformStaffPage() {
   const allowed = await hasPermission(context, STAFF_MANAGE_CAPABILITY);
 
   if (!allowed) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const staff = await listPlatformStaff();
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Platform staff</h1>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Platform staff"
+        description="Create platform_admin accounts and grant them individual capabilities."
+      />
       <PlatformStaffManager
         staff={staff}
         ungrantableCapabilities={[...UNGRANTABLE_CAPABILITIES]}
       />
-    </main>
+    </div>
   );
 }

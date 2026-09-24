@@ -5,6 +5,7 @@ import { getNotificationPreferences } from "@/lib/notifications/preferences";
 import { AcademySettingsForm } from "./settings-form";
 import { AcademyUsageWidget } from "./academy-usage-widget";
 import { NotificationPreferencesSection } from "./notification-preferences-section";
+import { PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 41: `/academy/settings` — expanded profile fields (direct
@@ -55,43 +56,38 @@ export default async function AcademySettingsPage() {
 
   if (!settingsResult.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{settingsResult.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{settingsResult.error.message}</p>
-      </main>
+      <PageMessage
+        title={settingsResult.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={settingsResult.error.message}
+      />
     );
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 720,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Academy settings</h1>
+    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
+      <PageHeader title="Academy settings" />
 
-      {usageResult.ok ? (
-        <AcademyUsageWidget
-          planName={usageResult.planName}
-          usage={usageResult.usage}
-          limits={usageResult.limits}
+      <div className="flex flex-col gap-6">
+        {usageResult.ok ? (
+          <AcademyUsageWidget
+            planName={usageResult.planName}
+            usage={usageResult.usage}
+            limits={usageResult.limits}
+          />
+        ) : null}
+
+        <AcademySettingsForm
+          academy={settingsResult.academy}
+          permissionLevel={settingsResult.permissionLevel}
         />
-      ) : null}
 
-      <AcademySettingsForm
-        academy={settingsResult.academy}
-        permissionLevel={settingsResult.permissionLevel}
-      />
-
-      {preferencesResult?.ok ? (
-        <NotificationPreferencesSection
-          academyId={settingsResult.academy.id}
-          preferences={preferencesResult.preferences}
-        />
-      ) : null}
-    </main>
+        {preferencesResult?.ok ? (
+          <NotificationPreferencesSection
+            academyId={settingsResult.academy.id}
+            preferences={preferencesResult.preferences}
+          />
+        ) : null}
+      </div>
+    </div>
   );
 }

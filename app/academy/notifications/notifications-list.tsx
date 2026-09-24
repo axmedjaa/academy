@@ -8,6 +8,7 @@ import {
 import { getNotificationIconCategory, type NotificationIconCategory } from "@/lib/notifications/notification-icon";
 import { humanizeNotificationLabel } from "@/lib/notifications/humanize-template-id";
 import type { NotificationListItem } from "@/lib/notifications/list-notifications";
+import { Button, ErrorMessage, Section } from "@/app/academy/_shell/ui";
 
 interface Props {
   notifications: NotificationListItem[];
@@ -74,72 +75,69 @@ export function NotificationsList({ notifications }: Props) {
   const unreadIds = notifications.filter((n) => n.readAt === null).map((n) => n.id);
 
   return (
-    <div>
-      {error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {error}
-        </p>
-      )}
+    <div className="flex flex-col gap-4">
+      {error && <ErrorMessage message={error} />}
 
-      <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1rem", alignItems: "center" }}>
-        <button type="button" disabled={isPending || selected.size === 0} onClick={markSelected}>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant="secondary" disabled={isPending || selected.size === 0} onClick={markSelected}>
           Mark selected as read ({selected.size})
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
           disabled={isPending || unreadIds.length === 0}
           onClick={() => setSelected(new Set(unreadIds))}
         >
           Select all unread
-        </button>
+        </Button>
       </div>
 
-      <ul style={{ listStyle: "none", padding: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-        {notifications.map((notification) => {
-          const category = getNotificationIconCategory(notification.templateId);
-          const isUnread = notification.readAt === null;
-          return (
-            <li
-              key={notification.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.75rem",
-                padding: "0.6rem 0.75rem",
-                border: "1px solid #ddd",
-                borderRadius: 4,
-                background: isUnread ? "#f2f8ff" : "white",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(notification.id)}
-                onChange={() => toggleSelected(notification.id)}
-                aria-label={`Select notification ${notification.eventType}`}
-              />
-              <span aria-hidden="true" title={category}>
-                {ICON_BY_CATEGORY[category]}
-              </span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: isUnread ? 700 : 400 }}>
-                  {humanizeNotificationLabel(notification.eventType)}
+      {notifications.length === 0 ? (
+        <Section>
+          <p className="text-sm text-muted">No notifications match this filter.</p>
+        </Section>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {notifications.map((notification) => {
+            const category = getNotificationIconCategory(notification.templateId);
+            const isUnread = notification.readAt === null;
+            return (
+              <li
+                key={notification.id}
+                className={`flex items-center gap-3 rounded-card border border-border px-3 py-3 shadow-card ${
+                  isUnread ? "bg-info-bg/40" : "bg-surface"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(notification.id)}
+                  onChange={() => toggleSelected(notification.id)}
+                  aria-label={`Select notification ${notification.eventType}`}
+                  className="h-4 w-4 accent-brand"
+                />
+                <span aria-hidden="true" title={category} className="text-lg leading-none">
+                  {ICON_BY_CATEGORY[category]}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className={isUnread ? "font-semibold text-ink" : "text-ink"}>
+                    {humanizeNotificationLabel(notification.eventType)}
+                  </div>
+                  <div className="text-xs text-muted">
+                    {notification.createdAt.toLocaleString()}
+                    {" — "}
+                    {notification.status}
+                  </div>
                 </div>
-                <div style={{ fontSize: "0.8rem", color: "#666" }}>
-                  {notification.createdAt.toLocaleString()}
-                  {" — "}
-                  {notification.status}
-                </div>
-              </div>
-              {isUnread && (
-                <button type="button" disabled={isPending} onClick={() => markOne(notification.id)}>
-                  Mark as read
-                </button>
-              )}
-            </li>
-          );
-        })}
-        {notifications.length === 0 && <li>No notifications match this filter.</li>}
-      </ul>
+                {isUnread && (
+                  <Button type="button" variant="secondary" className="shrink-0 px-2.5 py-1 text-xs" disabled={isPending} onClick={() => markOne(notification.id)}>
+                    Mark as read
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }

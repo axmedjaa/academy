@@ -6,6 +6,7 @@ import { getActiveCoursesForStudents } from "@/lib/academies/batch-assignments";
 import { listBatches } from "@/lib/academies/batches";
 import { listCourses } from "@/lib/academies/courses";
 import { StudentsList } from "./students-list";
+import { Button, LinkButton, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 39: `/academy/students` — student search/update.
@@ -57,14 +58,14 @@ export default async function AcademyStudentsPage({
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
-  const { data, canManage, membershipRole } = result;
+  const { data, canManage, canDelete, membershipRole } = result;
   const branchLimited = membershipRole === "admissions_officer" || membershipRole === "trainer";
 
   // Display enrichment for the "Course" column + "change course" control —
@@ -92,63 +93,55 @@ export default async function AcademyStudentsPage({
     }));
 
   return (
-    <main
-      style={{
-        maxWidth: 1100,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Students</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {branchLimited
-          ? "Showing students in your assigned branch(es) only."
-          : canManage
-            ? "You can search, view, and edit students across this academy."
-            : "You can view every student in this academy (read-only)."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Students"
+        description={
+          branchLimited
+            ? "Showing students in your assigned branch(es) only."
+            : canManage
+              ? "You can search, view, and edit students across this academy."
+              : "You can view every student in this academy (read-only)."
+        }
+        actions={canManage ? <LinkButton href="/academy/students/new">Register student</LinkButton> : undefined}
+      />
 
-      <form
-        method="get"
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "0.75rem",
-          alignItems: "flex-end",
-          margin: "1.5rem 0",
-        }}
-      >
-        <label>
-          Search (name or student #)
-          <input type="text" name="q" defaultValue={searchTerm} />
-        </label>
-        {!branchLimited && (
-          <label>
-            Branch ID
-            <input type="text" name="branchId" defaultValue={branchId} />
+      <form method="get">
+        <Toolbar>
+          <label className="min-w-[220px] flex-1">
+            <span className="mb-1 block text-xs font-medium text-muted">Search (name or student #)</span>
+            <input type="text" name="q" defaultValue={searchTerm} className={inputClass} />
           </label>
-        )}
-        <label>
-          Status
-          <select name="status" defaultValue={status}>
-            <option value="">Any</option>
-            <option value="active">Active</option>
-            <option value="archived">Archived</option>
-          </select>
-        </label>
-        <button type="submit">Search</button>
+          {!branchLimited && (
+            <label className="min-w-[160px]">
+              <span className="mb-1 block text-xs font-medium text-muted">Branch ID</span>
+              <input type="text" name="branchId" defaultValue={branchId} className={inputClass} />
+            </label>
+          )}
+          <label className="min-w-[140px]">
+            <span className="mb-1 block text-xs font-medium text-muted">Status</span>
+            <select name="status" defaultValue={status} className={inputClass}>
+              <option value="">Any</option>
+              <option value="active">Active</option>
+              <option value="archived">Archived</option>
+            </select>
+          </label>
+          <Button type="submit" variant="secondary">
+            Search
+          </Button>
+        </Toolbar>
       </form>
 
       <StudentsList
         students={data.rows}
         canManage={canManage}
+        canDelete={canDelete}
         showBranchField={!branchLimited}
         coursesByStudent={coursesByStudent}
         courseOptions={courseOptions}
       />
 
-      <p style={{ marginTop: "1rem" }}>
+      <p className="mt-4 text-sm text-muted">
         Page {data.page} — {data.totalCount} total
         {data.totalCount > data.pageSize && (
           <>
@@ -157,6 +150,7 @@ export default async function AcademyStudentsPage({
             {data.page > 1 && (
               <a
                 href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(data.page - 1) }).toString()}`}
+                className="text-brand hover:underline"
               >
                 Previous
               </a>
@@ -165,6 +159,7 @@ export default async function AcademyStudentsPage({
             {data.page * data.pageSize < data.totalCount && (
               <a
                 href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(data.page + 1) }).toString()}`}
+                className="text-brand hover:underline"
               >
                 Next
               </a>
@@ -173,7 +168,7 @@ export default async function AcademyStudentsPage({
           </>
         )}
       </p>
-    </main>
+    </div>
   );
 }
 

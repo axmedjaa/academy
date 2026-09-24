@@ -5,9 +5,12 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   assignStaffRole as assignStaffRoleForActor,
   createStaff as createStaffForActor,
+  deleteStaff as deleteStaffForActor,
+  getStaffDeletionEligibility as getStaffDeletionEligibilityForActor,
   removeStaffMembership as removeStaffMembershipForActor,
   updateStaff as updateStaffForActor,
   type CreateStaffInput,
+  type GetStaffDeletionEligibilityResult,
   type StaffActionError,
   type UpdateStaffInput,
 } from "@/lib/academies/staff";
@@ -121,4 +124,37 @@ export async function removeStaffMembership(
     return { ok: true };
   }
   return result;
+}
+
+/** Read-only preview for the staff table's Delete button. */
+export async function getStaffDeletionEligibility(
+  staffProfileId: string,
+): Promise<GetStaffDeletionEligibilityResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  return getStaffDeletionEligibilityForActor(context, staffProfileId);
+}
+
+/** Plain-callable permanent-deletion action. `confirmedName` must equal
+ * the staff member's exact current full name — re-checked server-side
+ * here, same convention as lib/academies/delete-academy.ts's
+ * deleteAcademy. */
+export async function deleteStaff(
+  staffProfileId: string,
+  confirmedName: string,
+): Promise<{ ok: true } | { ok: false; error: StaffActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await deleteStaffForActor(context, staffProfileId, confirmedName);
+  if (!result.ok) {
+    return result;
+  }
+
+  revalidatePath("/academy/staff");
+  return { ok: true };
 }

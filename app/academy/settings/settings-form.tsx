@@ -6,6 +6,7 @@ import {
   type AcademySettingsFormState,
 } from "@/lib/academies/settings-actions";
 import type { AcademySettingsRecord } from "@/lib/academies/settings";
+import { Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
 
 const initialState: AcademySettingsFormState = { ok: false };
 
@@ -32,127 +33,78 @@ export function AcademySettingsForm({ academy, permissionLevel }: Props) {
   const [state, formAction, pending] = useActionState(updateAcademySettings, initialState);
 
   return (
-    <section style={{ marginTop: "2rem" }}>
-      <h2>Academy profile</h2>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
+    <Section>
+      <h2 className="text-base font-semibold text-ink">Academy profile</h2>
+      <p className="mt-1 text-sm text-muted">
         Access level: {permissionLevel === "full" ? "Full" : "View/Edit"}. Changes save
         immediately — there is no approval step.
       </p>
 
-      <dl style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "0.25rem 1rem" }}>
-        <dt>Slug</dt>
-        <dd>{academy.slug}</dd>
-        <dt>Default currency</dt>
-        <dd>{academy.defaultCurrency}</dd>
+      <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+        <dt className="text-muted">Slug</dt>
+        <dd className="text-ink">{academy.slug}</dd>
+        <dt className="text-muted">Default currency</dt>
+        <dd className="text-ink">{academy.defaultCurrency}</dd>
       </dl>
 
-      <form
-        action={formAction}
-        style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: 480 }}
-      >
-        <label>
-          Name
-          <input
-            type="text"
-            name="name"
-            defaultValue={academy.name}
-            required
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
-        <label>
-          Type
-          <input
-            type="text"
-            name="type"
-            defaultValue={academy.type ?? ""}
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
-        <label>
-          Address
-          <input
-            type="text"
-            name="address"
-            defaultValue={academy.address ?? ""}
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
-        <label>
-          Phone
-          <input
-            type="text"
-            name="phone"
-            defaultValue={academy.phone ?? ""}
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
-        <label>
-          Email
-          <input
-            type="email"
-            name="email"
-            defaultValue={academy.email ?? ""}
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
-        <label>
-          Website
-          <input
-            type="text"
-            name="website"
-            defaultValue={academy.website ?? ""}
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
-        <label>
-          Logo reference
-          <input
-            type="text"
-            name="logoRef"
-            defaultValue={academy.logoRef ?? ""}
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
-        <label>
-          Registration number
+      <form action={formAction} className="mt-5 flex max-w-lg flex-col gap-3">
+        <Field label="Name">
+          <input type="text" name="name" defaultValue={academy.name} required className={inputClass} />
+        </Field>
+        <Field label="Type">
+          <input type="text" name="type" defaultValue={academy.type ?? ""} className={inputClass} />
+        </Field>
+        <Field label="Address">
+          <input type="text" name="address" defaultValue={academy.address ?? ""} className={inputClass} />
+        </Field>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Phone">
+            <input type="text" name="phone" defaultValue={academy.phone ?? ""} className={inputClass} />
+          </Field>
+          <Field label="Email">
+            <input type="email" name="email" defaultValue={academy.email ?? ""} className={inputClass} />
+          </Field>
+        </div>
+        <Field label="Website">
+          <input type="text" name="website" defaultValue={academy.website ?? ""} className={inputClass} />
+        </Field>
+        <Field label="Logo reference">
+          <input type="text" name="logoRef" defaultValue={academy.logoRef ?? ""} className={inputClass} />
+        </Field>
+        <Field label="Registration number">
           <input
             type="text"
             name="registrationNumber"
             defaultValue={academy.registrationNumber ?? ""}
-            style={{ display: "block", width: "100%" }}
+            className={inputClass}
           />
-        </label>
-        <label>
-          Primary contact name
-          <input
-            type="text"
-            name="primaryContactName"
-            defaultValue={academy.primaryContactName ?? ""}
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
-        <label>
-          Primary contact phone
-          <input
-            type="text"
-            name="primaryContactPhone"
-            defaultValue={academy.primaryContactPhone ?? ""}
-            style={{ display: "block", width: "100%" }}
-          />
-        </label>
+        </Field>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Primary contact name">
+            <input
+              type="text"
+              name="primaryContactName"
+              defaultValue={academy.primaryContactName ?? ""}
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Primary contact phone">
+            <input
+              type="text"
+              name="primaryContactPhone"
+              defaultValue={academy.primaryContactPhone ?? ""}
+              className={inputClass}
+            />
+          </Field>
+        </div>
 
-        {state.error && (
-          <p role="alert" style={{ color: "crimson" }}>
-            {state.error.message}
-          </p>
-        )}
-        {state.ok && <p style={{ color: "green" }}>Saved.</p>}
+        {state.error && <ErrorMessage message={state.error.message} />}
+        {state.ok && <p className="text-sm font-medium text-success">Saved.</p>}
 
-        <button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending} className="self-start">
           {pending ? "Saving..." : "Save changes"}
-        </button>
+        </Button>
       </form>
-    </section>
+    </Section>
   );
 }

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
   auditLogs,
+  mfaEmailOtps,
   mfaRecoveryCodes,
   mfaTotpCredentials,
   users,
@@ -284,6 +285,9 @@ describe("verifyMfaChallenge", () => {
       .delete(mfaRecoveryCodes)
       .where(eq(mfaRecoveryCodes.userId, challengeUserId));
     await db
+      .delete(mfaEmailOtps)
+      .where(eq(mfaEmailOtps.userId, challengeUserId));
+    await db
       .delete(auditLogs)
       .where(eq(auditLogs.actorUserId, challengeUserId));
     await db
@@ -336,6 +340,40 @@ describe("verifyMfaChallenge", () => {
       "AAAAA-AAAAA",
     );
     expect(result.ok).toBe(false);
+  });
+
+  it("accepts a correct email-OTP code as an ADDITIONAL method (never replacing TOTP)", async () => {
+    const rawCode = "482913";
+    const codeHash = createHash("sha256").update(`${challengeUserId}:${rawCode}`).digest("hex");
+    await db.insert(mfaEmailOtps).values({
+      userId: challengeUserId,
+      codeHash,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+
+    const result = await verifyMfaChallenge(challengeUserId, "email", rawCode);
+    expect(result.ok).toBe(true);
+
+    // TOTP still works afterward — email OTP is additive, not a replacement.
+    const totpResult = await verifyMfaChallenge(challengeUserId, "totp", currentCodeFor(secretBase32));
+    expect(totpResult.ok).toBe(true);
+
+    await db.delete(mfaEmailOtps).where(eq(mfaEmailOtps.userId, challengeUserId));
+  });
+
+  it("rejects a wrong email-OTP code", async () => {
+    const codeHash = createHash("sha256").update(`${challengeUserId}:111222`).digest("hex");
+    await db.insert(mfaEmailOtps).values({
+      userId: challengeUserId,
+      codeHash,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+
+    const result = await verifyMfaChallenge(challengeUserId, "email", "000000");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("INVALID_CODE");
+
+    await db.delete(mfaEmailOtps).where(eq(mfaEmailOtps.userId, challengeUserId));
   });
 
   it("rejects any code for a user with no verified credential", async () => {

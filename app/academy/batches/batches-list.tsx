@@ -1,8 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
-import { createBatch, setBatchStatus, type BatchFormState } from "@/lib/academies/batches-actions";
-import type { BatchRecord } from "@/lib/academies/batches";
+import { createBatch, deleteBatch, setBatchStatus, type BatchFormState } from "@/lib/academies/batches-actions";
+import type { BatchDeletionEligibilitySummary, BatchRecord } from "@/lib/academies/batches";
 import type { BranchRecord } from "@/lib/academies/branches";
 import type { CourseRecord } from "@/lib/academies/courses";
 import {
@@ -11,7 +11,6 @@ import {
   ErrorMessage,
   Field,
   LinkButton,
-  ProtectedDeleteButton,
   Section,
   TableWrap,
   inputClass,
@@ -19,15 +18,19 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
-import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: BatchFormState = { ok: false };
 
 interface Props {
-  batches: BatchRecord[];
+  batches: (BatchRecord & { deletionEligibility: BatchDeletionEligibilitySummary })[];
   branches: BranchRecord[];
   courses: CourseRecord[];
   canManage: boolean;
+  /** Narrower than `canManage` — Trainer can archive their own assigned
+   * batches but must never see a Delete action at all (permission-absent,
+   * not disabled — see lib/academies/batches.ts's canDeleteBatch). */
+  canDelete: boolean;
 }
 
 const STATUS_TONE: Record<BatchRecord["status"], "blue" | "green" | "slate" | "gray"> = {
@@ -37,7 +40,7 @@ const STATUS_TONE: Record<BatchRecord["status"], "blue" | "green" | "slate" | "g
   archived: "gray",
 };
 
-export function BatchesList({ batches, branches, courses, canManage }: Props) {
+export function BatchesList({ batches, branches, courses, canManage, canDelete }: Props) {
   const [createState, createFormAction, creating] = useActionState(createBatch, initialState);
 
   const courseNameById = new Map(courses.map((course) => [course.id, course.name]));
@@ -102,7 +105,15 @@ export function BatchesList({ batches, branches, courses, canManage }: Props) {
                         }
                         onConfirm={() => toggleBatchStatus(batch)}
                       />
-                      <ProtectedDeleteButton entityLabel="Batch" />
+                      {canDelete && (
+                        <EligibilityGatedDeleteButton
+                          entityLabel="Batch"
+                          entityName={batch.name}
+                          eligible={batch.deletionEligibility.eligible}
+                          reasons={batch.deletionEligibility.reasons}
+                          onConfirm={() => deleteBatch(batch.id, batch.name)}
+                        />
+                      )}
                     </div>
                   </td>
                 )}

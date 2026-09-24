@@ -4,6 +4,7 @@ import { listBatches } from "@/lib/academies/batches";
 import { listBranches } from "@/lib/academies/branches";
 import { listCourses } from "@/lib/academies/courses";
 import { BatchesList } from "./batches-list";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 43: `/academy/batches` — batch CRUD, the one entity in this
@@ -21,10 +22,10 @@ export default async function AcademyBatchesPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
@@ -38,26 +39,22 @@ export default async function AcademyBatchesPage() {
   const courseOptions = coursesResult.ok ? coursesResult.courses : [];
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Batches</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canManage
-          ? "You can create, edit, and archive batches in your scope."
-          : "You can view the batch(es) in your scope."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Batches"
+        description={
+          result.canManage
+            ? "You can create, edit, and archive batches in your scope."
+            : "You can view the batch(es) in your scope."
+        }
+      />
       <BatchesList
         batches={result.batches}
         branches={branchOptions}
         courses={courseOptions}
         canManage={result.canManage}
+        canDelete={result.canDelete}
       />
-    </main>
+    </div>
   );
 }

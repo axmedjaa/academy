@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAuditLogsForOwnAcademy } from "@/lib/academies/audit-logs-actions";
 import type { AuditResult } from "@/lib/audit-query";
 import { AuditLogExportButton } from "./audit-log-export-button";
+import { Badge, Button, ErrorMessage, PAGE_WRAP, PageHeader, TableWrap, Toolbar, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 42: `/academy/audit-logs`, Owner/Admin only, hard-scoped to
@@ -58,103 +59,95 @@ export default async function AcademyAuditLogsPage({
   );
 
   return (
-    <main
-      style={{
-        maxWidth: 1100,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Academy audit log</h1>
+    <div className={PAGE_WRAP}>
+      <PageHeader title="Academy audit log" description="Every recorded action taken within your academy." />
 
       {!response.ok ? (
-        <p role="alert" style={{ color: "crimson" }}>
-          {response.error.message}
-        </p>
+        <ErrorMessage message={response.error.message} />
       ) : (
         <>
-          <form
-            method="get"
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "0.75rem",
-              alignItems: "flex-end",
-              marginBottom: "1.5rem",
-            }}
-          >
-            <label>
-              Action
-              <input type="text" name="action" defaultValue={action} />
-            </label>
-            <label>
-              Actor role
-              <input type="text" name="actorRole" defaultValue={actorRole} />
-            </label>
-            <label>
-              Branch ID
-              <input type="text" name="branchId" defaultValue={branchId} />
-            </label>
-            <label>
-              Result
-              <select name="result" defaultValue={result}>
-                <option value="">Any</option>
-                <option value="success">Success</option>
-                <option value="failure">Failure</option>
-              </select>
-            </label>
-            <label>
-              From
-              <input type="date" name="createdFrom" defaultValue={createdFrom} />
-            </label>
-            <label>
-              To
-              <input type="date" name="createdTo" defaultValue={createdTo} />
-            </label>
-            <button type="submit">Filter</button>
+          <form method="get">
+            <Toolbar>
+              <label className="min-w-[140px]">
+                <span className="mb-1 block text-xs font-medium text-muted">Action</span>
+                <input type="text" name="action" defaultValue={action} className={inputClass} />
+              </label>
+              <label className="min-w-[140px]">
+                <span className="mb-1 block text-xs font-medium text-muted">Actor role</span>
+                <input type="text" name="actorRole" defaultValue={actorRole} className={inputClass} />
+              </label>
+              <label className="min-w-[140px]">
+                <span className="mb-1 block text-xs font-medium text-muted">Branch ID</span>
+                <input type="text" name="branchId" defaultValue={branchId} className={inputClass} />
+              </label>
+              <label className="min-w-[120px]">
+                <span className="mb-1 block text-xs font-medium text-muted">Result</span>
+                <select name="result" defaultValue={result} className={inputClass}>
+                  <option value="">Any</option>
+                  <option value="success">Success</option>
+                  <option value="failure">Failure</option>
+                </select>
+              </label>
+              <label className="min-w-[140px]">
+                <span className="mb-1 block text-xs font-medium text-muted">From</span>
+                <input type="date" name="createdFrom" defaultValue={createdFrom} className={inputClass} />
+              </label>
+              <label className="min-w-[140px]">
+                <span className="mb-1 block text-xs font-medium text-muted">To</span>
+                <input type="date" name="createdTo" defaultValue={createdTo} className={inputClass} />
+              </label>
+              <Button type="submit" variant="secondary">
+                Filter
+              </Button>
+            </Toolbar>
           </form>
 
-          <AuditLogExportButton
-            filters={{
-              actorRole: actorRole || undefined,
-              action: action || undefined,
-              branchId: branchId || undefined,
-              result: result || undefined,
-              createdFrom: createdFrom || undefined,
-              createdTo: createdTo || undefined,
-            }}
-          />
+          <div className="mb-4">
+            <AuditLogExportButton
+              filters={{
+                actorRole: actorRole || undefined,
+                action: action || undefined,
+                branchId: branchId || undefined,
+                result: result || undefined,
+                createdFrom: createdFrom || undefined,
+                createdTo: createdTo || undefined,
+              }}
+            />
+          </div>
 
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <TableWrap>
             <thead>
               <tr>
-                <th style={{ textAlign: "left" }}>When</th>
-                <th style={{ textAlign: "left" }}>Action</th>
-                <th style={{ textAlign: "left" }}>Actor role</th>
-                <th style={{ textAlign: "left" }}>Entity</th>
-                <th style={{ textAlign: "left" }}>Result</th>
+                <th className={th}>When</th>
+                <th className={th}>Action</th>
+                <th className={th}>Actor role</th>
+                <th className={th}>Entity</th>
+                <th className={th}>Result</th>
               </tr>
             </thead>
             <tbody>
               {response.data.rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.createdAt.toISOString()}</td>
-                  <td>{row.action}</td>
-                  <td>{row.actorRole ?? "—"}</td>
-                  <td>{row.entityType}</td>
-                  <td>{row.result}</td>
+                <tr key={row.id} className={trHover}>
+                  <td className={`${td} whitespace-nowrap`}>{row.createdAt.toISOString()}</td>
+                  <td className={td}>{row.action}</td>
+                  <td className={td}>{row.actorRole ?? "—"}</td>
+                  <td className={td}>{row.entityType}</td>
+                  <td className={td}>
+                    <Badge label={row.result} tone={row.result === "success" ? "green" : "red"} />
+                  </td>
                 </tr>
               ))}
               {response.data.rows.length === 0 && (
                 <tr>
-                  <td colSpan={5}>No audit log entries match these filters.</td>
+                  <td colSpan={5} className={`${td} text-center text-muted`}>
+                    No audit log entries match these filters.
+                  </td>
                 </tr>
               )}
             </tbody>
-          </table>
+          </TableWrap>
 
-          <p style={{ marginTop: "1rem" }}>
+          <p className="mt-4 text-sm text-muted">
             Page {response.data.page} — {response.data.totalCount} total
             {response.data.totalCount > response.data.pageSize && (
               <>
@@ -163,6 +156,7 @@ export default async function AcademyAuditLogsPage({
                 {response.data.page > 1 && (
                   <a
                     href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(response.data.page - 1) }).toString()}`}
+                    className="text-brand hover:underline"
                   >
                     Previous
                   </a>
@@ -173,6 +167,7 @@ export default async function AcademyAuditLogsPage({
                 {response.data.page * response.data.pageSize < response.data.totalCount && (
                   <a
                     href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(response.data.page + 1) }).toString()}`}
+                    className="text-brand hover:underline"
                   >
                     Next
                   </a>
@@ -183,7 +178,7 @@ export default async function AcademyAuditLogsPage({
           </p>
         </>
       )}
-    </main>
+    </div>
   );
 }
 

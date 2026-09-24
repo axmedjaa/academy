@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useTransition, type CSSProperties } from "react";
+import { useState, useTransition } from "react";
 import {
   exportRevenueReportCsvAction,
   getPlatformReportsAction,
 } from "@/lib/subscriptions/reports-actions";
 import type { PlatformReportsResult, RevenueGroupBy } from "@/lib/subscriptions/reports";
+import { Button, ErrorMessage, Field, Section, StatCard, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 
 interface Props {
   initialData: PlatformReportsResult;
@@ -82,65 +83,81 @@ export function ReportsManager({ initialData }: Props) {
     });
   }
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
-      {error && <p style={{ color: "#c0392b" }}>{error}</p>}
+  const latestTrendPoint = data.activeAcademyTrend[data.activeAcademyTrend.length - 1];
 
-      <section>
-        <h2>Active-academy trend</h2>
-        <p style={{ color: "#888", fontSize: "0.8rem" }}>
+  return (
+    <div className="flex flex-col gap-8">
+      {error && <ErrorMessage message={error} />}
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <StatCard
+          label="Active academies"
+          value={latestTrendPoint ? latestTrendPoint.cumulativeActive : 0}
+          hint={latestTrendPoint ? `as of ${latestTrendPoint.month}` : undefined}
+        />
+        <StatCard label="Subscriptions expiring soon" value={data.expiringSubscriptions.length} />
+        {data.revenue && (
+          <StatCard label="Total collected" value={formatCents(data.revenue.totals.collectedCents)} hint={data.revenue.groupBy === "month" ? undefined : `grouped by ${GROUP_BY_LABELS[data.revenue.groupBy].toLowerCase()}`} />
+        )}
+      </div>
+
+      <div>
+        <h2 className="mb-1 text-lg font-semibold text-ink">Active-academy trend</h2>
+        <p className="mb-3 text-sm text-muted">
           Monthly count of academies whose subscription was activated that
           month, and the cumulative total of today&apos;s active academies
           activated by that point — see lib/subscriptions/reports.ts for why
           this (rather than a true historical snapshot) is the derivation.
         </p>
-        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+        <TableWrap>
           <thead>
             <tr>
-              <th style={thStyle}>Month</th>
-              <th style={thStyle}>Newly activated</th>
-              <th style={thStyle}>Cumulative active</th>
+              <th className={th}>Month</th>
+              <th className={th}>Newly activated</th>
+              <th className={th}>Cumulative active</th>
             </tr>
           </thead>
           <tbody>
             {data.activeAcademyTrend.map((point) => (
-              <tr key={point.month}>
-                <td style={tdStyle}>{point.month}</td>
-                <td style={tdStyle}>{point.newlyActivated}</td>
-                <td style={tdStyle}>{point.cumulativeActive}</td>
+              <tr key={point.month} className={trHover}>
+                <td className={td}>{point.month}</td>
+                <td className={td}>{point.newlyActivated}</td>
+                <td className={td}>{point.cumulativeActive}</td>
               </tr>
             ))}
           </tbody>
-        </table>
-      </section>
+        </TableWrap>
+      </div>
 
-      <section>
-        <h2>Expiring subscriptions</h2>
+      <div>
+        <h2 className="mb-3 text-lg font-semibold text-ink">Expiring subscriptions</h2>
         {data.expiringSubscriptions.length === 0 ? (
-          <p>No subscriptions expiring soon.</p>
+          <Section>
+            <p className="text-sm text-muted">No subscriptions expiring soon.</p>
+          </Section>
         ) : (
-          <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <TableWrap>
             <thead>
               <tr>
-                <th style={thStyle}>Academy</th>
-                <th style={thStyle}>Plan</th>
-                <th style={thStyle}>Status</th>
-                <th style={thStyle}>Ends at</th>
-                <th style={thStyle}>Days until expiry</th>
+                <th className={th}>Academy</th>
+                <th className={th}>Plan</th>
+                <th className={th}>Status</th>
+                <th className={th}>Ends at</th>
+                <th className={th}>Days until expiry</th>
               </tr>
             </thead>
             <tbody>
               {data.expiringSubscriptions.map((row) => (
-                <tr key={row.subscriptionId}>
-                  <td style={tdStyle}>{row.academyName}</td>
-                  <td style={tdStyle}>{row.planName}</td>
-                  <td style={tdStyle}>{row.status}</td>
+                <tr key={row.subscriptionId} className={trHover}>
+                  <td className={`${td} font-medium`}>{row.academyName}</td>
+                  <td className={td}>{row.planName}</td>
+                  <td className={td}>{row.status}</td>
                   {/* endsAt crosses the server->client boundary as a
                       serialized string despite its Date type (same as
                       usage-manager.tsx's calculatedAt) — re-wrap before
                       formatting. */}
-                  <td style={tdStyle}>{new Date(row.endsAt).toLocaleDateString()}</td>
-                  <td style={{ ...tdStyle, color: row.daysUntilExpiry < 0 ? "#c0392b" : "#333" }}>
+                  <td className={td}>{new Date(row.endsAt).toLocaleDateString()}</td>
+                  <td className={`${td} ${row.daysUntilExpiry < 0 ? "font-medium text-danger" : ""}`}>
                     {row.daysUntilExpiry < 0
                       ? `${Math.abs(row.daysUntilExpiry)} days overdue`
                       : `${row.daysUntilExpiry} days`}
@@ -148,23 +165,23 @@ export function ReportsManager({ initialData }: Props) {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </TableWrap>
         )}
-      </section>
+      </div>
 
       {/* Entirely absent (not greyed out, not a teaser) when the actor
           lacks platform.revenue.view — data.revenue is null in that case,
           so there is nothing here to conditionally disable. */}
       {data.revenue && (
-        <section>
-          <h2>Revenue</h2>
-          <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "0.75rem" }}>
-            <label>
-              Group by{" "}
+        <div>
+          <h2 className="mb-3 text-lg font-semibold text-ink">Revenue</h2>
+          <div className="mb-3 flex flex-wrap items-end gap-3">
+            <Field label="Group by" className="min-w-[160px]">
               <select
                 value={groupBy}
                 disabled={isPending}
                 onChange={(e) => handleGroupByChange(e.target.value as RevenueGroupBy)}
+                className={inputClass}
               >
                 {REVENUE_GROUP_BY_OPTIONS.map((option) => (
                   <option key={option} value={option}>
@@ -172,54 +189,37 @@ export function ReportsManager({ initialData }: Props) {
                   </option>
                 ))}
               </select>
-            </label>
-            <button type="button" onClick={handleExport} disabled={isExporting}>
+            </Field>
+            <Button type="button" variant="secondary" onClick={handleExport} disabled={isExporting}>
               {isExporting ? "Exporting..." : "Export CSV"}
-            </button>
+            </Button>
           </div>
 
-          <table style={{ borderCollapse: "collapse", width: "100%" }}>
+          <TableWrap>
             <thead>
               <tr>
-                <th style={thStyle}>{GROUP_BY_LABELS[data.revenue.groupBy]}</th>
-                <th style={thStyle}>Collected</th>
-                <th style={thStyle}>Expected / Pending</th>
+                <th className={th}>{GROUP_BY_LABELS[data.revenue.groupBy]}</th>
+                <th className={th}>Collected</th>
+                <th className={th}>Expected / Pending</th>
               </tr>
             </thead>
             <tbody>
               {data.revenue.rows.map((row) => (
-                <tr key={row.groupKey}>
-                  <td style={tdStyle}>{row.label}</td>
-                  <td style={tdStyle}>{formatCents(row.collectedCents)}</td>
-                  <td style={tdStyle}>{formatCents(row.expectedCents)}</td>
+                <tr key={row.groupKey} className={trHover}>
+                  <td className={td}>{row.label}</td>
+                  <td className={td}>{formatCents(row.collectedCents)}</td>
+                  <td className={td}>{formatCents(row.expectedCents)}</td>
                 </tr>
               ))}
               <tr>
-                <td style={{ ...tdStyle, fontWeight: "bold" }}>Total</td>
-                <td style={{ ...tdStyle, fontWeight: "bold" }}>
-                  {formatCents(data.revenue.totals.collectedCents)}
-                </td>
-                <td style={{ ...tdStyle, fontWeight: "bold" }}>
-                  {formatCents(data.revenue.totals.expectedCents)}
-                </td>
+                <td className={`${td} font-bold`}>Total</td>
+                <td className={`${td} font-bold`}>{formatCents(data.revenue.totals.collectedCents)}</td>
+                <td className={`${td} font-bold`}>{formatCents(data.revenue.totals.expectedCents)}</td>
               </tr>
             </tbody>
-          </table>
-        </section>
+          </TableWrap>
+        </div>
       )}
     </div>
   );
 }
-
-const thStyle: CSSProperties = {
-  textAlign: "left",
-  borderBottom: "1px solid #ddd",
-  padding: "0.4rem 0.6rem",
-  fontSize: "0.85rem",
-};
-
-const tdStyle: CSSProperties = {
-  borderBottom: "1px solid #eee",
-  padding: "0.4rem 0.6rem",
-  fontSize: "0.9rem",
-};

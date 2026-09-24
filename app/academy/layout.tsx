@@ -71,16 +71,7 @@ export default async function AcademyLayout({ children }: LayoutProps<"/academy"
   // persistent banner" / *"Past Due — 5 days remaining in grace period."*
   const graceBanner =
     access.level === "grace" && access.message ? (
-      <div
-        role="status"
-        style={{
-          backgroundColor: "#FEF3C7",
-          color: "#92400E",
-          borderBottom: "1px solid #F3D98B",
-          padding: "0.75rem 1.5rem",
-          fontSize: "0.9rem",
-        }}
-      >
+      <div role="status" className="border-b border-warning/30 bg-warning-bg px-6 py-3 text-sm text-warning">
         {access.message}
       </div>
     ) : null;

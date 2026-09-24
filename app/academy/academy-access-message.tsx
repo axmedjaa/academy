@@ -33,9 +33,11 @@ export function AcademyAccessMessage({
   message: string;
 }) {
   return (
-    <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-      <h1>{HEADINGS[reason]}</h1>
-      <p>{message}</p>
+    <main className="flex min-h-screen items-center justify-center bg-app px-4 py-12">
+      <div className="w-full max-w-md rounded-card border border-border bg-surface p-6 text-center shadow-card">
+        <h1 className="text-lg font-semibold text-ink">{HEADINGS[reason]}</h1>
+        <p className="mt-2 text-sm text-muted">{message}</p>
+      </div>
     </main>
   );
 }

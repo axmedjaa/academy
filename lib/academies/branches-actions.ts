@@ -5,9 +5,12 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   archiveBranch as archiveBranchForActor,
   createBranch as createBranchForActor,
+  deleteBranch as deleteBranchForActor,
+  getBranchDeletionEligibility as getBranchDeletionEligibilityForActor,
   updateBranch as updateBranchForActor,
   type BranchActionError,
   type CreateBranchInput,
+  type GetBranchDeletionEligibilityResult,
   type UpdateBranchInput,
 } from "@/lib/academies/branches";
 
@@ -94,6 +97,38 @@ export async function archiveBranch(
   const result = await archiveBranchForActor(context, branchId);
   if (!result.ok) {
     return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/branches");
+  return { ok: true };
+}
+
+/** Read-only preview for the branches table's Delete button. */
+export async function getBranchDeletionEligibility(
+  branchId: string,
+): Promise<GetBranchDeletionEligibilityResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  return getBranchDeletionEligibilityForActor(context, branchId);
+}
+
+/** Plain-callable permanent-deletion action. `confirmedName` must equal
+ * the branch's exact current name — re-checked server-side here, same
+ * convention as lib/academies/delete-academy.ts's deleteAcademy. */
+export async function deleteBranch(
+  branchId: string,
+  confirmedName: string,
+): Promise<{ ok: true } | { ok: false; error: BranchActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await deleteBranchForActor(context, branchId, confirmedName);
+  if (!result.ok) {
+    return result;
   }
 
   revalidatePath("/academy/branches");

@@ -1,8 +1,8 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listStaff } from "@/lib/academies/staff";
 import { StaffTable } from "./staff-table";
+import { LinkButton, PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 35 — `/academy/staff`. Same gating shape as
@@ -24,29 +24,22 @@ export default async function StaffPage() {
   const result = await listStaff(context);
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
   const canManage = result.permissionLevel === "full" || result.permissionLevel === "manage";
 
   return (
-    <main
-      style={{
-        maxWidth: 960,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Staff</h1>
-        {canManage && <Link href="/academy/staff/new">Add staff member</Link>}
-      </div>
-      <StaffTable staff={result.staff} canManage={canManage} />
-    </main>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Staff"
+        actions={canManage ? <LinkButton href="/academy/staff/new">Add staff member</LinkButton> : undefined}
+      />
+      <StaffTable staff={result.staff} canManage={canManage} canDelete={result.canDelete} />
+    </div>
   );
 }

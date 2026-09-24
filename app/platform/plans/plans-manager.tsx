@@ -8,6 +8,18 @@ import {
   type PlanFormState,
 } from "@/lib/subscriptions/plans-actions";
 import type { SubscriptionPlanRecord } from "@/lib/subscriptions/plans";
+import {
+  Badge,
+  Button,
+  ErrorMessage,
+  Field,
+  Section,
+  TableWrap,
+  inputClass,
+  td,
+  th,
+  trHover,
+} from "@/app/academy/_shell/ui";
 
 const initialState: PlanFormState = { ok: false };
 
@@ -28,26 +40,30 @@ export function PlansManager({ plans }: Props) {
   const selectedPlan = plans.find((plan) => plan.id === selectedPlanId) ?? null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2.5rem" }}>
-      <section>
-        <h2>Create plan</h2>
-        <PlanForm mode="create" />
-      </section>
+    <div className="flex flex-col gap-6">
+      <Section>
+        <h2 className="text-base font-semibold text-ink">Create plan</h2>
+        <div className="mt-4">
+          <PlanForm mode="create" />
+        </div>
+      </Section>
 
-      <section>
-        <h2>Plan templates</h2>
+      <div>
+        <h2 className="mb-3 text-lg font-semibold text-ink">Plan templates</h2>
         {plans.length === 0 ? (
-          <p>No plans yet — create one above.</p>
+          <Section>
+            <p className="text-sm text-muted">No plans yet — create one above.</p>
+          </Section>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <TableWrap>
             <thead>
               <tr>
-                <th style={{ textAlign: "left" }}>Name</th>
-                <th style={{ textAlign: "left" }}>Price</th>
-                <th style={{ textAlign: "left" }}>Billing</th>
-                <th style={{ textAlign: "left" }}>Reports</th>
-                <th style={{ textAlign: "left" }}>Status</th>
-                <th style={{ textAlign: "left" }}>Actions</th>
+                <th className={th}>Name</th>
+                <th className={th}>Price</th>
+                <th className={th}>Billing</th>
+                <th className={th}>Reports</th>
+                <th className={th}>Status</th>
+                <th className={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -64,18 +80,20 @@ export function PlansManager({ plans }: Props) {
                 />
               ))}
             </tbody>
-          </table>
+          </TableWrap>
         )}
-      </section>
+      </div>
 
       {selectedPlan && (
-        <section>
-          <h2>Edit plan: {selectedPlan.name}</h2>
-          {/* key forces a remount (fresh useActionState) when switching
-              which plan is being edited, rather than reusing stale state
-              from a previously selected plan's submission. */}
-          <PlanForm mode="edit" plan={selectedPlan} key={selectedPlan.id} />
-        </section>
+        <Section>
+          <h2 className="text-base font-semibold text-ink">Edit plan: {selectedPlan.name}</h2>
+          <div className="mt-4">
+            {/* key forces a remount (fresh useActionState) when switching
+                which plan is being edited, rather than reusing stale state
+                from a previously selected plan's submission. */}
+            <PlanForm mode="edit" plan={selectedPlan} key={selectedPlan.id} />
+          </div>
+        </Section>
       )}
     </div>
   );
@@ -105,29 +123,37 @@ function PlanRow({
 
   return (
     <>
-      <tr>
-        <td>{plan.name}</td>
-        <td>
+      <tr className={trHover}>
+        <td className={`${td} font-medium`}>{plan.name}</td>
+        <td className={td}>
           {(plan.priceAmountCents / 100).toFixed(2)} {plan.currency}
         </td>
-        <td>{plan.billingPeriod}</td>
-        <td>{plan.reportsLevel}</td>
-        <td>{plan.isActive ? "Active" : "Retired"}</td>
-        <td>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <button type="button" onClick={onToggleEdit}>
+        <td className={td}>{plan.billingPeriod}</td>
+        <td className={td}>{plan.reportsLevel}</td>
+        <td className={td}>
+          <Badge label={plan.isActive ? "Active" : "Retired"} tone={plan.isActive ? "green" : "gray"} />
+        </td>
+        <td className={td}>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" onClick={onToggleEdit}>
               {isSelected ? "Close" : "Edit"}
-            </button>
-            <button type="button" disabled={isPending} onClick={toggleActive}>
+            </Button>
+            <Button
+              type="button"
+              variant={plan.isActive ? "danger" : "secondary"}
+              className="px-2.5 py-1 text-xs"
+              disabled={isPending}
+              onClick={toggleActive}
+            >
               {plan.isActive ? "Retire" : "Restore"}
-            </button>
+            </Button>
           </div>
         </td>
       </tr>
       {error && (
         <tr>
-          <td colSpan={6} role="alert" style={{ color: "crimson" }}>
-            {error}
+          <td colSpan={6} className={td}>
+            <ErrorMessage message={error} />
           </td>
         </tr>
       )}
@@ -146,133 +172,101 @@ function PlanForm({
   const [state, formAction, pending] = useActionState(action, initialState);
 
   return (
-    <form
-      action={formAction}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.75rem",
-        maxWidth: 480,
-      }}
-    >
+    <form action={formAction} className="flex max-w-xl flex-col gap-3">
       {mode === "edit" && plan && (
         <input type="hidden" name="planId" value={plan.id} />
       )}
 
-      <label>
-        Name
-        <input
-          type="text"
-          name="name"
-          required
-          defaultValue={plan?.name}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
+      <Field label="Name">
+        <input type="text" name="name" required defaultValue={plan?.name} className={inputClass} />
+      </Field>
 
-      <label>
-        Description
-        <textarea
-          name="description"
-          defaultValue={plan?.description ?? ""}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
+      <Field label="Description">
+        <textarea name="description" defaultValue={plan?.description ?? ""} rows={3} className={inputClass} />
+      </Field>
 
-      <label>
-        Price (in cents)
-        <input
-          type="number"
-          name="priceAmountCents"
-          min={0}
-          step={1}
-          required
-          defaultValue={plan?.priceAmountCents ?? 0}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Price (in cents)">
+          <input
+            type="number"
+            name="priceAmountCents"
+            min={0}
+            step={1}
+            required
+            defaultValue={plan?.priceAmountCents ?? 0}
+            className={inputClass}
+          />
+        </Field>
+        <Field label="Currency (3-letter code)">
+          <input
+            type="text"
+            name="currency"
+            maxLength={3}
+            required
+            defaultValue={plan?.currency ?? "USD"}
+            className={inputClass}
+          />
+        </Field>
+      </div>
 
-      <label>
-        Currency (3-letter code)
-        <input
-          type="text"
-          name="currency"
-          maxLength={3}
-          required
-          defaultValue={plan?.currency ?? "USD"}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Billing period
-        <select
-          name="billingPeriod"
-          defaultValue={plan?.billingPeriod ?? "monthly"}
-          style={{ display: "block", width: "100%" }}
-        >
+      <Field label="Billing period">
+        <select name="billingPeriod" defaultValue={plan?.billingPeriod ?? "monthly"} className={inputClass}>
           {BILLING_PERIODS.map((period) => (
             <option key={period} value={period}>
               {period}
             </option>
           ))}
         </select>
-      </label>
+      </Field>
 
-      <label>
-        Max branches
-        <input
-          type="number"
-          name="maxBranches"
-          min={0}
-          step={1}
-          required
-          defaultValue={plan?.maxBranches ?? 1}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Max branches">
+          <input
+            type="number"
+            name="maxBranches"
+            min={0}
+            step={1}
+            required
+            defaultValue={plan?.maxBranches ?? 1}
+            className={inputClass}
+          />
+        </Field>
+        <Field label="Max students">
+          <input
+            type="number"
+            name="maxStudents"
+            min={0}
+            step={1}
+            required
+            defaultValue={plan?.maxStudents ?? 100}
+            className={inputClass}
+          />
+        </Field>
+        <Field label="Max staff">
+          <input
+            type="number"
+            name="maxStaff"
+            min={0}
+            step={1}
+            required
+            defaultValue={plan?.maxStaff ?? 10}
+            className={inputClass}
+          />
+        </Field>
+        <Field label="Max courses">
+          <input
+            type="number"
+            name="maxCourses"
+            min={0}
+            step={1}
+            required
+            defaultValue={plan?.maxCourses ?? 10}
+            className={inputClass}
+          />
+        </Field>
+      </div>
 
-      <label>
-        Max students
-        <input
-          type="number"
-          name="maxStudents"
-          min={0}
-          step={1}
-          required
-          defaultValue={plan?.maxStudents ?? 100}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Max staff
-        <input
-          type="number"
-          name="maxStaff"
-          min={0}
-          step={1}
-          required
-          defaultValue={plan?.maxStaff ?? 10}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Max courses
-        <input
-          type="number"
-          name="maxCourses"
-          min={0}
-          step={1}
-          required
-          defaultValue={plan?.maxCourses ?? 10}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Max storage (bytes)
+      <Field label="Max storage (bytes)">
         <input
           type="number"
           name="maxStorageBytes"
@@ -280,60 +274,41 @@ function PlanForm({
           step={1}
           required
           defaultValue={plan?.maxStorageBytes ?? 1073741824}
-          style={{ display: "block", width: "100%" }}
+          className={inputClass}
         />
-      </label>
+      </Field>
 
-      <label>
-        Reports level
-        <select
-          name="reportsLevel"
-          defaultValue={plan?.reportsLevel ?? "basic"}
-          style={{ display: "block", width: "100%" }}
-        >
+      <Field label="Reports level">
+        <select name="reportsLevel" defaultValue={plan?.reportsLevel ?? "basic"} className={inputClass}>
           {REPORTS_LEVELS.map((level) => (
             <option key={level} value={level}>
               {level}
             </option>
           ))}
         </select>
-      </label>
+      </Field>
 
-      <label>
-        <input
-          type="checkbox"
-          name="smsEnabled"
-          defaultChecked={plan?.smsEnabled ?? false}
-        />{" "}
-        SMS enabled
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          name="emailEnabled"
-          defaultChecked={plan?.emailEnabled ?? true}
-        />{" "}
-        Email enabled
-      </label>
-      <label>
-        <input
-          type="checkbox"
-          name="certificateEnabled"
-          defaultChecked={plan?.certificateEnabled ?? false}
-        />{" "}
-        Certificates enabled
-      </label>
+      <div className="flex flex-col gap-2 rounded-control border border-border bg-app px-3 py-3">
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" name="smsEnabled" defaultChecked={plan?.smsEnabled ?? false} />
+          SMS enabled
+        </label>
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" name="emailEnabled" defaultChecked={plan?.emailEnabled ?? true} />
+          Email enabled
+        </label>
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" name="certificateEnabled" defaultChecked={plan?.certificateEnabled ?? false} />
+          Certificates enabled
+        </label>
+      </div>
 
-      {state.error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {state.error.message}
-        </p>
-      )}
-      {state.ok && <p style={{ color: "green" }}>Saved.</p>}
+      {state.error && <ErrorMessage message={state.error.message} />}
+      {state.ok && <p className="text-sm font-medium text-success">Saved.</p>}
 
-      <button type="submit" disabled={pending}>
+      <Button type="submit" disabled={pending} className="self-start">
         {pending ? "Saving..." : mode === "create" ? "Create plan" : "Save changes"}
-      </button>
+      </Button>
     </form>
   );
 }

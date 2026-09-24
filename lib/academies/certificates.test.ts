@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
+import QRCode from "qrcode";
 import { db } from "@/lib/db";
 import { redis } from "@/lib/redis";
+import { getCertificatePrintData } from "./certificate-print";
 import {
   academies,
   academyMemberships,
@@ -482,6 +484,63 @@ describe("issueCertificate — duplicate prevention", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Lookup by studentNumber/batch code (not just UUID id)
+// ---------------------------------------------------------------------------
+// Regression coverage: app/academy/students/students-list.tsx's "Student #"
+// column and app/academy/batches/batches-list.tsx's batch code are the only
+// identifiers those pages actually display for copy/paste — issueCertificate
+// used to require the strict UUID id for both, so pasting either
+// human-readable value always failed with "Student not found." (same class
+// of bug already fixed for lib/academies/id-cards.ts's resolveScopedStudent).
+describe("issueCertificate — lookup by studentNumber/batch code", () => {
+  it("accepts the student's studentNumber and the batch's code in place of their UUID ids", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+
+    const [student] = await db.select({ studentNumber: students.studentNumber }).from(students).where(eq(students.id, studentId));
+    const [batch] = await db.select({ code: batches.code }).from(batches).where(eq(batches.id, batchId));
+
+    const result = await issueCertificate(setup.context, student.studentNumber, batch.code);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.certificate.studentId).toBe(studentId);
+      expect(result.certificate.batchId).toBe(batchId);
+    }
+  });
+
+  it("matches studentNumber/batch code case-insensitively", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+
+    const [student] = await db.select({ studentNumber: students.studentNumber }).from(students).where(eq(students.id, studentId));
+    const [batch] = await db.select({ code: batches.code }).from(batches).where(eq(batches.id, batchId));
+
+    const result = await issueCertificate(setup.context, student.studentNumber.toLowerCase(), batch.code.toLowerCase());
+    expect(result.ok).toBe(true);
+  });
+
+  it("a studentNumber/batch code from a different academy still resolves to not_found (tenant isolation preserved)", async () => {
+    const actorSetup = await setupAcademy("academy_owner");
+    const otherSetup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(otherSetup);
+
+    const [student] = await db.select({ studentNumber: students.studentNumber }).from(students).where(eq(students.id, studentId));
+    const [batch] = await db.select({ code: batches.code }).from(batches).where(eq(batches.id, batchId));
+
+    const result = await issueCertificate(actorSetup.context, student.studentNumber, batch.code);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("an unmatched/made-up identifier is not_found, not a format-validation error", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const result = await issueCertificate(setup.context, "STD-does-not-exist", "batch-does-not-exist");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-academy IDOR
 // ---------------------------------------------------------------------------
 describe("cross-academy isolation (IDOR)", () => {
@@ -877,6 +936,121 @@ describe("verifyCertificate — rate limiting", () => {
       await redis.del(`ratelimit:verify-certificate:${ip}`);
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// getCertificatePrintData (lib/academies/certificate-print.ts) — the
+// authenticated certificate print/PDF view's data layer. Grouped in this
+// file (not a separate one) because it reuses this file's own heavy
+// academy/student/batch/grade-config fixture helpers rather than
+// duplicating them.
+// ---------------------------------------------------------------------------
+describe("getCertificatePrintData", () => {
+  it("returns the correct student, program, batch, and verification URL for an authorized user's own academy", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup, "Grace Hopper");
+    const issued = await issueCertificate(setup.context, studentId, batchId);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+
+    const result = await getCertificatePrintData(setup.context, issued.certificate.id, "https://app.example.com");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.data.certificate.id).toBe(issued.certificate.id);
+    expect(result.data.student.fullName).toBe("Grace Hopper");
+    expect(result.data.program?.name).toBe(setup.programName);
+    expect(result.data.batch.name).toBeTruthy();
+    // env.APP_URL (lib/env.ts), when configured, takes precedence over the
+    // passed requestOrigin (see buildVerificationUrl's own doc comment) —
+    // so this only asserts the URL's shape, not a specific host, to stay
+    // correct regardless of which one actually won in this environment.
+    expect(result.data.verificationUrl).toMatch(/^https?:\/\/.+/);
+    expect(result.data.verificationUrl.endsWith(`/verify/${encodeURIComponent(issued.certificate.certificateCode)}`)).toBe(
+      true,
+    );
+  });
+
+  it("resolves the correct passing grade for display", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+    const issued = await issueCertificate(setup.context, studentId, batchId);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+
+    const result = await getCertificatePrintData(setup.context, issued.certificate.id, "https://app.example.com");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // createEligibleStudentAndBatch publishes an 80-mark Pass result against
+    // this fixture's default bands (0-49 Fail / 50-100 Pass — see
+    // insertGradeBandsDirect's own default).
+    expect(result.data.grade).toEqual({ marksObtained: 80, gradeLabel: "Pass" });
+  });
+
+  it("a user from a different academy cannot access another academy's certificate (tenant isolation)", async () => {
+    const actorSetup = await setupAcademy("academy_owner");
+    const otherSetup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(otherSetup);
+    const issued = await issueCertificate(otherSetup.context, studentId, batchId);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+
+    const result = await getCertificatePrintData(actorSetup.context, issued.certificate.id, "https://app.example.com");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("a cancelled certificate is still retrievable (never hidden), same convention as public verification", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+    const issued = await issueCertificate(setup.context, studentId, batchId);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+
+    const cancelled = await cancelCertificate(setup.context, issued.certificate.id, "Issued in error");
+    expect(cancelled.ok).toBe(true);
+
+    const result = await getCertificatePrintData(setup.context, issued.certificate.id, "https://app.example.com");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.certificate.status).toBe("cancelled");
+  });
+
+  it("a role with no view rights on this permission row (finance_officer) is refused", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+    const issued = await issueCertificate(setup.context, studentId, batchId);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+
+    const financeUserId = await createUser();
+    await addMembership(financeUserId, setup.academyId, "finance_officer");
+    const financeContext = { userId: financeUserId, branchIds: [], academyWide: false };
+
+    const result = await getCertificatePrintData(financeContext, issued.certificate.id, "https://app.example.com");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+
+  it("the embedded QR code encodes the same verification URL returned alongside it", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+    const issued = await issueCertificate(setup.context, studentId, batchId);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+
+    const result = await getCertificatePrintData(setup.context, issued.certificate.id, "https://app.example.com");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.data.qrCodeDataUrl).not.toBeNull();
+    const independentlyGenerated = await QRCode.toDataURL(result.data.verificationUrl, { margin: 1, width: 240 });
+    // Deterministic for identical input+options — proves the QR image was
+    // built from this exact verification URL, not a different/stale one.
+    expect(result.data.qrCodeDataUrl).toBe(independentlyGenerated);
+  });
+
 });
 
 // Re-exported type used purely so the PublicCertificateVerification shape

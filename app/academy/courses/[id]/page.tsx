@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getCourse, listCourseEnrollments } from "@/lib/academies/courses";
+import { Badge, PAGE_WRAP, PageMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
@@ -12,6 +13,12 @@ const ENROLLMENT_STATUS_LABEL: Record<string, string> = {
   active: "Active",
   withdrawn: "Withdrawn",
   completed: "Completed",
+};
+
+const ENROLLMENT_STATUS_TONE: Record<string, "green" | "gray" | "amber"> = {
+  active: "green",
+  withdrawn: "gray",
+  completed: "amber",
 };
 
 /**
@@ -34,10 +41,10 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ i
   const courseResult = await getCourse(context, courseId);
   if (!courseResult.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{courseResult.error.code === "blocked" ? "Access unavailable" : "Not found"}</h1>
-        <p>{courseResult.error.message}</p>
-      </main>
+      <PageMessage
+        title={courseResult.error.code === "blocked" ? "Access unavailable" : "Not found"}
+        message={courseResult.error.message}
+      />
     );
   }
   const { course } = courseResult;
@@ -47,77 +54,79 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ i
   const activeCount = enrollments.filter((e) => e.status === "active").length;
 
   return (
-    <main
-      style={{
-        maxWidth: 800,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <p>
-        <Link href="/academy/courses">← Back to courses</Link>
-      </p>
+    <div className={PAGE_WRAP}>
+      <Link href="/academy/courses" className="mb-4 inline-block text-sm text-brand hover:underline">
+        ← Back to courses
+      </Link>
 
-      <div style={{ display: "flex", gap: "1.5rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+      <Section className="flex flex-col gap-5 sm:flex-row sm:items-start">
         {course.imageRef && (
           // eslint-disable-next-line @next/next/no-img-element -- see app/academy/id-cards/id-card-visual.tsx precedent
           <img
             src={course.imageRef}
-            alt=""
-            style={{ width: 200, height: 120, objectFit: "cover", borderRadius: 6, flexShrink: 0 }}
+            alt={`${course.name} course cover`}
+            className="h-32 w-full shrink-0 rounded-md object-cover sm:w-52"
           />
         )}
-        <div>
-          <h1 style={{ margin: 0 }}>{course.name}</h1>
-          <p style={{ color: "#666", margin: "0.25rem 0" }}>
-            {course.code ? `Code: ${course.code} · ` : ""}Status: {course.status}
-          </p>
-          {course.description && <p>{course.description}</p>}
-          <dl style={{ display: "grid", gridTemplateColumns: "140px 1fr", rowGap: "0.4rem" }}>
-            <dt style={{ color: "#666" }}>Instructor</dt>
-            <dd style={{ margin: 0 }}>{course.instructorName ?? "—"}</dd>
-            <dt style={{ color: "#666" }}>Starts</dt>
-            <dd style={{ margin: 0 }}>{formatDate(course.startDate)}</dd>
-            <dt style={{ color: "#666" }}>Ends</dt>
-            <dd style={{ margin: 0 }}>{formatDate(course.endDate)}</dd>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-bold text-ink">{course.name}</h1>
+            <Badge label={course.status} tone={course.status === "archived" ? "gray" : "green"} />
+          </div>
+          <p className="mt-1 text-sm text-muted">{course.code ? `Code: ${course.code}` : "No course code"}</p>
+          {course.description && <p className="mt-3 text-sm text-ink">{course.description}</p>}
+
+          <dl className="mt-4 grid grid-cols-[140px_1fr] gap-y-2 text-sm">
+            <dt className="text-muted">Instructor</dt>
+            <dd className="text-ink">{course.instructorName ?? "—"}</dd>
+            <dt className="text-muted">Starts</dt>
+            <dd className="text-ink">{formatDate(course.startDate)}</dd>
+            <dt className="text-muted">Ends</dt>
+            <dd className="text-ink">{formatDate(course.endDate)}</dd>
             {course.durationWeeks !== null && (
               <>
-                <dt style={{ color: "#666" }}>Duration</dt>
-                <dd style={{ margin: 0 }}>{course.durationWeeks} weeks</dd>
+                <dt className="text-muted">Duration</dt>
+                <dd className="text-ink">{course.durationWeeks} weeks</dd>
               </>
             )}
-            <dt style={{ color: "#666" }}>Enrolled students</dt>
-            <dd style={{ margin: 0 }}>{activeCount}</dd>
+            <dt className="text-muted">Enrolled students</dt>
+            <dd className="text-ink">{activeCount}</dd>
           </dl>
         </div>
-      </div>
+      </Section>
 
-      <h2 style={{ marginTop: "2rem" }}>Enrolled students</h2>
+      <h2 className="mb-3 mt-6 text-lg font-semibold text-ink">Enrolled students</h2>
       {enrollments.length === 0 ? (
-        <p style={{ color: "#666" }}>No students are enrolled in this course yet.</p>
+        <Section>
+          <p className="text-sm text-muted">No students are enrolled in this course yet.</p>
+        </Section>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <TableWrap>
           <thead>
-            <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
-              <th style={{ padding: "0.5rem" }}>Student #</th>
-              <th style={{ padding: "0.5rem" }}>Name</th>
-              <th style={{ padding: "0.5rem" }}>Batch</th>
-              <th style={{ padding: "0.5rem" }}>Status</th>
+            <tr>
+              <th className={th}>Student #</th>
+              <th className={th}>Name</th>
+              <th className={th}>Batch</th>
+              <th className={th}>Status</th>
             </tr>
           </thead>
           <tbody>
             {enrollments.map((enrollment) => (
-              <tr key={`${enrollment.studentId}-${enrollment.batchId}`} style={{ borderBottom: "1px solid #eee" }}>
-                <td style={{ padding: "0.5rem" }}>{enrollment.studentNumber}</td>
-                <td style={{ padding: "0.5rem" }}>{enrollment.studentFullName}</td>
-                <td style={{ padding: "0.5rem" }}>{enrollment.batchName}</td>
-                <td style={{ padding: "0.5rem" }}>{ENROLLMENT_STATUS_LABEL[enrollment.status] ?? enrollment.status}</td>
+              <tr key={`${enrollment.studentId}-${enrollment.batchId}`} className={trHover}>
+                <td className={td}>{enrollment.studentNumber}</td>
+                <td className={td}>{enrollment.studentFullName}</td>
+                <td className={td}>{enrollment.batchName}</td>
+                <td className={td}>
+                  <Badge
+                    label={ENROLLMENT_STATUS_LABEL[enrollment.status] ?? enrollment.status}
+                    tone={ENROLLMENT_STATUS_TONE[enrollment.status] ?? "gray"}
+                  />
+                </td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </TableWrap>
       )}
-    </main>
+    </div>
   );
 }

@@ -97,23 +97,25 @@ async function insertBranchDirect(academyId: string): Promise<string> {
 
 /** Directly inserts a students row — Item 38's registerStudent may not be
  * built yet, so tests build this fixture data directly, per the task
- * brief. */
+ * brief. Returns both the UUID id and the generated studentNumber, since
+ * lookups now accept either (see resolveScopedStudent's doc comment). */
 async function insertStudentDirect(
   academyId: string,
   branchId: string,
   creatorUserId: string,
-): Promise<string> {
+): Promise<{ id: string; studentNumber: string }> {
+  const studentNumber = `STD-${randomUUID().slice(0, 8)}`;
   const [row] = await db
     .insert(students)
     .values({
       academyId,
       branchId,
-      studentNumber: `STD-${randomUUID().slice(0, 8)}`,
+      studentNumber,
       fullName: "Test Student",
       createdBy: creatorUserId,
     })
     .returning({ id: students.id });
-  return row.id;
+  return { id: row.id, studentNumber };
 }
 
 /** Directly inserts staff_profiles + staff_branch_assignments rows, same
@@ -158,6 +160,7 @@ async function setupWithStudent(
   branchId: string;
   otherBranchId: string;
   studentId: string;
+  studentNumber: string;
 }> {
   const creatorUserId = await createUser();
   const academyId = await createAcademy(creatorUserId);
@@ -172,7 +175,7 @@ async function setupWithStudent(
 
   const branchId = await insertBranchDirect(academyId);
   const otherBranchId = await insertBranchDirect(academyId);
-  const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+  const student = await insertStudentDirect(academyId, branchId, creatorUserId);
 
   const userId = await createUser();
   await addMembership(userId, academyId, role);
@@ -188,7 +191,8 @@ async function setupWithStudent(
     context: { userId, branchIds: [], academyWide: false },
     branchId,
     otherBranchId,
-    studentId,
+    studentId: student.id,
+    studentNumber: student.studentNumber,
   };
 }
 
@@ -303,9 +307,22 @@ describe("issueStudentIdCard — permission matrix", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it("rejects a malformed student id with 'validation'", async () => {
+  // Was "validation" back when studentId had to be strictly UUID-shaped;
+  // that constraint is what caused the real-world bug this file's
+  // "lookup and issue by studentNumber" describe block below covers — a
+  // non-UUID, non-matching string is now a legitimate (if unmatched)
+  // studentNumber attempt, so it's "not_found" like any other unmatched
+  // student, not a format-validation failure.
+  it("treats a malformed/unmatched student id as 'not_found', not a validation error", async () => {
     const { context } = await setupWithStudent("academy_owner");
     const result = await issueStudentIdCard(context, { studentId: "not-a-uuid" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("still rejects a genuinely empty student id with 'validation'", async () => {
+    const { context } = await setupWithStudent("academy_owner");
+    const result = await issueStudentIdCard(context, { studentId: "" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
@@ -371,21 +388,21 @@ describe("branch-scoped IDOR — Admissions Officer / Trainer", () => {
       "admissions_officer",
       { assignToBranch: true },
     );
-    const outsideStudentId = await insertStudentDirect(academyId, otherBranchId, userId);
+    const outsideStudent = await insertStudentDirect(academyId, otherBranchId, userId);
 
-    const result = await issueStudentIdCard(context, { studentId: outsideStudentId });
+    const result = await issueStudentIdCard(context, { studentId: outsideStudent.id });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
   it("admissions_officer cannot reprint a card for a student outside their assigned branch", async () => {
     const owner = await setupWithStudent("academy_owner");
-    const outsideStudentId = await insertStudentDirect(
+    const outsideStudent = await insertStudentDirect(
       owner.academyId,
       owner.otherBranchId,
       owner.userId,
     );
-    const issued = await issueStudentIdCard(owner.context, { studentId: outsideStudentId });
+    const issued = await issueStudentIdCard(owner.context, { studentId: outsideStudent.id });
     expect(issued.ok).toBe(true);
     if (!issued.ok) return;
 
@@ -477,6 +494,68 @@ describe("getIdCard", () => {
   });
 });
 
+// Regression coverage: app/academy/students/students-list.tsx's "Student #"
+// column is the only identifier a staff member can actually copy — it
+// displays studentNumber (e.g. "STD-E2E-A-001"), never the internal UUID
+// `id`. Pasting that value into /academy/id-cards' "Student # or ID" field
+// used to always resolve to STUDENT_NOT_FOUND, since resolveScopedStudent
+// only ever matched against the UUID column.
+describe("lookup and issue by studentNumber (not just UUID id)", () => {
+  it("getIdCard resolves a student by studentNumber and returns the real UUID", async () => {
+    const { context, studentNumber, studentId } = await setupWithStudent("academy_owner");
+
+    const result = await getIdCard(context, studentNumber);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.studentId).toBe(studentId);
+      expect(result.card).toBeNull();
+    }
+  });
+
+  it("getIdCard matches studentNumber case-insensitively", async () => {
+    const { context, studentNumber, studentId } = await setupWithStudent("academy_owner");
+
+    const result = await getIdCard(context, studentNumber.toLowerCase());
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.studentId).toBe(studentId);
+  });
+
+  it("issueStudentIdCard accepts a studentNumber in place of the UUID id", async () => {
+    const { context, studentNumber, studentId } = await setupWithStudent("academy_owner");
+
+    const result = await issueStudentIdCard(context, { studentId: studentNumber });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.card.studentId).toBe(studentId);
+  });
+
+  it("a studentNumber from a different academy still resolves to nothing (tenant isolation preserved)", async () => {
+    const owner = await setupWithStudent("academy_owner");
+    const other = await setupWithStudent("academy_owner");
+
+    const result = await getIdCard(owner.context, other.studentNumber);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("a studentNumber outside an admissions_officer's assigned branch still resolves to nothing", async () => {
+    const { context, academyId, userId, otherBranchId } = await setupWithStudent("admissions_officer", {
+      assignToBranch: true,
+    });
+    const outsideStudent = await insertStudentDirect(academyId, otherBranchId, userId);
+
+    const result = await getIdCard(context, outsideStudent.studentNumber);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("rejects blank input the same way for either lookup form", async () => {
+    const { context } = await setupWithStudent("academy_owner");
+    const result = await getIdCard(context, "   ");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
 describe("student_id_cards.card_number — global uniqueness (DB level)", () => {
   it("rejects a duplicate card_number even across two different academies", async () => {
     const first = await setupWithStudent("academy_owner");
@@ -556,13 +635,13 @@ describe("subscription-state gating", () => {
       createdBy: creatorUserId,
     });
     const branchId = await insertBranchDirect(academyId);
-    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    const student = await insertStudentDirect(academyId, branchId, creatorUserId);
     const userId = await createUser();
     await addMembership(userId, academyId, "academy_owner");
 
     const result = await issueStudentIdCard(
       { userId, branchIds: [], academyWide: false },
-      { studentId },
+      { studentId: student.id },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("blocked");

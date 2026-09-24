@@ -1,7 +1,16 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { academyMemberships, staffBranchAssignments, staffProfiles, users } from "@/lib/db/schema";
+import { db, type DbClient } from "@/lib/db";
+import {
+  academyMemberships,
+  batchTrainerAssignments,
+  courses,
+  staffBranchAssignments,
+  staffDocuments,
+  staffProfiles,
+  timetables,
+  users,
+} from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_STAFF_ACTION,
@@ -52,7 +61,8 @@ export interface StaffActionError {
     | "not_found"
     | "allowance_exceeded"
     | "already_staff"
-    | "conflict";
+    | "conflict"
+    | "ineligible";
   message: string;
 }
 
@@ -199,6 +209,15 @@ export async function createStaff(
   const data = parsed.data;
   const academyId = access.academyId;
 
+  // Owner-safety guard (delete/deletion-audit pass): creating a brand-new
+  // staff member with role "academy_owner" is the same ownership-grant this
+  // file's assignStaffRole gates on already-being-an-owner — without this,
+  // a Manager (who already passes canManageStaff above) could mint an
+  // entirely new owner account from scratch, bypassing that same guard.
+  if (data.role === "academy_owner" && access.membershipRole !== "academy_owner") {
+    return { ok: false, error: { code: "forbidden", message: "Only an academy owner can grant ownership." } };
+  }
+
   try {
     const result = await db.transaction(async (tx) => {
       const allowance = await checkAllowance(academyId, "staff", tx);
@@ -221,6 +240,11 @@ export async function createStaff(
         .limit(1);
 
       let userId: string;
+      // Only set when re-using an existing user who has a "removed"
+      // membership row for this academy (see below) — reactivated in
+      // place rather than left to collide with the (user_id, academy_id)
+      // unique constraint on a fresh insert.
+      let removedMembershipId: string | null = null;
       if (existingUser) {
         userId = existingUser.id;
 
@@ -231,8 +255,20 @@ export async function createStaff(
             and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)),
           )
           .limit(1);
+        if (existingProfile) {
+          throw new AlreadyStaff();
+        }
+
+        // A "removed" row here (deleteStaff's own precondition — see that
+        // function's module comment: it never proceeds while an active
+        // membership exists, so the only way a membership can outlive a
+        // deleted staff_profiles row is already "removed") is this same
+        // person's prior employment record, not a live conflict. Only an
+        // *active* membership means "already staff" — a removed one just
+        // means "was staff here before," which createStaff must be able to
+        // re-hire, not permanently lock the email out of this academy.
         const [existingMembership] = await tx
-          .select({ id: academyMemberships.id })
+          .select({ id: academyMemberships.id, status: academyMemberships.status })
           .from(academyMemberships)
           .where(
             and(
@@ -241,8 +277,11 @@ export async function createStaff(
             ),
           )
           .limit(1);
-        if (existingProfile || existingMembership) {
-          throw new AlreadyStaff();
+        if (existingMembership) {
+          if (existingMembership.status === "active") {
+            throw new AlreadyStaff();
+          }
+          removedMembershipId = existingMembership.id;
         }
       } else {
         const passwordCheck = passwordSchema.safeParse(data.password);
@@ -261,12 +300,19 @@ export async function createStaff(
         userId = newUser.id;
       }
 
-      await tx.insert(academyMemberships).values({
-        userId,
-        academyId,
-        role: data.role,
-        status: "active",
-      });
+      if (removedMembershipId) {
+        await tx
+          .update(academyMemberships)
+          .set({ role: data.role, status: "active" })
+          .where(eq(academyMemberships.id, removedMembershipId));
+      } else {
+        await tx.insert(academyMemberships).values({
+          userId,
+          academyId,
+          role: data.role,
+          status: "active",
+        });
+      }
 
       const [profile] = await tx
         .insert(staffProfiles)
@@ -458,6 +504,24 @@ export type AssignStaffRoleResult =
  * (created either by createStaff above or by an earlier onboarding flow);
  * this action only ever changes the role column, never creates a
  * membership from scratch.
+ *
+ * ---------------------------------------------------------------------
+ * Owner-safety guard (added in the delete/deletion-audit pass)
+ * ---------------------------------------------------------------------
+ * Before this guard, `canManageStaff(level)` alone gated this action —
+ * Manager holds "manage" on `academy.staff`, the same level this function
+ * already accepted, so a Manager (not just Owner/Admin) could grant
+ * themselves or anyone else the `academy_owner` role, or strip the real
+ * owner of it, with no special check at all. Two rules now apply
+ * specifically to the `academy_owner` role (every other role transition is
+ * unchanged — Owner/Admin/Manager all keep exactly the authority they had):
+ *   1. Only an existing `academy_owner` may grant OR remove the
+ *      `academy_owner` role — this is the "ownership transfer" mechanism
+ *      this codebase has (there is no separate dedicated transfer action),
+ *      so it must not be reachable by anyone below owner.
+ *   2. An academy may never be left with zero active owners — demoting the
+ *      last remaining `academy_owner` membership is refused outright; a
+ *      successor must be promoted first.
  */
 export async function assignStaffRole(
   actorContext: AuthContext,
@@ -479,7 +543,18 @@ export async function assignStaffRole(
     return { ok: false, error: { code: "validation", message: "Invalid role." } };
   }
 
-  const result = await db.transaction(async (tx) => {
+  // Rule 1a: granting ownership itself requires already being an owner.
+  if (parsedRole.data === "academy_owner" && access.membershipRole !== "academy_owner") {
+    return { ok: false, error: { code: "forbidden", message: "Only an academy owner can grant ownership." } };
+  }
+
+  type Outcome =
+    | { kind: "not_found" }
+    | { kind: "owner_only" }
+    | { kind: "last_owner" }
+    | { kind: "ok"; userId: string; role: AcademyRole };
+
+  const result: Outcome = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select()
       .from(academyMemberships)
@@ -490,7 +565,30 @@ export async function assignStaffRole(
         ),
       )
       .limit(1);
-    if (!existing) return null;
+    if (!existing) return { kind: "not_found" };
+
+    // Rule 1b: demoting an existing owner away from "academy_owner" also
+    // requires the actor to already be an owner themselves.
+    if (existing.role === "academy_owner" && parsedRole.data !== "academy_owner") {
+      if (access.membershipRole !== "academy_owner") {
+        return { kind: "owner_only" };
+      }
+
+      // Rule 2: never demote the last remaining owner.
+      const owners = await tx
+        .select({ id: academyMemberships.id })
+        .from(academyMemberships)
+        .where(
+          and(
+            eq(academyMemberships.academyId, access.academyId),
+            eq(academyMemberships.role, "academy_owner"),
+            eq(academyMemberships.status, "active"),
+          ),
+        );
+      if (owners.length <= 1) {
+        return { kind: "last_owner" };
+      }
+    }
 
     const [updated] = await tx
       .update(academyMemberships)
@@ -512,40 +610,57 @@ export async function assignStaffRole(
       tx,
     );
 
-    return updated;
+    return { kind: "ok", userId: updated.userId, role: updated.role };
   });
 
-  if (!result) {
-    return {
-      ok: false,
-      error: { code: "not_found", message: "This user is not a staff member of this academy." },
-    };
+  switch (result.kind) {
+    case "not_found":
+      return {
+        ok: false,
+        error: { code: "not_found", message: "This user is not a staff member of this academy." },
+      };
+    case "owner_only":
+      return {
+        ok: false,
+        error: { code: "forbidden", message: "Only an academy owner can change another owner's role." },
+      };
+    case "last_owner":
+      return {
+        ok: false,
+        error: {
+          code: "conflict",
+          message: "This is the only remaining owner. Promote another member to owner first.",
+        },
+      };
+    case "ok":
+      return { ok: true, userId: result.userId, role: result.role };
   }
-  return { ok: true, userId: result.userId, role: result.role };
 }
 
 export type RemoveStaffMembershipResult = { ok: true } | { ok: false; error: StaffActionError };
 
 /**
- * The actual "remove access" lib/db/schema.ts's own `membershipStatusEnum`
- * comment has always described ("Removing an academy membership revokes
- * that user's active sessions for that academy context") but that no code
- * ever wrote until now — `updateStaff`'s status toggle only ever flips
- * `staff_profiles.status`, a separate column recording employment record
- * state, never `academy_memberships.status`, so an "archived" staff member
- * kept full academy login access under the pre-existing code. This is the
- * "delete" for staff membership: never a hard row delete (audit rows, exam
- * results, payments, etc. recorded under this person's `user_id` must stay
- * resolvable) — a status flip to `"removed"`, the exact same soft-removal
- * shape every other entity in this codebase already uses (branches/
- * courses/batches/programs `status: archived`, certificates
+ * New in the delete/deletion-audit pass: this is the actual "remove access"
+ * lib/db/schema.ts's own `membershipStatusEnum` comment has always described
+ * ("Removing an academy membership revokes that user's active sessions for
+ * that academy context") but that no code ever wrote until now —
+ * `updateStaff`'s status toggle only ever flips `staff_profiles.status`, a
+ * separate column recording employment record state, never
+ * `academy_memberships.status`, so an "archived" staff member kept full
+ * academy login access under the pre-existing code. This is the "delete"
+ * for staff membership per this task's audit: never a hard row delete
+ * (audit rows, exam results, payments, etc. recorded under this person's
+ * `user_id` must stay resolvable) — a status flip to `"removed"`, the exact
+ * same soft-removal shape every other entity in this codebase already uses
+ * (branches/courses/batches/programs `status: archived`, certificates
  * `status: cancelled`, ...).
  *
- * Owner-safety: removing an `academy_owner` membership requires the actor
- * to already be an owner, and is refused if it would leave zero active
- * owners. There is no ownership-transfer action in this codebase to point
- * someone at instead — assignStaffRole already IS that transfer (promote a
- * successor to `academy_owner`, then remove the original).
+ * Owner-safety: identical two rules as assignStaffRole's demotion path —
+ * removing an `academy_owner` membership requires the actor to already be
+ * an owner, and is refused if it would leave zero active owners. There is
+ * no ownership-transfer action in this codebase to point someone at instead
+ * — assignStaffRole already IS that transfer (promote a successor to
+ * `academy_owner`, then remove the original).
  */
 export async function removeStaffMembership(
   actorContext: AuthContext,
@@ -656,8 +771,20 @@ export interface StaffListRow extends StaffRecord {
   loginEmail: string;
 }
 
+export interface StaffDeletionEligibilitySummary {
+  eligible: boolean;
+  reasons: string[];
+}
+
 export type ListStaffResult =
-  | { ok: true; staff: StaffListRow[]; permissionLevel: AcademyPermissionLevel }
+  | {
+      ok: true;
+      staff: (StaffListRow & { deletionEligibility: StaffDeletionEligibilitySummary })[];
+      permissionLevel: AcademyPermissionLevel;
+      /** Owner/Admin/Manager only — see `canManageStaff`'s own callers.
+       * The UI renders the Delete action only when this is true. */
+      canDelete: boolean;
+    }
   | { ok: false; error: StaffActionError };
 
 /**
@@ -753,7 +880,7 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
       actorContext.userId,
     );
     if (visibleStaffProfileIds.length === 0) {
-      return { ok: true, permissionLevel: level, staff: [] };
+      return { ok: true, permissionLevel: level, staff: [], canDelete: canManageStaff(level) };
     }
   }
 
@@ -787,13 +914,329 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
         : eq(staffProfiles.academyId, access.academyId),
     );
 
+  const staffProfileIds = rows.map((row) => row.profile.id);
+  const referenceCountsByProfileId = await countStaffReferencesBulk(staffProfileIds);
+
   return {
     ok: true,
     permissionLevel: level,
-    staff: rows.map((row) => ({
-      ...toRecord(row.profile),
-      role: row.role,
-      loginEmail: row.loginEmail,
-    })),
+    canDelete: canManageStaff(level),
+    staff: rows.map((row) => {
+      const referenceCounts = referenceCountsByProfileId.get(row.profile.id) ?? {
+        instructorCourseCount: 0,
+        trainerAssignmentCount: 0,
+        timetableCount: 0,
+      };
+      // The join above only ever surfaces an *active* membership's role
+      // (see its own comment) — so `role !== null` here already means
+      // "this person currently has active academy access," with no extra
+      // query needed.
+      const reasons = buildStaffDeletionReasons({ hasActiveMembership: row.role !== null, ...referenceCounts });
+      return {
+        ...toRecord(row.profile),
+        role: row.role,
+        loginEmail: row.loginEmail,
+        deletionEligibility: { eligible: reasons.length === 0, reasons },
+      };
+    }),
   };
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * Permanent staff deletion — narrow, eligibility-gated, distinct from the
+ * archive/restore status toggle AND from removeStaffMembership
+ * ---------------------------------------------------------------------
+ * Direct inbound FKs to `staffProfiles` (lib/db/schema.ts):
+ * staffBranchAssignments, staffDocuments, courses.instructorId (nullable),
+ * batchTrainerAssignments, timetables.trainerStaffProfileId (nullable).
+ * `staffProfiles` has NO FK to `academy_memberships` (they're independent
+ * siblings joined only at query time by (academy_id, user_id) — see
+ * `listStaff`'s own join) — but a `staffProfiles` row can never be deleted
+ * while an ACTIVE `academy_memberships` row still exists for the same
+ * user+academy. This is the load-bearing rule this task explicitly asks
+ * for ("Deletion of a staff profile must NOT be used as a shortcut for
+ * revoking academy access"): it forces every deletion through the existing
+ * `removeStaffMembership` first, which already enforces "an owner-only
+ * actor may remove an owner" and "never remove the last remaining owner" —
+ * so `deleteStaff` never needs to re-implement those checks itself, and an
+ * `academy_owner` (or the last remaining owner) can never be deleted while
+ * their membership is still active.
+ *
+ * courses.instructorId and batchTrainerAssignments/timetables references
+ * are treated as protected — this codebase never silently mutates a live
+ * course/timetable row's FK as a side effect of an unrelated staff
+ * deletion (that would itself be a "cascade" this task explicitly
+ * forbids), so any of these existing simply blocks deletion until the
+ * caller reassigns/clears them first.
+ *
+ * staffBranchAssignments/staffDocuments are treated as safely disposable —
+ * pure branch-assignment/document metadata with no standalone value once
+ * the profile itself is gone, same judgment lib/academies/delete-academy.ts
+ * already made for these exact two tables at the whole-academy scale.
+ * `users` is never touched — a user account is shared across every
+ * academy that person has ever staffed (staff_profiles' own unique
+ * (academy_id, user_id) constraint proves one user can hold profiles in
+ * several academies), so deleting one academy's staff_profiles row must
+ * never delete or affect the global `users` row.
+ */
+export interface StaffDeletionEligibility {
+  staffProfileId: string;
+  staffName: string;
+  eligible: boolean;
+  reasons: string[];
+  hasActiveMembership: boolean;
+  instructorCourseCount: number;
+  trainerAssignmentCount: number;
+  timetableCount: number;
+}
+
+export type GetStaffDeletionEligibilityResult =
+  | { ok: true; eligibility: StaffDeletionEligibility }
+  | { ok: false; error: StaffActionError };
+
+type StaffReferenceCounts = {
+  instructorCourseCount: number;
+  trainerAssignmentCount: number;
+  timetableCount: number;
+};
+
+/** Bulk per-profile instructor/trainer/timetable reference counts, for the
+ * staff list's Delete button — three grouped queries for the whole
+ * visible list rather than N+1. `hasActiveMembership` is deliberately not
+ * computed here — `listStaff`'s own join already surfaces it for free
+ * (an active membership's role, or `null`), so no query is duplicated. */
+async function countStaffReferencesBulk(staffProfileIds: string[]): Promise<Map<string, StaffReferenceCounts>> {
+  if (staffProfileIds.length === 0) return new Map();
+  const [instructorRows, trainerRows, timetableRows] = await Promise.all([
+    db.select({ staffProfileId: courses.instructorId, count: sql<number>`count(*)::int` }).from(courses).where(inArray(courses.instructorId, staffProfileIds)).groupBy(courses.instructorId),
+    db.select({ staffProfileId: batchTrainerAssignments.staffProfileId, count: sql<number>`count(*)::int` }).from(batchTrainerAssignments).where(inArray(batchTrainerAssignments.staffProfileId, staffProfileIds)).groupBy(batchTrainerAssignments.staffProfileId),
+    db.select({ staffProfileId: timetables.trainerStaffProfileId, count: sql<number>`count(*)::int` }).from(timetables).where(inArray(timetables.trainerStaffProfileId, staffProfileIds)).groupBy(timetables.trainerStaffProfileId),
+  ]);
+  const instructorByProfile = new Map(instructorRows.filter((r) => r.staffProfileId !== null).map((r) => [r.staffProfileId as string, r.count]));
+  const trainerByProfile = new Map(trainerRows.map((r) => [r.staffProfileId, r.count]));
+  const timetableByProfile = new Map(timetableRows.filter((r) => r.staffProfileId !== null).map((r) => [r.staffProfileId as string, r.count]));
+
+  const result = new Map<string, StaffReferenceCounts>();
+  for (const staffProfileId of staffProfileIds) {
+    result.set(staffProfileId, {
+      instructorCourseCount: instructorByProfile.get(staffProfileId) ?? 0,
+      trainerAssignmentCount: trainerByProfile.get(staffProfileId) ?? 0,
+      timetableCount: timetableByProfile.get(staffProfileId) ?? 0,
+    });
+  }
+  return result;
+}
+
+async function countStaffDependents(
+  executor: DbClient,
+  academyId: string,
+  staffProfileId: string,
+  userId: string,
+): Promise<{
+  hasActiveMembership: boolean;
+  instructorCourseCount: number;
+  trainerAssignmentCount: number;
+  timetableCount: number;
+}> {
+  const [[membershipRow], [instructorRow], [trainerRow], [timetableRow]] = await Promise.all([
+    executor
+      .select({ id: academyMemberships.id })
+      .from(academyMemberships)
+      .where(
+        and(
+          eq(academyMemberships.userId, userId),
+          eq(academyMemberships.academyId, academyId),
+          eq(academyMemberships.status, "active"),
+        ),
+      )
+      .limit(1),
+    executor.select({ count: sql<number>`count(*)::int` }).from(courses).where(eq(courses.instructorId, staffProfileId)),
+    executor
+      .select({ count: sql<number>`count(*)::int` })
+      .from(batchTrainerAssignments)
+      .where(eq(batchTrainerAssignments.staffProfileId, staffProfileId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(timetables).where(eq(timetables.trainerStaffProfileId, staffProfileId)),
+  ]);
+  return {
+    hasActiveMembership: Boolean(membershipRow),
+    instructorCourseCount: instructorRow?.count ?? 0,
+    trainerAssignmentCount: trainerRow?.count ?? 0,
+    timetableCount: timetableRow?.count ?? 0,
+  };
+}
+
+function buildStaffDeletionReasons(counts: {
+  hasActiveMembership: boolean;
+  instructorCourseCount: number;
+  trainerAssignmentCount: number;
+  timetableCount: number;
+}): string[] {
+  const reasons: string[] = [];
+  if (counts.hasActiveMembership) {
+    reasons.push(
+      "this person still has active academy access — remove their access first (Remove access)",
+    );
+  }
+  if (counts.instructorCourseCount > 0) {
+    reasons.push(
+      `assigned as instructor to ${counts.instructorCourseCount} course${counts.instructorCourseCount === 1 ? "" : "s"}`,
+    );
+  }
+  if (counts.trainerAssignmentCount > 0) {
+    reasons.push(
+      `assigned as trainer to ${counts.trainerAssignmentCount} batch${counts.trainerAssignmentCount === 1 ? "" : "es"}`,
+    );
+  }
+  if (counts.timetableCount > 0) {
+    reasons.push(
+      `referenced in ${counts.timetableCount} timetable ${counts.timetableCount === 1 ? "entry" : "entries"}`,
+    );
+  }
+  return reasons;
+}
+
+/** Read-only preview for the UI's Delete button — `deleteStaff` below
+ * re-runs the identical check itself, inside the deletion transaction, as
+ * the actual authority. */
+export async function getStaffDeletionEligibility(
+  actorContext: AuthContext,
+  staffProfileId: string,
+): Promise<GetStaffDeletionEligibilityResult> {
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level === "blocked") {
+    return { ok: false, error: { code: "blocked", message: access.message } };
+  }
+
+  const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION);
+  if (!canManageStaff(level)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(staffProfileId);
+  if (!parsedId.success) {
+    return { ok: false, error: { code: "not_found", message: "Staff member not found." } };
+  }
+
+  const [profile] = await db
+    .select({ id: staffProfiles.id, fullName: staffProfiles.fullName, userId: staffProfiles.userId })
+    .from(staffProfiles)
+    .where(and(eq(staffProfiles.id, staffProfileId), eq(staffProfiles.academyId, access.academyId)))
+    .limit(1);
+  if (!profile) {
+    return { ok: false, error: { code: "not_found", message: "Staff member not found." } };
+  }
+
+  const counts = await countStaffDependents(db, access.academyId, profile.id, profile.userId);
+  const reasons = buildStaffDeletionReasons(counts);
+
+  return {
+    ok: true,
+    eligibility: {
+      staffProfileId: profile.id,
+      staffName: profile.fullName,
+      eligible: reasons.length === 0,
+      reasons,
+      ...counts,
+    },
+  };
+}
+
+export type DeleteStaffResult =
+  | { ok: true; staffProfileId: string }
+  | { ok: false; error: StaffActionError };
+
+/**
+ * Eligibility is re-verified from scratch INSIDE this transaction, on a
+ * row locked with `for("update")` — an assignment could be created, or
+ * access re-granted, between the UI's preview and this call, and this is
+ * the check that actually decides whether the delete proceeds. Audited
+ * before the row is removed, same convention as deleteAcademy/deleteExam/
+ * deleteProgram/deleteCourse/deleteBatch/deleteStudent.
+ */
+export async function deleteStaff(
+  actorContext: AuthContext,
+  staffProfileId: string,
+  confirmedName: string,
+): Promise<DeleteStaffResult> {
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level === "blocked") {
+    return { ok: false, error: { code: "blocked", message: access.message } };
+  }
+
+  const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION);
+  if (!canManageStaff(level)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(staffProfileId);
+  if (!parsedId.success) {
+    return { ok: false, error: { code: "not_found", message: "Staff member not found." } };
+  }
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(staffProfiles)
+      .where(and(eq(staffProfiles.id, staffProfileId), eq(staffProfiles.academyId, access.academyId)))
+      .for("update");
+    if (!existing) {
+      return { ok: false, error: { code: "not_found", message: "Staff member not found." } };
+    }
+
+    // Re-checked against the row's CURRENT full name, under the same
+    // lock — never trusts a name the caller fetched earlier via the
+    // eligibility preview, same convention as
+    // lib/academies/delete-academy.ts's deleteAcademy.
+    if (confirmedName !== existing.fullName) {
+      return {
+        ok: false,
+        error: { code: "validation", message: "Type the exact staff member's name to confirm permanent deletion." },
+      };
+    }
+
+    const counts = await countStaffDependents(tx, access.academyId, existing.id, existing.userId);
+    const reasons = buildStaffDeletionReasons(counts);
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "ineligible",
+          message: `This staff member cannot be permanently deleted because ${reasons.join(", ")}. Archive them instead.`,
+        },
+      };
+    }
+
+    // `toRecord`'s `email` field is staff_profiles' own optional contact
+    // email — a separate column from the account's actual sign-in email
+    // (users.email, only ever joined in at query time by listStaff). Once
+    // this row is gone, that join can never happen again, so the login
+    // email must be captured explicitly here or it's lost forever — the
+    // one piece of "who was this" information an admin reviewing the audit
+    // trail afterward would actually search for.
+    const [user] = await tx.select({ loginEmail: users.email }).from(users).where(eq(users.id, existing.userId)).limit(1);
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: access.membershipRole,
+        academyId: access.academyId,
+        action: "deleteStaff",
+        entityType: "staff_profile",
+        entityId: staffProfileId,
+        before: { ...toRecord(existing), loginEmail: user?.loginEmail ?? null },
+      },
+      tx,
+    );
+
+    // Disposable dependent data only — guaranteed by the eligibility check
+    // above that no active membership/instructor/trainer/timetable
+    // reference exists. `users` is never touched (see this function's own
+    // module comment).
+    await tx.delete(staffBranchAssignments).where(eq(staffBranchAssignments.staffProfileId, staffProfileId));
+    await tx.delete(staffDocuments).where(eq(staffDocuments.staffProfileId, staffProfileId));
+    await tx.delete(staffProfiles).where(eq(staffProfiles.id, staffProfileId));
+
+    return { ok: true, staffProfileId };
+  });
 }

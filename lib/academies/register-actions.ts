@@ -18,9 +18,6 @@ export interface RegisterAcademyState {
   error?: RegisterAcademyActionError;
 }
 
-/** Default state for the client form's useActionState call. */
-export const REGISTER_ACADEMY_INITIAL_STATE: RegisterAcademyState = { ok: false };
-
 /**
  * PLAN.md §4 server action name ("registerAcademy"), form-bound via
  * useActionState (same pattern as lib/platform-staff/actions.ts's

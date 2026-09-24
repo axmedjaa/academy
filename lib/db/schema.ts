@@ -87,6 +87,32 @@ export const passwordResetTokens = pgTable(
   ],
 );
 
+// Mirrors passwordResetTokens' exact shape/security convention (hashed
+// token, TTL via expiresAt, single-use via usedAt) plus the one field that
+// flow doesn't need: the pending newEmail, since users.email is
+// deliberately NOT updated until this token is verified (old email stays
+// authoritative until then — see lib/auth/email-change.ts).
+export const emailChangeTokens = pgTable(
+  "email_change_tokens",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    newEmail: text("new_email").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("email_change_tokens_token_hash_unique").on(table.tokenHash),
+    index("email_change_tokens_user_id_idx").on(table.userId),
+  ],
+);
+
 // Platform Owner / Platform Admin — see Cross-Cutting Architecture
 // Decisions: "Platform access via platform_memberships (platform_owner |
 // platform_admin)". Not the same enum as academy roles (academy_memberships,
@@ -222,6 +248,32 @@ export const mfaRecoveryCodes = pgTable(
   (table) => [
     uniqueIndex("mfa_recovery_codes_code_hash_unique").on(table.codeHash),
   ],
+);
+
+// Additional (not replacement) login-time MFA method alongside TOTP above —
+// a short-lived, low-entropy 6-digit code, unlike the 256-bit tokens
+// elsewhere in this schema, so lookups are always scoped by userId (never
+// by codeHash alone: two different users can plausibly get the same code).
+// `attempts` is this table's own brute-force guard — a code is dead once it
+// hits the verify function's attempt cap, even before `expiresAt`, forcing
+// a resend rather than allowing unlimited guesses against one code within
+// its TTL. No unique index on codeHash for the same low-entropy reason.
+export const mfaEmailOtps = pgTable(
+  "mfa_email_otps",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("mfa_email_otps_user_id_idx").on(table.userId)],
 );
 
 // Phase 1, Item 19. PLAN.md's exact column list (Phase 1 §2): "id, name,

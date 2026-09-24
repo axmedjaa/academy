@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { listSubscriptionPlans } from "@/lib/subscriptions/plans";
 import { PlansManager } from "./plans-manager";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 const PLANS_MANAGE_CAPABILITY = "plans.manage";
 
@@ -25,27 +26,15 @@ export default async function PlatformPlansPage() {
   const allowed = await hasPermission(context, PLANS_MANAGE_CAPABILITY);
 
   if (!allowed) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const plans = await listSubscriptionPlans();
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Subscription plans</h1>
+    <div className={PAGE_WRAP}>
+      <PageHeader title="Subscription plans" />
       <PlansManager plans={plans} />
-    </main>
+    </div>
   );
 }

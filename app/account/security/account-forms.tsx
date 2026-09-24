@@ -1,10 +1,15 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
-import { updateOwnAccount, type UpdateAccountState } from "@/lib/auth/update-account-actions";
+import { useActionState, useMemo, useState, useTransition } from "react";
+import {
+  resendEmailChangeVerification,
+  updateOwnAccount,
+  type UpdateAccountState,
+} from "@/lib/auth/update-account-actions";
 import {
   ErrorBanner,
   PrimaryButton,
+  SecondaryButton,
   SuccessBanner,
   fieldInputStyle,
   fieldLabelStyle,
@@ -19,24 +24,45 @@ const initialState: UpdateAccountState = { ok: false };
  * made a simple settings change feel like two unrelated tasks and asked for
  * the current password twice. `updateOwnAccount` (lib/auth/update-account.ts)
  * does the actual work; this component is presentation only.
+ *
+ * Submitting a new email never changes it immediately — it only sends a
+ * verification link to that new address (lib/auth/email-change.ts);
+ * `currentEmail` stays authoritative and signed-in-as until that link is
+ * clicked. `pendingNewEmail` (from the server component's own
+ * getPendingEmailChange read) renders the "Verification pending" banner on
+ * every page load, not just right after a submit.
  */
-export function AccountForms({ currentEmail }: { currentEmail: string }) {
+export function AccountForms({
+  currentEmail,
+  pendingNewEmail,
+}: {
+  currentEmail: string;
+  pendingNewEmail: string | null;
+}) {
   const [state, formAction, pending] = useActionState(updateOwnAccount, initialState);
+  const [isResending, startResendTransition] = useTransition();
+  const [resendError, setResendError] = useState<string | null>(null);
   const [newEmail, setNewEmail] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
+
+  // Derived, not stored: the server component's own pendingNewEmail read
+  // covers every page load, and this submit's own result covers the
+  // instant after a successful request — no effect/setState needed for
+  // either since both are plain values already available during render.
+  const pendingEmail = state.ok && state.emailVerificationSent ? state.emailVerificationSent : pendingNewEmail;
 
   const hasChange = newEmail.trim().length > 0 || newPassword.length > 0;
   const canSubmit = hasChange && currentPassword.length > 0 && !pending;
 
   const successMessage = useMemo(() => {
     if (!state.ok) return null;
-    if (state.email && state.passwordChanged) {
-      return `Email updated to ${state.email}, and your password was changed — other sessions were signed out.`;
+    if (state.emailVerificationSent && state.passwordChanged) {
+      return `We've sent a verification link to ${state.emailVerificationSent}. Your current email remains unchanged until you verify the new address. Your password was changed — other sessions were signed out.`;
     }
-    if (state.email) {
-      return `Email updated to ${state.email}.`;
+    if (state.emailVerificationSent) {
+      return `We've sent a verification link to ${state.emailVerificationSent}. Your current email remains unchanged until you verify the new address.`;
     }
     if (state.passwordChanged) {
       return "Password changed. Other sessions were signed out; you're still signed in here.";
@@ -49,6 +75,43 @@ export function AccountForms({ currentEmail }: { currentEmail: string }) {
       <p style={{ margin: 0, fontSize: "0.85rem", color: color.textMuted }}>
         Signed in as <span style={{ fontWeight: 600, color: color.text }}>{currentEmail}</span>
       </p>
+
+      {pendingEmail && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: spacing.sm,
+            padding: spacing.sm,
+            border: `1px solid ${color.border}`,
+            borderRadius: 8,
+            backgroundColor: color.bg,
+          }}
+        >
+          <p style={{ margin: 0, fontSize: "0.82rem", color: color.textMuted }}>
+            Verification pending for <span style={{ fontWeight: 600, color: color.text }}>{pendingEmail}</span>. Your
+            current email remains unchanged until you verify it.
+          </p>
+          <SecondaryButton
+            type="button"
+            disabled={isResending}
+            onClick={() => {
+              setResendError(null);
+              startResendTransition(async () => {
+                const result = await resendEmailChangeVerification();
+                if (!result.ok) {
+                  setResendError(result.error ?? "Couldn't resend the verification email.");
+                }
+              });
+            }}
+          >
+            {isResending ? "Sending..." : "Resend verification email"}
+          </SecondaryButton>
+        </div>
+      )}
+      {resendError && <ErrorBanner message={resendError} />}
 
       <label style={fieldLabelStyle}>
         New email

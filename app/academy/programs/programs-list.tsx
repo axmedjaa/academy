@@ -1,15 +1,20 @@
 "use client";
 
 import { useActionState } from "react";
-import { createProgram, setProgramStatus, type ProgramFormState } from "@/lib/academies/programs-actions";
-import type { ProgramRecord } from "@/lib/academies/programs";
-import { Badge, Button, ErrorMessage, Field, ProtectedDeleteButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
-import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import {
+  createProgram,
+  deleteProgram,
+  setProgramStatus,
+  type ProgramFormState,
+} from "@/lib/academies/programs-actions";
+import type { ProgramDeletionEligibilitySummary, ProgramRecord } from "@/lib/academies/programs";
+import { Badge, Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: ProgramFormState = { ok: false };
 
 interface Props {
-  programs: ProgramRecord[];
+  programs: (ProgramRecord & { deletionEligibility: ProgramDeletionEligibilitySummary })[];
   canManage: boolean;
 }
 
@@ -70,7 +75,13 @@ export function ProgramsList({ programs, canManage }: Props) {
                       }
                       onConfirm={() => toggleProgramStatus(program)}
                     />
-                    <ProtectedDeleteButton entityLabel="Program" />
+                    <EligibilityGatedDeleteButton
+                      entityLabel="Program"
+                      entityName={program.name}
+                      eligible={program.deletionEligibility.eligible}
+                      reasons={program.deletionEligibility.reasons}
+                      onConfirm={() => deleteProgram(program.id, program.name)}
+                    />
                     </div>
                   </td>
                 )}

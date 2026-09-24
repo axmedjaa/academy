@@ -149,3 +149,66 @@ export function ConfirmButton({
     </>
   );
 }
+
+interface EligibilityGatedDeleteButtonProps {
+  /** e.g. "Student", "Course" — used only for the disabled-state tooltip's
+   * wording ("this student cannot be permanently deleted because ..."). */
+  entityLabel: string;
+  /** The record's exact current display name — used both as the dialog's
+   * type-to-confirm required value and in its title. */
+  entityName: string;
+  eligible: boolean;
+  /** Plain-English reasons blocking deletion, already computed server-side
+   * (never re-derived here) — e.g. "3 batch enrollments", "1 payment". */
+  reasons: string[];
+  onConfirm: () => Promise<ConfirmActionResult>;
+  onSuccess?: () => void;
+  className?: string;
+}
+
+/**
+ * The shared "real conditional Delete" control for Students/Staff/
+ * Programs/Courses/Batches — same visual language across all five so a
+ * viewer only has to learn this once. Eligibility is entirely server-
+ * computed (each entity's own listX function) and handed in as plain
+ * props; this component never re-derives or second-guesses it — it only
+ * decides which of the two states to render, exactly the same split
+ * app/platform/academies/[id]/delete-academy-section.tsx already
+ * established for academy deletion. `dangerSolid` (solid fill) throughout
+ * so Delete is never visually confusable with the outlined `danger`
+ * Archive button next to it.
+ */
+export function EligibilityGatedDeleteButton({
+  entityLabel,
+  entityName,
+  eligible,
+  reasons,
+  onConfirm,
+  onSuccess,
+  className,
+}: EligibilityGatedDeleteButtonProps) {
+  if (!eligible) {
+    return (
+      <span
+        title={`This ${entityLabel.toLowerCase()} cannot be permanently deleted because ${reasons.join("; ")}. Use Archive instead.`}
+      >
+        <Button type="button" variant="dangerSolid" className={`px-2.5 py-1 text-xs ${className ?? ""}`} disabled>
+          Delete
+        </Button>
+      </span>
+    );
+  }
+
+  return (
+    <ConfirmButton
+      label="Delete"
+      variant="dangerSolid"
+      className={`px-2.5 py-1 text-xs ${className ?? ""}`}
+      title={`Delete "${entityName}" permanently?`}
+      description={<>This cannot be undone.</>}
+      confirmInput={{ label: `Type "${entityName}" to confirm`, requiredValue: entityName }}
+      onConfirm={onConfirm}
+      onSuccess={onSuccess}
+    />
+  );
+}

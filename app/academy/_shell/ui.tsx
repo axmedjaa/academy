@@ -297,29 +297,6 @@ export function Button({
   return <button {...rest} className={`${BUTTON_VARIANTS[variant]} ${className}`} />;
 }
 
-/**
- * A permanently-disabled "Delete" row action, for entities PLAN.md's
- * Archive & Deactivation Rules table categorically requires to be
- * archived rather than deleted (Branches, Staff, Students, Courses,
- * Programs, Batches — see each entity's list component for the citation).
- * Uses the same `dangerSolid` variant a real Delete button would, so it
- * reads as "this is where Delete lives" rather than being missing
- * entirely, with a native tooltip explaining why it's inactive — per this
- * codebase's "show Delete disabled with a clear explanation" convention
- * rather than hiding the action outright.
- */
-export function ProtectedDeleteButton({ entityLabel, className = "" }: { entityLabel: string; className?: string }) {
-  return (
-    <span
-      title={`${entityLabel} records are kept permanently for history, audit, and reporting — deletion isn't available. Use Archive instead.`}
-    >
-      <Button type="button" variant="dangerSolid" className={`px-2.5 py-1 text-xs ${className}`} disabled>
-        Delete
-      </Button>
-    </span>
-  );
-}
-
 /** Same visual treatment as `Button`, for navigation actions that must be a
  * `<Link>` (e.g. "Add student") rather than a form submit. */
 export function LinkButton({

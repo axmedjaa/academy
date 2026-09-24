@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listGradeConfigurations } from "@/lib/academies/grade-configurations";
 import { GradeConfigurationsList } from "./grade-configurations-list";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 47: `/academy/grades` — the grade-configuration approval
@@ -27,36 +28,31 @@ export default async function AcademyGradesPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 1000,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Grade configurations</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canApprove
-          ? "You can create, submit, approve, reject, and activate grade configurations."
-          : result.canManage
-            ? "You can create, edit, submit, and activate grade configurations. Approving or rejecting a submission requires Manager or Owner authority."
-            : "You don't have access to grade configurations for this academy."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Grade configurations"
+        description={
+          result.canApprove
+            ? "You can create, submit, approve, reject, and activate grade configurations."
+            : result.canManage
+              ? "You can create, edit, submit, and activate grade configurations. Approving or rejecting a submission requires Manager or Owner authority."
+              : "You don't have access to grade configurations for this academy."
+        }
+      />
       <GradeConfigurationsList
         configurations={result.configurations}
         canManage={result.canManage}
         canApprove={result.canApprove}
         currentUserId={context.userId}
       />
-    </main>
+    </div>
   );
 }

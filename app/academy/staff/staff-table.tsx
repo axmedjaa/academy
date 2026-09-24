@@ -1,16 +1,26 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { assignStaffRole, removeStaffMembership, updateStaff } from "@/lib/academies/staff-actions";
+import {
+  assignStaffRole,
+  deleteStaff,
+  removeStaffMembership,
+  updateStaff,
+} from "@/lib/academies/staff-actions";
 import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
-import type { StaffListRow } from "@/lib/academies/staff";
-import { Badge, Button, ErrorMessage, ProtectedDeleteButton, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
-import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import type { StaffDeletionEligibilitySummary, StaffListRow } from "@/lib/academies/staff";
+import { Badge, Button, ErrorMessage, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
 
 interface Props {
-  staff: StaffListRow[];
+  staff: (StaffListRow & { deletionEligibility: StaffDeletionEligibilitySummary })[];
   /** Full/Manage (Owner, Admin, Manager) — Trainer's "View" renders read-only. */
   canManage: boolean;
+  /** Owner/Admin/Manager only, same as `canManage` for staff in practice
+   * (Trainer's level here is always "view", never full/manage) — kept as
+   * its own prop for symmetry with the other four entities' list
+   * components and in case that ever changes. */
+  canDelete: boolean;
 }
 
 /**
@@ -21,7 +31,7 @@ interface Props {
  * since several rows each need their own independent pending state rather
  * than one shared form.
  */
-export function StaffTable({ staff, canManage }: Props) {
+export function StaffTable({ staff, canManage, canDelete }: Props) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -128,7 +138,15 @@ export function StaffTable({ staff, canManage }: Props) {
                           onConfirm={() => removeStaffMembership(row.userId)}
                         />
                       )}
-                      <ProtectedDeleteButton entityLabel="Staff" />
+                      {canDelete && (
+                        <EligibilityGatedDeleteButton
+                          entityLabel="Staff member"
+                          entityName={row.fullName}
+                          eligible={row.deletionEligibility.eligible}
+                          reasons={row.deletionEligibility.reasons}
+                          onConfirm={() => deleteStaff(row.id, row.fullName)}
+                        />
+                      )}
                     </div>
                   </td>
                 )}

@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { Icon } from "./icons";
 import type { AcademyNavItem, AcademyNavSubItem } from "@/lib/academies/nav-items";
 import type { AcademyRole } from "@/lib/auth/roles";
+import { signOut } from "@/lib/auth/actions";
 import { color, shell, spacing } from "@/lib/ui/theme";
 
 /**
@@ -132,6 +133,7 @@ export function AcademyShell({
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   onClick={() => setDrawerOpen(false)}
+                  className={active ? "" : "hover:bg-app"}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -143,6 +145,7 @@ export function AcademyShell({
                     backgroundColor: active ? color.primaryBlue : "transparent",
                     fontSize: "0.9rem",
                     fontWeight: active ? 600 : 500,
+                    transition: "background-color 0.15s ease",
                   }}
                 >
                   <Icon name={item.icon} />
@@ -157,12 +160,14 @@ export function AcademyShell({
                           key={sub.href}
                           href={sub.href}
                           onClick={() => setDrawerOpen(false)}
+                          className="rounded-md hover:bg-app hover:text-ink"
                           style={{
                             padding: "0.35rem 0.5rem",
                             fontSize: "0.82rem",
                             textDecoration: "none",
                             color: subActive ? color.primaryBlue : color.textMuted,
                             fontWeight: subActive ? 600 : 400,
+                            transition: "background-color 0.15s ease",
                           }}
                         >
                           {sub.label}
@@ -175,6 +180,52 @@ export function AcademyShell({
             );
           })}
         </nav>
+
+        <div style={{ marginTop: "auto", padding: spacing.sm, borderTop: `1px solid ${color.border}` }}>
+          <Link
+            href="/account/security"
+            onClick={() => setDrawerOpen(false)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: spacing.sm,
+              padding: "0.55rem 0.75rem",
+              borderRadius: 10,
+              textDecoration: "none",
+              color: color.textMuted,
+              fontSize: "0.9rem",
+              fontWeight: 500,
+            }}
+            className="rounded-md hover:bg-app hover:text-ink"
+          >
+            <Icon name="settings" />
+            <span>Account settings</span>
+          </Link>
+          <form action={signOut}>
+            <button
+              type="submit"
+              className="rounded-md hover:bg-app hover:text-ink"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: spacing.sm,
+                width: "100%",
+                padding: "0.55rem 0.75rem",
+                borderRadius: 10,
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: color.textMuted,
+                fontSize: "0.9rem",
+                fontWeight: 500,
+                textAlign: "left",
+              }}
+            >
+              <Icon name="close" />
+              <span>Sign out</span>
+            </button>
+          </form>
+        </div>
       </aside>
 
       <div className="academy-shell-content" style={{ marginLeft: shell.sidebarWidth }}>
@@ -217,7 +268,8 @@ export function AcademyShell({
             <Link
               href="/academy/notifications"
               aria-label={`Notifications${unreadNotificationsCount > 0 ? `, ${unreadNotificationsCount} unread` : ""}`}
-              style={{ position: "relative", color: color.textMuted, display: "flex" }}
+              className="rounded-full p-1.5 hover:bg-app hover:text-ink"
+              style={{ position: "relative", color: color.textMuted, display: "flex", transition: "background-color 0.15s ease" }}
             >
               <Icon name="notifications" />
               {unreadNotificationsCount > 0 && (
@@ -243,17 +295,32 @@ export function AcademyShell({
                 </span>
               )}
             </Link>
-            <div style={{ display: "flex", flexDirection: "column", textAlign: "right", lineHeight: 1.1 }}>
+            <Link
+              href="/account/security"
+              title="Account settings — update your email or password"
+              className="academy-shell-account-link"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                textAlign: "right",
+                lineHeight: 1.1,
+                borderRadius: 8,
+                padding: "0.2rem 0.4rem",
+                textDecoration: "none",
+              }}
+            >
               <span style={{ fontSize: "0.85rem", fontWeight: 600, color: color.text }}>
                 {ROLE_LABELS[membershipRole]}
               </span>
-            </div>
+            </Link>
           </div>
         </header>
 
         {graceBanner}
 
-        <main style={{ padding: spacing.xl, maxWidth: 1400, margin: "0 auto" }}>{children}</main>
+        <main className="px-4 py-6 sm:px-6 sm:py-8" style={{ maxWidth: 1400, margin: "0 auto" }}>
+          {children}
+        </main>
       </div>
 
       {/* Responsive behavior (DESIGN.md §2/§12): sidebar becomes a slide-in
@@ -263,6 +330,9 @@ export function AcademyShell({
        * @media rules (app/globals.css) rather than a CSS-in-JS/breakpoint
        * library. */}
       <style>{`
+        .academy-shell-account-link:hover {
+          background-color: ${color.bg};
+        }
         @media (max-width: 1024px) {
           .academy-shell-sidebar {
             left: -${shell.sidebarWidth}px;

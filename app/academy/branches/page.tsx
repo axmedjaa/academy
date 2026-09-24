@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listBranches } from "@/lib/academies/branches";
 import { BranchesList } from "./branches-list";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 34: `/academy/branches` — branch CRUD.
@@ -24,29 +25,24 @@ export default async function AcademyBranchesPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Branches</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canManage
-          ? "You can create, edit, and archive branches."
-          : "You can view the branch(es) you're assigned to."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Branches"
+        description={
+          result.canManage
+            ? "You can create, edit, and archive branches."
+            : "You can view the branch(es) you're assigned to."
+        }
+      />
       <BranchesList branches={result.branches} canManage={result.canManage} />
-    </main>
+    </div>
   );
 }

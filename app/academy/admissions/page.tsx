@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAdmissionsView } from "@/lib/academies/students";
 import { AdmissionsList } from "./admissions-list";
+import { Button, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 39: `/academy/admissions` — admissions view, distinct from
@@ -45,10 +46,10 @@ export default async function AcademyAdmissionsPage({
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
@@ -56,37 +57,33 @@ export default async function AcademyAdmissionsPage({
   const branchLimited = membershipRole === "admissions_officer" || membershipRole === "trainer";
 
   return (
-    <main
-      style={{
-        maxWidth: 1100,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Admissions</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {branchLimited
-          ? "Showing recently-registered or pending-documents students in your assigned branch(es) only."
-          : "Recently-registered or pending-documents students across this academy."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Admissions"
+        description={
+          branchLimited
+            ? "Showing recently-registered or pending-documents students in your assigned branch(es) only."
+            : "Recently-registered or pending-documents students across this academy."
+        }
+      />
 
       {!branchLimited && (
-        <form
-          method="get"
-          style={{ display: "flex", gap: "0.75rem", alignItems: "flex-end", margin: "1.5rem 0" }}
-        >
-          <label>
-            Branch ID
-            <input type="text" name="branchId" defaultValue={branchId} />
-          </label>
-          <button type="submit">Filter</button>
+        <form method="get">
+          <Toolbar>
+            <label className="min-w-[160px]">
+              <span className="mb-1 block text-xs font-medium text-muted">Branch ID</span>
+              <input type="text" name="branchId" defaultValue={branchId} className={inputClass} />
+            </label>
+            <Button type="submit" variant="secondary">
+              Filter
+            </Button>
+          </Toolbar>
         </form>
       )}
 
       <AdmissionsList admissions={data.rows} canManage={canManage} />
 
-      <p style={{ marginTop: "1rem" }}>
+      <p className="mt-4 text-sm text-muted">
         Page {data.page} — {data.totalCount} total
         {data.totalCount > data.pageSize && (
           <>
@@ -95,6 +92,7 @@ export default async function AcademyAdmissionsPage({
             {data.page > 1 && (
               <a
                 href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(data.page - 1) }).toString()}`}
+                className="text-brand hover:underline"
               >
                 Previous
               </a>
@@ -103,6 +101,7 @@ export default async function AcademyAdmissionsPage({
             {data.page * data.pageSize < data.totalCount && (
               <a
                 href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(data.page + 1) }).toString()}`}
+                className="text-brand hover:underline"
               >
                 Next
               </a>
@@ -111,7 +110,7 @@ export default async function AcademyAdmissionsPage({
           </>
         )}
       </p>
-    </main>
+    </div>
   );
 }
 

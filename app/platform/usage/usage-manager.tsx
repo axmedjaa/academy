@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { recalculateUsageAction } from "@/lib/subscriptions/usage-actions";
 import type { AcademyUsageOverviewRow } from "@/lib/subscriptions/usage";
+import { Badge, Button, ErrorMessage, Section } from "@/app/academy/_shell/ui";
 
 interface Props {
   rows: AcademyUsageOverviewRow[];
@@ -29,10 +30,10 @@ function formatBytes(bytes: number): string {
 
 // DESIGN.md §3 "Usage/allowance bar": "Green under 80%, amber 80–99%, red
 // at 100% (blocked)."
-function barColor(percentage: number): string {
-  if (percentage >= 100) return "#c0392b";
-  if (percentage >= 80) return "#d68910";
-  return "#2e8b57";
+function barColorClass(percentage: number): string {
+  if (percentage >= 100) return "bg-danger";
+  if (percentage >= 80) return "bg-warning";
+  return "bg-success";
 }
 
 function UsageBar({
@@ -51,36 +52,16 @@ function UsageBar({
   const overLimit = current >= limit;
 
   return (
-    <div style={{ marginBottom: "0.5rem" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          fontSize: "0.85rem",
-          marginBottom: "0.15rem",
-        }}
-      >
-        <span>{label}</span>
-        <span style={{ color: overLimit ? "#c0392b" : "#333" }}>
+    <div className="mb-2">
+      <div className="mb-1 flex justify-between text-sm">
+        <span className="text-ink">{label}</span>
+        <span className={overLimit ? "font-medium text-danger" : "text-muted"}>
           {format(current)} / {format(limit)}
           {overLimit ? " — at limit" : ""}
         </span>
       </div>
-      <div
-        style={{
-          background: "#eee",
-          borderRadius: 4,
-          height: 8,
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            width: `${percentage}%`,
-            background: barColor(percentage),
-            height: "100%",
-          }}
-        />
+      <div className="h-2 w-full overflow-hidden rounded-full bg-app">
+        <div className={`h-full rounded-full ${barColorClass(percentage)}`} style={{ width: `${percentage}%` }} />
       </div>
     </div>
   );
@@ -111,11 +92,15 @@ export function UsageManager({ rows }: Props) {
   }
 
   if (rows.length === 0) {
-    return <p>No academies yet.</p>;
+    return (
+      <Section>
+        <p className="text-sm text-muted">No academies yet.</p>
+      </Section>
+    );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+    <div className="flex flex-col gap-4">
       {rows.map((row) => {
         const anyOverLimit =
           row.usage && row.limits
@@ -127,56 +112,33 @@ export function UsageManager({ rows }: Props) {
             : false;
 
         return (
-          <section
-            key={row.academyId}
-            style={{
-              border: `1px solid ${anyOverLimit ? "#c0392b" : "#ddd"}`,
-              borderRadius: 8,
-              padding: "1rem 1.25rem",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "baseline",
-                marginBottom: "0.75rem",
-              }}
-            >
-              <div>
-                <strong>{row.academyName}</strong>
-                <span style={{ color: "#666", marginLeft: "0.5rem" }}>
-                  {row.planName ?? "No active plan"}
-                </span>
+          <Section key={row.academyId} className={anyOverLimit ? "ring-1 ring-inset ring-danger/40" : ""}>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <strong className="text-ink">{row.academyName}</strong>
+                <span className="text-sm text-muted">{row.planName ?? "No active plan"}</span>
+                {anyOverLimit && <Badge label="Over limit" tone="red" />}
               </div>
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                className="px-2.5 py-1 text-xs"
                 disabled={isPending && pendingAcademyId === row.academyId}
                 onClick={() => handleRecalculate(row.academyId)}
               >
-                {isPending && pendingAcademyId === row.academyId
-                  ? "Recalculating..."
-                  : "Recalculate"}
-              </button>
+                {isPending && pendingAcademyId === row.academyId ? "Recalculating..." : "Recalculate"}
+              </Button>
             </div>
 
             {errorsByAcademy[row.academyId] && (
-              <p style={{ color: "#c0392b", fontSize: "0.85rem" }}>
-                {errorsByAcademy[row.academyId]}
-              </p>
+              <div className="mb-3">
+                <ErrorMessage message={errorsByAcademy[row.academyId]} />
+              </div>
             )}
 
-            {!row.limits && (
-              <p style={{ color: "#666", fontSize: "0.85rem" }}>
-                No subscription/plan — allowance cannot be shown.
-              </p>
-            )}
+            {!row.limits && <p className="text-sm text-muted">No subscription/plan — allowance cannot be shown.</p>}
 
-            {!row.usage && (
-              <p style={{ color: "#666", fontSize: "0.85rem" }}>
-                Not yet calculated — click Recalculate.
-              </p>
-            )}
+            {!row.usage && <p className="text-sm text-muted">Not yet calculated — click Recalculate.</p>}
 
             {row.usage && row.limits && (
               <>
@@ -206,7 +168,7 @@ export function UsageManager({ rows }: Props) {
                   limit={row.limits.maxStorageBytes}
                   formatValue={formatBytes}
                 />
-                <p style={{ color: "#888", fontSize: "0.75rem", marginTop: "0.5rem" }}>
+                <p className="mt-2 text-xs text-muted">
                   {/* calculatedAt crosses the server->client boundary as a
                       serialized string despite its Date type (same as
                       payments-manager.tsx's receivedAt) — re-wrap before
@@ -215,7 +177,7 @@ export function UsageManager({ rows }: Props) {
                 </p>
               </>
             )}
-          </section>
+          </Section>
         );
       })}
     </div>

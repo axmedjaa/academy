@@ -13,6 +13,7 @@ import {
   PERMISSION_PRESETS,
 } from "@/lib/platform-staff/capabilities";
 import type { PlatformStaffAccount } from "@/lib/platform-staff/staff";
+import { Badge, Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 
 const initialCreateState: CreatePlatformAdminAccountState = { ok: false };
 
@@ -66,93 +67,71 @@ export function PlatformStaffManager({ staff, ungrantableCapabilities }: Props) 
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2.5rem" }}>
-      <section>
-        <h2>Create platform admin account</h2>
-        <form
-          action={createFormAction}
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "0.75rem",
-            maxWidth: 360,
-          }}
-        >
-          <label>
-            Email
-            <input
-              type="email"
-              name="email"
-              required
-              style={{ display: "block", width: "100%" }}
-            />
-          </label>
-          <label>
-            Temporary password
-            <input
-              type="password"
-              name="password"
-              required
-              minLength={12}
-              style={{ display: "block", width: "100%" }}
-            />
-          </label>
-          {createState.error && (
-            <p role="alert" style={{ color: "crimson" }}>
-              {createState.error.message}
-            </p>
-          )}
-          {createState.ok && (
-            <p style={{ color: "green" }}>Account created.</p>
-          )}
-          <button type="submit" disabled={createPending}>
+    <div className="flex flex-col gap-6">
+      <Section>
+        <h2 className="text-base font-semibold text-ink">Create platform admin account</h2>
+        <form action={createFormAction} className="mt-4 flex max-w-sm flex-col gap-3">
+          <Field label="Email">
+            <input type="email" name="email" required className={inputClass} />
+          </Field>
+          <Field label="Temporary password">
+            <input type="password" name="password" required minLength={12} className={inputClass} />
+          </Field>
+          {createState.error && <ErrorMessage message={createState.error.message} />}
+          {createState.ok && <p className="text-sm font-medium text-success">Account created.</p>}
+          <Button type="submit" disabled={createPending} className="self-start">
             {createPending ? "Creating..." : "Create account"}
-          </button>
+          </Button>
         </form>
-      </section>
+      </Section>
 
-      <section>
-        <h2>Staff accounts</h2>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={{ textAlign: "left" }}>Email</th>
-              <th style={{ textAlign: "left" }}>Role</th>
-              <th style={{ textAlign: "left" }}>Status</th>
-              <th style={{ textAlign: "left" }}>Granted capabilities</th>
-            </tr>
-          </thead>
-          <tbody>
-            {staff.map((account) => (
-              <tr key={account.userId}>
-                <td>{account.email}</td>
-                <td>{account.role}</td>
-                <td>{account.status}</td>
-                <td>
-                  {account.role === "platform_owner"
-                    ? "Full access (owner)"
-                    : account.grantedCapabilities.length > 0
-                      ? account.grantedCapabilities.join(", ")
-                      : "None"}
-                </td>
+      <Section>
+        <h2 className="text-base font-semibold text-ink">Staff accounts</h2>
+        <div className="mt-4">
+          <TableWrap>
+            <thead>
+              <tr>
+                <th className={th}>Email</th>
+                <th className={th}>Role</th>
+                <th className={th}>Status</th>
+                <th className={th}>Granted capabilities</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {staff.map((account) => (
+                <tr key={account.userId} className={trHover}>
+                  <td className={`${td} font-medium`}>{account.email}</td>
+                  <td className={td}>
+                    <Badge label={account.role} tone={account.role === "platform_owner" ? "blue" : "slate"} />
+                  </td>
+                  <td className={td}>
+                    <Badge label={account.status} tone={account.status === "active" ? "green" : "gray"} />
+                  </td>
+                  <td className={td}>
+                    {account.role === "platform_owner"
+                      ? "Full access (owner)"
+                      : account.grantedCapabilities.length > 0
+                        ? account.grantedCapabilities.join(", ")
+                        : "None"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </div>
+      </Section>
 
-      <section>
-        <h2>Grant permissions</h2>
+      <Section>
+        <h2 className="text-base font-semibold text-ink">Grant permissions</h2>
         {admins.length === 0 ? (
-          <p>No platform_admin accounts yet — create one above.</p>
+          <p className="mt-2 text-sm text-muted">No platform_admin accounts yet — create one above.</p>
         ) : (
-          <>
-            <label>
-              Platform admin account
+          <div className="mt-4 flex flex-col gap-4">
+            <Field label="Platform admin account" className="max-w-sm">
               <select
                 value={selectedUserId}
                 onChange={(event) => setSelectedUserId(event.target.value)}
-                style={{ display: "block", marginBottom: "1rem" }}
+                className={inputClass}
               >
                 {admins.map((account) => (
                   <option key={account.userId} value={account.userId}>
@@ -160,64 +139,58 @@ export function PlatformStaffManager({ staff, ungrantableCapabilities }: Props) 
                   </option>
                 ))}
               </select>
-            </label>
+            </Field>
 
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "0.5rem",
-                marginBottom: "1rem",
-              }}
-            >
+            <div className="flex flex-wrap gap-2">
               {Object.entries(PERMISSION_PRESETS).map(([name, capabilities]) => (
-                <button
+                <Button
                   key={name}
                   type="button"
+                  variant="secondary"
                   disabled={isPending}
                   onClick={() => applyPreset(capabilities)}
                 >
                   Apply {name} preset
-                </button>
+                </Button>
               ))}
             </div>
 
-            {grantError && (
-              <p role="alert" style={{ color: "crimson" }}>
-                {grantError}
-              </p>
-            )}
+            {grantError && <ErrorMessage message={grantError} />}
 
-            <ul style={{ listStyle: "none", padding: 0 }}>
+            <ul className="flex flex-col gap-2">
               {GRANTABLE_CAPABILITIES.map((capability) => {
                 const granted = grantedSet.has(capability);
                 return (
-                  <li key={capability} style={{ marginBottom: "0.5rem" }}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={granted}
-                        disabled={isPending}
-                        onChange={() => toggleCapability(capability, granted)}
-                      />{" "}
-                      {CAPABILITY_LABELS[capability]}
-                    </label>
+                  <li
+                    key={capability}
+                    className="flex items-center gap-3 rounded-control border border-border px-3 py-2"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={granted}
+                      disabled={isPending}
+                      onChange={() => toggleCapability(capability, granted)}
+                      className="h-4 w-4 accent-brand"
+                    />
+                    <span className="text-sm text-ink">{CAPABILITY_LABELS[capability]}</span>
                   </li>
                 );
               })}
               {ungrantableCapabilities.map((capability) => (
-                <li key={capability} style={{ marginBottom: "0.5rem" }}>
-                  <label style={{ color: "#888" }}>
-                    <input type="checkbox" checked={false} disabled readOnly />{" "}
-                    {capability} — Owner only — this permission cannot be
-                    granted
-                  </label>
+                <li
+                  key={capability}
+                  className="flex items-center gap-3 rounded-control border border-border bg-app px-3 py-2"
+                >
+                  <input type="checkbox" checked={false} disabled readOnly className="h-4 w-4" />
+                  <span className="text-sm text-muted">
+                    {capability} — Owner only — this permission cannot be granted
+                  </span>
                 </li>
               ))}
             </ul>
-          </>
+          </div>
         )}
-      </section>
+      </Section>
     </div>
   );
 }

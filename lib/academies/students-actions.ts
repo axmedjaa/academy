@@ -3,7 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
+  deleteStudent as deleteStudentForActor,
+  getStudentDeletionEligibility as getStudentDeletionEligibilityForActor,
   updateStudent as updateStudentForActor,
+  type GetStudentDeletionEligibilityResult,
   type StudentActionError,
   type UpdateStudentInput,
 } from "@/lib/academies/students";
@@ -98,6 +101,39 @@ export async function updateStudentStatus(
   }
 
   const result = await updateStudentForActor(context, studentId, input);
+  if (!result.ok) {
+    return result;
+  }
+
+  revalidatePath("/academy/students");
+  revalidatePath("/academy/admissions");
+  return { ok: true };
+}
+
+/** Read-only preview for the students table's Delete button. */
+export async function getStudentDeletionEligibility(
+  studentId: string,
+): Promise<GetStudentDeletionEligibilityResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  return getStudentDeletionEligibilityForActor(context, studentId);
+}
+
+/** Plain-callable permanent-deletion action. `confirmedName` must equal
+ * the student's exact current full name — re-checked server-side here,
+ * same convention as lib/academies/delete-academy.ts's deleteAcademy. */
+export async function deleteStudent(
+  studentId: string,
+  confirmedName: string,
+): Promise<{ ok: true } | { ok: false; error: StudentActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await deleteStudentForActor(context, studentId, confirmedName);
   if (!result.ok) {
     return result;
   }

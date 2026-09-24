@@ -12,6 +12,18 @@ import type {
   AcademySubscriptionOption,
   SubscriptionPaymentRecord,
 } from "@/lib/subscriptions/payments";
+import {
+  Badge,
+  Button,
+  ErrorMessage,
+  Field,
+  Section,
+  TableWrap,
+  inputClass,
+  td,
+  th,
+  trHover,
+} from "@/app/academy/_shell/ui";
 
 const initialState: PaymentFormState = { ok: false };
 
@@ -21,6 +33,13 @@ interface Props {
   canVerify: boolean;
 }
 
+const STATUS_TONE: Record<string, "amber" | "green" | "red" | "slate" | "gray"> = {
+  pending: "amber",
+  verified: "green",
+  rejected: "red",
+  reversed: "slate",
+};
+
 // DESIGN.md §8: "/platform/payments | A + C | Record-Payment form: academy,
 // subscription, amount (USD, cents-precise), method, reference, received
 // date, notes, optional evidence upload... Row actions: Verify / Reject /
@@ -29,27 +48,31 @@ interface Props {
 // create form, useTransition for the row actions.
 export function PaymentsManager({ payments, subscriptionOptions, canVerify }: Props) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2.5rem" }}>
-      <section>
-        <h2>Record payment</h2>
-        <RecordPaymentForm subscriptionOptions={subscriptionOptions} />
-      </section>
+    <div className="flex flex-col gap-8">
+      <Section>
+        <h2 className="text-base font-semibold text-ink">Record payment</h2>
+        <div className="mt-4">
+          <RecordPaymentForm subscriptionOptions={subscriptionOptions} />
+        </div>
+      </Section>
 
-      <section>
-        <h2>Payment history</h2>
+      <div>
+        <h2 className="mb-3 text-lg font-semibold text-ink">Payment history</h2>
         {payments.length === 0 ? (
-          <p>No payments recorded yet.</p>
+          <Section>
+            <p className="text-sm text-muted">No payments recorded yet.</p>
+          </Section>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <TableWrap>
             <thead>
               <tr>
-                <th style={{ textAlign: "left" }}>Received</th>
-                <th style={{ textAlign: "left" }}>Amount</th>
-                <th style={{ textAlign: "left" }}>Method</th>
-                <th style={{ textAlign: "left" }}>Reference</th>
-                <th style={{ textAlign: "left" }}>Evidence</th>
-                <th style={{ textAlign: "left" }}>Status</th>
-                {canVerify && <th style={{ textAlign: "left" }}>Actions</th>}
+                <th className={th}>Received</th>
+                <th className={th}>Amount</th>
+                <th className={th}>Method</th>
+                <th className={th}>Reference</th>
+                <th className={th}>Evidence</th>
+                <th className={th}>Status</th>
+                {canVerify && <th className={th}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -57,9 +80,9 @@ export function PaymentsManager({ payments, subscriptionOptions, canVerify }: Pr
                 <PaymentRow key={payment.id} payment={payment} canVerify={canVerify} />
               ))}
             </tbody>
-          </table>
+          </TableWrap>
         )}
-      </section>
+      </div>
     </div>
   );
 }
@@ -103,54 +126,63 @@ function PaymentRow({
 
   return (
     <>
-      <tr>
-        <td>{new Date(payment.receivedAt).toLocaleDateString()}</td>
-        <td>
+      <tr className={trHover}>
+        <td className={td}>{new Date(payment.receivedAt).toLocaleDateString()}</td>
+        <td className={`${td} font-medium`}>
           {(payment.amountCents / 100).toFixed(2)} {payment.currency}
         </td>
-        <td>{payment.paymentMethod}</td>
-        <td>{payment.paymentReference ?? "—"}</td>
-        <td>{payment.evidenceFileRef ? "Attached" : "—"}</td>
-        <td>{payment.status}</td>
+        <td className={td}>{payment.paymentMethod}</td>
+        <td className={td}>{payment.paymentReference ?? "—"}</td>
+        <td className={td}>{payment.evidenceFileRef ? "Attached" : "—"}</td>
+        <td className={td}>
+          <Badge label={payment.status} tone={STATUS_TONE[payment.status] ?? "gray"} />
+        </td>
         {canVerify && (
-          <td>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+          <td className={td}>
+            <div className="flex flex-wrap items-center gap-2">
               {payment.status === "pending" && (
                 <>
-                  <button
+                  <Button
                     type="button"
+                    className="px-2.5 py-1 text-xs"
                     disabled={isPending}
                     onClick={() => runAction("verify", verifySubscriptionPayment)}
                   >
                     {isPending && pendingReasonFor === "verify" ? "Verifying..." : "Verify"}
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="danger"
+                    className="px-2.5 py-1 text-xs"
                     disabled={isPending}
                     onClick={() => runAction("reject", rejectSubscriptionPayment)}
                   >
                     {isPending && pendingReasonFor === "reject" ? "Rejecting..." : "Reject"}
-                  </button>
+                  </Button>
                 </>
               )}
               {payment.status === "verified" && (
-                <button
+                <Button
                   type="button"
+                  variant="danger"
+                  className="px-2.5 py-1 text-xs"
                   disabled={isPending}
                   onClick={() => runAction("reverse", reverseSubscriptionPayment)}
                 >
                   {isPending && pendingReasonFor === "reverse" ? "Reversing..." : "Reverse"}
-                </button>
+                </Button>
               )}
-              {payment.status !== "pending" && payment.status !== "verified" && "—"}
+              {payment.status !== "pending" && payment.status !== "verified" && (
+                <span className="text-muted">—</span>
+              )}
             </div>
           </td>
         )}
       </tr>
       {error && (
         <tr>
-          <td colSpan={canVerify ? 7 : 6} role="alert" style={{ color: "crimson" }}>
-            {error}
+          <td colSpan={canVerify ? 7 : 6} className="px-4 py-2">
+            <ErrorMessage message={error} />
           </td>
         </tr>
       )}
@@ -173,23 +205,14 @@ function RecordPaymentForm({
   );
 
   return (
-    <form
-      action={formAction}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.75rem",
-        maxWidth: 480,
-      }}
-    >
-      <label>
-        Academy / subscription
+    <form action={formAction} className="flex max-w-lg flex-col gap-3">
+      <Field label="Academy / subscription">
         <select
           name="subscriptionId"
           required
           value={selectedSubscriptionId}
           onChange={(event) => setSelectedSubscriptionId(event.target.value)}
-          style={{ display: "block", width: "100%" }}
+          className={inputClass}
         >
           <option value="" disabled>
             Select a subscription
@@ -200,87 +223,51 @@ function RecordPaymentForm({
             </option>
           ))}
         </select>
-      </label>
+      </Field>
       <input type="hidden" name="academyId" value={selectedOption?.academyId ?? ""} />
 
-      <label>
-        Amount (in cents)
-        <input
-          type="number"
-          name="amountCents"
-          min={0}
-          step={1}
-          required
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Amount (in cents)">
+          <input type="number" name="amountCents" min={0} step={1} required className={inputClass} />
+        </Field>
+        <Field label="Currency (3-letter code)">
+          <input type="text" name="currency" maxLength={3} required defaultValue="USD" className={inputClass} />
+        </Field>
+      </div>
 
-      <label>
-        Currency (3-letter code)
-        <input
-          type="text"
-          name="currency"
-          maxLength={3}
-          required
-          defaultValue="USD"
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-
-      <label>
-        Payment method
+      <Field label="Payment method">
         <input
           type="text"
           name="paymentMethod"
           placeholder="bank_transfer, mobile_money, cash, ..."
           required
-          style={{ display: "block", width: "100%" }}
+          className={inputClass}
         />
-      </label>
+      </Field>
 
-      <label>
-        Reference
-        <input
-          type="text"
-          name="paymentReference"
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Reference">
+          <input type="text" name="paymentReference" className={inputClass} />
+        </Field>
+        <Field label="Received date">
+          <input type="date" name="receivedAt" required className={inputClass} />
+        </Field>
+      </div>
 
-      <label>
-        Received date
-        <input
-          type="date"
-          name="receivedAt"
-          required
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
+      <Field label="Evidence file reference (optional — no upload storage yet)">
+        <input type="text" name="evidenceFileRef" className={inputClass} />
+      </Field>
 
-      <label>
-        Evidence file reference (optional — no upload storage yet)
-        <input
-          type="text"
-          name="evidenceFileRef"
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
+      <Field label="Notes">
+        <textarea name="notes" rows={3} className={inputClass} />
+      </Field>
 
-      <label>
-        Notes
-        <textarea name="notes" style={{ display: "block", width: "100%" }} />
-      </label>
+      {state.error && <ErrorMessage message={state.error.message} />}
+      {state.ok && <p className="text-sm font-medium text-success">Payment recorded.</p>}
 
-      {state.error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {state.error.message}
-        </p>
-      )}
-      {state.ok && <p style={{ color: "green" }}>Payment recorded.</p>}
-
-      <button type="submit" disabled={pending}>
+      <Button type="submit" disabled={pending} className="self-start">
         {pending ? "Recording..." : "Record payment"}
-      </button>
+      </Button>
     </form>
   );
 }

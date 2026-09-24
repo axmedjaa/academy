@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getFinanceReports } from "@/lib/academies/finance-reports";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { FinanceReportsView } from "./finance-reports-view";
 
 /**
@@ -39,29 +40,20 @@ export default async function AcademyFinanceReportsPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 1000,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Finance Reports</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        Outstanding charges, payments received, income vs. expenses, and pending approvals for
-        this academy. This view never includes platform subscription billing — only student and
-        academy-side money.
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Finance Reports"
+        description="Outstanding charges, payments received, income vs. expenses, and pending approvals for this academy. This view never includes platform subscription billing — only student and academy-side money."
+      />
       <FinanceReportsView initialReport={result.report} />
-    </main>
+    </div>
   );
 }

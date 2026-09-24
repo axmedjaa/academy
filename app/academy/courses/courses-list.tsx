@@ -2,15 +2,20 @@
 
 import { useActionState, useState } from "react";
 import Link from "next/link";
-import { createCourse, setCourseStatus, updateCourse, type CourseFormState } from "@/lib/academies/courses-actions";
-import type { CourseWithInstructor } from "@/lib/academies/courses";
+import {
+  createCourse,
+  deleteCourse,
+  setCourseStatus,
+  updateCourse,
+  type CourseFormState,
+} from "@/lib/academies/courses-actions";
+import type { CourseDeletionEligibilitySummary, CourseWithInstructor } from "@/lib/academies/courses";
 import type { ProgramRecord } from "@/lib/academies/programs";
 import {
   Badge,
   Button,
   ErrorMessage,
   Field,
-  ProtectedDeleteButton,
   Section,
   TableWrap,
   inputClass,
@@ -18,7 +23,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
-import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: CourseFormState = { ok: false };
 
@@ -28,7 +33,7 @@ interface InstructorOption {
 }
 
 interface Props {
-  courses: CourseWithInstructor[];
+  courses: (CourseWithInstructor & { deletionEligibility: CourseDeletionEligibilitySummary })[];
   programs: ProgramRecord[];
   instructors: InstructorOption[];
   canManage: boolean;
@@ -132,7 +137,13 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                         }
                         onConfirm={() => toggleCourseStatus(course)}
                       />
-                      <ProtectedDeleteButton entityLabel="Course" />
+                      <EligibilityGatedDeleteButton
+                        entityLabel="Course"
+                        entityName={course.name}
+                        eligible={course.deletionEligibility.eligible}
+                        reasons={course.deletionEligibility.reasons}
+                        onConfirm={() => deleteCourse(course.id, course.name)}
+                      />
                     </div>
                   </td>
                 )}

@@ -141,6 +141,38 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
       <path d="m21 21-4.3-4.3" />
     </Base>
   ),
+  // Added for the Platform Owner console shell (app/platform/_shell) — same
+  // "hand-rolled inline SVG, no icon font" convention as every icon above.
+  apartment: (props) => (
+    <Base {...props}>
+      <rect x="4" y="3" width="16" height="18" rx="1" />
+      <path d="M8 7h1M8 11h1M8 15h1M15 7h1M15 11h1M15 15h1" />
+      <path d="M10.5 21v-3h3v3" />
+    </Base>
+  ),
+  inventory_2: (props) => (
+    <Base {...props}>
+      <rect x="3" y="7" width="18" height="13" rx="1.5" />
+      <path d="M3 11h18" />
+      <path d="M9 11v3h6v-3" />
+      <path d="M8 3.5h8L18 7H6l2-3.5z" />
+    </Base>
+  ),
+  autorenew: (props) => (
+    <Base {...props}>
+      <path d="M3 12a9 9 0 0 1 15.3-6.4L21 8" />
+      <path d="M21 4v4h-4" />
+      <path d="M21 12a9 9 0 0 1-15.3 6.4L3 16" />
+      <path d="M3 20v-4h4" />
+    </Base>
+  ),
+  speed: (props) => (
+    <Base {...props}>
+      <path d="M4 15a8 8 0 1 1 16 0" />
+      <path d="M12 15l4-5" />
+      <circle cx="12" cy="15" r="1.2" fill="currentColor" stroke="none" />
+    </Base>
+  ),
 };
 
 export function Icon({ name, ...props }: { name: string } & IconProps) {

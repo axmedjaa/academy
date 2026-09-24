@@ -21,7 +21,14 @@ export function MfaSetupForm({ secretBase32, qrCodeDataUrl }: Props) {
   const router = useRouter();
 
   if (state.ok && state.recoveryCodes) {
-    return <RecoveryCodesReveal recoveryCodes={state.recoveryCodes} onContinue={() => router.push("/")} />;
+    // /mfa/setup is Platform Owner only (this page's own module comment) —
+    // safe to send straight to the platform console rather than "/", same
+    // destination lib/auth/auth-context.ts's getPostLoginRedirectPath would
+    // resolve for this account (a client component can't call that
+    // server-only helper directly).
+    return (
+      <RecoveryCodesReveal recoveryCodes={state.recoveryCodes} onContinue={() => router.push("/platform/academies")} />
+    );
   }
 
   return (

@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { createStaff, type CreateStaffFormState } from "@/lib/academies/staff-actions";
 import { ACADEMY_ROLES } from "@/lib/auth/roles";
+import { Button, ErrorMessage, Field, inputClass } from "@/app/academy/_shell/ui";
 
 const initialState: CreateStaffFormState = { ok: false };
 
@@ -19,79 +20,43 @@ export function StaffForm() {
   const [state, formAction, pending] = useActionState(createStaff, initialState);
 
   return (
-    <form
-      action={formAction}
-      style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: 420 }}
-    >
-      <label>
-        Email
-        <input
-          type="email"
-          name="email"
-          required
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-      <label>
-        Temporary password (only needed for a brand-new account)
-        <input
-          type="password"
-          name="password"
-          minLength={12}
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-      <label>
-        Full name
-        <input
-          type="text"
-          name="fullName"
-          required
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-      <label>
-        Phone
-        <input
-          type="text"
-          name="phone"
-          required
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-      <label>
-        Employee number
-        <input
-          type="text"
-          name="employeeNumber"
-          style={{ display: "block", width: "100%" }}
-        />
-      </label>
-      <label>
-        Hire date
-        <input type="date" name="hireDate" style={{ display: "block", width: "100%" }} />
-      </label>
-      <label>
-        Role
-        <select name="role" defaultValue="trainer" style={{ display: "block", width: "100%" }}>
+    <form action={formAction} className="flex flex-col gap-3">
+      <Field label="Email">
+        <input type="email" name="email" required className={inputClass} />
+      </Field>
+      <Field label="Temporary password (only needed for a brand-new account)">
+        <input type="password" name="password" minLength={12} className={inputClass} />
+      </Field>
+      <Field label="Full name">
+        <input type="text" name="fullName" required className={inputClass} />
+      </Field>
+      <Field label="Phone">
+        <input type="text" name="phone" required className={inputClass} />
+      </Field>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field label="Employee number">
+          <input type="text" name="employeeNumber" className={inputClass} />
+        </Field>
+        <Field label="Hire date">
+          <input type="date" name="hireDate" className={inputClass} />
+        </Field>
+      </div>
+      <Field label="Role">
+        <select name="role" defaultValue="trainer" className={inputClass}>
           {ACADEMY_ROLES.map((role) => (
             <option key={role} value={role}>
               {role}
             </option>
           ))}
         </select>
-      </label>
+      </Field>
 
-      {state.error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {state.error.message}
-        </p>
-      )}
-      {state.ok && <p style={{ color: "green" }}>Staff member created.</p>}
+      {state.error && <ErrorMessage message={state.error.message} />}
+      {state.ok && <p className="text-sm font-medium text-success">Staff member created.</p>}
 
-      <button type="submit" disabled={pending}>
+      <Button type="submit" disabled={pending} className="self-start">
         {pending ? "Creating..." : "Create staff member"}
-      </button>
+      </Button>
     </form>
   );
 }

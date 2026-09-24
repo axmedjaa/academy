@@ -1,9 +1,13 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
+import { inArray } from "drizzle-orm";
 import { getAuthContext } from "@/lib/auth/auth-context";
+import { db } from "@/lib/db";
+import { students } from "@/lib/db/schema";
 import { listStudentCharges, listStudentPayments } from "@/lib/academies/student-payments";
+import { searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
 import { listIncomeRecords } from "@/lib/academies/income-records";
 import { listExpenseRecords } from "@/lib/academies/expense-records";
+import { LinkButton, PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { FinanceChargesPayments } from "./finance-charges-payments";
 import { FinanceIncomeExpenses } from "./finance-income-expenses";
 
@@ -33,6 +37,31 @@ import { FinanceIncomeExpenses } from "./finance-income-expenses";
  * rendered, not disabled" rule. Only when EVERY section is inaccessible
  * (e.g. Admissions Officer, who has "—" on all three rows) does this page
  * render a top-level "Access denied".
+ *
+ * UI-quality pass (this wave): restyled onto the shared Tailwind shell
+ * (PAGE_WRAP/PageHeader/PageMessage), matching every other `/academy/*`
+ * page — this page and its two client components previously predated that
+ * pass and still used raw inline styles/plain `<table>`. No business logic
+ * changed: same three independent reads, same ok/ownership checks, same
+ * props into the two child components. The one net-new read is a
+ * display-only student-name lookup (`fullName`/`studentNumber`, matching
+ * the "Name (STD-XXXX)" convention already used by roster-panel.tsx/
+ * exams-list.tsx/results-list.tsx) — every studentId being resolved here
+ * already came from a charge/payment row that listStudentCharges/
+ * listStudentPayments already tenant-scoped and authorized, so this is a
+ * display-field fetch on already-authorized ids, not a fresh authorization
+ * decision (same reasoning as lib/academies/id-cards-actions.ts's own
+ * resolveStudentName comment).
+ *
+ * Student picker (this wave): `searchStudents` (already tenant/branch-scoped
+ * for the caller's own role, same as everywhere else it's used — e.g.
+ * app/academy/batches/[batchId]/page.tsx's own studentOptions) backs a
+ * `<select>` in the Create Charge/Record Payment forms so a caller picks a
+ * student by name instead of typing/pasting a raw id. Active students only
+ * (creating a new charge/payment for an archived student isn't a real
+ * workflow); capped at STUDENTS_MAX_PAGE_SIZE, same ceiling every other
+ * "list students for a picker" call site already accepts rather than
+ * building unbounded/paginated combobox UI for this.
  */
 export default async function AcademyFinancePage() {
   const context = await getAuthContext();
@@ -61,49 +90,78 @@ export default async function AcademyFinancePage() {
             ? expensesResult.error
             : null;
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{error?.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{error?.message}</p>
-      </main>
+      <PageMessage
+        title={error?.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={error?.message ?? "You don't have permission to view this page."}
+      />
     );
   }
 
+  const studentIds = new Set<string>();
+  if (chargesResult.ok) {
+    for (const charge of chargesResult.charges) studentIds.add(charge.studentId);
+  }
+  if (paymentsResult.ok) {
+    for (const payment of paymentsResult.payments) studentIds.add(payment.studentId);
+  }
+  const studentRows = studentIds.size
+    ? await db
+        .select({ id: students.id, fullName: students.fullName, studentNumber: students.studentNumber })
+        .from(students)
+        .where(inArray(students.id, [...studentIds]))
+    : [];
+  const studentLabels = Object.fromEntries(
+    studentRows.map((row) => [row.id, `${row.fullName} (${row.studentNumber})`]),
+  );
+
+  const studentPickerResult =
+    chargesResult.ok && paymentsResult.ok
+      ? await searchStudents(context, { status: "active" }, { pageSize: STUDENTS_MAX_PAGE_SIZE })
+      : null;
+  const studentOptions =
+    studentPickerResult?.ok
+      ? studentPickerResult.data.rows.map((row) => ({
+          id: row.id,
+          fullName: row.fullName,
+          studentNumber: row.studentNumber,
+        }))
+      : [];
+
   return (
-    <main
-      style={{
-        maxWidth: 1000,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Finance</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        Student charges, manual payment recording, receipts, and income/expense records. Not a
-        general ledger — every payment is manually recorded after the fact.
-      </p>
-      {paymentsResult.ok && paymentsResult.canApprove && (
-        <p>
-          <Link href="/academy/finance/approvals">View pending student-payment approvals →</Link>
-        </p>
-      )}
-      {chargesResult.ok && paymentsResult.ok && (
-        <FinanceChargesPayments
-          charges={chargesResult.charges}
-          payments={paymentsResult.payments}
-          canManage={chargesResult.canManage}
-          canApprove={paymentsResult.canApprove}
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Finance"
+        description="Student charges, manual payment recording, receipts, and income/expense records. Not a general ledger — every payment is manually recorded after the fact."
+        actions={
+          paymentsResult.ok && paymentsResult.canApprove ? (
+            <LinkButton href="/academy/finance/approvals" variant="secondary">
+              Pending approvals
+            </LinkButton>
+          ) : undefined
+        }
+      />
+
+      <div className="flex flex-col gap-8">
+        {chargesResult.ok && paymentsResult.ok && (
+          <FinanceChargesPayments
+            charges={chargesResult.charges}
+            payments={paymentsResult.payments}
+            studentLabels={studentLabels}
+            studentOptions={studentOptions}
+            canManage={chargesResult.canManage}
+            canApprove={paymentsResult.canApprove}
+            currentUserId={context.userId}
+          />
+        )}
+        <FinanceIncomeExpenses
+          income={incomeResult.ok ? incomeResult.records : null}
+          incomeCanCreate={incomeResult.ok ? incomeResult.canCreate : false}
+          expenses={expensesResult.ok ? expensesResult.records : null}
+          expenseCanCreate={expensesResult.ok ? expensesResult.canCreate : false}
+          expenseCanApprove={expensesResult.ok ? expensesResult.canApprove : false}
           currentUserId={context.userId}
         />
-      )}
-      <FinanceIncomeExpenses
-        income={incomeResult.ok ? incomeResult.records : null}
-        incomeCanCreate={incomeResult.ok ? incomeResult.canCreate : false}
-        expenses={expensesResult.ok ? expensesResult.records : null}
-        expenseCanCreate={expensesResult.ok ? expensesResult.canCreate : false}
-        expenseCanApprove={expensesResult.ok ? expensesResult.canApprove : false}
-        currentUserId={context.userId}
-      />
-    </main>
+      </div>
+    </div>
   );
 }

@@ -5,10 +5,13 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   archiveBatch as archiveBatchForActor,
   createBatch as createBatchForActor,
+  deleteBatch as deleteBatchForActor,
+  getBatchDeletionEligibility as getBatchDeletionEligibilityForActor,
   restoreBatch as restoreBatchForActor,
   updateBatch as updateBatchForActor,
   type BatchActionError,
   type CreateBatchInput,
+  type GetBatchDeletionEligibilityResult,
   type UpdateBatchInput,
 } from "@/lib/academies/batches";
 
@@ -104,6 +107,38 @@ export async function setBatchStatus(
     status === "archived"
       ? await archiveBatchForActor(context, batchId)
       : await restoreBatchForActor(context, batchId);
+  if (!result.ok) {
+    return result;
+  }
+
+  revalidatePath("/academy/batches");
+  return { ok: true };
+}
+
+/** Read-only preview for the batches table's Delete button. */
+export async function getBatchDeletionEligibility(
+  batchId: string,
+): Promise<GetBatchDeletionEligibilityResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  return getBatchDeletionEligibilityForActor(context, batchId);
+}
+
+/** Plain-callable permanent-deletion action. `confirmedName` must equal
+ * the batch's exact current name — re-checked server-side here, same
+ * convention as lib/academies/delete-academy.ts's deleteAcademy. */
+export async function deleteBatch(
+  batchId: string,
+  confirmedName: string,
+): Promise<{ ok: true } | { ok: false; error: BatchActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await deleteBatchForActor(context, batchId, confirmedName);
   if (!result.ok) {
     return result;
   }

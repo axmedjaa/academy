@@ -4,6 +4,7 @@ import { listCourses } from "@/lib/academies/courses";
 import { listPrograms } from "@/lib/academies/programs";
 import { listStaff } from "@/lib/academies/staff";
 import { CoursesList } from "./courses-list";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 43: `/academy/courses` — course CRUD, `checkAllowance('courses')`
@@ -21,10 +22,10 @@ export default async function AcademyCoursesPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
@@ -42,26 +43,21 @@ export default async function AcademyCoursesPage() {
   const instructors = staffResult.ok ? staffResult.staff.filter((s) => s.status === "active") : [];
 
   return (
-    <main
-      style={{
-        maxWidth: 1000,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Courses</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canManage
-          ? "You can create, edit, and archive courses."
-          : "You can view this academy's courses."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Courses"
+        description={
+          result.canManage
+            ? "You can create, edit, and archive courses."
+            : "You can view this academy's courses."
+        }
+      />
       <CoursesList
         courses={result.courses}
         programs={programs}
         instructors={instructors.map((s) => ({ id: s.id, fullName: s.fullName }))}
         canManage={result.canManage}
       />
-    </main>
+    </div>
   );
 }

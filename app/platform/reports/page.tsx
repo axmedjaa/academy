@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { getPlatformReports, REPORTS_VIEW_CAPABILITY } from "@/lib/subscriptions/reports";
 import { ReportsManager } from "./reports-manager";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 // PLAN.md line 807 / Item 32b: "/platform/reports (revenue breakdowns,
 // expected vs. collected)." DESIGN.md's route table: "Entirely absent for
@@ -26,12 +27,7 @@ export default async function PlatformReportsPage() {
   const allowed = await hasPermission(context, REPORTS_VIEW_CAPABILITY);
 
   if (!allowed) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const result = await getPlatformReports(context);
@@ -40,32 +36,16 @@ export default async function PlatformReportsPage() {
     // Unreachable in practice given the check above (same context, same
     // capability), but a calm fallback rather than a raw error/crash if
     // this ever gets out of sync (e.g. a grant revoked mid-request).
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 1000,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Platform reports</h1>
-      <p style={{ color: "#555" }}>
-        Active-academy trend and expiring-subscriptions list are visible to
-        anyone granted platform reports access. The revenue breakdown below
-        (Collected vs. Expected/Pending, with its group-by and Export button)
-        is visible to the platform owner only — it can never be granted to a
-        platform admin.
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Platform reports"
+        description="Active-academy trend and expiring-subscriptions list are visible to anyone granted platform reports access. The revenue breakdown below (Collected vs. Expected/Pending, with its group-by and Export button) is visible to the platform owner only — it can never be granted to a platform admin."
+      />
       <ReportsManager initialData={result.data} />
-    </main>
+    </div>
   );
 }

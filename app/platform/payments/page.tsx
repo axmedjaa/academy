@@ -6,6 +6,7 @@ import {
   listSubscriptionPayments,
 } from "@/lib/subscriptions/payments";
 import { PaymentsManager } from "./payments-manager";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 const RECORD_PAYMENT_CAPABILITY = "recordSubscriptionPayment";
 const VERIFY_PAYMENT_CAPABILITY = "verifySubscriptionPayment";
@@ -30,12 +31,7 @@ export default async function PlatformPaymentsPage() {
   const canRecord = await hasPermission(context, RECORD_PAYMENT_CAPABILITY);
 
   if (!canRecord) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const canVerify = await hasPermission(context, VERIFY_PAYMENT_CAPABILITY);
@@ -45,20 +41,16 @@ export default async function PlatformPaymentsPage() {
   ]);
 
   return (
-    <main
-      style={{
-        maxWidth: 1000,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Subscription payments</h1>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Subscription payments"
+        description="Record incoming subscription payments and, if you're the platform owner, verify, reject, or reverse them."
+      />
       <PaymentsManager
         payments={payments}
         subscriptionOptions={subscriptionOptions}
         canVerify={canVerify}
       />
-    </main>
+    </div>
   );
 }

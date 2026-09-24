@@ -12,7 +12,7 @@ import {
   type ResetPasswordError,
 } from "@/lib/auth/password-reset";
 import { passwordSchema } from "@/lib/auth/password";
-import { getPlatformRole } from "@/lib/auth/auth-context";
+import { getPlatformRole, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
 import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
 import {
@@ -144,7 +144,7 @@ export async function signIn(
   const { token } = await createSession(result.userId, { ip, userAgent });
   cookieStore.set(SESSION_COOKIE_NAME, token, sessionCookieOptions());
 
-  redirect("/");
+  redirect(await getPostLoginRedirectPath(result.userId));
 }
 
 export async function signOut(): Promise<void> {

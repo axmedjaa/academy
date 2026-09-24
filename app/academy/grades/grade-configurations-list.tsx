@@ -12,6 +12,7 @@ import {
   type GradeConfigLifecycleActionResult,
 } from "@/lib/academies/grade-configurations-actions";
 import type { GradeConfigurationRecord } from "@/lib/academies/grade-configurations";
+import { Badge, Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 
 const initialFormState: GradeConfigFormState = { ok: false };
 
@@ -20,6 +21,13 @@ interface ListProps {
   canManage: boolean;
   canApprove: boolean;
   currentUserId: string;
+}
+
+function statusTone(status: string): "green" | "amber" | "gray" | "blue" {
+  if (status === "active") return "green";
+  if (status === "pending_approval") return "amber";
+  if (status === "approved") return "blue";
+  return "gray";
 }
 
 /**
@@ -48,19 +56,19 @@ export function GradeConfigurationsList({
   );
 
   return (
-    <section style={{ marginTop: "1.5rem" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+    <section className="flex flex-col gap-6">
+      <TableWrap>
         <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
-            <th style={{ padding: "0.5rem" }}>Name</th>
-            <th style={{ padding: "0.5rem" }}>Status</th>
-            <th style={{ padding: "0.5rem" }}>Actions</th>
+          <tr>
+            <th className={th}>Name</th>
+            <th className={th}>Status</th>
+            <th className={th}>Actions</th>
           </tr>
         </thead>
         <tbody>
           {configurations.length === 0 ? (
             <tr>
-              <td colSpan={3} style={{ padding: "0.5rem", color: "#666" }}>
+              <td colSpan={3} className={`${td} text-center text-muted`}>
                 No grade configurations yet.
               </td>
             </tr>
@@ -76,30 +84,22 @@ export function GradeConfigurationsList({
             ))
           )}
         </tbody>
-      </table>
+      </TableWrap>
 
       {canManage && (
-        <>
-          <h2 style={{ marginTop: "2rem" }}>Add grade configuration</h2>
-          <form
-            action={createFormAction}
-            style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: 420 }}
-          >
-            <label>
-              Name
-              <input type="text" name="name" required style={{ display: "block", width: "100%" }} />
-            </label>
-            {createState.error && (
-              <p role="alert" style={{ color: "crimson" }}>
-                {createState.error.message}
-              </p>
-            )}
-            {createState.ok && <p style={{ color: "green" }}>Configuration created as Draft.</p>}
-            <button type="submit" disabled={creating}>
+        <Section>
+          <h2 className="text-base font-semibold text-ink">Add grade configuration</h2>
+          <form action={createFormAction} className="mt-4 flex max-w-md flex-col gap-3">
+            <Field label="Name">
+              <input type="text" name="name" required className={inputClass} />
+            </Field>
+            {createState.error && <ErrorMessage message={createState.error.message} />}
+            {createState.ok && <p className="text-sm font-medium text-success">Configuration created as Draft.</p>}
+            <Button type="submit" disabled={creating} className="self-start">
               {creating ? "Creating..." : "Create configuration"}
-            </button>
+            </Button>
           </form>
-        </>
+        </Section>
       )}
     </section>
   );
@@ -167,109 +167,115 @@ function GradeConfigRow({ config, canManage, canApprove, currentUserId }: RowPro
 
   return (
     <>
-      <tr style={{ borderBottom: "1px solid #eee" }}>
-        <td style={{ padding: "0.5rem" }}>{config.name}</td>
-        <td style={{ padding: "0.5rem" }}>{config.status}</td>
-        <td style={{ padding: "0.5rem" }}>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+      <tr className={trHover}>
+        <td className={`${td} font-medium`}>{config.name}</td>
+        <td className={td}>
+          <Badge label={config.status} tone={statusTone(config.status)} />
+        </td>
+        <td className={td}>
+          <div className="flex flex-wrap items-center gap-2">
             {config.status === "draft" && canManage && (
               <>
-                <button type="button" onClick={() => setShowBandsEditor((value) => !value)}>
-                  {showBandsEditor ? "Hide bands" : "Edit bands"}
-                </button>
-                <button
+                <Button
                   type="button"
+                  variant="secondary"
+                  className="px-2.5 py-1 text-xs"
+                  onClick={() => setShowBandsEditor((value) => !value)}
+                >
+                  {showBandsEditor ? "Hide bands" : "Edit bands"}
+                </Button>
+                <Button
+                  type="button"
+                  className="px-2.5 py-1 text-xs"
                   disabled={pending}
                   onClick={() => runLifecycleAction(() => submitGradeConfigForApprovalAction(config.id))}
                 >
                   Submit for approval
-                </button>
+                </Button>
               </>
             )}
 
             {config.status === "pending_approval" && (
               <>
-                <button
+                <Button
                   type="button"
+                  className="px-2.5 py-1 text-xs"
                   disabled={pending || !canApprove || isOwnSubmission}
-                  title={
-                    isOwnSubmission ? "You can't approve a transaction you recorded." : undefined
-                  }
+                  title={isOwnSubmission ? "You can't approve a transaction you recorded." : undefined}
                   onClick={() => runLifecycleAction(() => approveGradeConfigAction(config.id))}
                 >
                   Approve
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="danger"
+                  className="px-2.5 py-1 text-xs"
                   disabled={pending || !canApprove || isOwnSubmission}
-                  title={
-                    isOwnSubmission ? "You can't approve a transaction you recorded." : undefined
-                  }
+                  title={isOwnSubmission ? "You can't approve a transaction you recorded." : undefined}
                   onClick={() => setShowRejectReason((value) => !value)}
                 >
                   Reject
-                </button>
+                </Button>
               </>
             )}
 
             {config.status === "approved" && canManage && (
-              <button
+              <Button
                 type="button"
+                className="px-2.5 py-1 text-xs"
                 disabled={pending}
                 onClick={() => runLifecycleAction(() => activateGradeConfigurationAction(config.id))}
               >
                 Activate
-              </button>
+              </Button>
             )}
 
             {config.status === "active" && (
-              <span style={{ color: "#666", fontSize: "0.85rem" }}>
+              <span className="text-sm text-muted">
                 Active — no in-place edit; create a new configuration to revise it.
               </span>
             )}
 
-            {config.status === "retired" && <span style={{ color: "#999" }}>Retired</span>}
+            {config.status === "retired" && <span className="text-sm text-muted">Retired</span>}
           </div>
         </td>
       </tr>
 
       {actionError && (
         <tr>
-          <td colSpan={3} style={{ padding: "0 0.5rem 0.5rem", color: "crimson" }}>
-            {actionError}
+          <td colSpan={3} className="px-4 pb-3">
+            <ErrorMessage message={actionError} />
           </td>
         </tr>
       )}
 
       {showRejectReason && config.status === "pending_approval" && (
         <tr>
-          <td colSpan={3} style={{ padding: "0.5rem", background: "#fafafa" }}>
-            <label>
-              Rejection reason (required)
+          <td colSpan={3} className="bg-app px-4 py-3">
+            <Field label="Rejection reason (required)" className="max-w-sm">
               <input
                 type="text"
                 value={rejectReason}
                 onChange={(event) => setRejectReason(event.target.value)}
-                style={{ display: "block", width: "100%" }}
+                className={inputClass}
               />
-            </label>
-            <button
+            </Field>
+            <Button
               type="button"
+              variant="danger"
+              className="mt-2"
               disabled={pending || rejectReason.trim().length === 0}
-              onClick={() =>
-                runLifecycleAction(() => rejectGradeConfigAction(config.id, rejectReason))
-              }
-              style={{ marginTop: "0.5rem" }}
+              onClick={() => runLifecycleAction(() => rejectGradeConfigAction(config.id, rejectReason))}
             >
               Confirm reject
-            </button>
+            </Button>
           </td>
         </tr>
       )}
 
       {showBandsEditor && config.status === "draft" && (
         <tr>
-          <td colSpan={3} style={{ padding: "0.5rem", background: "#fafafa" }}>
+          <td colSpan={3} className="bg-app px-4 py-3">
             <form action={bandsFormAction}>
               <input type="hidden" name="gradeConfigurationId" value={config.id} />
               <input
@@ -284,54 +290,55 @@ function GradeConfigRow({ config, canManage, canApprove, currentUserId }: RowPro
                   })),
                 )}
               />
-              {bands.map((band, index) => (
-                <div
-                  key={index}
-                  style={{ display: "flex", gap: "0.5rem", marginBottom: "0.25rem", alignItems: "center" }}
-                >
-                  <input
-                    placeholder="Label"
-                    value={band.label}
-                    onChange={(event) => updateBand(index, { label: event.target.value })}
-                  />
-                  <input
-                    placeholder="Min"
-                    value={band.minMark}
-                    onChange={(event) => updateBand(index, { minMark: event.target.value })}
-                    style={{ width: 80 }}
-                  />
-                  <input
-                    placeholder="Max"
-                    value={band.maxMark}
-                    onChange={(event) => updateBand(index, { maxMark: event.target.value })}
-                    style={{ width: 80 }}
-                  />
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}>
+              <div className="flex flex-col gap-2">
+                {bands.map((band, index) => (
+                  <div key={index} className="flex flex-wrap items-center gap-2">
                     <input
-                      type="checkbox"
-                      checked={band.isPass}
-                      onChange={(event) => updateBand(index, { isPass: event.target.checked })}
+                      placeholder="Label"
+                      value={band.label}
+                      onChange={(event) => updateBand(index, { label: event.target.value })}
+                      className={`${inputClass} w-36 py-1.5`}
                     />
-                    Pass
-                  </label>
-                  <button type="button" onClick={() => removeBand(index)}>
-                    Remove
-                  </button>
-                </div>
-              ))}
-              <button type="button" onClick={addBand}>
+                    <input
+                      placeholder="Min"
+                      value={band.minMark}
+                      onChange={(event) => updateBand(index, { minMark: event.target.value })}
+                      className={`${inputClass} w-20 py-1.5`}
+                    />
+                    <input
+                      placeholder="Max"
+                      value={band.maxMark}
+                      onChange={(event) => updateBand(index, { maxMark: event.target.value })}
+                      className={`${inputClass} w-20 py-1.5`}
+                    />
+                    <label className="flex items-center gap-1.5 text-sm text-ink">
+                      <input
+                        type="checkbox"
+                        checked={band.isPass}
+                        onChange={(event) => updateBand(index, { isPass: event.target.checked })}
+                        className="h-4 w-4 rounded border-border-strong text-brand focus:ring-brand/30"
+                      />
+                      Pass
+                    </label>
+                    <Button type="button" variant="danger" className="px-2.5 py-1 text-xs" onClick={() => removeBand(index)}>
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+              <Button type="button" variant="secondary" className="mt-2" onClick={addBand}>
                 Add band
-              </button>
+              </Button>
               {bandsFormState.error && (
-                <p role="alert" style={{ color: "crimson" }}>
-                  {bandsFormState.error.message}
-                </p>
+                <div className="mt-2">
+                  <ErrorMessage message={bandsFormState.error.message} />
+                </div>
               )}
-              {bandsFormState.ok && <p style={{ color: "green" }}>Bands saved.</p>}
-              <div>
-                <button type="submit" disabled={savingBands}>
+              {bandsFormState.ok && <p className="mt-2 text-sm font-medium text-success">Bands saved.</p>}
+              <div className="mt-3">
+                <Button type="submit" disabled={savingBands}>
                   {savingBands ? "Saving..." : "Save bands"}
-                </button>
+                </Button>
               </div>
             </form>
           </td>

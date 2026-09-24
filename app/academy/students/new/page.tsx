@@ -6,6 +6,7 @@ import { listBranches } from "@/lib/academies/branches";
 import { listBatches } from "@/lib/academies/batches";
 import { listCourses } from "@/lib/academies/courses";
 import { StudentForm } from "./student-form";
+import { PageHeader, PageMessage, Section } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 38 — `/academy/students/new`. Same gating shape as
@@ -40,22 +41,12 @@ export default async function NewStudentPage() {
     if (access.reason === "not_authenticated") {
       redirect("/login");
     }
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access unavailable</h1>
-        <p>{access.message}</p>
-      </main>
-    );
+    return <PageMessage title="Access unavailable" message={access.message} />;
   }
 
   const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STUDENTS_ACTION);
   if (level !== "full" && level !== "manage") {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to register students.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to register students." />;
   }
 
   const branchesResult = await listBranches(context);
@@ -76,26 +67,23 @@ export default async function NewStudentPage() {
     }));
 
   return (
-    <main
-      style={{
-        maxWidth: 480,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Register student</h1>
+    <div className="mx-auto w-full max-w-xl px-4 py-8 sm:px-6">
+      <PageHeader title="Register student" />
       {branches.length === 0 ? (
-        <p style={{ color: "#666" }}>
-          No branch is available to register a student into yet. Ask an Owner/Admin to create or
-          assign one first.
-        </p>
+        <Section>
+          <p className="text-sm text-muted">
+            No branch is available to register a student into yet. Ask an Owner/Admin to create or
+            assign one first.
+          </p>
+        </Section>
       ) : (
-        <StudentForm
-          branches={branches.map((branch) => ({ id: branch.id, name: branch.name }))}
-          courseOptions={courseOptions}
-        />
+        <Section>
+          <StudentForm
+            branches={branches.map((branch) => ({ id: branch.id, name: branch.name }))}
+            courseOptions={courseOptions}
+          />
+        </Section>
       )}
-    </main>
+    </div>
   );
 }

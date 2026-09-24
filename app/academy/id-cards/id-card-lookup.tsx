@@ -2,8 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { runIdCardAction, type IdCardFormState } from "@/lib/academies/id-cards-actions";
-import { Card, EmptyState, ErrorMessage, PrimaryButton } from "@/app/academy/_shell/ui";
-import { color, spacing } from "@/lib/ui/theme";
+import { Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
 import { IdCardVisual } from "./id-card-visual";
 
 const initialState: IdCardFormState = { ok: false };
@@ -25,9 +24,11 @@ interface Props {
  * results.
  *
  * Phase D addition (this wave): once a card is found or issued, the actual
- * visual card (app/academy/id-cards/id-card-view.tsx) renders instead of
- * the old plain `<dl>` fields — see that file's module comment for the
- * card-layout/print details.
+ * visual card (app/academy/id-cards/id-card-visual.tsx) renders instead of
+ * a plain `<dl>` — see that file's module comment for the card-layout/print
+ * details. Restyled onto the shared Tailwind shell (Section/Field/Button)
+ * to match every other `/academy/*` page; the card visual itself is left
+ * untouched (a deliberately distinct physical-card mockup, not a page).
  */
 export function IdCardLookup({ academyName }: Props) {
   const [state, formAction, pending] = useActionState(runIdCardAction, initialState);
@@ -37,69 +38,62 @@ export function IdCardLookup({ academyName }: Props) {
   const shownStudentId = state.studentId ?? studentId;
 
   return (
-    <Card>
-      <form
-        action={formAction}
-        style={{ display: "flex", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap" }}
-      >
+    <Section>
+      <form action={formAction} className="flex flex-wrap items-end gap-3">
         <input type="hidden" name="intent" value="lookup" />
-        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-          Student id
+        <Field label="Student # or ID" className="min-w-[300px]">
           <input
             type="text"
             name="studentId"
             value={studentId}
             onChange={(event) => setStudentId(event.target.value)}
+            placeholder="e.g. STD-E2E-A-001"
             required
-            style={{ minWidth: 300 }}
+            className={inputClass}
           />
-        </label>
-        <PrimaryButton type="submit" disabled={pending}>
+        </Field>
+        <Button type="submit" disabled={pending}>
           {pending ? "Working..." : "Look up"}
-        </PrimaryButton>
+        </Button>
       </form>
 
       {state.error && (
-        <div style={{ marginTop: spacing.sm }}>
+        <div className="mt-3">
           <ErrorMessage message={state.error.message} />
         </div>
       )}
 
       {shownStudentId && !state.error && (
-        <div style={{ marginTop: spacing.lg, borderTop: `1px solid ${color.border}`, paddingTop: spacing.md }}>
+        <div className="mt-6 border-t border-border pt-5">
           {card ? (
             <>
               <IdCardVisual card={card} studentName={state.studentName ?? shownStudentId} academyName={academyName} />
-              <form action={formAction} style={{ marginTop: spacing.sm }}>
+              <form action={formAction} className="mt-3">
                 <input type="hidden" name="intent" value="reprint" />
                 <input type="hidden" name="studentId" value={shownStudentId} />
                 <input type="hidden" name="cardId" value={card.id} />
-                <PrimaryButton type="submit" disabled={pending}>
+                <Button type="submit" disabled={pending}>
                   {pending ? "Working..." : "Reprint this card"}
-                </PrimaryButton>
+                </Button>
               </form>
             </>
           ) : (
             <>
-              <EmptyState message="No card issued yet for this student." />
-              <form
-                action={formAction}
-                style={{ display: "flex", flexDirection: "column", gap: spacing.sm, maxWidth: 420 }}
-              >
+              <p className="text-sm text-muted">No card issued yet for this student.</p>
+              <form action={formAction} className="mt-3 flex max-w-md flex-col gap-3">
                 <input type="hidden" name="intent" value="issue" />
                 <input type="hidden" name="studentId" value={shownStudentId} />
-                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-                  Photo URL (optional)
-                  <input type="text" name="photoFileRef" placeholder="https://…" style={{ width: "100%" }} />
-                </label>
-                <PrimaryButton type="submit" disabled={pending} style={{ alignSelf: "flex-start" }}>
+                <Field label="Photo URL (optional)">
+                  <input type="text" name="photoFileRef" placeholder="https://…" className={inputClass} />
+                </Field>
+                <Button type="submit" disabled={pending} className="self-start">
                   {pending ? "Working..." : "Issue card"}
-                </PrimaryButton>
+                </Button>
               </form>
             </>
           )}
         </div>
       )}
-    </Card>
+    </Section>
   );
 }

@@ -5,6 +5,7 @@ import { academies } from "@/lib/db/schema";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { checkIdCardAccess } from "@/lib/academies/id-cards";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { IdCardLookup } from "./id-card-lookup";
 
 /**
@@ -22,6 +23,10 @@ import { IdCardLookup } from "./id-card-lookup";
  * built yet (per this item's brief). Instead this page's client component
  * takes a student id directly (e.g. pasted from `/academy/students` once
  * that exists) and looks up/issues/reprints that one student's card.
+ *
+ * Restyled onto the shared Tailwind shell (PAGE_WRAP/PageHeader/
+ * PageMessage) to match every other `/academy/*` page — this page
+ * previously predated that pass and still used raw inline styles.
  */
 export default async function AcademyIdCardsPage() {
   const context = await getAuthContext();
@@ -34,10 +39,10 @@ export default async function AcademyIdCardsPage() {
 
   if (!result.ok) {
     return (
-      <div>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </div>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
@@ -49,15 +54,15 @@ export default async function AcademyIdCardsPage() {
           ?.name ?? "Academy");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
-      <div>
-        <h1 style={{ margin: 0 }}>Student ID cards</h1>
-        <p style={{ margin: 0, marginTop: "0.25rem", color: "#6B7280" }}>
-          {result.canManage
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Student ID cards"
+        description={
+          result.canManage
             ? "Look up a student by id to issue a new card or reprint their existing one."
-            : "You don't have permission to issue or reprint student ID cards."}
-        </p>
-      </div>
+            : "You don't have permission to issue or reprint student ID cards."
+        }
+      />
       {result.canManage && <IdCardLookup academyName={academyName} />}
     </div>
   );

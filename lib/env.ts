@@ -100,6 +100,53 @@ const envSchema = z.object({
     .int()
     .positive()
     .optional(),
+  // Email delivery (Resend) for password-reset and change-email-verification
+  // links. Deliberately optional here, unlike MFA_ENCRYPTION_KEY above —
+  // this app must still boot and serve every unrelated feature when email
+  // isn't configured; lib/email/client.ts checks these at call time instead
+  // and fails just that one send, not the whole app.
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().optional(),
+  APP_URL: z.string().optional(),
+  // Email-change verification token lifetime in minutes. Same "no value
+  // specified, pick a sane default, tunable via env" convention as
+  // PASSWORD_RESET_TOKEN_TTL_MINUTES above. Default: 60.
+  EMAIL_CHANGE_TOKEN_TTL_MINUTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  // Email-change verification-request rate limit, keyed per requesting
+  // userId (see lib/auth/email-change-rate-limit.ts) — reuses
+  // lib/rate-limit.ts, the same shared utility every other rate limit above
+  // uses. Defaults: 5 attempts / 900 seconds.
+  EMAIL_CHANGE_RATE_LIMIT_MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  EMAIL_CHANGE_RATE_LIMIT_WINDOW_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  // Email-OTP MFA login method (additional to TOTP, never a replacement).
+  // Code lifetime in minutes — short by design since it's re-sendable and
+  // only 6 digits. Default: 10.
+  MFA_EMAIL_OTP_TTL_MINUTES: z.coerce.number().int().positive().optional(),
+  // "Send/resend code to my email" rate limit, keyed per userId (see
+  // lib/auth/mfa-email-otp-rate-limit.ts) — same reused lib/rate-limit.ts
+  // utility as every other rate limit above. Defaults: 5 attempts / 900s.
+  MFA_EMAIL_OTP_RATE_LIMIT_MAX_ATTEMPTS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
+  MFA_EMAIL_OTP_RATE_LIMIT_WINDOW_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

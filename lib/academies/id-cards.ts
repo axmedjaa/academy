@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ilike, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { staffBranchAssignments, staffProfiles, students, studentIdCards } from "@/lib/db/schema";
@@ -179,21 +179,39 @@ async function resolveIdCardAccess(
  * different academy's student, and a student outside an assigned branch
  * all return the identical `STUDENT_NOT_FOUND` — same convention as
  * lib/academies/branches.ts's getBranch.
+ *
+ * Accepts either the student's UUID `id` OR their human-readable
+ * `studentNumber` (e.g. "STD-E2E-A-001") — the only identifier
+ * app/academy/students/students-list.tsx's "Student #" column actually
+ * displays for copy/paste, so a raw UUID was never something a caller could
+ * realistically have gotten from that page. `(academy_id, student_number)`
+ * is a DB-level unique constraint (lib/db/schema.ts), so the studentNumber
+ * branch is exactly as tenant-scoped and exact-match as the id branch —
+ * this is not a fuzzier search, still exactly one row or none. Matched
+ * case-insensitively (ilike, no wildcards) since studentNumber is always
+ * generated uppercase but a person retyping it may not preserve case.
  */
 async function resolveScopedStudent(
   executor: DbClient,
   academyId: string,
   membershipRole: AcademyRole,
   userId: string,
-  studentId: string,
+  studentIdOrNumber: string,
 ): Promise<{ id: string; branchId: string } | null> {
-  const parsedId = z.string().uuid().safeParse(studentId);
-  if (!parsedId.success) return null;
+  const trimmed = studentIdOrNumber.trim();
+  if (trimmed.length === 0) return null;
+
+  const isUuid = z.string().uuid().safeParse(trimmed).success;
 
   const [row] = await executor
     .select({ id: students.id, branchId: students.branchId })
     .from(students)
-    .where(and(eq(students.id, studentId), eq(students.academyId, academyId)))
+    .where(
+      and(
+        eq(students.academyId, academyId),
+        isUuid ? eq(students.id, trimmed) : ilike(students.studentNumber, trimmed),
+      ),
+    )
     .limit(1);
   if (!row) return null;
 
@@ -253,7 +271,10 @@ function isUniqueViolation(err: unknown): boolean {
 const MAX_CARD_NUMBER_ATTEMPTS = 10;
 
 export const issueStudentIdCardSchema = z.object({
-  studentId: z.string().uuid("Invalid student id."),
+  // Accepts the UUID id or the human-readable studentNumber — see
+  // resolveScopedStudent's own doc comment for why: the student list's
+  // "Student #" column is the only identifier there is to copy/paste.
+  studentId: z.string().trim().min(1, "Enter a student # or ID."),
   photoFileRef: z
     .string()
     .trim()
@@ -470,7 +491,7 @@ export async function checkIdCardAccess(
 }
 
 export type GetIdCardResult =
-  | { ok: true; card: IdCardRecord | null }
+  | { ok: true; studentId: string; card: IdCardRecord | null }
   | { ok: false; error: IdCardActionError };
 
 /**
@@ -480,6 +501,13 @@ export type GetIdCardResult =
  * card the student has ever had — `/academy/id-cards`'s only documented
  * need (per this item's file list) is "does this student currently have a
  * card, and what does it say," which the latest row answers.
+ *
+ * Returns the resolved UUID `studentId` alongside the card, even when
+ * `card` is null — the caller may have looked this up by studentNumber
+ * (resolveScopedStudent accepts either), and the "use server" wrapper
+ * (lib/academies/id-cards-actions.ts) needs the real UUID, never the raw
+ * user-typed value, for its own by-id display-name lookup and for the
+ * hidden field that feeds a subsequent "issue card" submission.
  */
 export async function getIdCard(
   actorContext: AuthContext,
@@ -507,5 +535,5 @@ export async function getIdCard(
     .orderBy(sql`${studentIdCards.issuedAt} desc`)
     .limit(1);
 
-  return { ok: true, card: rows[0] ? toRecord(rows[0]) : null };
+  return { ok: true, studentId: student.id, card: rows[0] ? toRecord(rows[0]) : null };
 }

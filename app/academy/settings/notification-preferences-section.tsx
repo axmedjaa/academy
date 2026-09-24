@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { setNotificationPreferenceAction } from "@/lib/notifications/preferences-actions";
 import { humanizeNotificationLabel } from "@/lib/notifications/humanize-template-id";
 import type { NotificationPreferenceView } from "@/lib/notifications/preferences";
+import { ErrorMessage, Section } from "@/app/academy/_shell/ui";
 
 interface Props {
   academyId: string;
@@ -51,52 +52,44 @@ export function NotificationPreferencesSection({ academyId, preferences }: Props
   }
 
   return (
-    <section style={{ marginTop: "2rem" }}>
-      <h2>Notification settings</h2>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
+    <Section>
+      <h2 className="text-base font-semibold text-ink">Notification settings</h2>
+      <p className="mt-1 text-sm text-muted">
         Choose which academy events you receive notifications for. Changes save immediately.
       </p>
 
       {error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {error}
-        </p>
+        <div className="mt-3">
+          <ErrorMessage message={error} />
+        </div>
       )}
 
-      <ul style={{ listStyle: "none", padding: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+      <ul className="mt-4 flex max-w-lg flex-col gap-2">
         {preferences.map((preference) => {
           const enabled = localEnabled[preference.templateId] ?? preference.enabled;
           return (
             <li
               key={preference.templateId}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "1rem",
-                padding: "0.5rem 0.75rem",
-                border: "1px solid #ddd",
-                borderRadius: 4,
-                maxWidth: 480,
-              }}
+              className="flex items-center justify-between gap-4 rounded-control border border-border bg-app/40 px-3 py-2.5"
             >
-              <span>{humanizeNotificationLabel(preference.templateId)}</span>
+              <span className="text-sm text-ink">{humanizeNotificationLabel(preference.templateId)}</span>
               {preference.mandatory ? (
                 <label
                   title="Required — cannot be turned off"
-                  style={{ display: "flex", alignItems: "center", gap: "0.4rem", color: "#666" }}
+                  className="flex items-center gap-2 text-xs text-muted"
                 >
                   <input type="checkbox" checked disabled aria-label={`${preference.templateId} (required)`} />
                   Required — cannot be turned off
                 </label>
               ) : (
-                <label style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                <label className="flex items-center gap-2 text-sm text-ink">
                   <input
                     type="checkbox"
                     checked={enabled}
                     disabled={isPending}
                     onChange={(event) => handleToggle(preference.templateId, event.target.checked)}
                     aria-label={preference.templateId}
+                    className="h-4 w-4 accent-brand"
                   />
                   {enabled ? "On" : "Off"}
                 </label>
@@ -105,6 +98,6 @@ export function NotificationPreferencesSection({ academyId, preferences }: Props
           );
         })}
       </ul>
-    </section>
+    </Section>
   );
 }

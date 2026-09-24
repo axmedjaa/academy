@@ -7,7 +7,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { verifyPassword } from "@/lib/auth/password";
-import { getAuthContext } from "@/lib/auth/auth-context";
+import { getAuthContext, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
 import {
   enrollMfaForUser,
   regenerateRecoveryCodesForUser,
@@ -18,6 +18,7 @@ import {
   type RegenerateRecoveryCodesError,
   type VerifyMfaEnrollmentError,
 } from "@/lib/auth/mfa";
+import { sendMfaEmailOtp } from "@/lib/auth/mfa-email-otp";
 import { resolveMfaFlowUserId } from "@/lib/auth/mfa-flow-identity";
 import {
   MFA_PENDING_COOKIE_NAME,
@@ -151,7 +152,7 @@ export async function verifyMfaEnrollment(
 }
 
 const challengeMfaSchema = z.object({
-  mode: z.enum(["totp", "recovery"]),
+  mode: z.enum(["totp", "recovery", "email"]),
   code: z.string().trim().min(1, "Enter a code"),
 });
 
@@ -217,7 +218,39 @@ export async function challengeMfa(
   }
 
   await completeLoginSession(pending.userId);
-  redirect("/");
+  redirect(await getPostLoginRedirectPath(pending.userId));
+}
+
+export interface SendMfaEmailOtpState {
+  ok: boolean;
+  error?: { code: string; message: string };
+}
+
+/**
+ * "Send code to my email" / "Resend code" on /mfa/challenge — a plain
+ * callable (no form fields to carry), bound via useTransition on the
+ * client rather than useActionState, matching
+ * lib/auth/update-account-actions.ts's resendEmailChangeVerification.
+ *
+ * Reads the pending-MFA cookie directly (same as challengeMfa below), not
+ * resolveMfaFlowUserId — this is strictly a login-time challenge action,
+ * never the voluntary-enrollment case that helper also covers.
+ */
+export async function sendMfaEmailOtpAction(): Promise<SendMfaEmailOtpState> {
+  const cookieStore = await cookies();
+  const pendingToken = cookieStore.get(MFA_PENDING_COOKIE_NAME)?.value;
+  const pending = pendingToken ? verifyPendingMfaToken(pendingToken) : null;
+
+  if (!pending) {
+    redirect("/login");
+  }
+
+  const result = await sendMfaEmailOtp(pending.userId);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  return { ok: true };
 }
 
 const regenerateRecoveryCodesSchema = z.object({

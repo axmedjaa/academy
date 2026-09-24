@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
@@ -7,19 +7,31 @@ import {
   academyMemberships,
   academySubscriptions,
   auditLogs,
+  batchEnrollments,
+  batches,
   branches,
+  certificates,
+  courses,
+  examResults,
+  exams,
+  gradeConfigurations,
+  programs,
   staffBranchAssignments,
   staffProfiles,
-  students,
+  studentCharges,
   studentDocuments,
+  studentPayments,
+  students,
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
+  deleteStudent,
   getAdmissionsView,
   getStudent,
+  getStudentDeletionEligibility,
   searchStudents,
   updateStudent,
 } from "./students";
@@ -175,6 +187,104 @@ async function insertStudentDirect(
   return row;
 }
 
+async function insertProgramAndCourse(academyId: string): Promise<string> {
+  const [program] = await db
+    .insert(programs)
+    .values({ academyId, name: `Program ${randomUUID()}` })
+    .returning({ id: programs.id });
+  const [course] = await db
+    .insert(courses)
+    .values({ academyId, programId: program.id, name: `Course ${randomUUID()}` })
+    .returning({ id: courses.id });
+  return course.id;
+}
+
+async function insertBatchDirect(academyId: string, branchId: string, courseId: string): Promise<string> {
+  const [row] = await db
+    .insert(batches)
+    .values({
+      academyId,
+      branchId,
+      courseId,
+      name: `Batch ${randomUUID()}`,
+      code: `B-${randomUUID().slice(0, 8)}`,
+      startDate: "2026-01-01",
+    })
+    .returning({ id: batches.id });
+  return row.id;
+}
+
+async function enrollStudentDirect(academyId: string, batchId: string, studentId: string): Promise<void> {
+  await db.insert(batchEnrollments).values({ academyId, batchId, studentId, status: "active" });
+}
+
+async function insertGradeConfigDirect(academyId: string, creatorUserId: string): Promise<string> {
+  const [row] = await db
+    .insert(gradeConfigurations)
+    .values({ academyId, name: `Config ${randomUUID()}`, createdBy: creatorUserId, status: "active" })
+    .returning({ id: gradeConfigurations.id });
+  return row.id;
+}
+
+async function insertExamResultDirect(
+  academyId: string,
+  batchId: string,
+  studentId: string,
+  creatorUserId: string,
+): Promise<void> {
+  const [exam] = await db
+    .insert(exams)
+    .values({ academyId, batchId, name: `Exam ${randomUUID()}`, maxMarks: "100" })
+    .returning({ id: exams.id });
+  const gradeConfigurationId = await insertGradeConfigDirect(academyId, creatorUserId);
+  await db.insert(examResults).values({
+    academyId,
+    examId: exam.id,
+    batchId,
+    studentId,
+    gradeConfigurationId,
+    enteredBy: creatorUserId,
+  });
+}
+
+async function insertChargeDirect(academyId: string, studentId: string, creatorUserId: string): Promise<void> {
+  await db.insert(studentCharges).values({
+    academyId,
+    studentId,
+    description: "Test charge",
+    amountCents: 10_000,
+    currency: "USD",
+    createdBy: creatorUserId,
+  });
+}
+
+async function insertPaymentDirect(academyId: string, studentId: string, recordedBy: string): Promise<void> {
+  await db.insert(studentPayments).values({
+    academyId,
+    studentId,
+    amountCents: 10_000,
+    currency: "USD",
+    method: "cash",
+    receivedAt: new Date(),
+    recordedBy,
+  });
+}
+
+async function insertCertificateDirect(
+  academyId: string,
+  studentId: string,
+  batchId: string,
+  issuedBy: string,
+): Promise<void> {
+  await db.insert(certificates).values({
+    academyId,
+    studentId,
+    batchId,
+    certificateCode: `CERT-${randomUUID()}`,
+    issuedBy,
+  });
+}
+
 afterAll(async () => {
   await db
     .delete(auditLogs)
@@ -185,6 +295,17 @@ afterAll(async () => {
       ),
     );
   for (const academyId of createdAcademyIds) {
+    await db.delete(certificates).where(eq(certificates.academyId, academyId));
+    await db.delete(examResults).where(eq(examResults.academyId, academyId));
+    await db.delete(exams).where(eq(exams.academyId, academyId));
+    await db.delete(gradeConfigurations).where(eq(gradeConfigurations.academyId, academyId));
+    await db.delete(studentPayments).where(eq(studentPayments.academyId, academyId));
+    await db.delete(studentCharges).where(eq(studentCharges.academyId, academyId));
+    await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
+    await db.delete(batches).where(eq(batches.academyId, academyId));
+    await db.delete(courses).where(eq(courses.academyId, academyId));
+    await db.delete(programs).where(eq(programs.academyId, academyId));
+
     const studentRows = await db
       .select({ id: students.id })
       .from(students)
@@ -663,5 +784,220 @@ describe("getAdmissionsView — recently-registered/pending-onboarding subset", 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.rows.map((r) => r.id)).toEqual([inScope.id]);
+  });
+});
+
+describe("getStudentDeletionEligibility / deleteStudent", () => {
+  it("an unused student (zero enrollments/results/charges/payments/certificates) is eligible and deletes", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Unused Student" });
+
+    const eligibility = await getStudentDeletionEligibility(context, student.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(true);
+      expect(eligibility.eligibility.reasons).toEqual([]);
+    }
+
+    const deleted = await deleteStudent(context, student.id, "Unused Student");
+    expect(deleted.ok).toBe(true);
+
+    const stillThere = await getStudent(context, student.id);
+    expect(stillThere.ok).toBe(false);
+    if (!stillThere.ok) expect(stillThere.error.code).toBe("not_found");
+  });
+
+  it("a student with a batch enrollment is blocked from deletion, and nothing is deleted", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Enrolled Student" });
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+    await enrollStudentDirect(academyId, batchId, student.id);
+
+    const eligibility = await getStudentDeletionEligibility(context, student.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.enrollmentCount).toBe(1);
+    }
+
+    const deleted = await deleteStudent(context, student.id, "Enrolled Student");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+
+    const stillThere = await getStudent(context, student.id);
+    expect(stillThere.ok).toBe(true);
+  });
+
+  it("a student with an exam result is blocked from deletion", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Exam Result Student" });
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+    await insertExamResultDirect(academyId, batchId, student.id, userId);
+
+    const eligibility = await getStudentDeletionEligibility(context, student.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.examResultCount).toBe(1);
+    }
+
+    const deleted = await deleteStudent(context, student.id, "Exam Result Student");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+  });
+
+  it("a student with a charge is blocked from deletion", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Charged Student" });
+    await insertChargeDirect(academyId, student.id, userId);
+
+    const eligibility = await getStudentDeletionEligibility(context, student.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.chargeCount).toBe(1);
+    }
+
+    const deleted = await deleteStudent(context, student.id, "Charged Student");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+  });
+
+  it("a student with a payment is blocked from deletion", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Paid Student" });
+    await insertPaymentDirect(academyId, student.id, userId);
+
+    const eligibility = await getStudentDeletionEligibility(context, student.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.paymentCount).toBe(1);
+    }
+
+    const deleted = await deleteStudent(context, student.id, "Paid Student");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+  });
+
+  it("a student with a certificate is blocked from deletion", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Certified Student" });
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+    await insertCertificateDirect(academyId, student.id, batchId, userId);
+
+    const eligibility = await getStudentDeletionEligibility(context, student.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.certificateCount).toBe(1);
+    }
+
+    const deleted = await deleteStudent(context, student.id, "Certified Student");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+  });
+
+  it("rejects a wrong confirmation name, and nothing is deleted", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Type Me Exactly" });
+
+    const result = await deleteStudent(context, student.id, "Wrong Name");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+
+    const stillThere = await getStudent(context, student.id);
+    expect(stillThere.ok).toBe(true);
+  });
+
+  it.each<[AcademyRole, boolean]>([
+    ["academy_admin", true],
+    ["manager", true],
+    ["admissions_officer", false],
+    ["finance_officer", false],
+    ["trainer", false],
+  ])("role %s: delete allowed = %s (Admissions Officer's own-branch manage access does not extend to delete)", async (role, allowed) => {
+    const owner = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(owner.academyId);
+    const student = await insertStudentDirect(owner.academyId, branchId, owner.userId);
+
+    const actingUserId = await createUser();
+    await addMembership(actingUserId, owner.academyId, role);
+    if (role === "trainer" || role === "admissions_officer") {
+      await assignUserToBranches(owner.academyId, actingUserId, [branchId]);
+    }
+    const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
+
+    const result = await deleteStudent(actingContext, student.id, student.fullName);
+    expect(result.ok).toBe(allowed);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+
+  it("never deletes another academy's student (tenant isolation)", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherBranch = await insertBranchDirect(other.academyId);
+    const otherStudent = await insertStudentDirect(other.academyId, otherBranch, other.userId, {
+      fullName: "Other Academy Student",
+    });
+
+    const { context } = await setupAcademy("academy_owner");
+    const eligibility = await getStudentDeletionEligibility(context, otherStudent.id);
+    expect(eligibility.ok).toBe(false);
+    if (!eligibility.ok) expect(eligibility.error.code).toBe("not_found");
+
+    const result = await deleteStudent(context, otherStudent.id, "Other Academy Student");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const stillThere = await getStudent(other.context, otherStudent.id);
+    expect(stillThere.ok).toBe(true);
+  });
+
+  it("writes an audit row before deleting, and the audit row survives the deletion", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Audited Deletion" });
+
+    const result = await deleteStudent(context, student.id, "Audited Deletion");
+    expect(result.ok).toBe(true);
+
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, student.id), eq(auditLogs.action, "deleteStudent")));
+    expect(audit?.action).toBe("deleteStudent");
+    expect(audit?.actorUserId).toBe(userId);
+    expect(audit?.academyId).toBe(academyId);
+  });
+
+  it("race condition: a payment recorded after the eligibility check still blocks the delete transaction", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Race Condition Student" });
+
+    const eligibility = await getStudentDeletionEligibility(context, student.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) expect(eligibility.eligibility.eligible).toBe(true);
+
+    // Simulates a concurrent payment landing between the UI's eligibility
+    // preview and the actual delete call.
+    await insertPaymentDirect(academyId, student.id, userId);
+
+    const result = await deleteStudent(context, student.id, "Race Condition Student");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ineligible");
+
+    const stillThere = await getStudent(context, student.id);
+    expect(stillThere.ok).toBe(true);
   });
 });

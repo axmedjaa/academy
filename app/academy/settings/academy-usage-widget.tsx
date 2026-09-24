@@ -1,4 +1,5 @@
 import type { OwnAcademyUsageLimits, OwnAcademyUsageMetrics } from "@/lib/academies/settings";
+import { Section, TableWrap, td, th } from "@/app/academy/_shell/ui";
 
 interface Props {
   planName: string | null;
@@ -33,14 +34,12 @@ function formatBytes(bytes: number): string {
 export function AcademyUsageWidget({ planName, usage, limits }: Props) {
   if (!usage || !limits) {
     return (
-      <section style={{ marginTop: "1.5rem" }}>
-        <h2>Usage</h2>
-        <p style={{ color: "#666" }}>
-          {!limits
-            ? "No active plan to compare usage against."
-            : "Usage has not been calculated yet."}
+      <Section>
+        <h2 className="text-base font-semibold text-ink">Usage</h2>
+        <p className="mt-1 text-sm text-muted">
+          {!limits ? "No active plan to compare usage against." : "Usage has not been calculated yet."}
         </p>
-      </section>
+      </Section>
     );
   }
 
@@ -58,36 +57,47 @@ export function AcademyUsageWidget({ planName, usage, limits }: Props) {
   ];
 
   return (
-    <section style={{ marginTop: "1.5rem" }}>
-      <h2>Usage{planName ? ` — ${planName} plan` : ""}</h2>
-      <p style={{ color: "#666", fontSize: "0.85rem" }}>
-        As of {usage.calculatedAt.toLocaleString()}. Informational only — allowance is
-        enforced at creation time, not here.
+    <Section>
+      <h2 className="text-base font-semibold text-ink">Usage{planName ? ` — ${planName} plan` : ""}</h2>
+      <p className="mt-1 text-sm text-muted">
+        As of {usage.calculatedAt.toLocaleString()}. Informational only — allowance is enforced at
+        creation time, not here.
       </p>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ textAlign: "left" }}>Resource</th>
-            <th style={{ textAlign: "left" }}>Used</th>
-            <th style={{ textAlign: "left" }}>Limit</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const format = row.formatValue ?? ((value: number) => String(value));
-            const overLimit = row.limit !== null && row.current >= row.limit;
-            return (
-              <tr key={row.label}>
-                <td>{row.label}</td>
-                <td style={overLimit ? { color: "crimson", fontWeight: "bold" } : undefined}>
-                  {format(row.current)}
-                </td>
-                <td>{row.limit !== null ? format(row.limit) : "—"}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </section>
+      <div className="mt-4">
+        <TableWrap>
+          <thead>
+            <tr>
+              <th className={th}>Resource</th>
+              <th className={th}>Used</th>
+              <th className={th}>Limit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const format = row.formatValue ?? ((value: number) => String(value));
+              const overLimit = row.limit !== null && row.current >= row.limit;
+              const pct = row.limit !== null && row.limit > 0 ? Math.min(100, (row.current / row.limit) * 100) : null;
+              return (
+                <tr key={row.label}>
+                  <td className={`${td} font-medium`}>{row.label}</td>
+                  <td className={td}>
+                    <div className={overLimit ? "font-bold text-danger" : undefined}>{format(row.current)}</div>
+                    {pct !== null && (
+                      <div className="mt-1.5 h-1.5 w-32 overflow-hidden rounded-full bg-app">
+                        <div
+                          className={`h-full rounded-full ${overLimit ? "bg-danger" : "bg-brand"}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    )}
+                  </td>
+                  <td className={td}>{row.limit !== null ? format(row.limit) : "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </TableWrap>
+      </div>
+    </Section>
   );
 }

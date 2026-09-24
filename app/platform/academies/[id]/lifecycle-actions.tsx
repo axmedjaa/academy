@@ -10,6 +10,7 @@ import {
   type LifecycleActionResult,
 } from "@/lib/academies/lifecycle-actions";
 import type { SubscriptionStatus } from "@/lib/subscriptions/state-machine";
+import { Button, ErrorMessage, inputClass } from "@/app/academy/_shell/ui";
 
 interface LifecycleActionsProps {
   academyId: string;
@@ -46,15 +47,13 @@ const CANCEL_SOURCES: ReadonlySet<SubscriptionStatus> = new Set([
 function StatusMessage({ error, success }: { error: string | null; success: string | null }) {
   if (error) {
     return (
-      <p role="alert" style={{ color: "crimson", margin: "0.25rem 0 0" }}>
-        {error}
-      </p>
+      <div className="mt-2">
+        <ErrorMessage message={error} />
+      </div>
     );
   }
   if (success) {
-    return (
-      <p style={{ color: "#0a7d2c", margin: "0.25rem 0 0" }}>{success}</p>
-    );
+    return <p className="mt-2 text-sm font-medium text-success">{success}</p>;
   }
   return null;
 }
@@ -74,6 +73,7 @@ function ReasonAction({
   disabledReason,
   confirmLabel,
   onSubmit,
+  variant = "secondary",
 }: {
   label: string;
   pendingLabel: string;
@@ -83,6 +83,7 @@ function ReasonAction({
   /** When set, a confirmation checkbox must be ticked before submitting (Close). */
   confirmLabel?: string;
   onSubmit: (reason: string | undefined) => Promise<LifecycleActionResult>;
+  variant?: "secondary" | "danger";
 }) {
   const [reason, setReason] = useState("");
   const [confirmed, setConfirmed] = useState(false);
@@ -107,51 +108,36 @@ function ReasonAction({
   }
 
   return (
-    <div
-      style={{
-        border: "1px solid #e5e7eb",
-        borderRadius: 6,
-        padding: "0.75rem",
-        marginBottom: "0.75rem",
-      }}
-      title={disabled ? disabledReason : undefined}
-    >
-      <strong>{label}</strong>
-      <div style={{ marginTop: "0.4rem" }}>
+    <div className="rounded-card border border-border bg-surface p-4" title={disabled ? disabledReason : undefined}>
+      <strong className="text-sm font-semibold text-ink">{label}</strong>
+      <div className="mt-2">
         <input
           type="text"
           placeholder={reasonMode === "required" ? "Reason (required)" : "Reason (optional)"}
           value={reason}
           onChange={(event) => setReason(event.target.value)}
           disabled={disabled || isPending}
-          style={{ width: "100%", maxWidth: 400, padding: "0.3rem" }}
+          className={`${inputClass} max-w-md`}
         />
       </div>
       {confirmLabel && (
-        <label style={{ display: "block", marginTop: "0.4rem", fontSize: "0.9rem" }}>
+        <label className="mt-2 flex items-start gap-2 text-sm text-ink">
           <input
             type="checkbox"
             checked={confirmed}
             onChange={(event) => setConfirmed(event.target.checked)}
             disabled={disabled || isPending}
-          />{" "}
+            className="mt-0.5"
+          />
           {confirmLabel}
         </label>
       )}
-      <button
-        type="button"
-        onClick={handleSubmit}
-        disabled={submitDisabled}
-        title={disabled ? disabledReason : undefined}
-        style={{ marginTop: "0.5rem" }}
-      >
-        {isPending ? pendingLabel : label}
-      </button>
-      {disabled && disabledReason && (
-        <p style={{ color: "#6b7280", fontSize: "0.85rem", margin: "0.25rem 0 0" }}>
-          {disabledReason}
-        </p>
-      )}
+      <div className="mt-3">
+        <Button type="button" variant={variant} onClick={handleSubmit} disabled={submitDisabled} title={disabled ? disabledReason : undefined}>
+          {isPending ? pendingLabel : label}
+        </Button>
+      </div>
+      {disabled && disabledReason && <p className="mt-2 text-xs text-muted">{disabledReason}</p>}
       <StatusMessage error={error} success={success} />
     </div>
   );
@@ -177,18 +163,13 @@ export function LifecycleActions({
   const [isActivatePending, startActivateTransition] = useTransition();
 
   if (academyClosed) {
-    return (
-      <p style={{ color: "#6b7280" }}>
-        This academy is permanently closed — no lifecycle actions are available.
-      </p>
-    );
+    return <p className="text-sm text-muted">This academy is permanently closed — no lifecycle actions are available.</p>;
   }
 
   if (subscriptionStatus === null) {
     return (
-      <p style={{ color: "#6b7280" }}>
-        This academy has no subscription yet — lifecycle actions become available once one is
-        created.
+      <p className="text-sm text-muted">
+        This academy has no subscription yet — lifecycle actions become available once one is created.
       </p>
     );
   }
@@ -216,30 +197,24 @@ export function LifecycleActions({
   }
 
   return (
-    <div>
+    <div className="flex flex-col gap-3">
       <div
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 6,
-          padding: "0.75rem",
-          marginBottom: "0.75rem",
-        }}
+        className="rounded-card border border-border bg-surface p-4"
         title={activateDisabled ? activateDisabledReasons.join(" ") : undefined}
       >
-        <strong>Activate</strong>
-        <div>
-          <button
+        <strong className="text-sm font-semibold text-ink">Activate</strong>
+        <div className="mt-3">
+          <Button
             type="button"
             onClick={handleActivate}
             disabled={activateDisabled || isActivatePending}
             title={activateDisabled ? activateDisabledReasons.join(" ") : undefined}
-            style={{ marginTop: "0.5rem" }}
           >
             {isActivatePending ? "Activating..." : "Activate"}
-          </button>
+          </Button>
         </div>
         {activateDisabled && (
-          <ul style={{ color: "#6b7280", fontSize: "0.85rem", margin: "0.25rem 0 0", paddingLeft: "1.1rem" }}>
+          <ul className="mt-2 list-disc pl-5 text-xs text-muted">
             {activateDisabledReasons.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
@@ -258,6 +233,7 @@ export function LifecycleActions({
             ? `Cannot suspend a subscription in status "${subscriptionStatus}".`
             : undefined
         }
+        variant="danger"
         onSubmit={(reason) => suspendAcademyAction(academyId, reason ?? "")}
       />
 
@@ -284,6 +260,7 @@ export function LifecycleActions({
             ? `Cannot cancel a subscription in status "${subscriptionStatus}".`
             : undefined
         }
+        variant="danger"
         onSubmit={(reason) => cancelAcademyAction(academyId, reason ?? "")}
       />
 
@@ -293,6 +270,7 @@ export function LifecycleActions({
         reasonMode="required"
         disabled={false}
         confirmLabel="I understand this is permanent and cannot be undone."
+        variant="danger"
         onSubmit={(reason) => closeAcademyAction(academyId, reason ?? "")}
       />
     </div>

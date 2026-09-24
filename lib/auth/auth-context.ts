@@ -36,6 +36,22 @@ export async function getPlatformRole(
   return membership?.role;
 }
 
+/**
+ * Where a just-signed-in user's own "home" is — called once a session is
+ * about to be issued (both `signIn`'s non-MFA path and `challengeMfa`'s
+ * post-verification path), replacing the previous blanket `redirect("/")`
+ * for everyone. Platform staff (owner or admin) land on the platform
+ * console's own primary tool; everyone else lands on the academy console.
+ * This never checks academy membership itself — an academy-less user simply
+ * sees `/academy/dashboard`'s own existing "not a member" message, exactly
+ * as if they'd typed that URL themselves; this function only decides which
+ * console to send someone toward, not whether they're allowed in.
+ */
+export async function getPostLoginRedirectPath(userId: string): Promise<string> {
+  const platformRole = await getPlatformRole(userId);
+  return platformRole ? "/platform/academies" : "/academy/dashboard";
+}
+
 /** Resolves the AuthContext for an already-authenticated user. Pure/testable. */
 export async function resolveAuthContext(userId: string): Promise<AuthContext> {
   return {

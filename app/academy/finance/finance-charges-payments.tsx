@@ -9,14 +9,52 @@ import {
 } from "@/lib/academies/student-payments-actions";
 import type { StudentChargeRecord, StudentPaymentRecord } from "@/lib/academies/student-payments";
 import { adjustStudentPaymentAction, reverseStudentPaymentAction } from "@/lib/academies/finance-reversals-actions";
+import {
+  Badge,
+  Button,
+  ErrorMessage,
+  Field,
+  Section,
+  TableWrap,
+  inputClass,
+  td,
+  th,
+  trHover,
+} from "@/app/academy/_shell/ui";
 
 const initialState: StudentPaymentsFormState = { ok: false };
 
 const SELF_APPROVAL_TOOLTIP = "You can't approve a transaction you recorded.";
 
+function formatMoney(amountCents: number, currency: string): string {
+  return `${currency} ${(amountCents / 100).toFixed(2)}`;
+}
+
+const CHARGE_STATUS_TONE = {
+  open: "gray",
+  partially_paid: "amber",
+  paid: "green",
+  cancelled: "red",
+} as const;
+
+const PAYMENT_STATUS_TONE = {
+  pending_approval: "amber",
+  approved: "green",
+  rejected: "red",
+  reversed: "slate",
+} as const;
+
 interface Props {
   charges: StudentChargeRecord[];
   payments: StudentPaymentRecord[];
+  /** studentId -> "Full Name (STD-XXXX)", resolved server-side once for
+   * every student referenced by any charge/payment (see page.tsx's own
+   * comment) — falls back to the raw id if a student was somehow deleted
+   * out from under an existing charge/payment row. */
+  studentLabels: Record<string, string>;
+  /** Active students for the Create Charge/Record Payment forms' student
+   * picker — see page.tsx's own comment. */
+  studentOptions: { id: string; fullName: string; studentNumber: string }[];
   /** Only "full"/"manage" callers (Manager/Finance Officer) get
    * create/record/issue controls — Owner/Admin/Trainer are read-only here,
    * per this row's confirmed View/View/Full/—/Manage/View matrix. */
@@ -32,7 +70,15 @@ interface Props {
   currentUserId: string;
 }
 
-export function FinanceChargesPayments({ charges, payments, canManage, canApprove, currentUserId }: Props) {
+export function FinanceChargesPayments({
+  charges,
+  payments,
+  studentLabels,
+  studentOptions,
+  canManage,
+  canApprove,
+  currentUserId,
+}: Props) {
   const [tab, setTab] = useState<"charges" | "payments">("charges");
   const [createChargeState, createChargeFormAction, creatingCharge] = useActionState(
     createStudentChargeAction,
@@ -41,6 +87,16 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
   const [recordPaymentState, recordPaymentFormAction, recordingPayment] = useActionState(
     recordStudentPaymentAction,
     initialState,
+  );
+  // Narrows the "Charge id" picker below to that student's own open/
+  // partially-paid charges — "" (no selection yet) shows every payable
+  // charge across all students, each already labeled with its own student
+  // name, so there's still something useful to pick from immediately.
+  const [paymentStudentId, setPaymentStudentId] = useState("");
+  const payableCharges = charges.filter(
+    (charge) =>
+      (charge.status === "open" || charge.status === "partially_paid") &&
+      (paymentStudentId === "" || charge.studentId === paymentStudentId),
   );
   const [issuingId, setIssuingId] = useState<string | null>(null);
   const [issueError, setIssueError] = useState<string | null>(null);
@@ -52,6 +108,10 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
   const [reversalReason, setReversalReason] = useState("");
   const [adjustAmount, setAdjustAmount] = useState("");
   const [reversedIds, setReversedIds] = useState<Set<string>>(new Set());
+
+  function studentLabel(studentId: string): string {
+    return studentLabels[studentId] ?? studentId;
+  }
 
   async function handleIssueReceipt(paymentId: string) {
     setIssuingId(paymentId);
@@ -95,115 +155,111 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
   }
 
   return (
-    <section style={{ marginTop: "1.5rem" }}>
-      <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-        <button type="button" onClick={() => setTab("charges")} disabled={tab === "charges"}>
+    <Section>
+      <div className="mb-4 flex gap-2">
+        <Button
+          type="button"
+          variant={tab === "charges" ? "primary" : "secondary"}
+          className="px-3 py-1.5 text-xs"
+          onClick={() => setTab("charges")}
+        >
           Charges
-        </button>
-        <button type="button" onClick={() => setTab("payments")} disabled={tab === "payments"}>
+        </Button>
+        <Button
+          type="button"
+          variant={tab === "payments" ? "primary" : "secondary"}
+          className="px-3 py-1.5 text-xs"
+          onClick={() => setTab("payments")}
+        >
           Payments
-        </button>
+        </Button>
       </div>
 
       {tab === "charges" && (
         <>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <TableWrap>
             <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
-                <th style={{ padding: "0.5rem" }}>Student</th>
-                <th style={{ padding: "0.5rem" }}>Description</th>
-                <th style={{ padding: "0.5rem" }}>Amount (cents)</th>
-                <th style={{ padding: "0.5rem" }}>Currency</th>
-                <th style={{ padding: "0.5rem" }}>Due date</th>
-                <th style={{ padding: "0.5rem" }}>Status</th>
+              <tr>
+                <th className={th}>Student</th>
+                <th className={th}>Description</th>
+                <th className={th}>Amount</th>
+                <th className={th}>Due date</th>
+                <th className={th}>Status</th>
               </tr>
             </thead>
             <tbody>
               {charges.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: "0.5rem", color: "#666" }}>
+                  <td colSpan={5} className={`${td} text-center text-muted`}>
                     No charges to show.
                   </td>
                 </tr>
               ) : (
                 charges.map((charge) => (
-                  <tr key={charge.id} style={{ borderBottom: "1px solid #eee" }}>
-                    <td style={{ padding: "0.5rem" }}>{charge.studentId}</td>
-                    <td style={{ padding: "0.5rem" }}>{charge.description}</td>
-                    <td style={{ padding: "0.5rem" }}>{charge.amountCents}</td>
-                    <td style={{ padding: "0.5rem" }}>{charge.currency}</td>
-                    <td style={{ padding: "0.5rem" }}>{charge.dueDate ?? "—"}</td>
-                    <td style={{ padding: "0.5rem" }}>{charge.status}</td>
+                  <tr key={charge.id} className={trHover}>
+                    <td className={`${td} font-medium`}>{studentLabel(charge.studentId)}</td>
+                    <td className={td}>{charge.description}</td>
+                    <td className={td}>{formatMoney(charge.amountCents, charge.currency)}</td>
+                    <td className={td}>{charge.dueDate ?? "—"}</td>
+                    <td className={td}>
+                      <Badge label={charge.status.replace("_", " ")} tone={CHARGE_STATUS_TONE[charge.status]} />
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
-          </table>
+          </TableWrap>
 
           {canManage && (
-            <>
-              <h2 style={{ marginTop: "2rem" }}>Create charge</h2>
-              <form
-                action={createChargeFormAction}
-                style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: 420 }}
-              >
-                <label>
-                  Student ID
-                  <input type="text" name="studentId" required style={{ display: "block", width: "100%" }} />
-                </label>
-                <label>
-                  Description
-                  <input
-                    type="text"
-                    name="description"
-                    required
-                    style={{ display: "block", width: "100%" }}
-                  />
-                </label>
-                <label>
-                  Amount (cents)
-                  <input
-                    type="number"
-                    name="amountCents"
-                    min={0}
-                    required
-                    style={{ display: "block", width: "100%" }}
-                  />
-                </label>
-                <label>
-                  Currency (optional — defaults to academy currency)
-                  <input type="text" name="currency" maxLength={3} style={{ display: "block", width: "100%" }} />
-                </label>
-                <label>
-                  Due date (optional)
-                  <input type="date" name="dueDate" style={{ display: "block", width: "100%" }} />
-                </label>
-                {createChargeState.error && (
-                  <p role="alert" style={{ color: "crimson" }}>
-                    {createChargeState.error.message}
-                  </p>
-                )}
-                {createChargeState.ok && <p style={{ color: "green" }}>Charge created.</p>}
-                <button type="submit" disabled={creatingCharge}>
+            <div className="mt-6 border-t border-border pt-5">
+              <h2 className="text-base font-semibold text-ink">Create charge</h2>
+              <form action={createChargeFormAction} className="mt-3 flex max-w-md flex-col gap-3">
+                <Field label="Student">
+                  <select name="studentId" required defaultValue="" className={inputClass}>
+                    <option value="" disabled>
+                      {studentOptions.length === 0 ? "No active students yet" : "Select a student…"}
+                    </option>
+                    {studentOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.fullName} ({option.studentNumber})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Description">
+                  <input type="text" name="description" required className={inputClass} />
+                </Field>
+                <Field label="Amount (cents)">
+                  <input type="number" name="amountCents" min={0} required className={inputClass} />
+                </Field>
+                <Field label="Currency (optional — defaults to academy currency)">
+                  <input type="text" name="currency" maxLength={3} className={inputClass} />
+                </Field>
+                <Field label="Due date (optional)">
+                  <input type="date" name="dueDate" className={inputClass} />
+                </Field>
+                {createChargeState.error && <ErrorMessage message={createChargeState.error.message} />}
+                {createChargeState.ok && <p className="text-sm font-medium text-success">Charge created.</p>}
+                <Button type="submit" disabled={creatingCharge} className="self-start">
                   {creatingCharge ? "Creating..." : "Create charge"}
-                </button>
+                </Button>
               </form>
-            </>
+            </div>
           )}
         </>
       )}
 
       {tab === "payments" && (
         <>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <TableWrap>
             <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
-                <th style={{ padding: "0.5rem" }}>Student</th>
-                <th style={{ padding: "0.5rem" }}>Amount (cents)</th>
-                <th style={{ padding: "0.5rem" }}>Method</th>
-                <th style={{ padding: "0.5rem" }}>Status</th>
-                {canManage && <th style={{ padding: "0.5rem" }}>Receipt</th>}
-                {canApprove && <th style={{ padding: "0.5rem" }}>Reverse / Adjust</th>}
+              <tr>
+                <th className={th}>Student</th>
+                <th className={th}>Amount</th>
+                <th className={th}>Method</th>
+                <th className={th}>Status</th>
+                {canManage && <th className={th}>Receipt</th>}
+                {canApprove && <th className={th}>Reverse / Adjust</th>}
               </tr>
             </thead>
             <tbody>
@@ -211,7 +267,7 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
                 <tr>
                   <td
                     colSpan={4 + (canManage ? 1 : 0) + (canApprove ? 1 : 0)}
-                    style={{ padding: "0.5rem", color: "#666" }}
+                    className={`${td} text-center text-muted`}
                   >
                     No payments to show.
                   </td>
@@ -222,31 +278,34 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
                   const isSelfRecorded = payment.recordedBy === currentUserId;
                   const canReverseThisRow =
                     canApprove && payment.status === "approved" && !alreadyReversedThisSession;
+                  const effectiveStatus = alreadyReversedThisSession ? "reversed" : payment.status;
                   return (
-                    <tr key={payment.id} style={{ borderBottom: "1px solid #eee" }}>
-                      <td style={{ padding: "0.5rem" }}>{payment.studentId}</td>
-                      <td style={{ padding: "0.5rem" }}>{payment.amountCents}</td>
-                      <td style={{ padding: "0.5rem" }}>{payment.method}</td>
-                      <td style={{ padding: "0.5rem" }}>
-                        {alreadyReversedThisSession ? "reversed" : payment.status}
+                    <tr key={payment.id} className={trHover}>
+                      <td className={`${td} font-medium`}>{studentLabel(payment.studentId)}</td>
+                      <td className={td}>{formatMoney(payment.amountCents, payment.currency)}</td>
+                      <td className={td}>{payment.method.replace("_", " ")}</td>
+                      <td className={td}>
+                        <Badge label={effectiveStatus.replace("_", " ")} tone={PAYMENT_STATUS_TONE[effectiveStatus]} />
                       </td>
                       {canManage && (
-                        <td style={{ padding: "0.5rem" }}>
-                          <button
+                        <td className={td}>
+                          <Button
                             type="button"
+                            variant="secondary"
+                            className="px-2.5 py-1 text-xs"
                             disabled={payment.status !== "approved" || issuingId === payment.id}
                             onClick={() => handleIssueReceipt(payment.id)}
                           >
                             {issuingId === payment.id ? "Issuing..." : "Issue receipt"}
-                          </button>
+                          </Button>
                         </td>
                       )}
                       {canApprove && (
-                        <td style={{ padding: "0.5rem" }}>
+                        <td className={td}>
                           {!canReverseThisRow ? (
-                            "—"
+                            <span className="text-muted">—</span>
                           ) : reversalRowId === payment.id ? (
-                            <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", minWidth: 220 }}>
+                            <div className="flex min-w-[220px] flex-col gap-2">
                               {reversalMode === "adjust" && (
                                 <input
                                   type="number"
@@ -254,6 +313,7 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
                                   min={0}
                                   value={adjustAmount}
                                   onChange={(event) => setAdjustAmount(event.target.value)}
+                                  className={`${inputClass} py-1.5`}
                                 />
                               )}
                               <input
@@ -261,10 +321,13 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
                                 placeholder="Reason (required)"
                                 value={reversalReason}
                                 onChange={(event) => setReversalReason(event.target.value)}
+                                className={`${inputClass} py-1.5`}
                               />
-                              <div style={{ display: "flex", gap: "0.35rem" }}>
-                                <button
+                              <div className="flex gap-2">
+                                <Button
                                   type="button"
+                                  variant="danger"
+                                  className="px-2.5 py-1 text-xs"
                                   disabled={
                                     isReversalPending ||
                                     reversalReason.trim() === "" ||
@@ -277,31 +340,37 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
                                     : reversalMode === "adjust"
                                       ? "Confirm adjustment"
                                       : "Confirm reversal"}
-                                </button>
-                                <button type="button" onClick={cancelReversal}>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  className="px-2.5 py-1 text-xs"
+                                  onClick={cancelReversal}
+                                >
                                   Back
-                                </button>
+                                </Button>
                               </div>
                             </div>
                           ) : (
-                            <div
-                              style={{ display: "flex", gap: "0.35rem" }}
-                              title={isSelfRecorded ? SELF_APPROVAL_TOOLTIP : undefined}
-                            >
-                              <button
+                            <div className="flex flex-wrap gap-2" title={isSelfRecorded ? SELF_APPROVAL_TOOLTIP : undefined}>
+                              <Button
                                 type="button"
+                                variant="danger"
+                                className="px-2.5 py-1 text-xs"
                                 disabled={isSelfRecorded}
                                 onClick={() => startReversal(payment.id, "reverse")}
                               >
                                 Reverse
-                              </button>
-                              <button
+                              </Button>
+                              <Button
                                 type="button"
+                                variant="secondary"
+                                className="px-2.5 py-1 text-xs"
                                 disabled={isSelfRecorded}
                                 onClick={() => startReversal(payment.id, "adjust")}
                               >
                                 Adjust
-                              </button>
+                              </Button>
                             </div>
                           )}
                         </td>
@@ -311,82 +380,82 @@ export function FinanceChargesPayments({ charges, payments, canManage, canApprov
                 })
               )}
             </tbody>
-          </table>
+          </TableWrap>
           {issueError && (
-            <p role="alert" style={{ color: "crimson" }}>
-              {issueError}
-            </p>
+            <div className="mt-3">
+              <ErrorMessage message={issueError} />
+            </div>
           )}
           {reversalError && (
-            <p role="alert" style={{ color: "crimson" }}>
-              {reversalError}
-            </p>
+            <div className="mt-3">
+              <ErrorMessage message={reversalError} />
+            </div>
           )}
 
           {canManage && (
-            <>
-              <h2 style={{ marginTop: "2rem" }}>Record payment</h2>
-              <form
-                action={recordPaymentFormAction}
-                style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: 420 }}
-              >
-                <label>
-                  Student ID
-                  <input type="text" name="studentId" required style={{ display: "block", width: "100%" }} />
-                </label>
-                <label>
-                  Charge ID (optional)
-                  <input type="text" name="chargeId" style={{ display: "block", width: "100%" }} />
-                </label>
-                <label>
-                  Amount (cents)
-                  <input
-                    type="number"
-                    name="amountCents"
-                    min={0}
+            <div className="mt-6 border-t border-border pt-5">
+              <h2 className="text-base font-semibold text-ink">Record payment</h2>
+              <form action={recordPaymentFormAction} className="mt-3 flex max-w-md flex-col gap-3">
+                <Field label="Student">
+                  <select
+                    name="studentId"
                     required
-                    style={{ display: "block", width: "100%" }}
-                  />
-                </label>
-                <label>
-                  Currency (optional — defaults to academy currency)
-                  <input type="text" name="currency" maxLength={3} style={{ display: "block", width: "100%" }} />
-                </label>
-                <label>
-                  Method
-                  <select name="method" style={{ display: "block", width: "100%" }}>
+                    value={paymentStudentId}
+                    onChange={(event) => setPaymentStudentId(event.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="" disabled>
+                      {studentOptions.length === 0 ? "No active students yet" : "Select a student…"}
+                    </option>
+                    {studentOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.fullName} ({option.studentNumber})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Charge (optional — leave blank if this payment isn't against a specific charge)">
+                  <select name="chargeId" defaultValue="" className={inputClass}>
+                    <option value="">No specific charge</option>
+                    {payableCharges.map((charge) => (
+                      <option key={charge.id} value={charge.id}>
+                        {studentLabel(charge.studentId)} — {charge.description} —{" "}
+                        {formatMoney(charge.amountCents, charge.currency)} ({charge.status.replace("_", " ")})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Amount (cents)">
+                  <input type="number" name="amountCents" min={0} required className={inputClass} />
+                </Field>
+                <Field label="Currency (optional — defaults to academy currency)">
+                  <input type="text" name="currency" maxLength={3} className={inputClass} />
+                </Field>
+                <Field label="Method">
+                  <select name="method" className={inputClass}>
                     <option value="cash">Cash</option>
                     <option value="mobile_money">Mobile money</option>
                     <option value="bank_transfer">Bank transfer</option>
                   </select>
-                </label>
-                <label>
-                  Reference (optional)
-                  <input type="text" name="reference" style={{ display: "block", width: "100%" }} />
-                </label>
-                <label>
-                  Received at
-                  <input
-                    type="datetime-local"
-                    name="receivedAt"
-                    required
-                    style={{ display: "block", width: "100%" }}
-                  />
-                </label>
-                {recordPaymentState.error && (
-                  <p role="alert" style={{ color: "crimson" }}>
-                    {recordPaymentState.error.message}
-                  </p>
+                </Field>
+                <Field label="Reference (optional)">
+                  <input type="text" name="reference" className={inputClass} />
+                </Field>
+                <Field label="Received at">
+                  <input type="datetime-local" name="receivedAt" required className={inputClass} />
+                </Field>
+                {recordPaymentState.error && <ErrorMessage message={recordPaymentState.error.message} />}
+                {recordPaymentState.ok && (
+                  <p className="text-sm font-medium text-success">Payment recorded (pending approval).</p>
                 )}
-                {recordPaymentState.ok && <p style={{ color: "green" }}>Payment recorded (pending approval).</p>}
-                <button type="submit" disabled={recordingPayment}>
+                <Button type="submit" disabled={recordingPayment} className="self-start">
                   {recordingPayment ? "Recording..." : "Record payment"}
-                </button>
+                </Button>
               </form>
-            </>
+            </div>
           )}
         </>
       )}
-    </section>
+    </Section>
   );
 }

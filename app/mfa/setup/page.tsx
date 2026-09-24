@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { resolveMfaFlowUserId } from "@/lib/auth/mfa-flow-identity";
 import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
+import { getPostLoginRedirectPath } from "@/lib/auth/auth-context";
 import { enrollMfa } from "@/lib/auth/mfa-actions";
 import { AuthCard } from "@/lib/ui/auth-components";
 import { MfaSetupForm } from "./mfa-setup-form";
@@ -20,7 +21,7 @@ export default async function MfaSetupPage() {
   // Re-enrollment isn't in scope for Item 13 — a user who already
   // completed enrollment is sent away rather than allowed to overwrite it.
   if (await hasVerifiedMfaCredential(userId)) {
-    redirect("/");
+    redirect(await getPostLoginRedirectPath(userId));
   }
 
   const { secretBase32, qrCodeDataUrl } = await enrollMfa();

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { getAuthContext, getCurrentSessionId } from "@/lib/auth/auth-context";
 import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
+import { getPendingEmailChange } from "@/lib/auth/email-change";
 import { listMySessions, revokeAllOtherSessions, revokeSession } from "@/lib/auth/session-actions";
 import { AuthLink, Card, Pill, SecondaryButton } from "@/lib/ui/auth-components";
 import { color, spacing } from "@/lib/ui/theme";
@@ -25,11 +26,12 @@ export default async function AccountSecurityPage() {
     redirect("/login");
   }
 
-  const [sessions, currentSessionId, mfaEnabled, [user]] = await Promise.all([
+  const [sessions, currentSessionId, mfaEnabled, [user], pendingEmailChange] = await Promise.all([
     listMySessions(),
     getCurrentSessionId(),
     context.platformRole === "platform_owner" ? hasVerifiedMfaCredential(context.userId) : Promise.resolve(null),
     db.select({ email: users.email }).from(users).where(eq(users.id, context.userId)).limit(1),
+    getPendingEmailChange(context.userId),
   ]);
 
   return (
@@ -47,7 +49,10 @@ export default async function AccountSecurityPage() {
           <p style={{ margin: 0, marginBottom: spacing.md, fontSize: "0.85rem", color: color.textMuted }}>
             Update your email or password. Leave either blank to keep it as-is.
           </p>
-          <AccountForms currentEmail={user?.email ?? ""} />
+          <AccountForms
+            currentEmail={user?.email ?? ""}
+            pendingNewEmail={pendingEmailChange?.newEmail ?? null}
+          />
         </Card>
 
         <Card>

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   assignTrainerToBatch as assignTrainerToBatchForActor,
+  deleteBatchEnrollment as deleteBatchEnrollmentForActor,
   enrollStudentInBatch as enrollStudentInBatchForActor,
   unassignTrainerFromBatch as unassignTrainerFromBatchForActor,
   updateStudentEnrollment as updateStudentEnrollmentForActor,
@@ -107,6 +108,29 @@ export async function withdrawStudentFromBatch(
   const result = await withdrawStudentFromBatchForActor(context, enrollmentId);
   if (!result.ok) {
     return { ok: false, error: result.error };
+  }
+
+  revalidatePath(`/academy/batches/${batchId}`);
+  return { ok: true };
+}
+
+/** Plain-callable, for the roster panel's "Delete" row action — permanent,
+ * distinct from the withdraw form action above. See
+ * lib/academies/batch-assignments.ts's deleteBatchEnrollment doc comment
+ * for the eligibility rule (no exam results/certificates for this
+ * student+batch pair). */
+export async function deleteBatchEnrollment(
+  enrollmentId: string,
+  batchId: string,
+): Promise<{ ok: true } | { ok: false; error: BatchAssignmentActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await deleteBatchEnrollmentForActor(context, enrollmentId);
+  if (!result.ok) {
+    return result;
   }
 
   revalidatePath(`/academy/batches/${batchId}`);

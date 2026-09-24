@@ -8,9 +8,14 @@ import type {
 } from "@/lib/academies/finance-reports";
 import { exportFinanceReportAction } from "@/lib/export/export-data-actions";
 import { downloadExportContent } from "@/lib/export/download-file";
+import { Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
 
 interface Props {
   initialReport: FinanceReportsData;
+}
+
+function formatMoney(amountCents: number, currency: string): string {
+  return `${currency} ${(amountCents / 100).toFixed(2)}`;
 }
 
 /**
@@ -27,6 +32,12 @@ interface Props {
  * *current* filter state (not just the initial one) to
  * `exportFinanceReportAction`, so exporting after adjusting filters exports
  * exactly what's on screen, never the unfiltered report.
+ *
+ * UI-quality pass (this wave): restyled onto the shared Tailwind shell
+ * (Section/Field/Button) — no business logic changed, same filter state,
+ * same export call. Deliberately owns its own top-level `Section`/spacing
+ * rather than assuming a parent wrapper, since this component is embedded
+ * two different ways (its own page, and a tab inside /academy/reports).
  */
 export function FinanceReportsView({ initialReport }: Props) {
   const [report, setReport] = useState(initialReport);
@@ -97,75 +108,66 @@ export function FinanceReportsView({ initialReport }: Props) {
     !report.studentPayments.visible && !report.income.visible && !report.expenses.visible;
 
   return (
-    <div>
-      <fieldset
-        disabled={isPending}
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "0.75rem",
-          alignItems: "flex-end",
-          border: "1px solid #ddd",
-          borderRadius: 8,
-          padding: "1rem",
-          marginTop: "1rem",
-        }}
-      >
-        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-          From
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-          To
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-          Branch ID
-          <input
-            type="text"
-            value={branchId}
-            onChange={(e) => setBranchId(e.target.value)}
-            placeholder="(optional)"
-          />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-          Status
-          <input
-            type="text"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            placeholder="e.g. approved, posted"
-          />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-          Method
-          <select value={method} onChange={(e) => setMethod(e.target.value)}>
-            <option value="">(any)</option>
-            <option value="cash">Cash</option>
-            <option value="mobile_money">Mobile money</option>
-            <option value="bank_transfer">Bank transfer</option>
-          </select>
-        </label>
-        <button type="button" onClick={applyFilters}>
-          Apply filters
-        </button>
-        <button type="button" onClick={resetFilters}>
-          Reset
-        </button>
-        <button type="button" onClick={handleExport} disabled={isExporting}>
-          {isExporting ? "Exporting..." : "Export CSV"}
-        </button>
-      </fieldset>
+    <div className="flex flex-col gap-6">
+      <Section>
+        <fieldset disabled={isPending} className="flex flex-wrap items-end gap-3">
+          <Field label="From" className="min-w-[150px]">
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className={inputClass} />
+          </Field>
+          <Field label="To" className="min-w-[150px]">
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className={inputClass} />
+          </Field>
+          <Field label="Branch id" className="min-w-[180px]">
+            <input
+              type="text"
+              value={branchId}
+              onChange={(e) => setBranchId(e.target.value)}
+              placeholder="(optional)"
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Status" className="min-w-[160px]">
+            <input
+              type="text"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              placeholder="e.g. approved, posted"
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Method" className="min-w-[160px]">
+            <select value={method} onChange={(e) => setMethod(e.target.value)} className={inputClass}>
+              <option value="">(any)</option>
+              <option value="cash">Cash</option>
+              <option value="mobile_money">Mobile money</option>
+              <option value="bank_transfer">Bank transfer</option>
+            </select>
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" onClick={applyFilters}>
+              Apply filters
+            </Button>
+            <Button type="button" variant="secondary" onClick={resetFilters}>
+              Reset
+            </Button>
+            <Button type="button" onClick={handleExport} disabled={isExporting}>
+              {isExporting ? "Exporting..." : "Export CSV"}
+            </Button>
+          </div>
+        </fieldset>
+      </Section>
 
-      {error && <p style={{ color: "#b00020" }}>{error}</p>}
+      {error && <ErrorMessage message={error} />}
 
       {nothingVisible && (
-        <p style={{ color: "#666" }}>
-          Your role has no view rights on any finance section, so there is nothing to show here.
-        </p>
+        <Section>
+          <p className="text-sm text-muted">
+            Your role has no view rights on any finance section, so there is nothing to show here.
+          </p>
+        </Section>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginTop: "1rem" }}>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {report.studentPayments.visible && (
           <>
             <SummaryCard title="Outstanding charges" data={report.studentPayments.outstandingCharges} />
@@ -196,29 +198,32 @@ function SummaryCard({
   data: { count: number; totalsByCurrency: AmountByCurrency[] };
 }) {
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem" }}>
-      <h3 style={{ margin: "0 0 0.5rem" }}>{title}</h3>
-      <p style={{ margin: 0, color: "#666" }}>{data.count} record(s)</p>
+    <Section className="flex flex-col gap-2">
+      <h3 className="text-sm font-semibold text-ink">{title}</h3>
+      <p className="text-xs text-muted">
+        {data.count} record{data.count === 1 ? "" : "s"}
+      </p>
       {data.totalsByCurrency.length === 0 ? (
-        <p style={{ margin: "0.5rem 0 0" }}>No amounts in the selected period.</p>
+        <p className="text-sm text-muted">No amounts in the selected period.</p>
       ) : (
-        <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem" }}>
+        <ul className="flex flex-col gap-1">
           {data.totalsByCurrency.map((row) => (
-            <li key={row.currency}>
-              {(row.amountCents / 100).toFixed(2)} {row.currency} ({row.count})
+            <li key={row.currency} className="flex items-baseline justify-between text-sm text-ink">
+              <span className="font-semibold">{formatMoney(row.amountCents, row.currency)}</span>
+              <span className="text-xs text-muted">{row.count} record{row.count === 1 ? "" : "s"}</span>
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </Section>
   );
 }
 
 function CountCard({ title, count }: { title: string; count: number }) {
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem" }}>
-      <h3 style={{ margin: "0 0 0.5rem" }}>{title}</h3>
-      <p style={{ margin: 0, fontSize: "1.5rem" }}>{count}</p>
-    </div>
+    <Section className="flex flex-col gap-2">
+      <h3 className="text-sm font-semibold text-ink">{title}</h3>
+      <p className="text-2xl font-bold text-ink">{count}</p>
+    </Section>
   );
 }

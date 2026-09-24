@@ -1,7 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { programs } from "@/lib/db/schema";
+import { db, type DbClient } from "@/lib/db";
+import { courses, programs } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_COURSES_BATCHES_ACTION,
@@ -42,7 +42,7 @@ function canManagePrograms(role: AcademyRole, level: AcademyPermissionLevel): bo
 }
 
 export interface ProgramActionError {
-  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict";
+  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "ineligible";
   message: string;
 }
 
@@ -145,22 +145,46 @@ async function resolveProgramAccess(
   };
 }
 
+export interface ProgramDeletionEligibilitySummary {
+  eligible: boolean;
+  reasons: string[];
+}
+
 export type ListProgramsResult =
-  | { ok: true; programs: ProgramRecord[]; canManage: boolean }
+  | { ok: true; programs: (ProgramRecord & { deletionEligibility: ProgramDeletionEligibilitySummary })[]; canManage: boolean }
   | { ok: false; error: ProgramActionError };
 
+/** Bulk course-count-by-program, for the programs list's Delete button —
+ * one grouped query for the whole visible list rather than N+1. */
+async function countCoursesByProgramIds(programIds: string[]): Promise<Map<string, number>> {
+  if (programIds.length === 0) return new Map();
+  const rows = await db
+    .select({ programId: courses.programId, count: sql<number>`count(*)::int` })
+    .from(courses)
+    .where(inArray(courses.programId, programIds))
+    .groupBy(courses.programId);
+  return new Map(rows.map((row) => [row.programId, row.count]));
+}
+
 /** Academy-wide read for every role holding any level on this action — no
- * branch scoping exists for programs (see module comment). */
+ * branch scoping exists for programs (see module comment). Delete-
+ * eligibility is computed server-side here (never in the UI, per this
+ * task's own "don't duplicate eligibility logic in the client" rule) and
+ * handed down as plain data for the table's Delete button to render. */
 export async function listPrograms(actorContext: AuthContext): Promise<ListProgramsResult> {
   const resolved = await resolveProgramAccess(actorContext);
   if (!resolved.ok) return resolved;
   const { academyId, membershipRole, permissionLevel } = resolved.access;
 
   const rows = await db.select().from(programs).where(eq(programs.academyId, academyId));
+  const courseCountByProgramId = await countCoursesByProgramIds(rows.map((row) => row.id));
 
   return {
     ok: true,
-    programs: rows.map(toRecord),
+    programs: rows.map((row) => {
+      const reasons = buildProgramDeletionReasons(courseCountByProgramId.get(row.id) ?? 0);
+      return { ...toRecord(row), deletionEligibility: { eligible: reasons.length === 0, reasons } };
+    }),
     canManage: canManagePrograms(membershipRole, permissionLevel),
   };
 }
@@ -448,4 +472,185 @@ export async function restoreProgram(
     return { ok: false, error: NOT_FOUND };
   }
   return { ok: true, program: toRecord(result) };
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * Permanent program deletion — narrow, eligibility-gated, distinct from
+ * archiveProgram
+ * ---------------------------------------------------------------------
+ * PLAN.md's "Archive & Deactivation Rules" table lists Programs under its
+ * categorical "archive/deactivate, never delete" rule — but that table
+ * describes the *normal* lifecycle path, the same one every other entity
+ * in it uses. This function draws the same narrow exception
+ * lib/academies/delete-academy.ts and lib/academies/exams.ts's deleteExam
+ * already established elsewhere in this codebase: a program that has
+ * never had a single course attached to it carries no protected history
+ * at all (courses.program_id is the program's only inbound FK — see
+ * lib/db/schema.ts), so removing the row destroys nothing PLAN.md's
+ * no-hard-delete principle actually protects. A program with even one
+ * course (active or archived) is refused outright — courses are
+ * themselves gated on their own batches/enrollments/results, so this
+ * check alone is enough to guarantee no academic or financial history is
+ * ever reachable from this deletion.
+ *
+ * Delete is gated stricter than archive: `canManagePrograms` already
+ * excludes Trainer (see this file's module comment) and Admissions
+ * Officer never reaches "full"/"manage" on this action (view-only) — so
+ * this reuses the exact same check as archive/restore, only Owner/Admin/
+ * Manager ever reach it.
+ */
+export interface ProgramDeletionEligibility {
+  programId: string;
+  programName: string;
+  eligible: boolean;
+  reasons: string[];
+  courseCount: number;
+}
+
+export type GetProgramDeletionEligibilityResult =
+  | { ok: true; eligibility: ProgramDeletionEligibility }
+  | { ok: false; error: ProgramActionError };
+
+async function countProgramCourses(executor: DbClient, programId: string): Promise<number> {
+  const [row] = await executor
+    .select({ count: sql<number>`count(*)::int` })
+    .from(courses)
+    .where(eq(courses.programId, programId));
+  return row?.count ?? 0;
+}
+
+function buildProgramDeletionReasons(courseCount: number): string[] {
+  const reasons: string[] = [];
+  if (courseCount > 0) {
+    reasons.push(`${courseCount} course${courseCount === 1 ? "" : "s"} ${courseCount === 1 ? "is" : "are"} attached to this program`);
+  }
+  return reasons;
+}
+
+/** Read-only preview for the UI's Delete button — `deleteProgram` below
+ * re-runs the identical check itself, inside the deletion transaction, as
+ * the actual authority. */
+export async function getProgramDeletionEligibility(
+  actorContext: AuthContext,
+  programId: string,
+): Promise<GetProgramDeletionEligibilityResult> {
+  const resolved = await resolveProgramAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManagePrograms(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(programId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const [program] = await db
+    .select({ id: programs.id, name: programs.name })
+    .from(programs)
+    .where(and(eq(programs.id, programId), eq(programs.academyId, academyId)))
+    .limit(1);
+  if (!program) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const courseCount = await countProgramCourses(db, program.id);
+  const reasons = buildProgramDeletionReasons(courseCount);
+
+  return {
+    ok: true,
+    eligibility: {
+      programId: program.id,
+      programName: program.name,
+      eligible: reasons.length === 0,
+      reasons,
+      courseCount,
+    },
+  };
+}
+
+export type DeleteProgramResult =
+  | { ok: true; programId: string }
+  | { ok: false; error: ProgramActionError };
+
+/**
+ * Eligibility is re-verified from scratch INSIDE this transaction, on a
+ * row locked with `for("update")` — the UI's own preview
+ * (`getProgramDeletionEligibility`, above) is only ever a display hint; a
+ * course could be created against this program between that read and this
+ * call, and this is the check that actually decides whether the delete
+ * proceeds. Audited before the row is removed, same convention as
+ * deleteAcademy/deleteExam.
+ */
+export async function deleteProgram(
+  actorContext: AuthContext,
+  programId: string,
+  confirmedName: string,
+): Promise<DeleteProgramResult> {
+  const resolved = await resolveProgramAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManagePrograms(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(programId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(programs)
+      .where(and(eq(programs.id, programId), eq(programs.academyId, academyId)))
+      .for("update");
+    if (!existing) {
+      return { ok: false, error: NOT_FOUND };
+    }
+
+    // Re-checked against the row's CURRENT name, under the same lock —
+    // never trusts a name the caller fetched earlier via the eligibility
+    // preview, same convention as lib/academies/delete-academy.ts's
+    // deleteAcademy.
+    if (confirmedName !== existing.name) {
+      return {
+        ok: false,
+        error: { code: "validation", message: "Type the exact program name to confirm permanent deletion." },
+      };
+    }
+
+    const courseCount = await countProgramCourses(tx, existing.id);
+    const reasons = buildProgramDeletionReasons(courseCount);
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "ineligible",
+          message: `This program cannot be permanently deleted because ${reasons.join(", ")}. Archive it instead.`,
+        },
+      };
+    }
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "deleteProgram",
+        entityType: "program",
+        entityId: programId,
+        before: toRecord(existing),
+      },
+      tx,
+    );
+
+    await tx.delete(programs).where(eq(programs.id, programId));
+
+    return { ok: true, programId };
+  });
 }

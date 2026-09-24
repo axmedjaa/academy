@@ -39,6 +39,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# local database backups (contain real credentials/PII, never commit)
+/backups/
+
 # vercel
 .vercel
 

@@ -7,8 +7,19 @@ import {
   issueCertificateAction,
   verifyCertificateInternalAction,
 } from "@/lib/academies/certificates-actions";
-import { Card, EmptyState, ErrorMessage, PrimaryButton, SecondaryButton, StatusBadge } from "@/app/academy/_shell/ui";
-import { color, spacing } from "@/lib/ui/theme";
+import {
+  Badge,
+  Button,
+  ErrorMessage,
+  Field,
+  LinkButton,
+  Section,
+  TableWrap,
+  inputClass,
+  td,
+  th,
+  trHover,
+} from "@/app/academy/_shell/ui";
 
 export interface CertificateRow {
   id: string;
@@ -27,19 +38,33 @@ export interface CertificateRow {
 interface Props {
   certificates: CertificateRow[];
   canManage: boolean;
+  /** Active students / all batches for the Issue form's pickers — see
+   * page.tsx's own comment. Empty when `canManage` is false (the caller
+   * never needs them). */
+  studentOptions: { id: string; fullName: string; studentNumber: string }[];
+  batchOptions: { id: string; name: string; code: string }[];
 }
 
 /**
- * DESIGN.md §9.7. Issue/cancel forms use plain studentId/batchId text
- * inputs rather than a search/autocomplete widget — same documented
- * precedent as app/academy/id-cards/id-card-lookup.tsx ("no student
- * search/autocomplete... this item doesn't depend on it being built").
- * Cancel's reveal-then-confirm pattern mirrors
+ * DESIGN.md §9.7. Issue's Student/Batch fields are `<select>` pickers
+ * (this wave) rather than free-text id inputs — pasting the studentNumber/
+ * batch code shown everywhere else in the app into a raw "Student id" field
+ * used to always fail with "Student not found." (lib/academies/certificates.ts's
+ * issueCertificate now accepts either form, but a picker avoids the typo/
+ * lookup problem entirely). Cancel's reveal-then-confirm pattern mirrors
  * app/academy/results/results-list.tsx's Reject flow exactly (same
  * "require a reason, confirmation before the destructive/terminal action"
- * shape DESIGN.md §3 Modal spec calls for).
+ * shape DESIGN.md §3 Modal spec calls for) — not `ConfirmButton`, since
+ * that component's dialog has no slot for a free-text reason field.
+ *
+ * Cancellation, never deletion: PLAN.md is explicit that certificates are
+ * never hard-deleted (public verification must stay permanently
+ * resolvable, even for a cancelled one) — `cancelCertificate` is the one
+ * and only removal path, "Restorable: no" in the Archive & Deactivation
+ * Rules table, so there is deliberately no Delete action anywhere on this
+ * page.
  */
-export function CertificatesList({ certificates, canManage }: Props) {
+export function CertificatesList({ certificates, canManage, studentOptions, batchOptions }: Props) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
@@ -52,7 +77,7 @@ export function CertificatesList({ certificates, canManage }: Props) {
     setError(null);
     setIssueSuccess(null);
     startTransition(async () => {
-      const result = await issueCertificateAction(issueStudentId.trim(), issueBatchId.trim());
+      const result = await issueCertificateAction(issueStudentId, issueBatchId);
       if (!result.ok) {
         setError(result.error.message);
         return;
@@ -77,129 +102,161 @@ export function CertificatesList({ certificates, canManage }: Props) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: spacing.xl }}>
+    <div className="flex flex-col gap-6">
       {error && <ErrorMessage message={error} />}
 
-      <Card>
-        <h2 style={{ marginTop: 0, fontSize: "1.05rem" }}>All certificates</h2>
-        {certificates.length === 0 ? (
-          <EmptyState message="No certificates issued yet." />
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: `1px solid ${color.border}` }}>
-                  <th style={{ padding: "0.4rem 0" }}>Student</th>
-                  <th style={{ padding: "0.4rem 0" }}>Program</th>
-                  <th style={{ padding: "0.4rem 0" }}>Batch</th>
-                  <th style={{ padding: "0.4rem 0" }}>Code</th>
-                  <th style={{ padding: "0.4rem 0" }}>Issued</th>
-                  <th style={{ padding: "0.4rem 0" }}>Status</th>
-                  {canManage && <th style={{ padding: "0.4rem 0" }}>Actions</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {certificates.map((cert) => (
-                  <tr key={cert.id} style={{ borderBottom: `1px solid ${color.border}` }}>
-                    <td style={{ padding: "0.4rem 0" }}>{cert.studentName}</td>
-                    <td style={{ padding: "0.4rem 0" }}>{cert.programName}</td>
-                    <td style={{ padding: "0.4rem 0" }}>{cert.batchName}</td>
-                    <td style={{ padding: "0.4rem 0", fontFamily: "monospace", fontSize: "0.8rem" }}>
-                      {cert.certificateCode}
-                    </td>
-                    <td style={{ padding: "0.4rem 0" }}>{cert.issuedAt.toLocaleDateString()}</td>
-                    <td style={{ padding: "0.4rem 0" }}>
-                      <StatusBadge
-                        label={cert.status}
-                        tone={cert.status === "issued" ? "green" : "slate"}
-                      />
-                    </td>
-                    {canManage && (
-                      <td style={{ padding: "0.4rem 0" }}>
-                        {cert.status === "issued" &&
-                          (cancellingId === cert.id ? (
-                            <div style={{ display: "flex", gap: spacing.xs, alignItems: "center" }}>
-                              <input
-                                type="text"
-                                placeholder="Cancellation reason"
-                                value={cancelReason}
-                                onChange={(e) => setCancelReason(e.target.value)}
-                                style={{ width: "12rem" }}
-                              />
-                              <PrimaryButton
-                                type="button"
-                                disabled={isPending || cancelReason.trim() === ""}
-                                onClick={() => handleCancel(cert.id)}
-                              >
-                                Confirm cancel
-                              </PrimaryButton>
-                              <SecondaryButton
-                                type="button"
-                                onClick={() => {
-                                  setCancellingId(null);
-                                  setCancelReason("");
-                                }}
-                              >
-                                Back
-                              </SecondaryButton>
-                            </div>
-                          ) : (
-                            <SecondaryButton type="button" disabled={isPending} onClick={() => setCancellingId(cert.id)}>
-                              Cancel
-                            </SecondaryButton>
-                          ))}
-                        {cert.status === "cancelled" && cert.cancellationReason && (
-                          <span style={{ fontSize: "0.75rem", color: color.textMuted }}>
-                            Reason: {cert.cancellationReason}
-                          </span>
-                        )}
-                      </td>
+      <TableWrap>
+        <thead>
+          <tr>
+            <th className={th}>Student</th>
+            <th className={th}>Program</th>
+            <th className={th}>Batch</th>
+            <th className={th}>Code</th>
+            <th className={th}>Issued</th>
+            <th className={th}>Status</th>
+            <th className={th}>Certificate</th>
+            {canManage && <th className={th}>Actions</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {certificates.length === 0 ? (
+            <tr>
+              <td colSpan={canManage ? 8 : 7} className={`${td} text-center text-muted`}>
+                No certificates issued yet.
+              </td>
+            </tr>
+          ) : (
+            certificates.map((cert) => (
+              <tr key={cert.id} className={trHover}>
+                <td className={`${td} font-medium`}>{cert.studentName}</td>
+                <td className={td}>{cert.programName}</td>
+                <td className={td}>{cert.batchName}</td>
+                <td className={`${td} font-mono text-xs`}>{cert.certificateCode}</td>
+                <td className={td}>{cert.issuedAt.toLocaleDateString()}</td>
+                <td className={td}>
+                  <Badge label={cert.status} tone={cert.status === "issued" ? "green" : "slate"} />
+                </td>
+                <td className={td}>
+                  <div className="flex flex-wrap gap-2">
+                    <LinkButton href={`/academy/certificates/${cert.id}/print`} variant="secondary" className="px-2.5 py-1 text-xs">
+                      View
+                    </LinkButton>
+                    {cert.status === "issued" && (
+                      <>
+                        <LinkButton
+                          href={`/academy/certificates/${cert.id}/print?autoprint=1`}
+                          variant="secondary"
+                          className="px-2.5 py-1 text-xs"
+                        >
+                          Print
+                        </LinkButton>
+                        <a href={`/academy/certificates/${cert.id}/pdf`} download>
+                          <Button type="button" className="px-2.5 py-1 text-xs">
+                            Download PDF
+                          </Button>
+                        </a>
+                      </>
                     )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+                  </div>
+                </td>
+                {canManage && (
+                  <td className={td}>
+                    {cert.status === "issued" &&
+                      (cancellingId === cert.id ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="text"
+                            placeholder="Cancellation reason"
+                            value={cancelReason}
+                            onChange={(e) => setCancelReason(e.target.value)}
+                            className={`${inputClass} w-48 py-1.5`}
+                          />
+                          <Button
+                            type="button"
+                            variant="danger"
+                            className="px-2.5 py-1 text-xs"
+                            disabled={isPending || cancelReason.trim() === ""}
+                            onClick={() => handleCancel(cert.id)}
+                          >
+                            Confirm cancel
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="px-2.5 py-1 text-xs"
+                            onClick={() => {
+                              setCancellingId(null);
+                              setCancelReason("");
+                            }}
+                          >
+                            Back
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="danger"
+                          className="px-2.5 py-1 text-xs"
+                          disabled={isPending}
+                          onClick={() => setCancellingId(cert.id)}
+                        >
+                          Cancel
+                        </Button>
+                      ))}
+                    {cert.status === "cancelled" && cert.cancellationReason && (
+                      <span className="text-xs text-muted">Reason: {cert.cancellationReason}</span>
+                    )}
+                  </td>
+                )}
+              </tr>
+            ))
+          )}
+        </tbody>
+      </TableWrap>
 
       {canManage && (
-        <Card>
-          <h2 style={{ marginTop: 0, fontSize: "1.05rem" }}>Issue certificate</h2>
-          <p style={{ fontSize: "0.8rem", color: color.textMuted, marginTop: 0 }}>
-            Enter the student and batch id (see <Link href="/academy/students">Students</Link> and{" "}
-            <Link href="/academy/batches">Batches</Link>). Issuing is blocked unless the student has a published,
-            passing result in that batch.
+        <Section>
+          <h2 className="text-base font-semibold text-ink">Issue certificate</h2>
+          <p className="mt-1 text-sm text-muted">
+            Pick the student and batch (see <Link href="/academy/students" className="text-brand hover:underline">Students</Link>{" "}
+            and <Link href="/academy/batches" className="text-brand hover:underline">Batches</Link>). Issuing is blocked unless the
+            student has a published, passing result in that batch.
           </p>
-          <div style={{ display: "flex", gap: spacing.sm, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-              Student id
-              <input
-                type="text"
-                value={issueStudentId}
-                onChange={(e) => setIssueStudentId(e.target.value)}
-                style={{ minWidth: 280 }}
-              />
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-              Batch id
-              <input
-                type="text"
-                value={issueBatchId}
-                onChange={(e) => setIssueBatchId(e.target.value)}
-                style={{ minWidth: 280 }}
-              />
-            </label>
-            <PrimaryButton
+          <div className="mt-4 flex flex-wrap items-end gap-3">
+            <Field label="Student" className="min-w-[260px]">
+              <select value={issueStudentId} onChange={(e) => setIssueStudentId(e.target.value)} className={inputClass}>
+                <option value="" disabled>
+                  {studentOptions.length === 0 ? "No active students yet" : "Select a student…"}
+                </option>
+                {studentOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.fullName} ({option.studentNumber})
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Batch" className="min-w-[260px]">
+              <select value={issueBatchId} onChange={(e) => setIssueBatchId(e.target.value)} className={inputClass}>
+                <option value="" disabled>
+                  {batchOptions.length === 0 ? "No batches yet" : "Select a batch…"}
+                </option>
+                {batchOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.name} ({option.code})
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Button
               type="button"
-              disabled={isPending || issueStudentId.trim() === "" || issueBatchId.trim() === ""}
+              disabled={isPending || issueStudentId === "" || issueBatchId === ""}
               onClick={handleIssue}
             >
               {isPending ? "Working..." : "Issue certificate"}
-            </PrimaryButton>
+            </Button>
           </div>
-          {issueSuccess && <p style={{ color: color.statusGreen, fontSize: "0.85rem" }}>{issueSuccess}</p>}
-        </Card>
+          {issueSuccess && <p className="mt-2 text-sm font-medium text-success">{issueSuccess}</p>}
+        </Section>
       )}
 
       <InternalVerificationLookup />
@@ -235,45 +292,50 @@ function InternalVerificationLookup() {
   }
 
   return (
-    <Card>
-      <h2 style={{ marginTop: 0, fontSize: "1.05rem" }}>Verify a certificate</h2>
-      <p style={{ fontSize: "0.8rem", color: color.textMuted, marginTop: 0 }}>
-        Look up any certificate by its printed code — identical to the public verification page.
-      </p>
-      <div style={{ display: "flex", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap" }}>
-        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-          Certificate code
+    <Section>
+      <h2 className="text-base font-semibold text-ink">Verify a certificate</h2>
+      <p className="mt-1 text-sm text-muted">Look up any certificate by its printed code — identical to the public verification page.</p>
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <Field label="Certificate code" className="min-w-[260px]">
           <input
             type="text"
             value={code}
             onChange={(e) => setCode(e.target.value)}
             placeholder="AB3D-7HKL-9MNP-Q2ST"
-            style={{ minWidth: 260 }}
+            className={inputClass}
           />
-        </label>
-        <PrimaryButton type="button" disabled={isPending || code.trim() === ""} onClick={handleLookup}>
+        </Field>
+        <Button type="button" variant="secondary" disabled={isPending || code.trim() === ""} onClick={handleLookup}>
           {isPending ? "Looking up..." : "Verify"}
-        </PrimaryButton>
+        </Button>
       </div>
       {error && (
-        <div style={{ marginTop: spacing.sm }}>
+        <div className="mt-3">
           <ErrorMessage message={error} />
         </div>
       )}
       {result && (
-        <dl style={{ marginTop: spacing.sm, fontSize: "0.9rem" }}>
-          <dt style={{ color: color.textMuted, fontSize: "0.75rem" }}>Student</dt>
-          <dd style={{ margin: "0 0 0.5rem" }}>{result.studentName}</dd>
-          <dt style={{ color: color.textMuted, fontSize: "0.75rem" }}>Program</dt>
-          <dd style={{ margin: "0 0 0.5rem" }}>{result.programName}</dd>
-          <dt style={{ color: color.textMuted, fontSize: "0.75rem" }}>Issued</dt>
-          <dd style={{ margin: "0 0 0.5rem" }}>{result.issuedAt.toLocaleDateString()}</dd>
-          <dt style={{ color: color.textMuted, fontSize: "0.75rem" }}>Status</dt>
-          <dd style={{ margin: 0 }}>
-            <StatusBadge label={result.status} tone={result.status === "valid" ? "green" : "slate"} />
-          </dd>
+        <dl className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="text-xs text-muted">Student</dt>
+            <dd className="text-ink">{result.studentName}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted">Program</dt>
+            <dd className="text-ink">{result.programName}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted">Issued</dt>
+            <dd className="text-ink">{result.issuedAt.toLocaleDateString()}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted">Status</dt>
+            <dd>
+              <Badge label={result.status} tone={result.status === "valid" ? "green" : "slate"} />
+            </dd>
+          </div>
         </dl>
       )}
-    </Card>
+    </Section>
   );
 }

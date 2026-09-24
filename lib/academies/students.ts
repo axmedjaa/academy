@@ -1,7 +1,19 @@
-import { and, count, desc, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { branches, staffBranchAssignments, staffProfiles, students, studentDocuments } from "@/lib/db/schema";
+import {
+  batchEnrollments,
+  branches,
+  certificates,
+  examResults,
+  staffBranchAssignments,
+  staffProfiles,
+  studentCharges,
+  studentDocuments,
+  studentIdCards,
+  studentPayments,
+  students,
+} from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_STUDENTS_ACTION,
@@ -68,8 +80,18 @@ function canViewStudents(level: AcademyPermissionLevel): boolean {
   return level !== "none";
 }
 
+/** Stricter than `canManageStudents`/archive: Admissions Officer holds
+ * "manage" on this action for their own assigned branch (see this file's
+ * module comment), but permanent deletion is deliberately narrower than
+ * archive — only Owner/Admin/Manager (the three academy-wide roles) may
+ * ever delete a student, matching the same restriction already applied to
+ * Programs/Courses/Batches. */
+function canDeleteStudent(role: AcademyRole, level: AcademyPermissionLevel): boolean {
+  return canManageStudents(level) && !isBranchLimited(role);
+}
+
 export interface StudentActionError {
-  code: "forbidden" | "validation" | "blocked" | "not_found";
+  code: "forbidden" | "validation" | "blocked" | "not_found" | "ineligible";
   message: string;
 }
 
@@ -303,8 +325,13 @@ export interface StudentSearchPagination {
   pageSize?: number;
 }
 
+export interface StudentDeletionEligibilitySummary {
+  eligible: boolean;
+  reasons: string[];
+}
+
 export interface StudentSearchResult {
-  rows: StudentRecord[];
+  rows: (StudentRecord & { deletionEligibility: StudentDeletionEligibilitySummary })[];
   page: number;
   pageSize: number;
   totalCount: number;
@@ -322,6 +349,11 @@ export type SearchStudentsResult =
        * Never used for authorization itself — every mutation re-derives
        * and re-checks this server-side regardless of what the UI shows. */
       membershipRole: AcademyRole;
+      /** Narrower than `canManage` — see `canDeleteStudent`'s own comment.
+       * The UI renders the Delete action only when this is true (never a
+       * disabled Delete for a role that can never reach it at all, per
+       * DESIGN.md §"Rule for building any screen"). */
+      canDelete: boolean;
     }
   | { ok: false; error: StudentActionError };
 
@@ -401,6 +433,7 @@ export async function searchStudents(
       permissionLevel,
       canManage: canManageStudents(permissionLevel),
       membershipRole,
+      canDelete: canDeleteStudent(membershipRole, permissionLevel),
     };
   }
 
@@ -434,12 +467,30 @@ export async function searchStudents(
     db.select({ value: count() }).from(students).where(where),
   ]);
 
+  const countsByStudentId = await countStudentDependentsBulk(rows.map((row) => row.id));
+
   return {
     ok: true,
-    data: { rows: rows.map(toRecord), page, pageSize, totalCount: totalRows[0]?.value ?? 0 },
+    data: {
+      rows: rows.map((row) => {
+        const counts = countsByStudentId.get(row.id) ?? {
+          enrollmentCount: 0,
+          examResultCount: 0,
+          chargeCount: 0,
+          paymentCount: 0,
+          certificateCount: 0,
+        };
+        const reasons = buildStudentDeletionReasons(counts);
+        return { ...toRecord(row), deletionEligibility: { eligible: reasons.length === 0, reasons } };
+      }),
+      page,
+      pageSize,
+      totalCount: totalRows[0]?.value ?? 0,
+    },
     permissionLevel,
     canManage: canManageStudents(permissionLevel),
     membershipRole,
+    canDelete: canDeleteStudent(membershipRole, permissionLevel),
   };
 }
 
@@ -772,4 +823,258 @@ export async function getAdmissionsView(
     canManage: canManageStudents(permissionLevel),
     membershipRole,
   };
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * Permanent student deletion — narrow, eligibility-gated, distinct from
+ * the archive/restore status toggle
+ * ---------------------------------------------------------------------
+ * Direct inbound FKs to `students` (lib/db/schema.ts): studentDocuments,
+ * studentIdCards, batchEnrollments, examResults, studentCharges,
+ * studentPayments, certificates. The last five are protected — PLAN.md's
+ * no-hard-delete principle covers enrollment history, exam results, and
+ * every financial/certificate record explicitly, so any row in any of
+ * them (regardless of status — a withdrawn enrollment or a cancelled
+ * certificate is still a real historical fact) blocks deletion outright.
+ *
+ * studentDocuments/studentIdCards are treated as safely disposable — they
+ * carry no historical value beyond the student's own existence (same
+ * judgment lib/academies/delete-academy.ts's own disposable-data list
+ * already made for these exact two tables at the whole-academy scale).
+ * They are deleted explicitly, by name, inside the same transaction —
+ * never a blind cascade.
+ */
+export interface StudentDeletionEligibility {
+  studentId: string;
+  studentName: string;
+  eligible: boolean;
+  reasons: string[];
+  enrollmentCount: number;
+  examResultCount: number;
+  chargeCount: number;
+  paymentCount: number;
+  certificateCount: number;
+}
+
+export type GetStudentDeletionEligibilityResult =
+  | { ok: true; eligibility: StudentDeletionEligibility }
+  | { ok: false; error: StudentActionError };
+
+type StudentDependentCounts = {
+  enrollmentCount: number;
+  examResultCount: number;
+  chargeCount: number;
+  paymentCount: number;
+  certificateCount: number;
+};
+
+/** Bulk per-student dependent counts, for the students list's Delete
+ * button — five grouped queries for the whole visible page rather than
+ * N+1 (bounded by page size, never the whole academy). */
+async function countStudentDependentsBulk(studentIds: string[]): Promise<Map<string, StudentDependentCounts>> {
+  if (studentIds.length === 0) return new Map();
+  const [enrollmentRows, examResultRows, chargeRows, paymentRows, certificateRows] = await Promise.all([
+    db.select({ studentId: batchEnrollments.studentId, count: sql<number>`count(*)::int` }).from(batchEnrollments).where(inArray(batchEnrollments.studentId, studentIds)).groupBy(batchEnrollments.studentId),
+    db.select({ studentId: examResults.studentId, count: sql<number>`count(*)::int` }).from(examResults).where(inArray(examResults.studentId, studentIds)).groupBy(examResults.studentId),
+    db.select({ studentId: studentCharges.studentId, count: sql<number>`count(*)::int` }).from(studentCharges).where(inArray(studentCharges.studentId, studentIds)).groupBy(studentCharges.studentId),
+    db.select({ studentId: studentPayments.studentId, count: sql<number>`count(*)::int` }).from(studentPayments).where(inArray(studentPayments.studentId, studentIds)).groupBy(studentPayments.studentId),
+    db.select({ studentId: certificates.studentId, count: sql<number>`count(*)::int` }).from(certificates).where(inArray(certificates.studentId, studentIds)).groupBy(certificates.studentId),
+  ]);
+  const enrollmentByStudent = new Map(enrollmentRows.map((r) => [r.studentId, r.count]));
+  const examResultByStudent = new Map(examResultRows.map((r) => [r.studentId, r.count]));
+  const chargeByStudent = new Map(chargeRows.map((r) => [r.studentId, r.count]));
+  const paymentByStudent = new Map(paymentRows.map((r) => [r.studentId, r.count]));
+  const certificateByStudent = new Map(certificateRows.map((r) => [r.studentId, r.count]));
+
+  const result = new Map<string, StudentDependentCounts>();
+  for (const studentId of studentIds) {
+    result.set(studentId, {
+      enrollmentCount: enrollmentByStudent.get(studentId) ?? 0,
+      examResultCount: examResultByStudent.get(studentId) ?? 0,
+      chargeCount: chargeByStudent.get(studentId) ?? 0,
+      paymentCount: paymentByStudent.get(studentId) ?? 0,
+      certificateCount: certificateByStudent.get(studentId) ?? 0,
+    });
+  }
+  return result;
+}
+
+async function countStudentDependents(
+  executor: DbClient,
+  studentId: string,
+): Promise<StudentDependentCounts> {
+  const [[enrollmentRow], [examResultRow], [chargeRow], [paymentRow], [certificateRow]] = await Promise.all([
+    executor.select({ count: sql<number>`count(*)::int` }).from(batchEnrollments).where(eq(batchEnrollments.studentId, studentId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(examResults).where(eq(examResults.studentId, studentId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(studentCharges).where(eq(studentCharges.studentId, studentId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(studentPayments).where(eq(studentPayments.studentId, studentId)),
+    executor.select({ count: sql<number>`count(*)::int` }).from(certificates).where(eq(certificates.studentId, studentId)),
+  ]);
+  return {
+    enrollmentCount: enrollmentRow?.count ?? 0,
+    examResultCount: examResultRow?.count ?? 0,
+    chargeCount: chargeRow?.count ?? 0,
+    paymentCount: paymentRow?.count ?? 0,
+    certificateCount: certificateRow?.count ?? 0,
+  };
+}
+
+function buildStudentDeletionReasons(counts: {
+  enrollmentCount: number;
+  examResultCount: number;
+  chargeCount: number;
+  paymentCount: number;
+  certificateCount: number;
+}): string[] {
+  const reasons: string[] = [];
+  if (counts.enrollmentCount > 0) {
+    reasons.push(`${counts.enrollmentCount} batch enrollment${counts.enrollmentCount === 1 ? "" : "s"}`);
+  }
+  if (counts.examResultCount > 0) {
+    reasons.push(`${counts.examResultCount} exam result${counts.examResultCount === 1 ? "" : "s"}`);
+  }
+  if (counts.chargeCount > 0) {
+    reasons.push(`${counts.chargeCount} charge${counts.chargeCount === 1 ? "" : "s"}`);
+  }
+  if (counts.paymentCount > 0) {
+    reasons.push(`${counts.paymentCount} payment${counts.paymentCount === 1 ? "" : "s"}`);
+  }
+  if (counts.certificateCount > 0) {
+    reasons.push(`${counts.certificateCount} certificate${counts.certificateCount === 1 ? "" : "s"}`);
+  }
+  return reasons;
+}
+
+/** Read-only preview for the UI's Delete button — `deleteStudent` below
+ * re-runs the identical check itself, inside the deletion transaction, as
+ * the actual authority. */
+export async function getStudentDeletionEligibility(
+  actorContext: AuthContext,
+  studentId: string,
+): Promise<GetStudentDeletionEligibilityResult> {
+  const resolved = await resolveStudentAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canDeleteStudent(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(studentId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const [student] = await db
+    .select({ id: students.id, fullName: students.fullName })
+    .from(students)
+    .where(and(eq(students.id, studentId), eq(students.academyId, academyId)))
+    .limit(1);
+  if (!student) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const counts = await countStudentDependents(db, student.id);
+  const reasons = buildStudentDeletionReasons(counts);
+
+  return {
+    ok: true,
+    eligibility: {
+      studentId: student.id,
+      studentName: student.fullName,
+      eligible: reasons.length === 0,
+      reasons,
+      ...counts,
+    },
+  };
+}
+
+export type DeleteStudentResult =
+  | { ok: true; studentId: string }
+  | { ok: false; error: StudentActionError };
+
+/**
+ * Eligibility is re-verified from scratch INSIDE this transaction, on a
+ * row locked with `for("update")` — an enrollment or payment could be
+ * recorded between the UI's preview and this call, and this is the check
+ * that actually decides whether the delete proceeds. Audited before the
+ * row is removed, same convention as deleteAcademy/deleteExam/
+ * deleteProgram/deleteCourse/deleteBatch. No branch-scoping check is
+ * needed here (see `canDeleteStudent`'s own comment) — every role that
+ * ever reaches this point is academy-wide, never branch-limited.
+ */
+export async function deleteStudent(
+  actorContext: AuthContext,
+  studentId: string,
+  confirmedName: string,
+): Promise<DeleteStudentResult> {
+  const resolved = await resolveStudentAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canDeleteStudent(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(studentId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(students)
+      .where(and(eq(students.id, studentId), eq(students.academyId, academyId)))
+      .for("update");
+    if (!existing) {
+      return { ok: false, error: NOT_FOUND };
+    }
+
+    // Re-checked against the row's CURRENT full name, under the same
+    // lock — never trusts a name the caller fetched earlier via the
+    // eligibility preview, same convention as
+    // lib/academies/delete-academy.ts's deleteAcademy.
+    if (confirmedName !== existing.fullName) {
+      return {
+        ok: false,
+        error: { code: "validation", message: "Type the exact student name to confirm permanent deletion." },
+      };
+    }
+
+    const counts = await countStudentDependents(tx, existing.id);
+    const reasons = buildStudentDeletionReasons(counts);
+    if (reasons.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "ineligible",
+          message: `This student cannot be permanently deleted because academic or financial history exists (${reasons.join(", ")}). Archive the student instead.`,
+        },
+      };
+    }
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "deleteStudent",
+        entityType: "student",
+        entityId: studentId,
+        branchId: existing.branchId,
+        before: toRecord(existing),
+      },
+      tx,
+    );
+
+    // Disposable dependent data only — guaranteed by the eligibility check
+    // above that no enrollment/result/charge/payment/certificate exists.
+    await tx.delete(studentDocuments).where(eq(studentDocuments.studentId, studentId));
+    await tx.delete(studentIdCards).where(eq(studentIdCards.studentId, studentId));
+    await tx.delete(students).where(eq(students.id, studentId));
+
+    return { ok: true, studentId };
+  });
 }

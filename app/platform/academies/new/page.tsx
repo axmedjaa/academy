@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { listSubscriptionPlans } from "@/lib/subscriptions/plans";
 import { RegisterAcademyForm } from "./register-academy-form";
+import { PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 const REGISTER_ACADEMY_CAPABILITY = "registerAcademy";
 
@@ -23,12 +24,7 @@ export default async function RegisterAcademyPage() {
   const allowed = await hasPermission(context, REGISTER_ACADEMY_CAPABILITY);
 
   if (!allowed) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   // Item 24: registration now assigns a plan and creates the initial
@@ -43,20 +39,12 @@ export default async function RegisterAcademyPage() {
   const activePlans = plans.filter((plan) => plan.isActive);
 
   return (
-    <main
-      style={{
-        maxWidth: 720,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Register a new academy</h1>
-      <p style={{ color: "#555" }}>
-        Creates the academy profile, its owner account, a default branch, and
-        its initial subscription in one step.
-      </p>
+    <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
+      <PageHeader
+        title="Register a new academy"
+        description="Creates the academy profile, its owner account, a default branch, and its initial subscription in one step."
+      />
       <RegisterAcademyForm activePlans={activePlans} />
-    </main>
+    </div>
   );
 }

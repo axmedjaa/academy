@@ -1,11 +1,20 @@
 import { randomBytes, createHash, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { auditLogs, passwordResetTokens, sessions, users } from "@/lib/db/schema";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { createSession, validateSessionToken } from "@/lib/auth/session";
+
+// Real Resend is never called from the test suite (Security requirement) —
+// mocking this one boundary lets these tests verify recipient/subject/
+// reset-URL content without any real network call.
+vi.mock("@/lib/email/client", () => ({ sendEmail: vi.fn() }));
+
+import { sendEmail } from "@/lib/email/client";
 import { applyPasswordReset, issuePasswordResetToken } from "./password-reset";
+
+const sendEmailMock = vi.mocked(sendEmail);
 
 const OLD_PASSWORD = "old-password-123456";
 const NEW_PASSWORD = "brand-new-password-654321";
@@ -76,7 +85,35 @@ async function insertResetToken(
   return rawToken;
 }
 
+beforeEach(() => {
+  sendEmailMock.mockReset();
+  sendEmailMock.mockResolvedValue({ ok: true });
+});
+
 describe("issuePasswordResetToken", () => {
+  it("emails the reset link to the account's own address, with the expected subject", async () => {
+    await issuePasswordResetToken(activeUserEmail);
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const call = sendEmailMock.mock.calls[0][0];
+    expect(call.to).toBe(activeUserEmail);
+    expect(call.subject).toBe("Reset your password");
+    expect(call.html).toMatch(/\/reset-password\?token=/);
+    expect(call.text).toMatch(/\/reset-password\?token=/);
+  });
+
+  it("still creates the token row and returns normally when email delivery fails", async () => {
+    sendEmailMock.mockResolvedValue({ ok: false, error: "boom" });
+
+    await expect(issuePasswordResetToken(activeUserEmail)).resolves.toBeUndefined();
+
+    const rows = await db
+      .select()
+      .from(passwordResetTokens)
+      .where(eq(passwordResetTokens.userId, activeUserId));
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
   it("creates a token row for an existing active user", async () => {
     await issuePasswordResetToken(activeUserEmail);
 

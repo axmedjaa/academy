@@ -1,19 +1,23 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { updateStudent, updateStudentStatus, type StudentFormState } from "@/lib/academies/students-actions";
+import {
+  deleteStudent,
+  updateStudent,
+  updateStudentStatus,
+  type StudentFormState,
+} from "@/lib/academies/students-actions";
 import {
   updateStudentEnrollment,
   type BatchAssignmentFormState,
 } from "@/lib/academies/batch-assignments-actions";
-import type { StudentRecord } from "@/lib/academies/students";
+import type { StudentDeletionEligibilitySummary, StudentRecord } from "@/lib/academies/students";
 import type { StudentActiveCourse } from "@/lib/academies/batch-assignments";
 import {
   Badge,
   Button,
   ErrorMessage,
   Field,
-  ProtectedDeleteButton,
   Section,
   TableWrap,
   inputClass,
@@ -21,7 +25,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
-import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: StudentFormState = { ok: false };
 const initialEnrollmentState: BatchAssignmentFormState = { ok: false };
@@ -32,12 +36,16 @@ interface CourseOption {
 }
 
 interface Props {
-  students: StudentRecord[];
+  students: (StudentRecord & { deletionEligibility: StudentDeletionEligibilitySummary })[];
   /** Only "full"/"manage" callers (Owner, Admin, Manager, Admissions
    * Officer) get edit controls — "view" (Finance Officer, Trainer) is
    * read-only, per the Master Permission Matrix's Full/Full/Manage/
    * Manage/View/"View assigned" split. */
   canManage: boolean;
+  /** Narrower than `canManage` — Admissions Officer can archive students in
+   * their own assigned branch but must never see a Delete action at all
+   * (permission-absent, not disabled — see students.ts's canDeleteStudent). */
+  canDelete: boolean;
   /** False for branch-limited callers (Admissions Officer) — see
    * lib/academies/students.ts's updateStudent branchId judgment call: a
    * branch-limited caller must never submit a `branchId` field at all, so
@@ -52,7 +60,7 @@ interface Props {
   courseOptions: CourseOption[];
 }
 
-export function StudentsList({ students, canManage, showBranchField, coursesByStudent, courseOptions }: Props) {
+export function StudentsList({ students, canManage, canDelete, showBranchField, coursesByStudent, courseOptions }: Props) {
   const [updateState, updateFormAction, updating] = useActionState(updateStudent, initialState);
   const [enrollmentState, enrollmentFormAction, updatingEnrollment] = useActionState(
     updateStudentEnrollment,
@@ -146,7 +154,15 @@ export function StudentsList({ students, canManage, showBranchField, coursesBySt
                         }
                         onConfirm={() => toggleStudentStatus(student)}
                       />
-                      <ProtectedDeleteButton entityLabel="Student" />
+                      {canDelete && (
+                        <EligibilityGatedDeleteButton
+                          entityLabel="Student"
+                          entityName={student.fullName}
+                          eligible={student.deletionEligibility.eligible}
+                          reasons={student.deletionEligibility.reasons}
+                          onConfirm={() => deleteStudent(student.id, student.fullName)}
+                        />
+                      )}
                     </div>
                   </td>
                 )}

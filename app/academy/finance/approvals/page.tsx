@@ -1,8 +1,10 @@
 import { redirect } from "next/navigation";
+import { inArray } from "drizzle-orm";
 import { getAuthContext } from "@/lib/auth/auth-context";
+import { db } from "@/lib/db";
+import { students } from "@/lib/db/schema";
 import { listStudentPayments } from "@/lib/academies/student-payments";
-import { Card, EmptyState, ErrorMessage } from "@/app/academy/_shell/ui";
-import { color, spacing } from "@/lib/ui/theme";
+import { PAGE_WRAP, PageHeader, PageMessage, Section } from "@/app/academy/_shell/ui";
 import { PaymentApprovalsQueue } from "./payment-approvals-queue";
 
 /**
@@ -33,6 +35,11 @@ import { PaymentApprovalsQueue } from "./payment-approvals-queue";
  * existing `canManage` (see that file's own comment), the same shape
  * `listExpenseRecords` already exposed both of. No new read/query was
  * added.
+ *
+ * UI-quality pass (this wave): restyled onto the shared Tailwind shell
+ * (PAGE_WRAP/PageHeader/PageMessage/Section), matching /academy/finance
+ * itself — same student-name-lookup convention as that page's own comment
+ * (display-only, on already-authorized/tenant-scoped studentIds).
  */
 export default async function FinanceApprovalsPage() {
   const context = await getAuthContext();
@@ -43,29 +50,34 @@ export default async function FinanceApprovalsPage() {
   const result = await listStudentPayments(context);
   if (!result.ok) {
     return (
-      <div>
-        <h1 style={{ margin: 0, color: color.text }}>Approvals</h1>
-        <ErrorMessage message={result.error.message} />
-      </div>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
   const pending = result.payments.filter((payment) => payment.status === "pending_approval");
+  const studentIds = [...new Set(pending.map((payment) => payment.studentId))];
+  const studentRows = studentIds.length
+    ? await db
+        .select({ id: students.id, fullName: students.fullName, studentNumber: students.studentNumber })
+        .from(students)
+        .where(inArray(students.id, studentIds))
+    : [];
+  const studentLabels = Object.fromEntries(
+    studentRows.map((row) => [row.id, `${row.fullName} (${row.studentNumber})`]),
+  );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: spacing.xl }}>
-      <div>
-        <h1 style={{ margin: 0, color: color.text }}>Approvals</h1>
-        <p style={{ margin: 0, marginTop: spacing.xxs, color: color.textMuted }}>
-          Student payments awaiting a decision.
-        </p>
-      </div>
+    <div className={PAGE_WRAP}>
+      <PageHeader title="Approvals" description="Student payments awaiting a decision." />
       {result.canApprove ? (
-        <PaymentApprovalsQueue payments={pending} currentUserId={context.userId} />
+        <PaymentApprovalsQueue payments={pending} studentLabels={studentLabels} currentUserId={context.userId} />
       ) : (
-        <Card>
-          <EmptyState message="You don't have permission to approve or reject student payments." />
-        </Card>
+        <Section>
+          <p className="text-sm text-muted">You don&apos;t have permission to approve or reject student payments.</p>
+        </Section>
       )}
     </div>
   );

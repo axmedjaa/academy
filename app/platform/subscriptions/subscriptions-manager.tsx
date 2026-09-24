@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { renewSubscription } from "@/lib/subscriptions/renew-actions";
 import type { PlatformSubscriptionRow } from "@/lib/subscriptions/renew";
+import { Badge, Button, ErrorMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
 
 interface Props {
   subscriptions: PlatformSubscriptionRow[];
@@ -16,6 +17,16 @@ const STATUS_LABELS: Record<PlatformSubscriptionRow["effectiveStatus"], string> 
   suspended: "Suspended",
   expired: "Expired",
   cancelled: "Cancelled",
+};
+
+const STATUS_TONE: Record<PlatformSubscriptionRow["effectiveStatus"], "gray" | "blue" | "green" | "amber" | "red"> = {
+  draft: "gray",
+  trial: "blue",
+  active: "green",
+  past_due: "amber",
+  suspended: "red",
+  expired: "red",
+  cancelled: "gray",
 };
 
 function formatDate(date: Date | null): string {
@@ -37,20 +48,24 @@ function formatDate(date: Date | null): string {
 // listPlatformSubscriptions.
 export function SubscriptionsManager({ subscriptions }: Props) {
   if (subscriptions.length === 0) {
-    return <p>No subscriptions yet.</p>;
+    return (
+      <Section>
+        <p className="text-sm text-muted">No subscriptions yet.</p>
+      </Section>
+    );
   }
 
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+    <TableWrap>
       <thead>
         <tr>
-          <th style={{ textAlign: "left" }}>Academy</th>
-          <th style={{ textAlign: "left" }}>Plan</th>
-          <th style={{ textAlign: "left" }}>Status</th>
-          <th style={{ textAlign: "left" }}>Starts</th>
-          <th style={{ textAlign: "left" }}>Ends</th>
-          <th style={{ textAlign: "left" }}>Renewed</th>
-          <th style={{ textAlign: "left" }}>Actions</th>
+          <th className={th}>Academy</th>
+          <th className={th}>Plan</th>
+          <th className={th}>Status</th>
+          <th className={th}>Starts</th>
+          <th className={th}>Ends</th>
+          <th className={th}>Renewed</th>
+          <th className={th}>Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -58,7 +73,7 @@ export function SubscriptionsManager({ subscriptions }: Props) {
           <SubscriptionRow key={subscription.subscriptionId} subscription={subscription} />
         ))}
       </tbody>
-    </table>
+    </TableWrap>
   );
 }
 
@@ -81,47 +96,49 @@ function SubscriptionRow({ subscription }: { subscription: PlatformSubscriptionR
     });
   }
 
-  let statusBadge = STATUS_LABELS[subscription.effectiveStatus];
-  if (subscription.effectiveStatus === "past_due" && subscription.graceDaysRemaining !== null) {
-    statusBadge += ` — ${subscription.graceDaysRemaining} day${
-      subscription.graceDaysRemaining === 1 ? "" : "s"
-    } left in grace period`;
-  }
-
   return (
     <>
-      <tr>
-        <td>{subscription.academyName}</td>
-        <td>
+      <tr className={trHover}>
+        <td className={`${td} font-medium`}>{subscription.academyName}</td>
+        <td className={td}>
           {subscription.planName} ({subscription.billingPeriod})
         </td>
-        <td>
-          {statusBadge}
-          {subscription.expiringSoon && (
-            <span style={{ color: "#b45309", marginLeft: "0.5rem" }}>
-              Expiring in {subscription.expiringSoonDaysRemaining} day
-              {subscription.expiringSoonDaysRemaining === 1 ? "" : "s"}
-            </span>
-          )}
+        <td className={td}>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge label={STATUS_LABELS[subscription.effectiveStatus]} tone={STATUS_TONE[subscription.effectiveStatus]} />
+            {subscription.effectiveStatus === "past_due" && subscription.graceDaysRemaining !== null && (
+              <span className="text-xs text-warning">
+                {subscription.graceDaysRemaining} day{subscription.graceDaysRemaining === 1 ? "" : "s"} left in grace period
+              </span>
+            )}
+            {subscription.expiringSoon && (
+              <span className="text-xs text-warning">
+                Expiring in {subscription.expiringSoonDaysRemaining} day
+                {subscription.expiringSoonDaysRemaining === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
         </td>
-        <td>{formatDate(subscription.startsAt)}</td>
-        <td>{formatDate(subscription.endsAt)}</td>
-        <td>{formatDate(subscription.renewedAt)}</td>
-        <td>
-          <button
+        <td className={td}>{formatDate(subscription.startsAt)}</td>
+        <td className={td}>{formatDate(subscription.endsAt)}</td>
+        <td className={td}>{formatDate(subscription.renewedAt)}</td>
+        <td className={td}>
+          <Button
             type="button"
+            variant="secondary"
+            className="px-2.5 py-1 text-xs"
             disabled={!subscription.canRenew || isPending}
             title={subscription.renewDisabledReason ?? undefined}
             onClick={handleRenew}
           >
             {isPending ? "Renewing..." : "Renew"}
-          </button>
+          </Button>
         </td>
       </tr>
       {error && (
         <tr>
-          <td colSpan={7} role="alert" style={{ color: "crimson" }}>
-            {error}
+          <td colSpan={7} className={td}>
+            <ErrorMessage message={error} />
           </td>
         </tr>
       )}

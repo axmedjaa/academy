@@ -4,6 +4,9 @@ import { db } from "@/lib/db";
 import { passwordResetTokens, users } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { recordAudit } from "@/lib/audit";
+import { sendEmail } from "@/lib/email/client";
+import { passwordResetEmail } from "@/lib/email/templates";
 import { hashPassword } from "@/lib/auth/password";
 import { revokeAllSessionsForUser } from "@/lib/auth/session";
 
@@ -28,13 +31,15 @@ function hashResetToken(token: string): string {
  * reset link has been sent." — identical either way). A token is only
  * actually issued for an existing, active account.
  *
- * No email provider exists yet anywhere in this project (deferred to
- * Phase 5's notification infrastructure) — the reset link is logged
- * instead, as an explicit placeholder for real delivery.
+ * Delivered via lib/email (Resend) — see sendEmail's own doc comment for
+ * why RESEND_API_KEY/APP_URL are optional at boot and checked here instead.
+ * A missing/misconfigured provider or a failed send never changes what this
+ * function returns to its caller (still nothing) or what the UI shows (the
+ * same neutral confirmation) — only a safe, tokenless server log records it.
  */
 export async function issuePasswordResetToken(email: string): Promise<void> {
   const [user] = await db
-    .select({ id: users.id, status: users.status })
+    .select({ id: users.id, email: users.email, status: users.status })
     .from(users)
     .where(eq(users.email, email.toLowerCase()))
     .limit(1);
@@ -53,11 +58,25 @@ export async function issuePasswordResetToken(email: string): Promise<void> {
     expiresAt,
   });
 
-  // Placeholder for real email delivery (no lib/email exists yet).
-  logger.info("password reset link generated", {
-    userId: user.id,
-    resetLink: `/reset-password?token=${token}`,
+  await recordAudit({
+    actorUserId: user.id,
+    action: "password_reset_requested",
+    entityType: "user",
+    entityId: user.id,
   });
+
+  if (!env.APP_URL) {
+    logger.error("password reset email not sent: APP_URL is not configured", { userId: user.id });
+    return;
+  }
+
+  const resetUrl = `${env.APP_URL.replace(/\/$/, "")}/reset-password?token=${token}`;
+  const content = passwordResetEmail({ resetUrl, expiresInMinutes: TOKEN_TTL_MS / 60_000 });
+
+  const result = await sendEmail({ to: user.email, subject: content.subject, html: content.html, text: content.text });
+  if (!result.ok) {
+    logger.error("password reset email failed to send", { userId: user.id });
+  }
 }
 
 export interface ResetPasswordError {
@@ -114,6 +133,13 @@ export async function applyPasswordReset(
     .where(eq(passwordResetTokens.id, resetToken.id));
 
   await revokeAllSessionsForUser(resetToken.userId);
+
+  await recordAudit({
+    actorUserId: resetToken.userId,
+    action: "password_reset_completed",
+    entityType: "user",
+    entityId: resetToken.userId,
+  });
 
   return { ok: true };
 }

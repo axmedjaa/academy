@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { queryAuditLogs } from "@/lib/audit-query-actions";
 import type { AuditResult } from "@/lib/audit-query";
+import { Badge, Button, ErrorMessage, PAGE_WRAP, PageHeader, PageMessage, TableWrap, Toolbar, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 
 const AUDIT_LOGS_CAPABILITY = "queryAuditLogs";
 
@@ -33,12 +34,7 @@ export default async function AuditLogsPage({
   const allowed = await hasPermission(context, AUDIT_LOGS_CAPABILITY);
 
   if (!allowed) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const params = await searchParams;
@@ -71,96 +67,86 @@ export default async function AuditLogsPage({
   );
 
   return (
-    <main
-      style={{
-        maxWidth: 1100,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Audit logs</h1>
+    <div className={PAGE_WRAP}>
+      <PageHeader title="Audit logs" description="Every recorded action across the whole platform." />
 
-      <form
-        method="get"
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "0.75rem",
-          alignItems: "flex-end",
-          marginBottom: "1.5rem",
-        }}
-      >
-        <label>
-          Action
-          <input type="text" name="action" defaultValue={action} />
-        </label>
-        <label>
-          Actor role
-          <input type="text" name="actorRole" defaultValue={actorRole} />
-        </label>
-        <label>
-          Academy ID
-          <input type="text" name="academyId" defaultValue={academyId} />
-        </label>
-        <label>
-          Branch ID
-          <input type="text" name="branchId" defaultValue={branchId} />
-        </label>
-        <label>
-          Result
-          <select name="result" defaultValue={result}>
-            <option value="">Any</option>
-            <option value="success">Success</option>
-            <option value="failure">Failure</option>
-          </select>
-        </label>
-        <label>
-          From
-          <input type="date" name="createdFrom" defaultValue={createdFrom} />
-        </label>
-        <label>
-          To
-          <input type="date" name="createdTo" defaultValue={createdTo} />
-        </label>
-        <button type="submit">Filter</button>
+      <form method="get">
+        <Toolbar>
+          <label className="min-w-[140px]">
+            <span className="mb-1 block text-xs font-medium text-muted">Action</span>
+            <input type="text" name="action" defaultValue={action} className={inputClass} />
+          </label>
+          <label className="min-w-[140px]">
+            <span className="mb-1 block text-xs font-medium text-muted">Actor role</span>
+            <input type="text" name="actorRole" defaultValue={actorRole} className={inputClass} />
+          </label>
+          <label className="min-w-[140px]">
+            <span className="mb-1 block text-xs font-medium text-muted">Academy ID</span>
+            <input type="text" name="academyId" defaultValue={academyId} className={inputClass} />
+          </label>
+          <label className="min-w-[140px]">
+            <span className="mb-1 block text-xs font-medium text-muted">Branch ID</span>
+            <input type="text" name="branchId" defaultValue={branchId} className={inputClass} />
+          </label>
+          <label className="min-w-[120px]">
+            <span className="mb-1 block text-xs font-medium text-muted">Result</span>
+            <select name="result" defaultValue={result} className={inputClass}>
+              <option value="">Any</option>
+              <option value="success">Success</option>
+              <option value="failure">Failure</option>
+            </select>
+          </label>
+          <label className="min-w-[140px]">
+            <span className="mb-1 block text-xs font-medium text-muted">From</span>
+            <input type="date" name="createdFrom" defaultValue={createdFrom} className={inputClass} />
+          </label>
+          <label className="min-w-[140px]">
+            <span className="mb-1 block text-xs font-medium text-muted">To</span>
+            <input type="date" name="createdTo" defaultValue={createdTo} className={inputClass} />
+          </label>
+          <Button type="submit" variant="secondary">
+            Filter
+          </Button>
+        </Toolbar>
       </form>
 
       {!response.ok ? (
-        <p role="alert" style={{ color: "crimson" }}>
-          {response.error.message}
-        </p>
+        <ErrorMessage message={response.error.message} />
       ) : (
         <>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <TableWrap>
             <thead>
               <tr>
-                <th style={{ textAlign: "left" }}>When</th>
-                <th style={{ textAlign: "left" }}>Action</th>
-                <th style={{ textAlign: "left" }}>Actor role</th>
-                <th style={{ textAlign: "left" }}>Entity</th>
-                <th style={{ textAlign: "left" }}>Result</th>
+                <th className={th}>When</th>
+                <th className={th}>Action</th>
+                <th className={th}>Actor role</th>
+                <th className={th}>Entity</th>
+                <th className={th}>Result</th>
               </tr>
             </thead>
             <tbody>
               {response.data.rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.createdAt.toISOString()}</td>
-                  <td>{row.action}</td>
-                  <td>{row.actorRole ?? "—"}</td>
-                  <td>{row.entityType}</td>
-                  <td>{row.result}</td>
+                <tr key={row.id} className={trHover}>
+                  <td className={`${td} whitespace-nowrap`}>{row.createdAt.toISOString()}</td>
+                  <td className={td}>{row.action}</td>
+                  <td className={td}>{row.actorRole ?? "—"}</td>
+                  <td className={td}>{row.entityType}</td>
+                  <td className={td}>
+                    <Badge label={row.result} tone={row.result === "success" ? "green" : "red"} />
+                  </td>
                 </tr>
               ))}
               {response.data.rows.length === 0 && (
                 <tr>
-                  <td colSpan={5}>No audit log entries match these filters.</td>
+                  <td colSpan={5} className={`${td} text-center text-muted`}>
+                    No audit log entries match these filters.
+                  </td>
                 </tr>
               )}
             </tbody>
-          </table>
+          </TableWrap>
 
-          <p style={{ marginTop: "1rem" }}>
+          <p className="mt-4 text-sm text-muted">
             Page {response.data.page} — {response.data.totalCount} total
             {response.data.totalCount > response.data.pageSize && (
               <>
@@ -169,6 +155,7 @@ export default async function AuditLogsPage({
                 {response.data.page > 1 && (
                   <a
                     href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(response.data.page - 1) }).toString()}`}
+                    className="text-brand hover:underline"
                   >
                     Previous
                   </a>
@@ -179,6 +166,7 @@ export default async function AuditLogsPage({
                 {response.data.page * response.data.pageSize < response.data.totalCount && (
                   <a
                     href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(response.data.page + 1) }).toString()}`}
+                    className="text-brand hover:underline"
                   >
                     Next
                   </a>
@@ -189,7 +177,7 @@ export default async function AuditLogsPage({
           </p>
         </>
       )}
-    </main>
+    </div>
   );
 }
 

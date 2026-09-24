@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { listExams } from "@/lib/academies/exams";
 import { listBatches } from "@/lib/academies/batches";
 import { ExamsList } from "./exams-list";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 48: `/academy/exams` — minimal UI, logic+tests are this
@@ -24,10 +25,10 @@ export default async function AcademyExamsPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
@@ -37,28 +38,23 @@ export default async function AcademyExamsPage() {
   const batchOptions = batchesResult.ok ? batchesResult.batches : [];
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Exams</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canManage
-          ? "You can create exams and enter marks in your scope."
-          : result.canEnterMarks
-            ? "You can enter marks for exams on your assigned batches."
-            : "You can view exams in your scope."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Exams"
+        description={
+          result.canManage
+            ? "You can create exams and enter marks in your scope."
+            : result.canEnterMarks
+              ? "You can enter marks for exams on your assigned batches."
+              : "You can view exams in your scope."
+        }
+      />
       <ExamsList
         exams={result.exams}
         batches={batchOptions}
         canManage={result.canManage}
         canEnterMarks={result.canEnterMarks}
       />
-    </main>
+    </div>
   );
 }

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listNotificationsForUser } from "@/lib/notifications/list-notifications";
 import { NotificationsList } from "./notifications-list";
+import { PAGE_WRAP, PageHeader } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Phase 5, Item 59 — `/academy/notifications`. DESIGN.md §9.8: "list
@@ -41,27 +42,28 @@ export default async function AcademyNotificationsPage({
 
   const notifications = await listNotificationsForUser(context, { unreadOnly });
 
-  return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Notifications</h1>
+  const tabBase = "rounded-control px-3 py-1.5 text-sm font-medium transition-colors";
 
-      <nav style={{ marginBottom: "1.5rem", display: "flex", gap: "1rem" }}>
-        <a href="/academy/notifications" style={{ fontWeight: unreadOnly ? 400 : 700 }}>
+  return (
+    <div className={PAGE_WRAP}>
+      <PageHeader title="Notifications" />
+
+      <div className="mb-5 inline-flex gap-1 rounded-control border border-border bg-surface p-1">
+        <a
+          href="/academy/notifications"
+          className={`${tabBase} ${!unreadOnly ? "bg-brand text-white" : "text-muted hover:bg-app"}`}
+        >
           All
         </a>
-        <a href="/academy/notifications?filter=unread" style={{ fontWeight: unreadOnly ? 700 : 400 }}>
+        <a
+          href="/academy/notifications?filter=unread"
+          className={`${tabBase} ${unreadOnly ? "bg-brand text-white" : "text-muted hover:bg-app"}`}
+        >
           Unread
         </a>
-      </nav>
+      </div>
 
       <NotificationsList notifications={notifications} />
-    </main>
+    </div>
   );
 }

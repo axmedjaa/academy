@@ -1,0 +1,262 @@
+/* A4 landscape: 297mm x 210mm. On screen this renders as a centered,
+   shadowed "sheet" at that exact aspect ratio; @media print removes the
+   chrome around it and sizes the physical page to match exactly, so the
+   certificate looks the same on screen and on paper. */
+
+.page {
+  min-height: 100vh;
+  background: #f1f3f6;
+  padding: 2rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  width: 297mm;
+  max-width: 100%;
+}
+
+.sheetWrap {
+  width: 297mm;
+  max-width: 100%;
+  aspect-ratio: 297 / 210;
+  box-shadow: 0 4px 24px rgba(17, 24, 39, 0.18);
+  position: relative;
+}
+
+.sheet {
+  position: absolute;
+  inset: 0;
+  background: #fffdf8;
+  padding: 14mm;
+  display: flex;
+  flex-direction: column;
+  font-family: Georgia, "Times New Roman", serif;
+  color: #1b2a4a;
+  overflow: hidden;
+}
+
+.borderOuter {
+  position: absolute;
+  inset: 6mm;
+  border: 2px solid #1b2a4a;
+  pointer-events: none;
+}
+
+.borderInner {
+  position: absolute;
+  inset: 8.5mm;
+  border: 1px solid #2f5fe0;
+  pointer-events: none;
+}
+
+.content {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  justify-content: space-between;
+  padding: 4mm 10mm;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.logo {
+  max-height: 18mm;
+  max-width: 60mm;
+  object-fit: contain;
+  margin-bottom: 0.25rem;
+}
+
+.academyName {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #1b2a4a;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1b2a4a;
+  margin: 0.5rem 0 0;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lead {
+  font-size: 0.95rem;
+  color: #4b5563;
+}
+
+.studentName {
+  font-size: 2.1rem;
+  font-weight: 700;
+  color: #1b2a4a;
+  padding: 0 1rem 0.35rem;
+  border-bottom: 1.5px solid #2f5fe0;
+}
+
+.programLine {
+  font-size: 1.05rem;
+  color: #1b2a4a;
+  max-width: 190mm;
+}
+
+.programName {
+  font-weight: 700;
+}
+
+.batchLine {
+  font-size: 0.85rem;
+  color: #4b5563;
+}
+
+.gradeLine {
+  font-size: 0.95rem;
+  color: #1b2a4a;
+  font-weight: 600;
+}
+
+.footer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end;
+  gap: 1rem;
+  width: 100%;
+}
+
+.signatureBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  justify-self: start;
+}
+
+.signatureLine {
+  width: 50mm;
+  border-top: 1px solid #1b2a4a;
+}
+
+.signatureLabel {
+  font-size: 0.7rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.metaBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.75rem;
+  color: #4b5563;
+}
+
+.certCode {
+  font-family: "Courier New", monospace;
+  font-weight: 700;
+  color: #1b2a4a;
+}
+
+.qrBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  justify-self: end;
+}
+
+.qrImage {
+  width: 22mm;
+  height: 22mm;
+}
+
+.verifyText {
+  font-size: 0.6rem;
+  color: #6b7280;
+  max-width: 45mm;
+  word-break: break-all;
+  text-align: center;
+}
+
+.academyContact {
+  font-size: 0.65rem;
+  color: #6b7280;
+  text-align: center;
+  margin-top: 0.5rem;
+}
+
+.cancelledBanner {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-18deg);
+  font-size: 3.2rem;
+  font-weight: 800;
+  letter-spacing: 0.25em;
+  color: rgba(185, 28, 28, 0.35);
+  border: 6px solid rgba(185, 28, 28, 0.35);
+  padding: 0.25em 0.6em;
+  text-transform: uppercase;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 0;
+  }
+
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  .noPrint {
+    display: none !important;
+  }
+
+  .page {
+    min-height: 0;
+    padding: 0;
+    background: #fff;
+    gap: 0;
+  }
+
+  .sheetWrap {
+    box-shadow: none;
+    width: 297mm;
+    height: 210mm;
+    aspect-ratio: auto;
+  }
+
+  .sheet {
+    box-shadow: none;
+  }
+}

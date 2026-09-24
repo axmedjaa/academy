@@ -9,6 +9,7 @@ import {
   updateOwnEmail as updateOwnEmailForActor,
   type UpdateAccountActionError,
 } from "@/lib/auth/update-account";
+import { resendEmailChangeVerification as resendEmailChangeVerificationForActor } from "@/lib/auth/email-change";
 
 const UNAUTHENTICATED: UpdateAccountActionError = {
   code: "forbidden",
@@ -18,7 +19,7 @@ const UNAUTHENTICATED: UpdateAccountActionError = {
 export interface UpdateEmailState {
   ok: boolean;
   error?: UpdateAccountActionError;
-  email?: string;
+  emailVerificationSent?: string;
 }
 
 /** Form-bound via useActionState for /account/security's "Change email" form. */
@@ -40,7 +41,33 @@ export async function updateOwnEmail(
   }
 
   revalidatePath("/account/security");
-  return { ok: true, email: result.email };
+  return { ok: true, emailVerificationSent: result.status === "verification_sent" ? result.newEmail : undefined };
+}
+
+export interface ResendEmailChangeState {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Plain callable (no form fields to carry) bound via useTransition on the
+ * client — same convention as app/academy/certificates/certificates-list.tsx's
+ * handleIssue, rather than useActionState, since there's nothing here for a
+ * FormData/prevState pair to carry.
+ */
+export async function resendEmailChangeVerification(): Promise<ResendEmailChangeState> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED.message };
+  }
+
+  const result = await resendEmailChangeVerificationForActor(context.userId);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/account/security");
+  return { ok: true };
 }
 
 export interface ChangePasswordState {
@@ -84,7 +111,7 @@ export async function changeOwnPassword(
 export interface UpdateAccountState {
   ok: boolean;
   error?: UpdateAccountActionError;
-  email?: string;
+  emailVerificationSent?: string;
   passwordChanged?: boolean;
 }
 
@@ -124,5 +151,5 @@ export async function updateOwnAccount(
   }
 
   revalidatePath("/account/security");
-  return { ok: true, email: result.email, passwordChanged: result.passwordChanged };
+  return { ok: true, emailVerificationSent: result.emailVerificationSent, passwordChanged: result.passwordChanged };
 }

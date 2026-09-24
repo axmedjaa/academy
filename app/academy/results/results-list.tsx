@@ -15,11 +15,20 @@ import {
 } from "@/lib/academies/result-corrections-actions";
 import type { ResultRosterRow } from "@/lib/academies/results";
 import type { ResultCorrectionRecord } from "@/lib/academies/result-corrections";
+import { Badge, Button, ErrorMessage, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 
 interface Props {
   results: ResultRosterRow[];
   canSubmit: boolean;
   canApprove: boolean;
+}
+
+function statusTone(status: string): "green" | "amber" | "gray" | "blue" | "red" {
+  if (status === "published" || status === "approved") return "green";
+  if (status === "under_review" || status === "requested") return "amber";
+  if (status === "marks_entered" || status === "draft") return "blue";
+  if (status === "rejected") return "red";
+  return "gray";
 }
 
 /**
@@ -54,145 +63,170 @@ export function ResultsList({ results, canSubmit, canApprove }: Props) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
-      {error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {error}
-        </p>
+    <div className="flex flex-col gap-6">
+      {error && <ErrorMessage message={error} />}
+      {results.length === 0 && (
+        <Section>
+          <p className="text-sm text-muted">No results yet.</p>
+        </Section>
       )}
-      {results.length === 0 && <p>No results yet.</p>}
       {[...byExam.entries()].map(([examId, rows]) => {
         const hasMarksEntered = rows.some((row) => row.status === "marks_entered");
         const hasApproved = rows.some((row) => row.status === "approved");
         return (
-          <section key={examId} style={{ border: "1px solid #ddd", padding: "1rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h2 style={{ margin: 0 }}>Exam {examId}</h2>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
+          <Section key={examId}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-base font-semibold text-ink">Exam {examId}</h2>
+              <div className="flex flex-wrap gap-2">
                 {canSubmit && hasMarksEntered && (
-                  <button type="button" disabled={isPending} onClick={() => run(() => submitResults(examId))}>
+                  <Button type="button" variant="secondary" disabled={isPending} onClick={() => run(() => submitResults(examId))}>
                     Submit marks for review
-                  </button>
+                  </Button>
                 )}
                 {canApprove && hasApproved && (
-                  <button type="button" disabled={isPending} onClick={() => run(() => publishResults(examId))}>
+                  <Button type="button" disabled={isPending} onClick={() => run(() => publishResults(examId))}>
                     Publish approved results
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.75rem" }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left" }}>Student</th>
-                  <th style={{ textAlign: "left" }}>Marks</th>
-                  <th style={{ textAlign: "left" }}>Status</th>
-                  <th style={{ textAlign: "left" }}>Grade</th>
-                  {canApprove && <th />}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      {row.studentFullName} ({row.studentNumber})
-                    </td>
-                    <td>{row.marksObtained ?? "—"}</td>
-                    <td>{row.status}</td>
-                    <td>{row.gradeBandLabel ?? "—"}</td>
-                    {canApprove && (
-                      <td>
-                        {row.status === "published" && (
-                          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                            {correctingId === row.id ? (
-                              <>
-                                <input
-                                  type="number"
-                                  placeholder="Proposed marks"
-                                  value={proposedMarks}
-                                  onChange={(event) => setProposedMarks(event.target.value)}
-                                  style={{ width: "7rem" }}
-                                />
-                                <input
-                                  type="text"
-                                  placeholder="Reason"
-                                  value={correctionReason}
-                                  onChange={(event) => setCorrectionReason(event.target.value)}
-                                  style={{ width: "10rem" }}
-                                />
-                                <button
-                                  type="button"
-                                  disabled={isPending || correctionReason.trim() === "" || proposedMarks.trim() === ""}
-                                  onClick={() =>
-                                    run(async () => {
-                                      const result = await requestResultCorrection(row.id, {
-                                        reason: correctionReason,
-                                        proposedMarksObtained: Number(proposedMarks),
-                                      });
-                                      if (result.ok) {
-                                        setCorrectingId(null);
-                                        setCorrectionReason("");
-                                        setProposedMarks("");
-                                      }
-                                      return result;
-                                    })
-                                  }
-                                >
-                                  Submit correction request
-                                </button>
-                              </>
-                            ) : (
-                              <button type="button" disabled={isPending} onClick={() => setCorrectingId(row.id)}>
-                                Request correction
-                              </button>
-                            )}
-                          </div>
-                        )}
-                        {row.status === "under_review" && (
-                          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                            <button type="button" disabled={isPending} onClick={() => run(() => approveResult(row.id))}>
-                              Approve
-                            </button>
-                            {rejectingId === row.id ? (
-                              <>
-                                <input
-                                  type="text"
-                                  placeholder="Reason"
-                                  value={rejectReason}
-                                  onChange={(event) => setRejectReason(event.target.value)}
-                                  style={{ width: "10rem" }}
-                                />
-                                <button
-                                  type="button"
-                                  disabled={isPending || rejectReason.trim() === ""}
-                                  onClick={() =>
-                                    run(async () => {
-                                      const result = await rejectResult(row.id, rejectReason);
-                                      if (result.ok) {
-                                        setRejectingId(null);
-                                        setRejectReason("");
-                                      }
-                                      return result;
-                                    })
-                                  }
-                                >
-                                  Confirm reject
-                                </button>
-                              </>
-                            ) : (
-                              <button type="button" disabled={isPending} onClick={() => setRejectingId(row.id)}>
-                                Reject
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                    )}
+            <div className="mt-3">
+              <TableWrap>
+                <thead>
+                  <tr>
+                    <th className={th}>Student</th>
+                    <th className={th}>Marks</th>
+                    <th className={th}>Status</th>
+                    <th className={th}>Grade</th>
+                    {canApprove && <th className={th}>Actions</th>}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.id} className={trHover}>
+                      <td className={`${td} font-medium`}>
+                        {row.studentFullName} <span className="font-normal text-muted">({row.studentNumber})</span>
+                      </td>
+                      <td className={td}>{row.marksObtained ?? "—"}</td>
+                      <td className={td}>
+                        <Badge label={row.status} tone={statusTone(row.status)} />
+                      </td>
+                      <td className={td}>{row.gradeBandLabel ?? "—"}</td>
+                      {canApprove && (
+                        <td className={td}>
+                          {row.status === "published" && (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {correctingId === row.id ? (
+                                <>
+                                  <input
+                                    type="number"
+                                    placeholder="Proposed marks"
+                                    value={proposedMarks}
+                                    onChange={(event) => setProposedMarks(event.target.value)}
+                                    className={`${inputClass} w-28 py-1.5`}
+                                  />
+                                  <input
+                                    type="text"
+                                    placeholder="Reason"
+                                    value={correctionReason}
+                                    onChange={(event) => setCorrectionReason(event.target.value)}
+                                    className={`${inputClass} w-40 py-1.5`}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="secondary"
+                                    className="px-2.5 py-1 text-xs"
+                                    disabled={isPending || correctionReason.trim() === "" || proposedMarks.trim() === ""}
+                                    onClick={() =>
+                                      run(async () => {
+                                        const result = await requestResultCorrection(row.id, {
+                                          reason: correctionReason,
+                                          proposedMarksObtained: Number(proposedMarks),
+                                        });
+                                        if (result.ok) {
+                                          setCorrectingId(null);
+                                          setCorrectionReason("");
+                                          setProposedMarks("");
+                                        }
+                                        return result;
+                                      })
+                                    }
+                                  >
+                                    Submit correction request
+                                  </Button>
+                                </>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  className="px-2.5 py-1 text-xs"
+                                  disabled={isPending}
+                                  onClick={() => setCorrectingId(row.id)}
+                                >
+                                  Request correction
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                          {row.status === "under_review" && (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                className="px-2.5 py-1 text-xs"
+                                disabled={isPending}
+                                onClick={() => run(() => approveResult(row.id))}
+                              >
+                                Approve
+                              </Button>
+                              {rejectingId === row.id ? (
+                                <>
+                                  <input
+                                    type="text"
+                                    placeholder="Reason"
+                                    value={rejectReason}
+                                    onChange={(event) => setRejectReason(event.target.value)}
+                                    className={`${inputClass} w-40 py-1.5`}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="danger"
+                                    className="px-2.5 py-1 text-xs"
+                                    disabled={isPending || rejectReason.trim() === ""}
+                                    onClick={() =>
+                                      run(async () => {
+                                        const result = await rejectResult(row.id, rejectReason);
+                                        if (result.ok) {
+                                          setRejectingId(null);
+                                          setRejectReason("");
+                                        }
+                                        return result;
+                                      })
+                                    }
+                                  >
+                                    Confirm reject
+                                  </Button>
+                                </>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="danger"
+                                  className="px-2.5 py-1 text-xs"
+                                  disabled={isPending}
+                                  onClick={() => setRejectingId(row.id)}
+                                >
+                                  Reject
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </TableWrap>
+            </div>
+          </Section>
         );
       })}
       {canApprove && <CorrectionsPanel />}
@@ -243,82 +277,95 @@ function CorrectionsPanel() {
   }
 
   return (
-    <section style={{ border: "1px solid #ddd", padding: "1rem" }}>
-      <h2 style={{ marginTop: 0 }}>Result correction requests</h2>
+    <Section>
+      <h2 className="text-base font-semibold text-ink">Result correction requests</h2>
       {error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {error}
-        </p>
+        <div className="mt-2">
+          <ErrorMessage message={error} />
+        </div>
       )}
-      {!corrections && <p>Loading...</p>}
-      {corrections && corrections.length === 0 && <p>No correction requests.</p>}
+      {!corrections && <p className="mt-2 text-sm text-muted">Loading...</p>}
+      {corrections && corrections.length === 0 && <p className="mt-2 text-sm text-muted">No correction requests.</p>}
       {corrections && corrections.length > 0 && (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={{ textAlign: "left" }}>Result</th>
-              <th style={{ textAlign: "left" }}>Proposed marks</th>
-              <th style={{ textAlign: "left" }}>Reason</th>
-              <th style={{ textAlign: "left" }}>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {corrections.map((correction) => (
-              <tr key={correction.id}>
-                <td>{correction.originalResultId}</td>
-                <td>{correction.proposedMarksObtained ?? "—"}</td>
-                <td>{correction.reason}</td>
-                <td>{correction.status}</td>
-                <td>
-                  {correction.status === "requested" && (
-                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                      <button
-                        type="button"
-                        disabled={isPending}
-                        onClick={() => run(() => approveResultCorrection(correction.id))}
-                      >
-                        Approve
-                      </button>
-                      {rejectingId === correction.id ? (
-                        <>
-                          <input
-                            type="text"
-                            placeholder="Reason"
-                            value={rejectReason}
-                            onChange={(event) => setRejectReason(event.target.value)}
-                            style={{ width: "10rem" }}
-                          />
-                          <button
-                            type="button"
-                            disabled={isPending || rejectReason.trim() === ""}
-                            onClick={() =>
-                              run(async () => {
-                                const result = await rejectResultCorrection(correction.id, rejectReason);
-                                if (result.ok) {
-                                  setRejectingId(null);
-                                  setRejectReason("");
-                                }
-                                return result;
-                              })
-                            }
-                          >
-                            Confirm reject
-                          </button>
-                        </>
-                      ) : (
-                        <button type="button" disabled={isPending} onClick={() => setRejectingId(correction.id)}>
-                          Reject
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </td>
+        <div className="mt-3">
+          <TableWrap>
+            <thead>
+              <tr>
+                <th className={th}>Result</th>
+                <th className={th}>Proposed marks</th>
+                <th className={th}>Reason</th>
+                <th className={th}>Status</th>
+                <th className={th}>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {corrections.map((correction) => (
+                <tr key={correction.id} className={trHover}>
+                  <td className={td}>{correction.originalResultId}</td>
+                  <td className={td}>{correction.proposedMarksObtained ?? "—"}</td>
+                  <td className={td}>{correction.reason}</td>
+                  <td className={td}>
+                    <Badge label={correction.status} tone={statusTone(correction.status)} />
+                  </td>
+                  <td className={td}>
+                    {correction.status === "requested" && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          className="px-2.5 py-1 text-xs"
+                          disabled={isPending}
+                          onClick={() => run(() => approveResultCorrection(correction.id))}
+                        >
+                          Approve
+                        </Button>
+                        {rejectingId === correction.id ? (
+                          <>
+                            <input
+                              type="text"
+                              placeholder="Reason"
+                              value={rejectReason}
+                              onChange={(event) => setRejectReason(event.target.value)}
+                              className={`${inputClass} w-40 py-1.5`}
+                            />
+                            <Button
+                              type="button"
+                              variant="danger"
+                              className="px-2.5 py-1 text-xs"
+                              disabled={isPending || rejectReason.trim() === ""}
+                              onClick={() =>
+                                run(async () => {
+                                  const result = await rejectResultCorrection(correction.id, rejectReason);
+                                  if (result.ok) {
+                                    setRejectingId(null);
+                                    setRejectReason("");
+                                  }
+                                  return result;
+                                })
+                              }
+                            >
+                              Confirm reject
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="danger"
+                            className="px-2.5 py-1 text-xs"
+                            disabled={isPending}
+                            onClick={() => setRejectingId(correction.id)}
+                          >
+                            Reject
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </div>
       )}
-    </section>
+    </Section>
   );
 }

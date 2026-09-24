@@ -1,9 +1,19 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { listAcademies, type AcademySummary } from "@/lib/academies/approve";
 import type { SubscriptionStatus } from "@/lib/subscriptions/state-machine";
+import {
+  Badge,
+  LinkButton,
+  PAGE_WRAP,
+  PageHeader,
+  PageMessage,
+  TableWrap,
+  td,
+  th,
+  trHover,
+} from "@/app/academy/_shell/ui";
 
 // "approveAcademy" is in UNGRANTABLE_CAPABILITIES (lib/auth/permissions.ts),
 // so hasPermission() returns true here only for platform_owner. DESIGN.md
@@ -27,25 +37,25 @@ function statusLabel(status: AcademySummary["status"]): string {
   }
 }
 
-function statusColor(status: AcademySummary["status"]): string {
+function statusTone(status: AcademySummary["status"]): "green" | "gray" | "amber" {
   switch (status) {
     case "approved":
-      return "#0a7d2c";
+      return "green";
     case "closed":
-      return "#6b7280";
+      return "gray";
     case "pending_approval":
     default:
-      return "#b45309";
+      return "amber";
   }
 }
 
 // DESIGN.md §11.1's derived subscription badge, applied here to the list
 // page's new "Subscription" column — a second, separate badge from the
-// approval-derived one above (statusLabel/statusColor track
+// approval-derived one above (statusLabel/statusTone track
 // academies.approved_at/closed_at; these two track
 // academy_subscriptions.status). Duplicated in
 // app/platform/academies/[id]/page.tsx rather than shared — see that file's
-// own comment on subscriptionStatusLabel/subscriptionStatusColor for why.
+// own comment on subscriptionStatusLabel/subscriptionStatusTone for why.
 function subscriptionStatusLabel(status: SubscriptionStatus | null): string {
   if (status === null) return "No subscription";
   switch (status) {
@@ -68,23 +78,23 @@ function subscriptionStatusLabel(status: SubscriptionStatus | null): string {
   }
 }
 
-function subscriptionStatusColor(status: SubscriptionStatus | null): string {
-  if (status === null) return "#9ca3af";
+function subscriptionStatusTone(status: SubscriptionStatus | null): "green" | "blue" | "gray" | "amber" | "red" {
+  if (status === null) return "gray";
   switch (status) {
     case "active":
-      return "#0a7d2c";
+      return "green";
     case "trial":
-      return "#2563eb";
+      return "blue";
     case "draft":
-      return "#6b7280";
+      return "gray";
     case "past_due":
-      return "#b45309";
+      return "amber";
     case "suspended":
     case "expired":
     case "cancelled":
-      return "#b91c1c";
+      return "red";
     default:
-      return "#6b7280";
+      return "gray";
   }
 }
 
@@ -98,35 +108,18 @@ export default async function AcademiesPage() {
   const allowed = await hasPermission(context, ACADEMIES_CAPABILITY);
 
   if (!allowed) {
-    return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>Access denied</h1>
-        <p>You don&apos;t have permission to view this page.</p>
-      </main>
-    );
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const academies = await listAcademies();
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <h1>Academies</h1>
-        <Link href="/platform/academies/new">Register new academy</Link>
-      </div>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Academies"
+        description="Every academy registered on the platform, its approval state, and its subscription."
+        actions={<LinkButton href="/platform/academies/new">Register new academy</LinkButton>}
+      />
 
       {/*
         DESIGN.md §8's column list for this screen: "name, status badge
@@ -142,54 +135,52 @@ export default async function AcademiesPage() {
         documents) — inventing a number here would be exactly the kind of
         fake data this item's brief says not to render.
       */}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "1.5rem" }}>
+      <TableWrap>
         <thead>
           <tr>
-            <th style={{ textAlign: "left" }}>Name</th>
-            <th style={{ textAlign: "left" }}>Slug</th>
-            <th style={{ textAlign: "left" }}>Approval</th>
-            <th style={{ textAlign: "left" }}>Plan</th>
-            <th style={{ textAlign: "left" }}>Subscription</th>
-            <th style={{ textAlign: "left" }}>Branches</th>
-            <th style={{ textAlign: "left" }}>Created</th>
-            <th style={{ textAlign: "left" }}></th>
+            <th className={th}>Name</th>
+            <th className={th}>Slug</th>
+            <th className={th}>Approval</th>
+            <th className={th}>Plan</th>
+            <th className={th}>Subscription</th>
+            <th className={th}>Branches</th>
+            <th className={th}>Created</th>
+            <th className={th}>Actions</th>
           </tr>
         </thead>
         <tbody>
           {academies.length === 0 && (
             <tr>
-              <td colSpan={8}>No academies registered yet.</td>
+              <td colSpan={8} className={`${td} text-center text-muted`}>
+                No academies registered yet.
+              </td>
             </tr>
           )}
           {academies.map((academy) => (
-            <tr key={academy.id}>
-              <td>{academy.name}</td>
-              <td>{academy.slug}</td>
-              <td>
-                <span style={{ color: statusColor(academy.status), fontWeight: 600 }}>
-                  {statusLabel(academy.status)}
-                </span>
+            <tr key={academy.id} className={trHover}>
+              <td className={`${td} font-medium`}>{academy.name}</td>
+              <td className={td}>{academy.slug}</td>
+              <td className={td}>
+                <Badge label={statusLabel(academy.status)} tone={statusTone(academy.status)} />
               </td>
-              <td>{academy.planName ?? "—"}</td>
-              <td>
-                <span
-                  style={{
-                    color: subscriptionStatusColor(academy.subscriptionStatus),
-                    fontWeight: 600,
-                  }}
-                >
-                  {subscriptionStatusLabel(academy.subscriptionStatus)}
-                </span>
+              <td className={td}>{academy.planName ?? "—"}</td>
+              <td className={td}>
+                <Badge
+                  label={subscriptionStatusLabel(academy.subscriptionStatus)}
+                  tone={subscriptionStatusTone(academy.subscriptionStatus)}
+                />
               </td>
-              <td>{academy.branchCount}</td>
-              <td>{academy.createdAt.toLocaleDateString()}</td>
-              <td>
-                <Link href={`/platform/academies/${academy.id}`}>View</Link>
+              <td className={td}>{academy.branchCount}</td>
+              <td className={td}>{academy.createdAt.toLocaleDateString()}</td>
+              <td className={td}>
+                <LinkButton href={`/platform/academies/${academy.id}`} variant="secondary" className="px-2.5 py-1 text-xs">
+                  View
+                </LinkButton>
               </td>
             </tr>
           ))}
         </tbody>
-      </table>
-    </main>
+      </TableWrap>
+    </div>
   );
 }

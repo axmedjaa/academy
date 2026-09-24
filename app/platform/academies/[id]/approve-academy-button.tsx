@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { approveAcademyAction } from "@/lib/academies/approve-actions";
+import { Button, ErrorMessage } from "@/app/academy/_shell/ui";
 
 interface Props {
   academyId: string;
@@ -32,19 +33,15 @@ export function ApproveAcademyButton({ academyId }: Props) {
   }
 
   if (succeeded) {
-    return <p style={{ color: "green" }}>Academy approved.</p>;
+    return <p className="text-sm font-medium text-success">Academy approved.</p>;
   }
 
   return (
-    <div>
-      <button type="button" onClick={handleApprove} disabled={isPending}>
+    <div className="flex flex-col gap-2">
+      <Button type="button" className="self-start" onClick={handleApprove} disabled={isPending}>
         {isPending ? "Approving..." : "Approve academy"}
-      </button>
-      {error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {error}
-        </p>
-      )}
+      </Button>
+      {error && <ErrorMessage message={error} />}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
@@ -7,6 +7,7 @@ import {
   academyMemberships,
   academySubscriptions,
   auditLogs,
+  courses,
   programs,
   subscriptionPlans,
   users,
@@ -16,7 +17,9 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import {
   archiveProgram,
   createProgram,
+  deleteProgram,
   getProgram,
+  getProgramDeletionEligibility,
   listPrograms,
   updateProgram,
   type CreateProgramInput,
@@ -111,6 +114,14 @@ function validInput(overrides: Partial<CreateProgramInput> = {}): CreateProgramI
   };
 }
 
+async function insertCourseDirect(academyId: string, programId: string): Promise<string> {
+  const [row] = await db
+    .insert(courses)
+    .values({ academyId, programId, name: `Course ${randomUUID()}` })
+    .returning({ id: courses.id });
+  return row.id;
+}
+
 afterAll(async () => {
   await db
     .delete(auditLogs)
@@ -121,6 +132,7 @@ afterAll(async () => {
       ),
     );
   for (const academyId of createdAcademyIds) {
+    await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
@@ -273,5 +285,141 @@ describe("listPrograms / getProgram", () => {
     const result = await getProgram(context, otherProgramId);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
+describe("getProgramDeletionEligibility / deleteProgram", () => {
+  it("an unused program (zero courses) is eligible and deletes", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const created = await createProgram(context, validInput({ name: "Unused Program" }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const eligibility = await getProgramDeletionEligibility(context, created.program.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(true);
+      expect(eligibility.eligibility.reasons).toEqual([]);
+    }
+
+    const deleted = await deleteProgram(context, created.program.id, "Unused Program");
+    expect(deleted.ok).toBe(true);
+
+    const stillThere = await getProgram(context, created.program.id);
+    expect(stillThere.ok).toBe(false);
+    if (!stillThere.ok) expect(stillThere.error.code).toBe("not_found");
+  });
+
+  it("a program with a course attached is blocked from deletion, and nothing is deleted", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const created = await createProgram(context, validInput({ name: "Program With Courses" }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await insertCourseDirect(academyId, created.program.id);
+
+    const eligibility = await getProgramDeletionEligibility(context, created.program.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.courseCount).toBe(1);
+    }
+
+    const deleted = await deleteProgram(context, created.program.id, "Program With Courses");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+
+    const stillThere = await getProgram(context, created.program.id);
+    expect(stillThere.ok).toBe(true);
+  });
+
+  it("rejects a wrong confirmation name, and nothing is deleted", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const created = await createProgram(context, validInput({ name: "Type Me Exactly" }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const result = await deleteProgram(context, created.program.id, "Wrong Name");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+
+    const stillThere = await getProgram(context, created.program.id);
+    expect(stillThere.ok).toBe(true);
+  });
+
+  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+    "refuses %s with code 'forbidden'",
+    async (role) => {
+      const owner = await setupAcademy("academy_owner");
+      const created = await createProgram(owner.context, validInput());
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      const actingUserId = await createUser();
+      await addMembership(actingUserId, owner.academyId, role);
+      const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
+
+      const result = await deleteProgram(actingContext, created.program.id, created.program.name);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("forbidden");
+    },
+  );
+
+  it("never deletes another academy's program (tenant isolation)", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherCreated = await createProgram(other.context, validInput({ name: "Other Academy Program" }));
+    expect(otherCreated.ok).toBe(true);
+    if (!otherCreated.ok) return;
+
+    const { context } = await setupAcademy("academy_owner");
+    const eligibility = await getProgramDeletionEligibility(context, otherCreated.program.id);
+    expect(eligibility.ok).toBe(false);
+    if (!eligibility.ok) expect(eligibility.error.code).toBe("not_found");
+
+    const result = await deleteProgram(context, otherCreated.program.id, "Other Academy Program");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const stillThere = await getProgram(other.context, otherCreated.program.id);
+    expect(stillThere.ok).toBe(true);
+  });
+
+  it("writes an audit row before deleting, and the audit row survives the deletion", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const created = await createProgram(context, validInput({ name: "Audited Deletion" }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const result = await deleteProgram(context, created.program.id, "Audited Deletion");
+    expect(result.ok).toBe(true);
+
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, created.program.id), eq(auditLogs.action, "deleteProgram")));
+    expect(audit?.action).toBe("deleteProgram");
+    expect(audit?.actorUserId).toBe(userId);
+    expect(audit?.academyId).toBe(academyId);
+  });
+
+  it("race condition: a course created after the eligibility check still blocks the delete transaction", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const created = await createProgram(context, validInput({ name: "Race Condition Program" }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const eligibility = await getProgramDeletionEligibility(context, created.program.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) expect(eligibility.eligibility.eligible).toBe(true);
+
+    // Simulates a concurrent createCourse landing between the UI's
+    // eligibility preview and the actual delete call.
+    await insertCourseDirect(academyId, created.program.id);
+
+    const result = await deleteProgram(context, created.program.id, "Race Condition Program");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ineligible");
+
+    const stillThere = await getProgram(context, created.program.id);
+    expect(stillThere.ok).toBe(true);
   });
 });

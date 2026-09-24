@@ -4,6 +4,7 @@ import { listAcademyTimetable } from "@/lib/academies/timetables";
 import { listBatches } from "@/lib/academies/batches";
 import { listBranches } from "@/lib/academies/branches";
 import { TimetableList } from "./timetable-list";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 45: `/academy/timetable` — academy-wide timetable CRUD, no
@@ -21,10 +22,10 @@ export default async function AcademyTimetablePage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
@@ -36,26 +37,21 @@ export default async function AcademyTimetablePage() {
   const batchOptions = batchesResult.ok ? batchesResult.batches : [];
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Timetable</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canManage
-          ? "You can create, edit, and delete timetable entries in your scope."
-          : "You can view the timetable entries in your scope."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Timetable"
+        description={
+          result.canManage
+            ? "You can create, edit, and delete timetable entries in your scope."
+            : "You can view the timetable entries in your scope."
+        }
+      />
       <TimetableList
         entries={result.entries}
         branches={branchOptions}
         batches={batchOptions}
         canManage={result.canManage}
       />
-    </main>
+    </div>
   );
 }

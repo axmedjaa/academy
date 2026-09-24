@@ -5,6 +5,21 @@ import { getAcademicReports, type AcademicReportsData } from "@/lib/academies/ac
 import { getFinanceReports } from "@/lib/academies/finance-reports";
 import { FinanceReportsView } from "@/app/academy/finance-reports/finance-reports-view";
 import { ReportExportButton } from "./report-export-button";
+import { color } from "@/lib/ui/theme";
+import {
+  Button,
+  ErrorMessage,
+  Field,
+  PAGE_WRAP,
+  PageHeader,
+  Section,
+  StatCard,
+  TableWrap,
+  inputClass,
+  td,
+  th,
+  trHover,
+} from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Phase 5, Item 61a — `/academy/reports` hub (DESIGN.md §9.9: "hub
@@ -93,20 +108,10 @@ export default async function AcademyReportsPage({
   const courseId = get("courseId");
 
   return (
-    <main
-      style={{
-        maxWidth: 1100,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Reports</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        Student, academic, and finance reporting for this academy.
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader title="Reports" description="Student, academic, and finance reporting for this academy." />
 
-      <nav style={{ display: "flex", gap: "0.5rem", margin: "1rem 0", borderBottom: "1px solid #ddd" }}>
+      <nav className="mb-5 inline-flex gap-1 rounded-control border border-border bg-surface p-1">
         <TabLink label="Student" href="?tab=student" active={tab === "student"} />
         <TabLink label="Academic" href="?tab=academic" active={tab === "academic"} />
         <TabLink label="Finance" href="?tab=finance" active={tab === "finance"} />
@@ -130,7 +135,7 @@ export default async function AcademyReportsPage({
         />
       )}
       {tab === "finance" && <FinanceTab context={context} />}
-    </main>
+    </div>
   );
 }
 
@@ -138,24 +143,12 @@ function TabLink({ label, href, active }: { label: string; href: string; active:
   return (
     <a
       href={href}
-      style={{
-        padding: "0.5rem 0.9rem",
-        textDecoration: "none",
-        color: active ? "#111" : "#666",
-        borderBottom: active ? "2px solid #111" : "2px solid transparent",
-        fontWeight: active ? 600 : 400,
-      }}
+      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+        active ? "bg-brand text-white" : "text-muted hover:bg-app hover:text-ink"
+      }`}
     >
       {label}
     </a>
-  );
-}
-
-function ErrorBox({ message }: { message: string }) {
-  return (
-    <p role="alert" style={{ color: "crimson" }}>
-      {message}
-    </p>
   );
 }
 
@@ -181,47 +174,55 @@ async function StudentTab({
   });
 
   if (!result.ok) {
-    return <ErrorBox message={result.error.message} />;
+    return <ErrorMessage message={result.error.message} />;
   }
 
   const report: StudentReportsData = result.report;
 
   return (
-    <div>
+    <div className="flex flex-col gap-6">
       <FilterForm tab="student" dateFrom={dateFrom} dateTo={dateTo} branchId={branchId} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem", margin: "1rem 0" }}>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard label="Total students (matching filters)" value={report.totalStudents} />
         {report.statusBreakdown.map((row) => (
           <StatCard key={row.status} label={`Status: ${row.status}`} value={row.count} />
         ))}
       </div>
 
-      <h3>Enrollment trend</h3>
-      {/* Genuinely aggregate/trend data — chart alongside the table, never instead of it. */}
-      <BarChart
-        points={report.enrollmentTrend.map((p) => ({ label: p.period, value: p.count }))}
-        emptyMessage="No enrollments in the selected period."
-      />
-      <SimpleTable
-        columns={["Month", "New enrollments"]}
-        rows={report.enrollmentTrend.map((p) => [p.period, String(p.count)])}
-        emptyMessage="No enrollments in the selected period."
-      />
+      <div>
+        <h3 className="mb-2 text-base font-semibold text-ink">Enrollment trend</h3>
+        {/* Genuinely aggregate/trend data — chart alongside the table, never instead of it. */}
+        <Section className="mb-3">
+          <BarChart
+            points={report.enrollmentTrend.map((p) => ({ label: p.period, value: p.count }))}
+            emptyMessage="No enrollments in the selected period."
+          />
+        </Section>
+        <SimpleTable
+          columns={["Month", "New enrollments"]}
+          rows={report.enrollmentTrend.map((p) => [p.period, String(p.count)])}
+          emptyMessage="No enrollments in the selected period."
+        />
+      </div>
 
-      <h3 style={{ marginTop: "1.5rem" }}>Enrollment status breakdown</h3>
-      <SimpleTable
-        columns={["Status", "Count"]}
-        rows={report.enrollmentStatusBreakdown.map((row) => [row.status, String(row.count)])}
-        emptyMessage="No enrollments recorded."
-      />
+      <div>
+        <h3 className="mb-2 text-base font-semibold text-ink">Enrollment status breakdown</h3>
+        <SimpleTable
+          columns={["Status", "Count"]}
+          rows={report.enrollmentStatusBreakdown.map((row) => [row.status, String(row.count)])}
+          emptyMessage="No enrollments recorded."
+        />
+      </div>
 
-      <h3 style={{ marginTop: "1.5rem" }}>Branch distribution</h3>
-      <SimpleTable
-        columns={["Branch", "Students"]}
-        rows={report.branchDistribution.map((row) => [row.branchName, String(row.count)])}
-        emptyMessage="No students match these filters."
-      />
+      <div>
+        <h3 className="mb-2 text-base font-semibold text-ink">Branch distribution</h3>
+        <SimpleTable
+          columns={["Branch", "Students"]}
+          rows={report.branchDistribution.map((row) => [row.branchName, String(row.count)])}
+          emptyMessage="No students match these filters."
+        />
+      </div>
 
       <ReportExportButton
         kind="student"
@@ -256,48 +257,54 @@ async function AcademicTab({
   });
 
   if (!result.ok) {
-    return <ErrorBox message={result.error.message} />;
+    return <ErrorMessage message={result.error.message} />;
   }
 
   const report: AcademicReportsData = result.report;
 
   return (
-    <div>
+    <div className="flex flex-col gap-6">
       <FilterForm tab="academic" dateFrom={dateFrom} dateTo={dateTo} batchId={batchId} courseId={courseId} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem", margin: "1rem 0" }}>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard label="Results published" value={report.resultsPublishedCount} />
       </div>
 
-      <h3>Pass rate by batch</h3>
-      {/* Genuinely aggregate/trend data (pass/fail rate) — chart alongside the table. */}
-      <BarChart
-        points={report.passFailByBatch.map((row) => ({
-          label: row.batchName,
-          value: row.passRate === null ? 0 : Math.round(row.passRate * 100),
-        }))}
-        valueSuffix="%"
-        emptyMessage="No published results in the selected batches."
-      />
-      <SimpleTable
-        columns={["Batch", "Course", "Pass", "Fail", "Pending", "Pass rate"]}
-        rows={report.passFailByBatch.map((row) => [
-          row.batchName,
-          row.courseName,
-          String(row.passCount),
-          String(row.failCount),
-          String(row.pendingCount),
-          row.passRate === null ? "—" : `${Math.round(row.passRate * 100)}%`,
-        ])}
-        emptyMessage="No published results match these filters."
-      />
+      <div>
+        <h3 className="mb-2 text-base font-semibold text-ink">Pass rate by batch</h3>
+        {/* Genuinely aggregate/trend data (pass/fail rate) — chart alongside the table. */}
+        <Section className="mb-3">
+          <BarChart
+            points={report.passFailByBatch.map((row) => ({
+              label: row.batchName,
+              value: row.passRate === null ? 0 : Math.round(row.passRate * 100),
+            }))}
+            valueSuffix="%"
+            emptyMessage="No published results in the selected batches."
+          />
+        </Section>
+        <SimpleTable
+          columns={["Batch", "Course", "Pass", "Fail", "Pending", "Pass rate"]}
+          rows={report.passFailByBatch.map((row) => [
+            row.batchName,
+            row.courseName,
+            String(row.passCount),
+            String(row.failCount),
+            String(row.pendingCount),
+            row.passRate === null ? "—" : `${Math.round(row.passRate * 100)}%`,
+          ])}
+          emptyMessage="No published results match these filters."
+        />
+      </div>
 
-      <h3 style={{ marginTop: "1.5rem" }}>Grade distribution</h3>
-      <SimpleTable
-        columns={["Grade band", "Count"]}
-        rows={report.gradeDistribution.map((row) => [row.gradeBandLabel, String(row.count)])}
-        emptyMessage="No published, graded results match these filters."
-      />
+      <div>
+        <h3 className="mb-2 text-base font-semibold text-ink">Grade distribution</h3>
+        <SimpleTable
+          columns={["Grade band", "Count"]}
+          rows={report.gradeDistribution.map((row) => [row.gradeBandLabel, String(row.count)])}
+          emptyMessage="No published, graded results match these filters."
+        />
+      </div>
 
       <ReportExportButton
         kind="academic"
@@ -326,17 +333,19 @@ async function FinanceTab({
   const result = await getFinanceReports(context, {});
 
   if (!result.ok) {
-    return <ErrorBox message={result.error.message} />;
+    return <ErrorMessage message={result.error.message} />;
   }
 
   return (
-    <div>
-      <p style={{ color: "#666", fontSize: "0.85rem" }}>
+    <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted">
         Outstanding charges, payments received, income vs. expenses. Never
         includes platform subscription billing (§9.6). This is the same
         report as{" "}
-        <a href="/academy/finance-reports">/academy/finance-reports</a> —
-        both routes coexist for now (see this page&apos;s module comment).
+        <a href="/academy/finance-reports" className="text-brand hover:underline">
+          /academy/finance-reports
+        </a>{" "}
+        — both routes coexist for now (see this page&apos;s module comment).
       </p>
       <FinanceReportsView initialReport={result.report} />
     </div>
@@ -364,59 +373,38 @@ function FilterForm({
   courseId?: string;
 }) {
   return (
-    <form
-      method="get"
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        gap: "0.75rem",
-        alignItems: "flex-end",
-        border: "1px solid #ddd",
-        borderRadius: 8,
-        padding: "1rem",
-      }}
-    >
-      <input type="hidden" name="tab" value={tab} />
-      <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-        From
-        <input type="date" name="dateFrom" defaultValue={dateFrom} />
-      </label>
-      <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-        To
-        <input type="date" name="dateTo" defaultValue={dateTo} />
-      </label>
-      {tab === "student" && (
-        <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-          Branch ID
-          <input type="text" name="branchId" defaultValue={branchId} placeholder="(optional)" />
-        </label>
-      )}
-      {tab === "academic" && (
-        <>
-          <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-            Batch ID
-            <input type="text" name="batchId" defaultValue={batchId} placeholder="(optional)" />
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", fontSize: "0.85rem" }}>
-            Course ID
-            <input type="text" name="courseId" defaultValue={courseId} placeholder="(optional)" />
-          </label>
-        </>
-      )}
-      <button type="submit">Filter</button>
-      <a href={`?tab=${tab}`} style={{ fontSize: "0.85rem" }}>
-        Reset
-      </a>
-    </form>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: number }) {
-  return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: "1rem" }}>
-      <div style={{ color: "#666", fontSize: "0.8rem" }}>{label}</div>
-      <div style={{ fontSize: "1.5rem" }}>{value}</div>
-    </div>
+    <Section>
+      <form method="get" className="flex flex-wrap items-end gap-3">
+        <input type="hidden" name="tab" value={tab} />
+        <Field label="From" className="min-w-[140px]">
+          <input type="date" name="dateFrom" defaultValue={dateFrom} className={inputClass} />
+        </Field>
+        <Field label="To" className="min-w-[140px]">
+          <input type="date" name="dateTo" defaultValue={dateTo} className={inputClass} />
+        </Field>
+        {tab === "student" && (
+          <Field label="Branch ID" className="min-w-[160px]">
+            <input type="text" name="branchId" defaultValue={branchId} placeholder="(optional)" className={inputClass} />
+          </Field>
+        )}
+        {tab === "academic" && (
+          <>
+            <Field label="Batch ID" className="min-w-[160px]">
+              <input type="text" name="batchId" defaultValue={batchId} placeholder="(optional)" className={inputClass} />
+            </Field>
+            <Field label="Course ID" className="min-w-[160px]">
+              <input type="text" name="courseId" defaultValue={courseId} placeholder="(optional)" className={inputClass} />
+            </Field>
+          </>
+        )}
+        <Button type="submit" variant="secondary">
+          Filter
+        </Button>
+        <a href={`?tab=${tab}`} className="text-sm text-brand hover:underline">
+          Reset
+        </a>
+      </form>
+    </Section>
   );
 }
 
@@ -430,11 +418,11 @@ function SimpleTable({
   emptyMessage: string;
 }) {
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "0.5rem" }}>
+    <TableWrap>
       <thead>
         <tr>
           {columns.map((col) => (
-            <th key={col} style={{ textAlign: "left", borderBottom: "1px solid #ddd", padding: "0.4rem 0" }}>
+            <th key={col} className={th}>
               {col}
             </th>
           ))}
@@ -443,15 +431,15 @@ function SimpleTable({
       <tbody>
         {rows.length === 0 ? (
           <tr>
-            <td colSpan={columns.length} style={{ padding: "0.5rem 0", color: "#777" }}>
+            <td colSpan={columns.length} className={`${td} text-center text-muted`}>
               {emptyMessage}
             </td>
           </tr>
         ) : (
           rows.map((row, i) => (
-            <tr key={i}>
+            <tr key={i} className={trHover}>
               {row.map((cell, j) => (
-                <td key={j} style={{ padding: "0.4rem 0", borderBottom: "1px solid #f0f0f0" }}>
+                <td key={j} className={td}>
                   {cell}
                 </td>
               ))}
@@ -459,7 +447,7 @@ function SimpleTable({
           ))
         )}
       </tbody>
-    </table>
+    </TableWrap>
   );
 }
 
@@ -467,7 +455,8 @@ function SimpleTable({
  * Minimal inline-SVG bar chart — no charting library dependency (none
  * exists in this codebase's package.json). Purely presentational, next to
  * (never instead of) the data table for the same section, per DESIGN.md's
- * "chart never replaces the table" rule.
+ * "chart never replaces the table" rule. Colors come from lib/ui/theme.ts
+ * (the same brand/muted tokens used everywhere else), not new hex values.
  */
 function BarChart({
   points,
@@ -479,7 +468,7 @@ function BarChart({
   valueSuffix?: string;
 }) {
   if (points.length === 0) {
-    return <p style={{ color: "#777" }}>{emptyMessage}</p>;
+    return <p className="text-sm text-muted">{emptyMessage}</p>;
   }
 
   const width = 640;
@@ -493,7 +482,8 @@ function BarChart({
       viewBox={`0 0 ${width} ${height + 24}`}
       role="img"
       aria-label="Chart"
-      style={{ width: "100%", maxWidth: width, height: "auto", display: "block" }}
+      className="block h-auto w-full"
+      style={{ maxWidth: width }}
     >
       {points.map((point, i) => {
         const barHeight = (point.value / maxValue) * height;
@@ -501,11 +491,11 @@ function BarChart({
         const y = height - barHeight;
         return (
           <g key={point.label}>
-            <rect x={x} y={y} width={barWidth} height={barHeight} fill="#4f7cff" rx={2} />
-            <text x={x + barWidth / 2} y={height + 14} fontSize="9" textAnchor="middle" fill="#666">
+            <rect x={x} y={y} width={barWidth} height={barHeight} fill={color.primaryBlue} rx={2} />
+            <text x={x + barWidth / 2} y={height + 14} fontSize="9" textAnchor="middle" fill={color.textMuted}>
               {point.label.length > 8 ? `${point.label.slice(0, 7)}…` : point.label}
             </text>
-            <text x={x + barWidth / 2} y={y - 4} fontSize="9" textAnchor="middle" fill="#333">
+            <text x={x + barWidth / 2} y={y - 4} fontSize="9" textAnchor="middle" fill={color.text}>
               {point.value}
               {valueSuffix}
             </text>

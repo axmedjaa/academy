@@ -7,10 +7,16 @@ import {
   academyMemberships,
   academySubscriptions,
   auditLogs,
+  batchTrainerAssignments,
+  batches,
   branches,
+  courses,
+  programs,
   staffBranchAssignments,
+  staffDocuments,
   staffProfiles,
   subscriptionPlans,
+  timetables,
   users,
 } from "@/lib/db/schema";
 import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
@@ -20,6 +26,8 @@ import { checkAllowance } from "@/lib/subscriptions/usage";
 import {
   assignStaffRole,
   createStaff,
+  deleteStaff,
+  getStaffDeletionEligibility,
   listStaff,
   removeStaffMembership,
   updateStaff,
@@ -171,6 +179,73 @@ async function assignBranchesToProfile(
   }
 }
 
+/** A staffProfiles row with NO academy_memberships row at all — represents
+ * an employment record whose access was fully removed (or never granted),
+ * the only shape `deleteStaff` should ever consider eligible on the
+ * membership front. */
+async function createStaffWithoutMembership(
+  academyId: string,
+  fullName = "Unused Staff",
+): Promise<{ staffProfileId: string; userId: string }> {
+  const userId = await createUser();
+  const [profile] = await db
+    .insert(staffProfiles)
+    .values({ academyId, userId, fullName, phone: "+1-555-0001" })
+    .returning({ id: staffProfiles.id });
+  return { staffProfileId: profile.id, userId };
+}
+
+async function insertProgramCourseBatch(
+  academyId: string,
+  branchId: string,
+): Promise<{ courseId: string; batchId: string }> {
+  const [program] = await db
+    .insert(programs)
+    .values({ academyId, name: `Program ${randomUUID()}` })
+    .returning({ id: programs.id });
+  const [course] = await db
+    .insert(courses)
+    .values({ academyId, programId: program.id, name: `Course ${randomUUID()}` })
+    .returning({ id: courses.id });
+  const [batch] = await db
+    .insert(batches)
+    .values({
+      academyId,
+      branchId,
+      courseId: course.id,
+      name: `Batch ${randomUUID()}`,
+      code: `B-${randomUUID().slice(0, 8)}`,
+      startDate: "2026-01-01",
+    })
+    .returning({ id: batches.id });
+  return { courseId: course.id, batchId: batch.id };
+}
+
+async function assignInstructorToCourse(courseId: string, staffProfileId: string): Promise<void> {
+  await db.update(courses).set({ instructorId: staffProfileId }).where(eq(courses.id, courseId));
+}
+
+async function assignTrainerToBatch(academyId: string, batchId: string, staffProfileId: string): Promise<void> {
+  await db.insert(batchTrainerAssignments).values({ academyId, batchId, staffProfileId, status: "active" });
+}
+
+async function insertTimetableEntry(
+  academyId: string,
+  branchId: string,
+  batchId: string,
+  staffProfileId: string,
+): Promise<void> {
+  await db.insert(timetables).values({
+    academyId,
+    branchId,
+    batchId,
+    dayOfWeek: "mon",
+    startTime: "09:00",
+    endTime: "10:00",
+    trainerStaffProfileId: staffProfileId,
+  });
+}
+
 async function seedActiveStaff(academyId: string, count: number): Promise<void> {
   for (let i = 0; i < count; i += 1) {
     const staffUserId = await createUser();
@@ -216,6 +291,12 @@ afterAll(async () => {
   for (const academyId of createdAcademyIds) {
     // Item 36 fixtures (assignUserToBranches/insertBranchDirect): FK order
     // requires staff_branch_assignments before staff_profiles/branches.
+    await db.delete(timetables).where(eq(timetables.academyId, academyId));
+    await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
+    await db.delete(batches).where(eq(batches.academyId, academyId));
+    await db.delete(courses).where(eq(courses.academyId, academyId));
+    await db.delete(programs).where(eq(programs.academyId, academyId));
+    await db.delete(staffDocuments).where(eq(staffDocuments.academyId, academyId));
     await db
       .delete(staffBranchAssignments)
       .where(eq(staffBranchAssignments.academyId, academyId));
@@ -414,6 +495,65 @@ describe("createStaff — the create/reuse/audit transaction", () => {
     if (!second.ok) expect(second.error.code).toBe("already_staff");
   });
 
+  it("allows re-hiring a previously-deleted staff member using the same email (removeStaffMembership + deleteStaff, then createStaff again)", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const input = validCreateInput({ fullName: "Departed Then Rehired" });
+
+    const created = await createStaffTracked(context, input);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const removed = await removeStaffMembership(context, created.userId);
+    expect(removed.ok).toBe(true);
+
+    const deleted = await deleteStaff(context, created.staffProfileId, "Departed Then Rehired");
+    expect(deleted.ok).toBe(true);
+
+    // Re-creating with the exact same email must succeed — the stale
+    // "removed" academy_memberships row from before must be reactivated in
+    // place, not treated as a live conflict (this was the actual bug: a
+    // naive "any existing membership row = already staff" check blocked
+    // re-hiring forever after a single deletion).
+    const rehired = await createStaff(context, { ...input, password: undefined, role: "manager" });
+    expect(rehired.ok).toBe(true);
+    if (rehired.ok) {
+      createdUserIds.push(rehired.userId);
+      expect(rehired.userId).toBe(created.userId);
+    }
+
+    // Reactivated in place — still exactly one membership row for this
+    // (user, academy) pair, now active with the new role, never a second
+    // inserted row.
+    const memberships = await db
+      .select()
+      .from(academyMemberships)
+      .where(and(eq(academyMemberships.userId, created.userId), eq(academyMemberships.academyId, academyId)));
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0].status).toBe("active");
+    expect(memberships[0].role).toBe("manager");
+  });
+
+  it("deleteStaff's audit row preserves the deleted staff member's login email, since it disappears from every other view once the profile is gone", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const email = `deleted-staff-${randomUUID()}@example.com`;
+    const created = await createStaffTracked(context, validCreateInput({ email, fullName: "Traceable Deletion" }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const removed = await removeStaffMembership(context, created.userId);
+    expect(removed.ok).toBe(true);
+    const deleted = await deleteStaff(context, created.staffProfileId, "Traceable Deletion");
+    expect(deleted.ok).toBe(true);
+
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, created.staffProfileId), eq(auditLogs.action, "deleteStaff")));
+    expect(audit?.action).toBe("deleteStaff");
+    const before = audit?.before as { loginEmail?: string | null } | null;
+    expect(before?.loginEmail).toBe(email);
+  });
+
   it("blocks with code 'blocked' when the academy's subscription is suspended", async () => {
     const creatorUserId = await createUser();
     const academyId = await createAcademy(creatorUserId);
@@ -455,6 +595,27 @@ describe("createStaff — permission matrix (Full/Manage may create, everyone el
       if (!result.ok) expect(result.error.code).toBe("forbidden");
     },
   );
+
+  // Owner-safety pass (delete/deletion-audit task): canManageStaff alone
+  // used to gate this action, and Manager holds "manage" — the same level
+  // Admin's "full" satisfies — so a Manager could mint a brand-new
+  // academy_owner account from scratch with no extra check at all.
+  it.each<AcademyRole>(["academy_admin", "manager"])(
+    "refuses %s creating a new staff member with role academy_owner",
+    async (role) => {
+      const { context } = await setupAcademy(role);
+      const result = await createStaffTracked(context, validCreateInput({ role: "academy_owner" }));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("forbidden");
+    },
+  );
+
+  it("allows an existing owner to create a new staff member with role academy_owner", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const result = await createStaffTracked(context, validCreateInput({ role: "academy_owner" }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.role).toBe("academy_owner");
+  });
 });
 
 describe("updateStaff", () => {
@@ -558,6 +719,23 @@ describe("assignStaffRole", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
+  it("tenant isolation: Academy A owner cannot change Academy B staff's role by supplying their userId", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherTarget = await createTargetStaff(other.academyId, "trainer");
+
+    const { context } = await setupAcademy("academy_owner");
+    const result = await assignStaffRole(context, otherTarget.userId, "academy_admin");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    // Academy B's membership must be completely untouched by the refused attempt.
+    const [membership] = await db
+      .select()
+      .from(academyMemberships)
+      .where(and(eq(academyMemberships.userId, otherTarget.userId), eq(academyMemberships.academyId, other.academyId)));
+    expect(membership.role).toBe("trainer");
+  });
+
   it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
     "allows %s to assign a role",
     async (role) => {
@@ -578,6 +756,62 @@ describe("assignStaffRole", () => {
       if (!result.ok) expect(result.error.code).toBe("forbidden");
     },
   );
+
+  // Owner-safety pass (delete/deletion-audit task): Manager holds "manage"
+  // on academy.staff, the same level this action already accepted for every
+  // other role — without this guard a Manager could self-promote (or
+  // promote anyone) to academy_owner, or strip the real owner of it.
+  it.each<AcademyRole>(["academy_admin", "manager"])(
+    "refuses %s granting academy_owner to someone else",
+    async (role) => {
+      const { academyId, context } = await setupAcademy(role);
+      const target = await createTargetStaff(academyId, "trainer");
+      const result = await assignStaffRole(context, target.userId, "academy_owner");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("forbidden");
+    },
+  );
+
+  it("allows an existing owner to grant academy_owner to someone else", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createTargetStaff(academyId, "trainer");
+    const result = await assignStaffRole(context, target.userId, "academy_owner");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.role).toBe("academy_owner");
+  });
+
+  it("refuses a non-owner (Admin) demoting the real owner away from academy_owner", async () => {
+    const { academyId, userId: ownerUserId } = await setupAcademy("academy_owner");
+    const adminUserId = await createUser();
+    await addMembership(adminUserId, academyId, "academy_admin");
+    const adminContext: AuthContext = { userId: adminUserId, branchIds: [], academyWide: false };
+
+    const result = await assignStaffRole(adminContext, ownerUserId, "manager");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+
+    const [membership] = await db
+      .select()
+      .from(academyMemberships)
+      .where(and(eq(academyMemberships.userId, ownerUserId), eq(academyMemberships.academyId, academyId)));
+    expect(membership.role).toBe("academy_owner");
+  });
+
+  it("refuses demoting the last remaining owner, even by another owner", async () => {
+    const { academyId, userId: ownerUserId } = await setupAcademy("academy_owner");
+    const owner2UserId = await createUser();
+    await addMembership(owner2UserId, academyId, "academy_owner");
+    const owner2Context: AuthContext = { userId: owner2UserId, branchIds: [], academyWide: false };
+
+    // Two owners exist — demoting the first one is fine.
+    const firstDemotion = await assignStaffRole(owner2Context, ownerUserId, "manager");
+    expect(firstDemotion.ok).toBe(true);
+
+    // Now owner2 is the only remaining owner — demoting them must be refused.
+    const lastDemotion = await assignStaffRole(owner2Context, owner2UserId, "manager");
+    expect(lastDemotion.ok).toBe(false);
+    if (!lastDemotion.ok) expect(lastDemotion.error.code).toBe("conflict");
+  });
 });
 
 describe("removeStaffMembership (owner-safety pass, delete/deletion-audit task)", () => {
@@ -760,5 +994,226 @@ describe("listStaff — permission matrix (Full/Manage/View may list, Admissions
       expect(row?.role).toBe("finance_officer");
       expect(row?.loginEmail).toBeTruthy();
     }
+  });
+});
+
+describe("getStaffDeletionEligibility / deleteStaff", () => {
+  it("a staff profile with no active membership and no references is eligible and deletes", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createStaffWithoutMembership(academyId, "Unused Staff");
+
+    const eligibility = await getStaffDeletionEligibility(context, target.staffProfileId);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(true);
+      expect(eligibility.eligibility.reasons).toEqual([]);
+    }
+
+    const deleted = await deleteStaff(context, target.staffProfileId, "Unused Staff");
+    expect(deleted.ok).toBe(true);
+
+    const result = await listStaff(context);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.staff.find((s) => s.id === target.staffProfileId)).toBeUndefined();
+  });
+
+  it("an academy_owner with active membership cannot be deleted through normal staff deletion", async () => {
+    const owner = await setupAcademy("academy_owner");
+    // A second owner, so this isn't also blocked by "last remaining owner"
+    // — this test is specifically about the active-membership guard.
+    const secondOwnerUserId = await createUser();
+    await addMembership(secondOwnerUserId, owner.academyId, "academy_owner");
+    const [profile] = await db
+      .insert(staffProfiles)
+      .values({ academyId: owner.academyId, userId: secondOwnerUserId, fullName: "Second Owner", phone: "+1-555-0002" })
+      .returning({ id: staffProfiles.id });
+
+    const eligibility = await getStaffDeletionEligibility(owner.context, profile.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.hasActiveMembership).toBe(true);
+    }
+
+    const result = await deleteStaff(owner.context, profile.id, "Second Owner");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ineligible");
+  });
+
+  it("the last remaining owner cannot be deleted (still has an active membership)", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const [profile] = await db
+      .insert(staffProfiles)
+      .values({ academyId: owner.academyId, userId: owner.userId, fullName: "Only Owner", phone: "+1-555-0003" })
+      .returning({ id: staffProfiles.id });
+
+    const result = await deleteStaff(owner.context, profile.id, "Only Owner");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ineligible");
+
+    // The membership itself is completely untouched.
+    const [membership] = await db
+      .select()
+      .from(academyMemberships)
+      .where(and(eq(academyMemberships.userId, owner.userId), eq(academyMemberships.academyId, owner.academyId)));
+    expect(membership.status).toBe("active");
+    expect(membership.role).toBe("academy_owner");
+  });
+
+  it("removing access first (removeStaffMembership), then deleting, succeeds — the correct two-step workflow", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createTargetStaff(academyId, "trainer");
+
+    const removed = await removeStaffMembership(context, target.userId);
+    expect(removed.ok).toBe(true);
+
+    const eligibility = await getStaffDeletionEligibility(context, target.staffProfileId);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) expect(eligibility.eligibility.eligible).toBe(true);
+
+    const deleted = await deleteStaff(context, target.staffProfileId, "Target Staff");
+    expect(deleted.ok).toBe(true);
+  });
+
+  it("a staff member assigned as a course instructor is blocked from deletion", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createStaffWithoutMembership(academyId, "Instructor Staff");
+    const branchId = await insertBranchDirect(academyId);
+    const { courseId } = await insertProgramCourseBatch(academyId, branchId);
+    await assignInstructorToCourse(courseId, target.staffProfileId);
+
+    const eligibility = await getStaffDeletionEligibility(context, target.staffProfileId);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.instructorCourseCount).toBe(1);
+    }
+
+    const deleted = await deleteStaff(context, target.staffProfileId, "Instructor Staff");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+  });
+
+  it("a staff member assigned as a batch trainer is blocked from deletion", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createStaffWithoutMembership(academyId, "Trainer Staff");
+    const branchId = await insertBranchDirect(academyId);
+    const { batchId } = await insertProgramCourseBatch(academyId, branchId);
+    await assignTrainerToBatch(academyId, batchId, target.staffProfileId);
+
+    const eligibility = await getStaffDeletionEligibility(context, target.staffProfileId);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.trainerAssignmentCount).toBe(1);
+    }
+
+    const deleted = await deleteStaff(context, target.staffProfileId, "Trainer Staff");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+  });
+
+  it("a staff member referenced in a timetable entry is blocked from deletion", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createStaffWithoutMembership(academyId, "Timetable Staff");
+    const branchId = await insertBranchDirect(academyId);
+    const { batchId } = await insertProgramCourseBatch(academyId, branchId);
+    await insertTimetableEntry(academyId, branchId, batchId, target.staffProfileId);
+
+    const eligibility = await getStaffDeletionEligibility(context, target.staffProfileId);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.timetableCount).toBe(1);
+    }
+
+    const deleted = await deleteStaff(context, target.staffProfileId, "Timetable Staff");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+  });
+
+  it("rejects a wrong confirmation name, and nothing is deleted", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createStaffWithoutMembership(academyId, "Type Me Exactly");
+
+    const result = await deleteStaff(context, target.staffProfileId, "Wrong Name");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+
+    const listed = await listStaff(context);
+    expect(listed.ok).toBe(true);
+    if (listed.ok) expect(listed.staff.find((s) => s.id === target.staffProfileId)).toBeDefined();
+  });
+
+  it.each<[AcademyRole, boolean]>([
+    ["academy_admin", true],
+    ["manager", true],
+    ["admissions_officer", false],
+    ["finance_officer", false],
+    ["trainer", false],
+  ])("role %s: delete allowed = %s", async (role, allowed) => {
+    const owner = await setupAcademy("academy_owner");
+    const target = await createStaffWithoutMembership(owner.academyId);
+
+    const actingUserId = await createUser();
+    await addMembership(actingUserId, owner.academyId, role);
+    const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
+
+    const result = await deleteStaff(actingContext, target.staffProfileId, "Unused Staff");
+    expect(result.ok).toBe(allowed);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+
+  it("never deletes another academy's staff profile (tenant isolation)", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherTarget = await createStaffWithoutMembership(other.academyId, "Other Academy Staff");
+
+    const { context } = await setupAcademy("academy_owner");
+    const eligibility = await getStaffDeletionEligibility(context, otherTarget.staffProfileId);
+    expect(eligibility.ok).toBe(false);
+    if (!eligibility.ok) expect(eligibility.error.code).toBe("not_found");
+
+    const result = await deleteStaff(context, otherTarget.staffProfileId, "Other Academy Staff");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const listed = await listStaff(other.context);
+    expect(listed.ok).toBe(true);
+    if (listed.ok) expect(listed.staff.find((s) => s.id === otherTarget.staffProfileId)).toBeDefined();
+  });
+
+  it("writes an audit row before deleting, and the audit row survives the deletion", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const target = await createStaffWithoutMembership(academyId, "Audited Deletion");
+
+    const result = await deleteStaff(context, target.staffProfileId, "Audited Deletion");
+    expect(result.ok).toBe(true);
+
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, target.staffProfileId), eq(auditLogs.action, "deleteStaff")));
+    expect(audit?.action).toBe("deleteStaff");
+    expect(audit?.actorUserId).toBe(userId);
+    expect(audit?.academyId).toBe(academyId);
+  });
+
+  it("race condition: a course-instructor assignment made after the eligibility check still blocks the delete transaction", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createStaffWithoutMembership(academyId, "Race Condition Staff");
+
+    const eligibility = await getStaffDeletionEligibility(context, target.staffProfileId);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) expect(eligibility.eligibility.eligible).toBe(true);
+
+    // Simulates a concurrent instructor assignment landing between the
+    // UI's eligibility preview and the actual delete call.
+    const branchId = await insertBranchDirect(academyId);
+    const { courseId } = await insertProgramCourseBatch(academyId, branchId);
+    await assignInstructorToCourse(courseId, target.staffProfileId);
+
+    const result = await deleteStaff(context, target.staffProfileId, "Race Condition Staff");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("ineligible");
   });
 });

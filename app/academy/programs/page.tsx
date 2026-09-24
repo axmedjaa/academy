@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listPrograms } from "@/lib/academies/programs";
 import { ProgramsList } from "./programs-list";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 43: `/academy/programs` — program CRUD. Same gating shape
@@ -20,29 +21,24 @@ export default async function AcademyProgramsPage() {
 
   if (!result.ok) {
     return (
-      <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-        <h1>{result.error.code === "blocked" ? "Access unavailable" : "Access denied"}</h1>
-        <p>{result.error.message}</p>
-      </main>
+      <PageMessage
+        title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"}
+        message={result.error.message}
+      />
     );
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 900,
-        margin: "2rem auto",
-        fontFamily: "system-ui, sans-serif",
-        padding: "0 1rem",
-      }}
-    >
-      <h1>Programs</h1>
-      <p style={{ color: "#666", fontSize: "0.9rem" }}>
-        {result.canManage
-          ? "You can create, edit, and archive programs."
-          : "You can view this academy's programs."}
-      </p>
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Programs"
+        description={
+          result.canManage
+            ? "You can create, edit, and archive programs."
+            : "You can view this academy's programs."
+        }
+      />
       <ProgramsList programs={result.programs} canManage={result.canManage} />
-    </main>
+    </div>
   );
 }

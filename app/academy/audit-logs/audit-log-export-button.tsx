@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { exportAuditLogAction } from "@/lib/export/export-data-actions";
 import { downloadExportContent } from "@/lib/export/download-file";
+import { Button, ErrorMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Phase 5, Item 60 — Export button for `/academy/audit-logs`.
@@ -40,15 +41,11 @@ export function AuditLogExportButton({
   }
 
   return (
-    <div style={{ margin: "0.75rem 0" }}>
-      {error && (
-        <p role="alert" style={{ color: "#b00020", fontSize: "0.85rem" }}>
-          {error}
-        </p>
-      )}
-      <button type="button" onClick={handleExport} disabled={isPending}>
+    <div className="flex flex-col gap-2">
+      {error && <ErrorMessage message={error} />}
+      <Button type="button" variant="secondary" className="self-start" onClick={handleExport} disabled={isPending}>
         {isPending ? "Exporting..." : "Export CSV"}
-      </button>
+      </Button>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ilike } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -444,10 +444,68 @@ export type IssueCertificateResult =
  * `(student_id, batch_id)` unique constraint" — see this file's module
  * comment for the full retry-loop shape.
  */
+/**
+ * Accepts either the student's UUID `id` OR their human-readable
+ * `studentNumber` (e.g. "STD-000001") — app/academy/students/students-list.tsx's
+ * "Student #" column is the only identifier that page actually displays for
+ * copy/paste, same gap fixed for lib/academies/id-cards.ts's
+ * resolveScopedStudent (see that function's own doc comment for the full
+ * reasoning). `(academy_id, student_number)` is a DB-level unique
+ * constraint, so this is still an exact match, not a fuzzy search.
+ */
+async function resolveStudentIdOrNumber(
+  executor: DbClient,
+  academyId: string,
+  studentIdOrNumber: string,
+): Promise<string | null> {
+  const trimmed = studentIdOrNumber.trim();
+  if (trimmed.length === 0) return null;
+  const isUuid = z.string().uuid().safeParse(trimmed).success;
+
+  const [row] = await executor
+    .select({ id: students.id })
+    .from(students)
+    .where(
+      and(
+        eq(students.academyId, academyId),
+        isUuid ? eq(students.id, trimmed) : ilike(students.studentNumber, trimmed),
+      ),
+    )
+    .limit(1);
+  return row?.id ?? null;
+}
+
+/**
+ * Same idea as resolveStudentIdOrNumber above, for batches' own
+ * human-readable identifier: `code` (e.g. "batch3"), unique per
+ * `(academy_id, code)`.
+ */
+async function resolveBatchIdOrCode(
+  executor: DbClient,
+  academyId: string,
+  batchIdOrCode: string,
+): Promise<string | null> {
+  const trimmed = batchIdOrCode.trim();
+  if (trimmed.length === 0) return null;
+  const isUuid = z.string().uuid().safeParse(trimmed).success;
+
+  const [row] = await executor
+    .select({ id: batches.id })
+    .from(batches)
+    .where(
+      and(
+        eq(batches.academyId, academyId),
+        isUuid ? eq(batches.id, trimmed) : ilike(batches.code, trimmed),
+      ),
+    )
+    .limit(1);
+  return row?.id ?? null;
+}
+
 export async function issueCertificate(
   actorContext: AuthContext,
-  studentId: string,
-  batchId: string,
+  studentIdOrNumber: string,
+  batchIdOrCode: string,
 ): Promise<IssueCertificateResult> {
   const resolved = await resolveCertificatesAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -457,30 +515,13 @@ export async function issueCertificate(
     return { ok: false, error: FORBIDDEN };
   }
 
-  const parsedStudentId = z.string().uuid().safeParse(studentId);
-  if (!parsedStudentId.success) {
-    return { ok: false, error: STUDENT_NOT_FOUND };
-  }
-  const parsedBatchId = z.string().uuid().safeParse(batchId);
-  if (!parsedBatchId.success) {
-    return { ok: false, error: BATCH_NOT_FOUND };
-  }
-
-  const [student] = await db
-    .select({ id: students.id, academyId: students.academyId })
-    .from(students)
-    .where(eq(students.id, studentId))
-    .limit(1);
-  if (!student || student.academyId !== academyId) {
+  const studentId = await resolveStudentIdOrNumber(db, academyId, studentIdOrNumber);
+  if (!studentId) {
     return { ok: false, error: STUDENT_NOT_FOUND };
   }
 
-  const [batch] = await db
-    .select({ id: batches.id, academyId: batches.academyId })
-    .from(batches)
-    .where(eq(batches.id, batchId))
-    .limit(1);
-  if (!batch || batch.academyId !== academyId) {
+  const batchId = await resolveBatchIdOrCode(db, academyId, batchIdOrCode);
+  if (!batchId) {
     return { ok: false, error: BATCH_NOT_FOUND };
   }
 

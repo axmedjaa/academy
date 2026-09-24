@@ -3,6 +3,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { hashPassword, passwordSchema, verifyPassword } from "@/lib/auth/password";
+import { issueEmailChangeToken } from "@/lib/auth/email-change";
+import { checkEmailChangeRateLimit } from "@/lib/auth/email-change-rate-limit";
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
@@ -24,7 +26,7 @@ import type { AuthContext } from "@/lib/auth/auth-context";
  */
 
 export interface UpdateAccountActionError {
-  code: "forbidden" | "validation" | "wrong_password" | "email_taken";
+  code: "forbidden" | "validation" | "wrong_password" | "email_taken" | "rate_limited" | "email_send_failed";
   message: string;
 }
 
@@ -50,9 +52,20 @@ const updateEmailSchema = z.object({
 export type UpdateOwnEmailInput = z.input<typeof updateEmailSchema>;
 
 export type UpdateOwnEmailResult =
-  | { ok: true; email: string }
+  | { ok: true; status: "unchanged" }
+  | { ok: true; status: "verification_sent"; newEmail: string }
   | { ok: false; error: UpdateAccountActionError };
 
+/**
+ * Does NOT change `users.email`. On success it only issues a
+ * verification token and emails it to `newEmail` (lib/auth/email-change.ts)
+ * — the address only takes effect once that link is clicked and
+ * `applyEmailChangeToken` re-validates everything (including uniqueness
+ * again, in case it was claimed in the meantime). This function still owns
+ * every check that gates *requesting* a change: current password,
+ * new-email format/no-op, and duplicate check against the email currently
+ * in use by any account.
+ */
 export async function updateOwnEmail(
   actorContext: AuthContext,
   input: UpdateOwnEmailInput,
@@ -78,7 +91,7 @@ export async function updateOwnEmail(
   }
 
   if (newEmail === user.email) {
-    return { ok: true, email: user.email };
+    return { ok: true, status: "unchanged" };
   }
 
   const [existing] = await db
@@ -90,19 +103,23 @@ export async function updateOwnEmail(
     return { ok: false, error: { code: "email_taken", message: "That email is already in use." } };
   }
 
-  await db.update(users).set({ email: newEmail, updatedAt: new Date() }).where(eq(users.id, user.id));
+  const rateLimit = await checkEmailChangeRateLimit(actorContext.userId);
+  if (!rateLimit.allowed) {
+    return {
+      ok: false,
+      error: {
+        code: "rate_limited",
+        message: `Too many verification emails requested. Try again in ${rateLimit.retryAfterSeconds}s.`,
+      },
+    };
+  }
 
-  await recordAudit({
-    actorUserId: actorContext.userId,
-    actorRole: actorContext.platformRole,
-    action: "updateOwnEmail",
-    entityType: "user",
-    entityId: user.id,
-    before: { email: user.email },
-    after: { email: newEmail },
-  });
+  const issued = await issueEmailChangeToken(user.id, newEmail);
+  if (!issued.ok) {
+    return { ok: false, error: { code: "email_send_failed", message: issued.error } };
+  }
 
-  return { ok: true, email: newEmail };
+  return { ok: true, status: "verification_sent", newEmail };
 }
 
 const changePasswordSchema = z
@@ -210,7 +227,7 @@ const updateAccountSchema = z
 export type UpdateOwnAccountInput = z.input<typeof updateAccountSchema>;
 
 export type UpdateOwnAccountResult =
-  | { ok: true; email?: string; passwordChanged: boolean }
+  | { ok: true; emailVerificationSent?: string; passwordChanged: boolean }
   | { ok: false; error: UpdateAccountActionError };
 
 /**
@@ -221,6 +238,10 @@ export type UpdateOwnAccountResult =
  * above (kept as-is, including their own tests) rather than duplicating
  * their verification/validation logic — this is an orchestration layer,
  * not a second implementation.
+ *
+ * `emailVerificationSent` carries the pending new address when a
+ * verification email was actually sent — `users.email` itself does not
+ * change until that link is clicked (see updateOwnEmail's doc comment).
  *
  * At least one of `newEmail`/`newPassword` must be provided (enforced by
  * the schema above) — submitting neither would be a no-op, which the UI
@@ -237,13 +258,15 @@ export async function updateOwnAccount(
   }
   const { currentPassword, newEmail, newPassword } = parsed.data;
 
-  let updatedEmail: string | undefined;
+  let emailVerificationSent: string | undefined;
   if (newEmail !== undefined) {
     const emailResult = await updateOwnEmail(actorContext, { currentPassword, newEmail });
     if (!emailResult.ok) {
       return emailResult;
     }
-    updatedEmail = emailResult.email;
+    if (emailResult.status === "verification_sent") {
+      emailVerificationSent = emailResult.newEmail;
+    }
   }
 
   let passwordChanged = false;
@@ -267,5 +290,5 @@ export async function updateOwnAccount(
     passwordChanged = true;
   }
 
-  return { ok: true, email: updatedEmail, passwordChanged };
+  return { ok: true, emailVerificationSent, passwordChanged };
 }
