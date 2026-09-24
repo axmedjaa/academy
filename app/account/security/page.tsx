@@ -1,9 +1,13 @@
 import { redirect } from "next/navigation";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { users } from "@/lib/db/schema";
 import { getAuthContext, getCurrentSessionId } from "@/lib/auth/auth-context";
 import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
 import { listMySessions, revokeAllOtherSessions, revokeSession } from "@/lib/auth/session-actions";
 import { AuthLink, Card, Pill, SecondaryButton } from "@/lib/ui/auth-components";
 import { color, spacing } from "@/lib/ui/theme";
+import { AccountForms } from "./account-forms";
 
 /** DESIGN.md §7: `/account/security` — "B. Active-sessions list (device/
  * browser, IP, last-active, 'this device' flag) with per-row Revoke +
@@ -21,10 +25,11 @@ export default async function AccountSecurityPage() {
     redirect("/login");
   }
 
-  const [sessions, currentSessionId, mfaEnabled] = await Promise.all([
+  const [sessions, currentSessionId, mfaEnabled, [user]] = await Promise.all([
     listMySessions(),
     getCurrentSessionId(),
     context.platformRole === "platform_owner" ? hasVerifiedMfaCredential(context.userId) : Promise.resolve(null),
+    db.select({ email: users.email }).from(users).where(eq(users.id, context.userId)).limit(1),
   ]);
 
   return (
@@ -36,6 +41,14 @@ export default async function AccountSecurityPage() {
             Manage where you&apos;re signed in and your account&apos;s two-factor authentication.
           </p>
         </div>
+
+        <Card>
+          <h2 style={{ margin: 0, marginBottom: spacing.xxs, fontSize: "1.05rem", color: color.text }}>Account</h2>
+          <p style={{ margin: 0, marginBottom: spacing.md, fontSize: "0.85rem", color: color.textMuted }}>
+            Update your email or password. Leave either blank to keep it as-is.
+          </p>
+          <AccountForms currentEmail={user?.email ?? ""} />
+        </Card>
 
         <Card>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.md }}>
