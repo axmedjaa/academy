@@ -393,3 +393,59 @@ export async function archiveProgram(
   }
   return { ok: true, program: toRecord(result) };
 }
+
+/** Mirror of archiveProgram, flipped — no hard delete either way, `status`
+ * just moves back to "active". Idempotent. */
+export async function restoreProgram(
+  actorContext: AuthContext,
+  programId: string,
+): Promise<ArchiveProgramResult> {
+  const resolved = await resolveProgramAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManagePrograms(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(programId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(programs)
+      .where(and(eq(programs.id, programId), eq(programs.academyId, academyId)))
+      .limit(1);
+    if (!existing) return null;
+
+    const [updated] = await tx
+      .update(programs)
+      .set({ status: "active", updatedAt: new Date() })
+      .where(eq(programs.id, programId))
+      .returning();
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "restoreProgram",
+        entityType: "program",
+        entityId: programId,
+        before: toRecord(existing),
+        after: toRecord(updated),
+      },
+      tx,
+    );
+
+    return updated;
+  });
+
+  if (!result) {
+    return { ok: false, error: NOT_FOUND };
+  }
+  return { ok: true, program: toRecord(result) };
+}

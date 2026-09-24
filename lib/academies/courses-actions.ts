@@ -5,6 +5,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   archiveCourse as archiveCourseForActor,
   createCourse as createCourseForActor,
+  restoreCourse as restoreCourseForActor,
   updateCourse as updateCourseForActor,
   type CourseActionError,
   type CreateCourseInput,
@@ -85,6 +86,29 @@ export async function archiveCourse(
   const result = await archiveCourseForActor(context, courseId);
   if (!result.ok) {
     return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/courses");
+  return { ok: true };
+}
+
+/** Plain-callable, for the courses table's "Archive"/"Restore" row action
+ * — same convention as students-actions.ts's updateStudentStatus. */
+export async function setCourseStatus(
+  courseId: string,
+  status: "active" | "archived",
+): Promise<{ ok: true } | { ok: false; error: CourseActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result =
+    status === "archived"
+      ? await archiveCourseForActor(context, courseId)
+      : await restoreCourseForActor(context, courseId);
+  if (!result.ok) {
+    return result;
   }
 
   revalidatePath("/academy/courses");

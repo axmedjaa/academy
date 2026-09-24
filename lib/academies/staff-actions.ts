@@ -5,6 +5,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   assignStaffRole as assignStaffRoleForActor,
   createStaff as createStaffForActor,
+  removeStaffMembership as removeStaffMembershipForActor,
   updateStaff as updateStaffForActor,
   type CreateStaffInput,
   type StaffActionError,
@@ -93,6 +94,28 @@ export async function assignStaffRole(
   }
 
   const result = await assignStaffRoleForActor(context, targetUserId, role);
+  if (result.ok) {
+    revalidatePath("/academy/staff");
+    return { ok: true };
+  }
+  return result;
+}
+
+/**
+ * New in the delete/deletion-audit pass — see
+ * lib/academies/staff.ts's removeStaffMembership for the actual guard
+ * (owner-only for an owner target, last-owner protection, audit-logged
+ * status flip to "removed", never a hard delete).
+ */
+export async function removeStaffMembership(
+  targetUserId: string,
+): Promise<{ ok: true } | { ok: false; error: StaffActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await removeStaffMembershipForActor(context, targetUserId);
   if (result.ok) {
     revalidatePath("/academy/staff");
     return { ok: true };

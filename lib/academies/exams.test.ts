@@ -24,7 +24,17 @@ import {
 } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
-import { createExam, enterMarks, getExam, listExamResults, listExams } from "./exams";
+import {
+  archiveExam,
+  createExam,
+  deleteExam,
+  enterMarks,
+  getExam,
+  getExamDeletionEligibility,
+  listExamResults,
+  listExams,
+  restoreExam,
+} from "./exams";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -604,5 +614,145 @@ describe("FK integrity", () => {
     const result = await enterMarks(context, randomUUID(), [{ studentId, marksObtained: 50 }]);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
+describe("archiveExam / restoreExam", () => {
+  it("archives then restores an exam, round-tripping status without touching exam_results", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    await enrollStudentDirect(academyId, batchId, studentId);
+    const created = await createExam(context, { batchId, name: "Midterm", maxMarks: 100 });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const archived = await archiveExam(context, created.exam.id);
+    expect(archived.ok).toBe(true);
+    if (archived.ok) expect(archived.exam.status).toBe("archived");
+
+    const restored = await restoreExam(context, created.exam.id);
+    expect(restored.ok).toBe(true);
+    if (restored.ok) expect(restored.exam.status).toBe("scheduled");
+
+    const roster = await listExamResults(context, created.exam.id);
+    expect(roster.ok).toBe(true);
+    if (roster.ok) expect(roster.results).toHaveLength(1);
+  });
+
+  it("forbids a Trainer from archiving an exam (Trainer may enter marks, not manage exams)", async () => {
+    const { context, academyId, batchId } = await setupAcademy("academy_owner");
+    const created = await createExam(context, { batchId, name: "Midterm", maxMarks: 100 });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const trainerUserId = await createUser();
+    await addMembership(trainerUserId, academyId, "trainer");
+    const trainerContext: AuthContext = { userId: trainerUserId, branchIds: [], academyWide: false };
+
+    const result = await archiveExam(trainerContext, created.exam.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+
+  it("never archives another academy's exam (tenant isolation)", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherExam = await createExam(other.context, { batchId: other.batchId, name: "Other", maxMarks: 100 });
+    expect(otherExam.ok).toBe(true);
+    if (!otherExam.ok) return;
+
+    const { context } = await setupAcademy("academy_owner");
+    const result = await archiveExam(context, otherExam.exam.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
+describe("getExamDeletionEligibility / deleteExam", () => {
+  it("an exam with zero exam_results (no students were enrolled when it was created) is eligible for permanent deletion", async () => {
+    const { context, batchId } = await setupAcademy("academy_owner");
+    const created = await createExam(context, { batchId, name: "Unused Exam", maxMarks: 100 });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.resultCount).toBe(0);
+
+    const eligibility = await getExamDeletionEligibility(context, created.exam.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(true);
+      expect(eligibility.eligibility.hasResults).toBe(false);
+    }
+
+    const deleted = await deleteExam(context, created.exam.id);
+    expect(deleted.ok).toBe(true);
+
+    const afterDelete = await getExam(context, created.exam.id);
+    expect(afterDelete.ok).toBe(false);
+    if (!afterDelete.ok) expect(afterDelete.error.code).toBe("not_found");
+  });
+
+  it("an exam with exam_results (a student was enrolled when it was created) is blocked from permanent deletion, and nothing is deleted", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    await enrollStudentDirect(academyId, batchId, studentId);
+    const created = await createExam(context, { batchId, name: "Midterm", maxMarks: 100 });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.resultCount).toBe(1);
+
+    const eligibility = await getExamDeletionEligibility(context, created.exam.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.hasResults).toBe(true);
+    }
+
+    const deleted = await deleteExam(context, created.exam.id);
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+
+    // Nothing was silently deleted to force the delete through.
+    const stillThere = await getExam(context, created.exam.id);
+    expect(stillThere.ok).toBe(true);
+    const rosterStillThere = await listExamResults(context, created.exam.id);
+    expect(rosterStillThere.ok).toBe(true);
+    if (rosterStillThere.ok) expect(rosterStillThere.results).toHaveLength(1);
+  });
+
+  it("forbids a Trainer from deleting an exam even when it is otherwise eligible", async () => {
+    const { context, academyId, batchId } = await setupAcademy("academy_owner");
+    const created = await createExam(context, { batchId, name: "Unused Exam", maxMarks: 100 });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const trainerUserId = await createUser();
+    await addMembership(trainerUserId, academyId, "trainer");
+    const trainerContext: AuthContext = { userId: trainerUserId, branchIds: [], academyWide: false };
+
+    const result = await deleteExam(trainerContext, created.exam.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+
+    const stillThere = await getExam(context, created.exam.id);
+    expect(stillThere.ok).toBe(true);
+  });
+
+  it("never deletes another academy's exam (tenant isolation), and the eligibility preview agrees", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherExam = await createExam(other.context, { batchId: other.batchId, name: "Other", maxMarks: 100 });
+    expect(otherExam.ok).toBe(true);
+    if (!otherExam.ok) return;
+
+    const { context } = await setupAcademy("academy_owner");
+
+    const eligibility = await getExamDeletionEligibility(context, otherExam.exam.id);
+    expect(eligibility.ok).toBe(false);
+    if (!eligibility.ok) expect(eligibility.error.code).toBe("not_found");
+
+    const result = await deleteExam(context, otherExam.exam.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const stillThere = await getExam(other.context, otherExam.exam.id);
+    expect(stillThere.ok).toBe(true);
   });
 });

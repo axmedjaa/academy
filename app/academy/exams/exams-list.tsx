@@ -3,116 +3,185 @@
 import { useActionState, useEffect, useState, useTransition } from "react";
 import {
   createExam,
+  deleteExam,
   enterMarks,
   getExamResultsRoster,
+  setExamStatus,
   type ExamFormState,
 } from "@/lib/academies/exams-actions";
 import type { ExamRecord, ExamResultRosterRow } from "@/lib/academies/exams";
 import type { BatchRecord } from "@/lib/academies/batches";
+import {
+  Badge,
+  Button,
+  ErrorMessage,
+  Field,
+  Section,
+  TableWrap,
+  inputClass,
+  td,
+  th,
+  trHover,
+} from "@/app/academy/_shell/ui";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: ExamFormState = { ok: false };
 
 interface Props {
-  exams: ExamRecord[];
+  exams: (ExamRecord & { hasResults: boolean })[];
   batches: BatchRecord[];
   canManage: boolean;
   canEnterMarks: boolean;
 }
 
+function statusTone(status: string): "green" | "amber" | "gray" | "blue" {
+  if (status === "completed" || status === "published") return "green";
+  if (status === "marks_entered" || status === "under_review") return "amber";
+  if (status === "draft" || status === "scheduled") return "blue";
+  return "gray";
+}
+
 export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
   const [createState, createFormAction, createPending] = useActionState(createExam, initialState);
   const [openExamId, setOpenExamId] = useState<string | null>(null);
+  const showActions = canManage || canEnterMarks;
+
+  function toggleExamStatus(exam: ExamRecord) {
+    return setExamStatus(exam.id, exam.status === "archived" ? "scheduled" : "archived");
+  }
+
+  function removeExam(examId: string) {
+    return deleteExam(examId);
+  }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
+    <div className="flex flex-col gap-8">
       <section>
-        <h2>Exams</h2>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <h2 className="mb-3 text-lg font-semibold text-ink">Exams</h2>
+        <TableWrap>
           <thead>
             <tr>
-              <th style={{ textAlign: "left" }}>Name</th>
-              <th style={{ textAlign: "left" }}>Max marks</th>
-              <th style={{ textAlign: "left" }}>Date</th>
-              <th style={{ textAlign: "left" }}>Status</th>
-              {canEnterMarks && <th />}
+              <th className={th}>Name</th>
+              <th className={th}>Max marks</th>
+              <th className={th}>Date</th>
+              <th className={th}>Status</th>
+              {showActions && <th className={th}>Actions</th>}
             </tr>
           </thead>
           <tbody>
             {exams.length === 0 && (
               <tr>
-                <td colSpan={canEnterMarks ? 5 : 4}>No exams yet.</td>
+                <td colSpan={showActions ? 5 : 4} className={`${td} text-center text-muted`}>
+                  No exams yet.
+                </td>
               </tr>
             )}
             {exams.map((exam) => (
-              <tr key={exam.id}>
-                <td>{exam.name}</td>
-                <td>{exam.maxMarks}</td>
-                <td>{exam.examDate ?? "—"}</td>
-                <td>{exam.status}</td>
-                {canEnterMarks && (
-                  <td>
-                    <button
-                      type="button"
-                      onClick={() => setOpenExamId(openExamId === exam.id ? null : exam.id)}
-                    >
-                      {openExamId === exam.id ? "Close" : "Enter marks"}
-                    </button>
+              <tr key={exam.id} className={trHover}>
+                <td className={`${td} font-medium`}>{exam.name}</td>
+                <td className={td}>{exam.maxMarks}</td>
+                <td className={td}>{exam.examDate ?? "—"}</td>
+                <td className={td}>
+                  <Badge label={exam.status} tone={statusTone(exam.status)} />
+                </td>
+                {showActions && (
+                  <td className={td}>
+                    <div className="flex flex-wrap gap-2">
+                      {canEnterMarks && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          className="px-2.5 py-1 text-xs"
+                          onClick={() => setOpenExamId(openExamId === exam.id ? null : exam.id)}
+                        >
+                          {openExamId === exam.id ? "Close" : "Enter marks"}
+                        </Button>
+                      )}
+                      {canManage && (
+                        <ConfirmButton
+                          label={exam.status === "archived" ? "Restore" : "Archive"}
+                          variant={exam.status === "archived" ? "secondary" : "danger"}
+                          className="px-2.5 py-1 text-xs"
+                          title={exam.status === "archived" ? `Restore "${exam.name}"?` : `Archive "${exam.name}"?`}
+                          description={
+                            exam.status === "archived" ? (
+                              <>This exam will be marked scheduled again.</>
+                            ) : (
+                              <>
+                                Archived exams are hidden from active use, but every entered mark and
+                                result is kept and can be restored at any time.
+                              </>
+                            )
+                          }
+                          onConfirm={() => toggleExamStatus(exam)}
+                        />
+                      )}
+                      {canManage && (
+                        <span
+                          title={
+                            exam.hasResults
+                              ? "This exam has student results attached to it, so it can't be permanently deleted. Use Archive instead."
+                              : undefined
+                          }
+                        >
+                          <ConfirmButton
+                            label="Delete"
+                            variant="dangerSolid"
+                            className="px-2.5 py-1 text-xs"
+                            disabled={exam.hasResults}
+                            title={`Permanently delete "${exam.name}"?`}
+                            description={
+                              <>
+                                This cannot be undone. The exam will be permanently removed from the
+                                database — this is only possible because it has no student results
+                                attached yet.
+                              </>
+                            }
+                            onConfirm={() => removeExam(exam.id)}
+                          />
+                        </span>
+                      )}
+                    </div>
                   </td>
                 )}
               </tr>
             ))}
           </tbody>
-        </table>
+        </TableWrap>
         {openExamId && <MarksEntryPanel examId={openExamId} />}
       </section>
 
       {canManage && (
-        <section>
-          <h2>Create exam</h2>
-          <form
-            action={createFormAction}
-            style={{ display: "flex", flexDirection: "column", gap: "0.75rem", maxWidth: 360 }}
-          >
-            <label>
-              Batch
-              <select name="batchId" required style={{ display: "block", width: "100%" }}>
+        <Section>
+          <h2 className="text-base font-semibold text-ink">Create exam</h2>
+          <form action={createFormAction} className="mt-4 flex max-w-md flex-col gap-3">
+            <Field label="Batch">
+              <select name="batchId" required className={inputClass}>
                 {batches.map((batch) => (
                   <option key={batch.id} value={batch.id}>
                     {batch.name}
                   </option>
                 ))}
               </select>
-            </label>
-            <label>
-              Name
-              <input type="text" name="name" required style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Max marks
-              <input
-                type="number"
-                name="maxMarks"
-                min="1"
-                step="any"
-                required
-                style={{ display: "block", width: "100%" }}
-              />
-            </label>
-            <label>
-              Exam date (optional)
-              <input type="date" name="examDate" style={{ display: "block", width: "100%" }} />
-            </label>
-            {createState.error && (
-              <p role="alert" style={{ color: "crimson" }}>
-                {createState.error.message}
-              </p>
-            )}
-            {createState.ok && <p style={{ color: "green" }}>Exam created.</p>}
-            <button type="submit" disabled={createPending}>
+            </Field>
+            <Field label="Name">
+              <input type="text" name="name" required className={inputClass} />
+            </Field>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Max marks">
+                <input type="number" name="maxMarks" min="1" step="any" required className={inputClass} />
+              </Field>
+              <Field label="Exam date (optional)">
+                <input type="date" name="examDate" className={inputClass} />
+              </Field>
+            </div>
+            {createState.error && <ErrorMessage message={createState.error.message} />}
+            {createState.ok && <p className="text-sm font-medium text-success">Exam created.</p>}
+            <Button type="submit" disabled={createPending} className="self-start">
               {createPending ? "Creating..." : "Create exam"}
-            </button>
+            </Button>
           </form>
-        </section>
+        </Section>
       )}
     </div>
   );
@@ -168,55 +237,57 @@ function MarksEntryPanel({ examId }: { examId: string }) {
   }
 
   return (
-    <div style={{ marginTop: "1rem", border: "1px solid #ddd", padding: "1rem" }}>
-      <h3>Marks</h3>
-      {!roster && !error && <p>Loading roster...</p>}
+    <Section className="mt-3">
+      <h3 className="text-sm font-semibold text-ink">Marks</h3>
+      {!roster && !error && <p className="mt-2 text-sm text-muted">Loading roster...</p>}
       {error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {error}
-        </p>
+        <div className="mt-2">
+          <ErrorMessage message={error} />
+        </div>
       )}
-      {roster && roster.length === 0 && <p>No students enrolled in this batch.</p>}
+      {roster && roster.length === 0 && <p className="mt-2 text-sm text-muted">No students enrolled in this batch.</p>}
       {roster && roster.length > 0 && (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th style={{ textAlign: "left" }}>Student</th>
-              <th style={{ textAlign: "left" }}>Status</th>
-              <th style={{ textAlign: "left" }}>Marks</th>
-            </tr>
-          </thead>
-          <tbody>
-            {roster.map((row) => (
-              <tr key={row.id}>
-                <td>
-                  {row.studentFullName} ({row.studentNumber})
-                </td>
-                <td>{row.status}</td>
-                <td>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={marks[row.studentId] ?? ""}
-                    disabled={row.status !== "draft" && row.status !== "marks_entered"}
-                    onChange={(event) =>
-                      setMarks((prev) => ({ ...prev, [row.studentId]: event.target.value }))
-                    }
-                    style={{ width: "6rem" }}
-                  />
-                </td>
+        <div className="mt-3">
+          <TableWrap>
+            <thead>
+              <tr>
+                <th className={th}>Student</th>
+                <th className={th}>Status</th>
+                <th className={th}>Marks</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {roster.map((row) => (
+                <tr key={row.id} className={trHover}>
+                  <td className={td}>
+                    {row.studentFullName} <span className="text-muted">({row.studentNumber})</span>
+                  </td>
+                  <td className={td}>
+                    <Badge label={row.status} tone={statusTone(row.status)} />
+                  </td>
+                  <td className={td}>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={marks[row.studentId] ?? ""}
+                      disabled={row.status !== "draft" && row.status !== "marks_entered"}
+                      onChange={(event) => setMarks((prev) => ({ ...prev, [row.studentId]: event.target.value }))}
+                      className={`${inputClass} w-28 py-1.5`}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        </div>
       )}
-      {saved && <p style={{ color: "green" }}>Marks saved.</p>}
+      {saved && <p className="mt-2 text-sm font-medium text-success">Marks saved.</p>}
       {roster && roster.length > 0 && (
-        <button type="button" onClick={handleSubmit} disabled={isPending} style={{ marginTop: "0.75rem" }}>
+        <Button type="button" onClick={handleSubmit} disabled={isPending} className="mt-3">
           {isPending ? "Saving..." : "Save marks"}
-        </button>
+        </Button>
       )}
-    </div>
+    </Section>
   );
 }

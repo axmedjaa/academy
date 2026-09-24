@@ -582,3 +582,69 @@ export async function archiveBatch(
   }
   return { ok: true, batch: toRecord(result) };
 }
+
+/** Mirror of archiveBatch, flipped — restores to "active" regardless of
+ * whatever status the batch had before archiving (this table doesn't track
+ * that), since "active" is the normal usable state. Idempotent, same
+ * branch-scoping rule as archiveBatch. */
+export async function restoreBatch(
+  actorContext: AuthContext,
+  batchId: string,
+): Promise<ArchiveBatchResult> {
+  const resolved = await resolveBatchAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManage(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(batchId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(batches)
+      .where(and(eq(batches.id, batchId), eq(batches.academyId, academyId)))
+      .limit(1);
+    if (!existing) return null;
+
+    if (isBranchLimited(membershipRole)) {
+      const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
+      if (!assignedIds.includes(existing.branchId)) {
+        return null;
+      }
+    }
+
+    const [updated] = await tx
+      .update(batches)
+      .set({ status: "active", updatedAt: new Date() })
+      .where(eq(batches.id, batchId))
+      .returning();
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "restoreBatch",
+        entityType: "batch",
+        entityId: batchId,
+        branchId: updated.branchId,
+        before: toRecord(existing),
+        after: toRecord(updated),
+      },
+      tx,
+    );
+
+    return updated;
+  });
+
+  if (!result) {
+    return { ok: false, error: NOT_FOUND };
+  }
+  return { ok: true, batch: toRecord(result) };
+}

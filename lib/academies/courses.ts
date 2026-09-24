@@ -657,3 +657,88 @@ export async function archiveCourse(
   }
   return { ok: true, course: toRecord(result) };
 }
+
+/** Mirror of archiveCourse, flipped. Restoring re-consumes a course
+ * allowance slot (archiveCourse's own comment: countCourses only counts
+ * `status = "active"`), so this re-checks the plan's course limit the same
+ * way createCourse does before letting the course become active again —
+ * an addition beyond a literal "just flip the status back" per this
+ * codebase's convention of not letting a restore silently push an academy
+ * over its subscribed limit. */
+export async function restoreCourse(
+  actorContext: AuthContext,
+  courseId: string,
+): Promise<ArchiveCourseResult> {
+  const resolved = await resolveCourseAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManageCourses(membershipRole, permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(courseId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(courses)
+        .where(and(eq(courses.id, courseId), eq(courses.academyId, academyId)))
+        .limit(1);
+      if (!existing) return null;
+
+      const allowance = await checkAllowance(academyId, "courses", tx);
+      if (!allowance.ok) {
+        throw new AllowanceCheckFailure(allowance.error);
+      }
+      if (!allowance.result.allowed) {
+        throw new AllowanceLimitReached(allowance.result.current, allowance.result.limit);
+      }
+
+      const [updated] = await tx
+        .update(courses)
+        .set({ status: "active", updatedAt: new Date() })
+        .where(eq(courses.id, courseId))
+        .returning();
+
+      await recordAudit(
+        {
+          actorUserId: actorContext.userId,
+          actorRole: membershipRole,
+          academyId,
+          action: "restoreCourse",
+          entityType: "course",
+          entityId: courseId,
+          before: toRecord(existing),
+          after: toRecord(updated),
+        },
+        tx,
+      );
+
+      return updated;
+    });
+
+    if (!result) {
+      return { ok: false, error: NOT_FOUND };
+    }
+    return { ok: true, course: toRecord(result) };
+  } catch (err) {
+    if (err instanceof AllowanceLimitReached) {
+      return {
+        ok: false,
+        error: {
+          code: "allowance",
+          message: `This academy has reached its plan's course limit (${err.current}/${err.limit}). Archive an existing course or upgrade the plan to restore another.`,
+        },
+      };
+    }
+    if (err instanceof AllowanceCheckFailure) {
+      return { ok: false, error: { code: "validation", message: err.usageError.message } };
+    }
+    throw err;
+  }
+}

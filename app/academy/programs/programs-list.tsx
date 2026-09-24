@@ -1,8 +1,10 @@
 "use client";
 
 import { useActionState } from "react";
-import { archiveProgram, createProgram, type ProgramFormState } from "@/lib/academies/programs-actions";
+import { createProgram, setProgramStatus, type ProgramFormState } from "@/lib/academies/programs-actions";
 import type { ProgramRecord } from "@/lib/academies/programs";
+import { Badge, Button, ErrorMessage, Field, ProtectedDeleteButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: ProgramFormState = { ok: false };
 
@@ -13,79 +15,88 @@ interface Props {
 
 export function ProgramsList({ programs, canManage }: Props) {
   const [createState, createFormAction, creating] = useActionState(createProgram, initialState);
-  const [archiveState, archiveFormAction, archiving] = useActionState(archiveProgram, initialState);
+
+  function toggleProgramStatus(program: ProgramRecord) {
+    return setProgramStatus(program.id, program.status === "active" ? "archived" : "active");
+  }
 
   return (
-    <section style={{ marginTop: "1.5rem" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+    <section className="flex flex-col gap-6">
+      <TableWrap>
         <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
-            <th style={{ padding: "0.5rem" }}>Name</th>
-            <th style={{ padding: "0.5rem" }}>Description</th>
-            <th style={{ padding: "0.5rem" }}>Status</th>
-            {canManage && <th style={{ padding: "0.5rem" }}>Actions</th>}
+          <tr>
+            <th className={th}>Name</th>
+            <th className={th}>Description</th>
+            <th className={th}>Status</th>
+            {canManage && <th className={th}>Actions</th>}
           </tr>
         </thead>
         <tbody>
           {programs.length === 0 ? (
             <tr>
-              <td colSpan={canManage ? 4 : 3} style={{ padding: "0.5rem", color: "#666" }}>
-                No programs to show.
+              <td colSpan={canManage ? 4 : 3} className={`${td} text-center text-muted`}>
+                No programs to show yet.
               </td>
             </tr>
           ) : (
             programs.map((program) => (
-              <tr key={program.id} style={{ borderBottom: "1px solid #eee" }}>
-                <td style={{ padding: "0.5rem" }}>{program.name}</td>
-                <td style={{ padding: "0.5rem" }}>{program.description ?? "—"}</td>
-                <td style={{ padding: "0.5rem" }}>{program.status}</td>
+              <tr key={program.id} className={trHover}>
+                <td className={`${td} font-medium`}>{program.name}</td>
+                <td className={td}>{program.description ?? "—"}</td>
+                <td className={td}>
+                  <Badge label={program.status} tone={program.status === "archived" ? "gray" : "green"} />
+                </td>
                 {canManage && (
-                  <td style={{ padding: "0.5rem" }}>
-                    <form action={archiveFormAction}>
-                      <input type="hidden" name="programId" value={program.id} />
-                      <button type="submit" disabled={archiving || program.status === "archived"}>
-                        Archive
-                      </button>
-                    </form>
+                  <td className={td}>
+                    <div className="flex flex-wrap gap-2">
+                    <ConfirmButton
+                      label={program.status === "active" ? "Archive" : "Restore"}
+                      variant={program.status === "active" ? "danger" : "secondary"}
+                      className="px-2.5 py-1 text-xs"
+                      title={
+                        program.status === "active"
+                          ? `Archive "${program.name}"?`
+                          : `Restore "${program.name}"?`
+                      }
+                      description={
+                        program.status === "active" ? (
+                          <>
+                            Archived programs are hidden from course creation, but every course already
+                            under this program is kept and can be restored at any time.
+                          </>
+                        ) : (
+                          <>This program will be marked active again and available for new courses.</>
+                        )
+                      }
+                      onConfirm={() => toggleProgramStatus(program)}
+                    />
+                    <ProtectedDeleteButton entityLabel="Program" />
+                    </div>
                   </td>
                 )}
               </tr>
             ))
           )}
         </tbody>
-      </table>
-      {archiveState.error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {archiveState.error.message}
-        </p>
-      )}
+      </TableWrap>
 
       {canManage && (
-        <>
-          <h2 style={{ marginTop: "2rem" }}>Add program</h2>
-          <form
-            action={createFormAction}
-            style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: 420 }}
-          >
-            <label>
-              Name
-              <input type="text" name="name" required style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Description
-              <textarea name="description" style={{ display: "block", width: "100%" }} />
-            </label>
-            {createState.error && (
-              <p role="alert" style={{ color: "crimson" }}>
-                {createState.error.message}
-              </p>
-            )}
-            {createState.ok && <p style={{ color: "green" }}>Program created.</p>}
-            <button type="submit" disabled={creating}>
+        <Section>
+          <h2 className="text-base font-semibold text-ink">Add program</h2>
+          <form action={createFormAction} className="mt-4 flex max-w-lg flex-col gap-3">
+            <Field label="Name">
+              <input type="text" name="name" required className={inputClass} />
+            </Field>
+            <Field label="Description">
+              <textarea name="description" rows={3} className={inputClass} />
+            </Field>
+            {createState.error && <ErrorMessage message={createState.error.message} />}
+            {createState.ok && <p className="text-sm font-medium text-success">Program created.</p>}
+            <Button type="submit" disabled={creating} className="self-start">
               {creating ? "Creating..." : "Create program"}
-            </button>
+            </Button>
           </form>
-        </>
+        </Section>
       )}
     </section>
   );

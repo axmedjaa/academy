@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { assignStaffRole, updateStaff } from "@/lib/academies/staff-actions";
+import { assignStaffRole, removeStaffMembership, updateStaff } from "@/lib/academies/staff-actions";
 import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
 import type { StaffListRow } from "@/lib/academies/staff";
+import { Badge, Button, ErrorMessage, ProtectedDeleteButton, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 
 interface Props {
   staff: StaffListRow[];
@@ -48,62 +50,93 @@ export function StaffTable({ staff, canManage }: Props) {
   }
 
   return (
-    <div>
-      {error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {error}
-        </p>
-      )}
-      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: "1rem" }}>
+    <div className="flex flex-col gap-4">
+      {error && <ErrorMessage message={error} />}
+      <TableWrap>
         <thead>
           <tr>
-            <th style={{ textAlign: "left" }}>Name</th>
-            <th style={{ textAlign: "left" }}>Employee #</th>
-            <th style={{ textAlign: "left" }}>Phone</th>
-            <th style={{ textAlign: "left" }}>Login email</th>
-            <th style={{ textAlign: "left" }}>Role</th>
-            <th style={{ textAlign: "left" }}>Status</th>
-            {canManage && <th></th>}
+            <th className={th}>Name</th>
+            <th className={th}>Employee #</th>
+            <th className={th}>Phone</th>
+            <th className={th}>Login email</th>
+            <th className={th}>Role</th>
+            <th className={th}>Status</th>
+            {canManage && <th className={th}>Actions</th>}
           </tr>
         </thead>
         <tbody>
-          {staff.map((row) => (
-            <tr key={row.id}>
-              <td>{row.fullName}</td>
-              <td>{row.employeeNumber ?? "—"}</td>
-              <td>{row.phone}</td>
-              <td>{row.loginEmail}</td>
-              <td>
-                {canManage ? (
-                  <select
-                    value={row.role ?? ""}
-                    disabled={isPending}
-                    onChange={(event) =>
-                      onRoleChange(row.userId, event.target.value as AcademyRole)
-                    }
-                  >
-                    {ACADEMY_ROLES.map((role) => (
-                      <option key={role} value={role}>
-                        {role}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  (row.role ?? "—")
-                )}
+          {staff.length === 0 ? (
+            <tr>
+              <td colSpan={canManage ? 7 : 6} className={`${td} text-center text-muted`}>
+                No staff members to show.
               </td>
-              <td>{row.status}</td>
-              {canManage && (
-                <td>
-                  <button type="button" disabled={isPending} onClick={() => onToggleStatus(row)}>
-                    {row.status === "active" ? "Archive" : "Restore"}
-                  </button>
-                </td>
-              )}
             </tr>
-          ))}
+          ) : (
+            staff.map((row) => (
+              <tr key={row.id} className={trHover}>
+                <td className={`${td} font-medium`}>{row.fullName}</td>
+                <td className={td}>{row.employeeNumber ?? "—"}</td>
+                <td className={td}>{row.phone}</td>
+                <td className={td}>{row.loginEmail}</td>
+                <td className={td}>
+                  {row.role === null ? (
+                    <Badge label="No access" tone="gray" />
+                  ) : canManage ? (
+                    <select
+                      value={row.role}
+                      disabled={isPending}
+                      onChange={(event) => onRoleChange(row.userId, event.target.value as AcademyRole)}
+                      className={`${inputClass} py-1.5`}
+                    >
+                      {ACADEMY_ROLES.map((role) => (
+                        <option key={role} value={role}>
+                          {role}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    row.role
+                  )}
+                </td>
+                <td className={td}>
+                  <Badge label={row.status} tone={row.status === "active" ? "green" : "gray"} />
+                </td>
+                {canManage && (
+                  <td className={td}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        variant={row.status === "active" ? "danger" : "secondary"}
+                        className="px-2.5 py-1 text-xs"
+                        disabled={isPending}
+                        onClick={() => onToggleStatus(row)}
+                      >
+                        {row.status === "active" ? "Archive" : "Restore"}
+                      </Button>
+                      {row.role !== null && (
+                        <ConfirmButton
+                          label="Remove access"
+                          className="px-2.5 py-1 text-xs"
+                          title={`Remove ${row.fullName}'s access?`}
+                          description={
+                            <>
+                              They will no longer be able to sign in to this academy. Their employment record and
+                              history (results, payments, audit entries) are kept, but this specific action can&apos;t
+                              be undone from this screen.
+                            </>
+                          }
+                          onConfirm={() => removeStaffMembership(row.userId)}
+                        />
+                      )}
+                      <ProtectedDeleteButton entityLabel="Staff" />
+                    </div>
+                  </td>
+                )}
+              </tr>
+            ))
+          )}
         </tbody>
-      </table>
+      </TableWrap>
     </div>
   );
 }

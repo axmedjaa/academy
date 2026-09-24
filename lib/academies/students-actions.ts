@@ -76,3 +76,33 @@ export async function updateStudent(
   revalidatePath("/academy/admissions");
   return { ok: true };
 }
+
+/**
+ * Plain-callable variant of the action above, for a one-click row action
+ * (the students table's own "Archive"/"Restore" button) rather than a
+ * `useActionState`-bound form submission — same convention as
+ * lib/academies/staff-actions.ts's `updateStaff`. The caller (students-
+ * list.tsx) resubmits the row's own current field values alongside the new
+ * `status`, since `updateStudent` (lib/academies/students.ts) sets every
+ * field it's given rather than merging a partial patch — never includes
+ * `branchId`, so a branch-limited caller's own scoping is untouched
+ * regardless of who clicks this.
+ */
+export async function updateStudentStatus(
+  studentId: string,
+  input: UpdateStudentInput,
+): Promise<{ ok: true } | { ok: false; error: StudentActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await updateStudentForActor(context, studentId, input);
+  if (!result.ok) {
+    return result;
+  }
+
+  revalidatePath("/academy/students");
+  revalidatePath("/academy/admissions");
+  return { ok: true };
+}

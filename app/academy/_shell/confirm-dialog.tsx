@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { Button } from "./ui";
 
-type Variant = "primary" | "secondary" | "danger";
+type Variant = "primary" | "secondary" | "danger" | "dangerSolid";
 
 export interface ConfirmActionResult {
   ok: boolean;

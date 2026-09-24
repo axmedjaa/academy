@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -164,7 +164,7 @@ function canEnterMarksLevel(level: AcademyPermissionLevel): boolean {
 }
 
 export interface ExamActionError {
-  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "invalid_state";
+  code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "invalid_state" | "ineligible";
   message: string;
 }
 
@@ -681,7 +681,7 @@ export async function enterMarks(
 }
 
 export type ListExamsResult =
-  | { ok: true; exams: ExamRecord[]; canManage: boolean; canEnterMarks: boolean }
+  | { ok: true; exams: (ExamRecord & { hasResults: boolean })[]; canManage: boolean; canEnterMarks: boolean }
   | { ok: false; error: ExamActionError };
 
 /** Lists exams for the academy, optionally filtered to one batch. A
@@ -723,9 +723,24 @@ export async function listExams(
   const rows = await db.select().from(exams).where(conditions);
   const visible = allowedBatchIds ? rows.filter((row) => allowedBatchIds!.includes(row.batchId)) : rows;
 
+  // Bulk-computed for the "Delete" row action's eligibility (deleteExam
+  // below refuses outright unless this is false) — one query for the whole
+  // list rather than N+1 per row.
+  const idsWithResults =
+    visible.length > 0
+      ? new Set(
+          (
+            await db
+              .selectDistinct({ examId: examResults.examId })
+              .from(examResults)
+              .where(inArray(examResults.examId, visible.map((row) => row.id)))
+          ).map((row) => row.examId),
+        )
+      : new Set<string>();
+
   return {
     ok: true,
-    exams: visible.map(toExamRecord),
+    exams: visible.map((row) => ({ ...toExamRecord(row), hasResults: idsWithResults.has(row.id) })),
     canManage: canManage(permissionLevel),
     canEnterMarks: canEnterMarksLevel(permissionLevel),
   };
@@ -821,4 +836,275 @@ export async function listExamResults(
     })),
     canEnterMarks: canEnterMarksLevel(permissionLevel),
   };
+}
+
+export type ArchiveExamResult =
+  | { ok: true; exam: ExamRecord }
+  | { ok: false; error: ExamActionError };
+
+/**
+ * No hard delete — `status = archived` is the removal path, same
+ * convention as archiveCourse/archiveProgram/archiveBatch. This file's own
+ * module comment on `exams.status` notes createExam/enterMarks never had a
+ * reason to touch `completed`/`archived`; this is the first action that
+ * does. Archiving only ever changes `exams.status` — it never touches
+ * `exam_results` rows (no results are hidden, corrected, or unpublished by
+ * this action), so it's safe regardless of what stage the exam's results
+ * are at. Idempotent. Same `canManage` gate as createExam (Owner/Admin/
+ * Manager only — a Trainer can enter marks but not archive the exam).
+ */
+export async function archiveExam(
+  actorContext: AuthContext,
+  examId: string,
+): Promise<ArchiveExamResult> {
+  const resolved = await resolveExamAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManage(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(examId);
+  if (!parsedId.success) {
+    return { ok: false, error: EXAM_NOT_FOUND };
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ exam: exams, branchId: batches.branchId })
+      .from(exams)
+      .innerJoin(batches, eq(batches.id, exams.batchId))
+      .where(and(eq(exams.id, examId), eq(exams.academyId, academyId)))
+      .limit(1);
+    if (!existing) return null;
+
+    const [updated] = await tx
+      .update(exams)
+      .set({ status: "archived", updatedAt: new Date() })
+      .where(eq(exams.id, examId))
+      .returning();
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "archiveExam",
+        entityType: "exam",
+        entityId: examId,
+        branchId: existing.branchId,
+        before: toExamRecord(existing.exam),
+        after: toExamRecord(updated),
+      },
+      tx,
+    );
+
+    return updated;
+  });
+
+  if (!result) {
+    return { ok: false, error: EXAM_NOT_FOUND };
+  }
+  return { ok: true, exam: toExamRecord(result) };
+}
+
+/** Mirror of archiveExam, flipped — restores to "scheduled" regardless of
+ * whatever status the exam had before archiving, since "scheduled" is the
+ * exam lifecycle's own starting state. Idempotent. */
+export async function restoreExam(
+  actorContext: AuthContext,
+  examId: string,
+): Promise<ArchiveExamResult> {
+  const resolved = await resolveExamAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManage(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(examId);
+  if (!parsedId.success) {
+    return { ok: false, error: EXAM_NOT_FOUND };
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ exam: exams, branchId: batches.branchId })
+      .from(exams)
+      .innerJoin(batches, eq(batches.id, exams.batchId))
+      .where(and(eq(exams.id, examId), eq(exams.academyId, academyId)))
+      .limit(1);
+    if (!existing) return null;
+
+    const [updated] = await tx
+      .update(exams)
+      .set({ status: "scheduled", updatedAt: new Date() })
+      .where(eq(exams.id, examId))
+      .returning();
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "restoreExam",
+        entityType: "exam",
+        entityId: examId,
+        branchId: existing.branchId,
+        before: toExamRecord(existing.exam),
+        after: toExamRecord(updated),
+      },
+      tx,
+    );
+
+    return updated;
+  });
+
+  if (!result) {
+    return { ok: false, error: EXAM_NOT_FOUND };
+  }
+  return { ok: true, exam: toExamRecord(result) };
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * Permanent exam deletion — narrow, eligibility-gated, distinct from
+ * archiveExam
+ * ---------------------------------------------------------------------
+ * PLAN.md's "Archive & Deactivation Rules" table (Planning Gaps
+ * Resolution §12) states a categorical "archive/deactivate, never delete"
+ * rule for Branches, Staff, Students, Courses, Programs, and Batches —
+ * `exams` is NOT one of the entities that table names. What PLAN.md does
+ * protect unconditionally is *result* data: "No hard deletes on posted
+ * financial/result records" (Confirmed Technical Decisions), and Exam
+ * Results is explicitly part of the Result Lifecycle table PLAN.md
+ * defines. So the line this function draws is: the `exams` container row
+ * itself may be permanently removed, but only when doing so can never
+ * touch a single `exam_results` row — i.e. only an exam that has never had
+ * any student results attached to it at all (in practice: created for a
+ * batch with zero actively-enrolled students, since `createExam` stamps
+ * one Draft `exam_results` row per actively-enrolled student at creation
+ * time — see this file's module comment). This is the same "zero rows in
+ * the protected table(s)" eligibility pattern lib/academies/delete-
+ * academy.ts already established for academies; deleting exam_results
+ * rows to force an exam "eligible" is never done here.
+ */
+export interface ExamDeletionEligibility {
+  examId: string;
+  examName: string;
+  eligible: boolean;
+  hasResults: boolean;
+}
+
+export type GetExamDeletionEligibilityResult =
+  | { ok: true; eligibility: ExamDeletionEligibility }
+  | { ok: false; error: ExamActionError };
+
+async function examHasResults(executor: DbClient, examId: string): Promise<boolean> {
+  const [row] = await executor.select({ id: examResults.id }).from(examResults).where(eq(examResults.examId, examId)).limit(1);
+  return Boolean(row);
+}
+
+/** Read-only preview for the UI's Delete button (enabled/disabled + why) —
+ * `deleteExam` below re-runs the identical check itself, inside the
+ * deletion transaction, as the actual authority. */
+export async function getExamDeletionEligibility(
+  actorContext: AuthContext,
+  examId: string,
+): Promise<GetExamDeletionEligibilityResult> {
+  const resolved = await resolveExamAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole } = resolved.access;
+
+  const parsedId = z.string().uuid().safeParse(examId);
+  if (!parsedId.success) return { ok: false, error: EXAM_NOT_FOUND };
+
+  const [existing] = await db
+    .select({ id: exams.id, name: exams.name, batchId: exams.batchId })
+    .from(exams)
+    .where(and(eq(exams.id, examId), eq(exams.academyId, academyId)))
+    .limit(1);
+  if (!existing) return { ok: false, error: EXAM_NOT_FOUND };
+
+  if (membershipRole === "trainer") {
+    const assignedBatchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
+    if (!assignedBatchIds.includes(existing.batchId)) return { ok: false, error: EXAM_NOT_FOUND };
+  }
+
+  const hasResults = await examHasResults(db, examId);
+
+  return {
+    ok: true,
+    eligibility: { examId: existing.id, examName: existing.name, eligible: !hasResults, hasResults },
+  };
+}
+
+export type DeleteExamResult =
+  | { ok: true; examId: string }
+  | { ok: false; error: ExamActionError };
+
+/**
+ * Same `canManage` gate as createExam/archiveExam (Owner/Admin/Manager
+ * only). Eligibility is re-verified from scratch INSIDE this transaction,
+ * on a row locked with `for("update")` — the UI's own preview
+ * (`getExamDeletionEligibility`, above) is only ever a display hint; a
+ * mark could be entered between that read and this call, and this is the
+ * check that actually decides whether the delete proceeds. Audited before
+ * the row is removed, same convention as deleteAcademy.
+ */
+export async function deleteExam(actorContext: AuthContext, examId: string): Promise<DeleteExamResult> {
+  const resolved = await resolveExamAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManage(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(examId);
+  if (!parsedId.success) {
+    return { ok: false, error: EXAM_NOT_FOUND };
+  }
+
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ exam: exams, branchId: batches.branchId })
+      .from(exams)
+      .innerJoin(batches, eq(batches.id, exams.batchId))
+      .where(and(eq(exams.id, examId), eq(exams.academyId, academyId)))
+      .for("update");
+    if (!existing) {
+      return { ok: false, error: EXAM_NOT_FOUND };
+    }
+
+    if (await examHasResults(tx, examId)) {
+      return {
+        ok: false,
+        error: {
+          code: "ineligible",
+          message: "This exam cannot be permanently deleted because it has student results attached to it. Archive it instead.",
+        },
+      };
+    }
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "deleteExam",
+        entityType: "exam",
+        entityId: examId,
+        branchId: existing.branchId,
+        before: toExamRecord(existing.exam),
+      },
+      tx,
+    );
+
+    await tx.delete(exams).where(eq(exams.id, examId));
+
+    return { ok: true, examId };
+  });
 }

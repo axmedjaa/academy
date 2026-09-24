@@ -2,9 +2,23 @@
 
 import { useActionState, useState } from "react";
 import Link from "next/link";
-import { archiveCourse, createCourse, updateCourse, type CourseFormState } from "@/lib/academies/courses-actions";
+import { createCourse, setCourseStatus, updateCourse, type CourseFormState } from "@/lib/academies/courses-actions";
 import type { CourseWithInstructor } from "@/lib/academies/courses";
 import type { ProgramRecord } from "@/lib/academies/programs";
+import {
+  Badge,
+  Button,
+  ErrorMessage,
+  Field,
+  ProtectedDeleteButton,
+  Section,
+  TableWrap,
+  inputClass,
+  td,
+  th,
+  trHover,
+} from "@/app/academy/_shell/ui";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: CourseFormState = { ok: false };
 
@@ -25,128 +39,146 @@ function formatDate(value: string | null): string {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+function statusTone(status: string): "green" | "gray" {
+  return status === "archived" ? "gray" : "green";
+}
+
 export function CoursesList({ courses, programs, instructors, canManage }: Props) {
   const [createState, createFormAction, creating] = useActionState(createCourse, initialState);
   const [updateState, updateFormAction, updating] = useActionState(updateCourse, initialState);
-  const [archiveState, archiveFormAction, archiving] = useActionState(archiveCourse, initialState);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const editingCourse = courses.find((c) => c.id === editingId) ?? null;
 
+  function toggleCourseStatus(course: CourseWithInstructor) {
+    return setCourseStatus(course.id, course.status === "active" ? "archived" : "active");
+  }
+
   return (
-    <section style={{ marginTop: "1.5rem" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+    <section className="flex flex-col gap-6">
+      <TableWrap>
         <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
-            <th style={{ padding: "0.5rem" }}>Image</th>
-            <th style={{ padding: "0.5rem" }}>Name</th>
-            <th style={{ padding: "0.5rem" }}>Instructor</th>
-            <th style={{ padding: "0.5rem" }}>Starts</th>
-            <th style={{ padding: "0.5rem" }}>Ends</th>
-            <th style={{ padding: "0.5rem" }}>Status</th>
-            <th style={{ padding: "0.5rem" }}>Actions</th>
+          <tr>
+            <th className={th}>Image</th>
+            <th className={th}>Name</th>
+            <th className={th}>Instructor</th>
+            <th className={th}>Starts</th>
+            <th className={th}>Ends</th>
+            <th className={th}>Status</th>
+            {canManage && <th className={th}>Actions</th>}
           </tr>
         </thead>
         <tbody>
           {courses.length === 0 ? (
             <tr>
-              <td colSpan={7} style={{ padding: "0.5rem", color: "#666" }}>
-                No courses to show.
+              <td colSpan={canManage ? 7 : 6} className={`${td} text-center text-muted`}>
+                No courses to show yet.
               </td>
             </tr>
           ) : (
             courses.map((course) => (
-              <tr key={course.id} style={{ borderBottom: "1px solid #eee" }}>
-                <td style={{ padding: "0.5rem" }}>
+              <tr key={course.id} className={trHover}>
+                <td className={td}>
                   {course.imageRef ? (
                     // eslint-disable-next-line @next/next/no-img-element -- this codebase renders every course/academy image via a plain <img> (see app/academy/id-cards/id-card-visual.tsx), no next/image usage anywhere
-                    <img src={course.imageRef} alt="" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 4 }} />
+                    <img
+                      src={course.imageRef}
+                      alt={`${course.name} course thumbnail`}
+                      className="h-12 w-12 rounded-md object-cover"
+                    />
                   ) : (
-                    "—"
+                    <span className="text-muted">—</span>
                   )}
                 </td>
-                <td style={{ padding: "0.5rem" }}>
-                  <Link href={`/academy/courses/${course.id}`}>{course.name}</Link>
-                  {course.code && <span style={{ color: "#666" }}> ({course.code})</span>}
+                <td className={td}>
+                  <Link href={`/academy/courses/${course.id}`} className="font-medium text-brand hover:underline">
+                    {course.name}
+                  </Link>
+                  {course.code && <span className="text-muted"> ({course.code})</span>}
                 </td>
-                <td style={{ padding: "0.5rem" }}>{course.instructorName ?? "—"}</td>
-                <td style={{ padding: "0.5rem" }}>{formatDate(course.startDate)}</td>
-                <td style={{ padding: "0.5rem" }}>{formatDate(course.endDate)}</td>
-                <td style={{ padding: "0.5rem" }}>{course.status}</td>
-                <td style={{ padding: "0.5rem", display: "flex", gap: "0.5rem" }}>
-                  <Link href={`/academy/courses/${course.id}`}>View</Link>
-                  {canManage && (
-                    <>
-                      <button type="button" onClick={() => setEditingId(course.id)}>
+                <td className={td}>{course.instructorName ?? "—"}</td>
+                <td className={td}>{formatDate(course.startDate)}</td>
+                <td className={td}>{formatDate(course.endDate)}</td>
+                <td className={td}>
+                  <Badge label={course.status} tone={statusTone(course.status)} />
+                </td>
+                {canManage && (
+                  <td className={td}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link href={`/academy/courses/${course.id}`} className="text-sm text-brand hover:underline">
+                        View
+                      </Link>
+                      <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEditingId(course.id)}>
                         Edit
-                      </button>
-                      <form action={archiveFormAction}>
-                        <input type="hidden" name="courseId" value={course.id} />
-                        <button type="submit" disabled={archiving || course.status === "archived"}>
-                          Archive
-                        </button>
-                      </form>
-                    </>
-                  )}
-                </td>
+                      </Button>
+                      <ConfirmButton
+                        label={course.status === "active" ? "Archive" : "Restore"}
+                        variant={course.status === "active" ? "danger" : "secondary"}
+                        className="px-2.5 py-1 text-xs"
+                        title={course.status === "active" ? `Archive "${course.name}"?` : `Restore "${course.name}"?`}
+                        description={
+                          course.status === "active" ? (
+                            <>
+                              Archived courses are hidden from new batch creation and free up this
+                              academy&apos;s plan course allowance, but every batch and student history is
+                              kept and can be restored at any time.
+                            </>
+                          ) : (
+                            <>
+                              This course will be marked active again and count against this academy&apos;s
+                              plan course allowance.
+                            </>
+                          )
+                        }
+                        onConfirm={() => toggleCourseStatus(course)}
+                      />
+                      <ProtectedDeleteButton entityLabel="Course" />
+                    </div>
+                  </td>
+                )}
               </tr>
             ))
           )}
         </tbody>
-      </table>
-      {archiveState.error && (
-        <p role="alert" style={{ color: "crimson" }}>
-          {archiveState.error.message}
-        </p>
-      )}
+      </TableWrap>
 
       {canManage && editingCourse && (
-        <>
-          <h2 style={{ marginTop: "2rem" }}>Edit course — {editingCourse.name}</h2>
-          <form
-            action={updateFormAction}
-            style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: 420 }}
-          >
+        <Section>
+          <h2 className="text-base font-semibold text-ink">Edit course — {editingCourse.name}</h2>
+          <form action={updateFormAction} className="mt-4 flex max-w-lg flex-col gap-3">
             <input type="hidden" name="courseId" value={editingCourse.id} />
-            <label>
-              Program
-              <select name="programId" required defaultValue={editingCourse.programId} style={{ display: "block", width: "100%" }}>
+            <Field label="Program">
+              <select name="programId" required defaultValue={editingCourse.programId} className={inputClass}>
                 {programs.map((program) => (
                   <option key={program.id} value={program.id}>
                     {program.name}
                   </option>
                 ))}
               </select>
-            </label>
-            <label>
-              Name
-              <input type="text" name="name" required defaultValue={editingCourse.name} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Code
-              <input type="text" name="code" defaultValue={editingCourse.code ?? ""} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Description
-              <textarea name="description" defaultValue={editingCourse.description ?? ""} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Duration (weeks)
+            </Field>
+            <Field label="Name">
+              <input type="text" name="name" required defaultValue={editingCourse.name} className={inputClass} />
+            </Field>
+            <Field label="Code">
+              <input type="text" name="code" defaultValue={editingCourse.code ?? ""} className={inputClass} />
+            </Field>
+            <Field label="Description">
+              <textarea name="description" defaultValue={editingCourse.description ?? ""} rows={3} className={inputClass} />
+            </Field>
+            <Field label="Duration (weeks)">
               <input
                 type="number"
                 name="durationWeeks"
                 min={0}
                 defaultValue={editingCourse.durationWeeks ?? ""}
-                style={{ display: "block", width: "100%" }}
+                className={inputClass}
               />
-            </label>
-            <label>
-              Course image URL
-              <input type="text" name="imageRef" defaultValue={editingCourse.imageRef ?? ""} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Instructor
-              <select name="instructorId" defaultValue={editingCourse.instructorId ?? ""} style={{ display: "block", width: "100%" }}>
+            </Field>
+            <Field label="Course image URL">
+              <input type="text" name="imageRef" defaultValue={editingCourse.imageRef ?? ""} className={inputClass} />
+            </Field>
+            <Field label="Instructor">
+              <select name="instructorId" defaultValue={editingCourse.instructorId ?? ""} className={inputClass}>
                 <option value="">No instructor assigned</option>
                 {instructors.map((instructor) => (
                   <option key={instructor.id} value={instructor.id}>
@@ -154,73 +186,59 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                   </option>
                 ))}
               </select>
-            </label>
-            <label>
-              Start date
-              <input type="date" name="startDate" defaultValue={editingCourse.startDate ?? ""} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              End date
-              <input type="date" name="endDate" defaultValue={editingCourse.endDate ?? ""} style={{ display: "block", width: "100%" }} />
-            </label>
-            {updateState.error && (
-              <p role="alert" style={{ color: "crimson" }}>
-                {updateState.error.message}
-              </p>
-            )}
-            {updateState.ok && <p style={{ color: "green" }}>Course updated.</p>}
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button type="submit" disabled={updating}>
+            </Field>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Start date">
+                <input type="date" name="startDate" defaultValue={editingCourse.startDate ?? ""} className={inputClass} />
+              </Field>
+              <Field label="End date">
+                <input type="date" name="endDate" defaultValue={editingCourse.endDate ?? ""} className={inputClass} />
+              </Field>
+            </div>
+            {updateState.error && <ErrorMessage message={updateState.error.message} />}
+            {updateState.ok && <p className="text-sm font-medium text-success">Course updated.</p>}
+            <div className="flex gap-2">
+              <Button type="submit" disabled={updating}>
                 {updating ? "Saving..." : "Save changes"}
-              </button>
-              <button type="button" onClick={() => setEditingId(null)}>
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => setEditingId(null)}>
                 Cancel
-              </button>
+              </Button>
             </div>
           </form>
-        </>
+        </Section>
       )}
 
       {canManage && (
-        <>
-          <h2 style={{ marginTop: "2rem" }}>Add course</h2>
-          <form
-            action={createFormAction}
-            style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: 420 }}
-          >
-            <label>
-              Program
-              <select name="programId" required style={{ display: "block", width: "100%" }}>
+        <Section>
+          <h2 className="text-base font-semibold text-ink">Add course</h2>
+          <form action={createFormAction} className="mt-4 flex max-w-lg flex-col gap-3">
+            <Field label="Program">
+              <select name="programId" required className={inputClass}>
                 {programs.map((program) => (
                   <option key={program.id} value={program.id}>
                     {program.name}
                   </option>
                 ))}
               </select>
-            </label>
-            <label>
-              Name
-              <input type="text" name="name" required style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Code
-              <input type="text" name="code" style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Description
-              <textarea name="description" style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Duration (weeks)
-              <input type="number" name="durationWeeks" min={0} style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Course image URL
-              <input type="text" name="imageRef" placeholder="https://…" style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              Instructor
-              <select name="instructorId" defaultValue="" style={{ display: "block", width: "100%" }}>
+            </Field>
+            <Field label="Name">
+              <input type="text" name="name" required className={inputClass} />
+            </Field>
+            <Field label="Code">
+              <input type="text" name="code" className={inputClass} />
+            </Field>
+            <Field label="Description">
+              <textarea name="description" rows={3} className={inputClass} />
+            </Field>
+            <Field label="Duration (weeks)">
+              <input type="number" name="durationWeeks" min={0} className={inputClass} />
+            </Field>
+            <Field label="Course image URL">
+              <input type="text" name="imageRef" placeholder="https://…" className={inputClass} />
+            </Field>
+            <Field label="Instructor">
+              <select name="instructorId" defaultValue="" className={inputClass}>
                 <option value="">No instructor assigned</option>
                 {instructors.map((instructor) => (
                   <option key={instructor.id} value={instructor.id}>
@@ -228,26 +246,22 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                   </option>
                 ))}
               </select>
-            </label>
-            <label>
-              Start date
-              <input type="date" name="startDate" style={{ display: "block", width: "100%" }} />
-            </label>
-            <label>
-              End date
-              <input type="date" name="endDate" style={{ display: "block", width: "100%" }} />
-            </label>
-            {createState.error && (
-              <p role="alert" style={{ color: "crimson" }}>
-                {createState.error.message}
-              </p>
-            )}
-            {createState.ok && <p style={{ color: "green" }}>Course created.</p>}
-            <button type="submit" disabled={creating}>
+            </Field>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="Start date">
+                <input type="date" name="startDate" className={inputClass} />
+              </Field>
+              <Field label="End date">
+                <input type="date" name="endDate" className={inputClass} />
+              </Field>
+            </div>
+            {createState.error && <ErrorMessage message={createState.error.message} />}
+            {createState.ok && <p className="text-sm font-medium text-success">Course created.</p>}
+            <Button type="submit" disabled={creating} className="self-start">
               {creating ? "Creating..." : "Create course"}
-            </button>
+            </Button>
           </form>
-        </>
+        </Section>
       )}
     </section>
   );

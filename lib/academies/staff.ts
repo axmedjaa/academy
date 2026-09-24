@@ -524,6 +524,133 @@ export async function assignStaffRole(
   return { ok: true, userId: result.userId, role: result.role };
 }
 
+export type RemoveStaffMembershipResult = { ok: true } | { ok: false; error: StaffActionError };
+
+/**
+ * The actual "remove access" lib/db/schema.ts's own `membershipStatusEnum`
+ * comment has always described ("Removing an academy membership revokes
+ * that user's active sessions for that academy context") but that no code
+ * ever wrote until now — `updateStaff`'s status toggle only ever flips
+ * `staff_profiles.status`, a separate column recording employment record
+ * state, never `academy_memberships.status`, so an "archived" staff member
+ * kept full academy login access under the pre-existing code. This is the
+ * "delete" for staff membership: never a hard row delete (audit rows, exam
+ * results, payments, etc. recorded under this person's `user_id` must stay
+ * resolvable) — a status flip to `"removed"`, the exact same soft-removal
+ * shape every other entity in this codebase already uses (branches/
+ * courses/batches/programs `status: archived`, certificates
+ * `status: cancelled`, ...).
+ *
+ * Owner-safety: removing an `academy_owner` membership requires the actor
+ * to already be an owner, and is refused if it would leave zero active
+ * owners. There is no ownership-transfer action in this codebase to point
+ * someone at instead — assignStaffRole already IS that transfer (promote a
+ * successor to `academy_owner`, then remove the original).
+ */
+export async function removeStaffMembership(
+  actorContext: AuthContext,
+  targetUserId: string,
+): Promise<RemoveStaffMembershipResult> {
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level === "blocked") {
+    return { ok: false, error: { code: "blocked", message: access.message } };
+  }
+
+  const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION);
+  if (!canManageStaff(level)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedTargetId = z.string().uuid().safeParse(targetUserId);
+  if (!parsedTargetId.success) {
+    return {
+      ok: false,
+      error: { code: "not_found", message: "This user is not an active staff member of this academy." },
+    };
+  }
+
+  type Outcome = { kind: "not_found" } | { kind: "owner_only" } | { kind: "last_owner" } | { kind: "ok"; id: string };
+
+  const result: Outcome = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(academyMemberships)
+      .where(
+        and(
+          eq(academyMemberships.userId, targetUserId),
+          eq(academyMemberships.academyId, access.academyId),
+          eq(academyMemberships.status, "active"),
+        ),
+      )
+      .limit(1);
+    if (!existing) return { kind: "not_found" };
+
+    if (existing.role === "academy_owner") {
+      if (access.membershipRole !== "academy_owner") {
+        return { kind: "owner_only" };
+      }
+
+      const owners = await tx
+        .select({ id: academyMemberships.id })
+        .from(academyMemberships)
+        .where(
+          and(
+            eq(academyMemberships.academyId, access.academyId),
+            eq(academyMemberships.role, "academy_owner"),
+            eq(academyMemberships.status, "active"),
+          ),
+        );
+      if (owners.length <= 1) {
+        return { kind: "last_owner" };
+      }
+    }
+
+    await tx
+      .update(academyMemberships)
+      .set({ status: "removed" })
+      .where(eq(academyMemberships.id, existing.id));
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: access.membershipRole,
+        academyId: access.academyId,
+        action: "removeStaffMembership",
+        entityType: "academy_membership",
+        entityId: existing.id,
+        before: { status: existing.status, role: existing.role },
+        after: { status: "removed" },
+      },
+      tx,
+    );
+
+    return { kind: "ok", id: existing.id };
+  });
+
+  switch (result.kind) {
+    case "not_found":
+      return {
+        ok: false,
+        error: { code: "not_found", message: "This user is not an active staff member of this academy." },
+      };
+    case "owner_only":
+      return {
+        ok: false,
+        error: { code: "forbidden", message: "Only an academy owner can remove another owner's access." },
+      };
+    case "last_owner":
+      return {
+        ok: false,
+        error: {
+          code: "conflict",
+          message: "This is the only remaining owner. Promote another member to owner first.",
+        },
+      };
+    case "ok":
+      return { ok: true };
+  }
+}
+
 export interface StaffListRow extends StaffRecord {
   role: AcademyRole | null;
   loginEmail: string;
@@ -643,6 +770,12 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
       and(
         eq(academyMemberships.userId, staffProfiles.userId),
         eq(academyMemberships.academyId, staffProfiles.academyId),
+        // A membership `removeStaffMembership` set to "removed" must stop
+        // showing that person's old role here — the leftJoin simply finds
+        // no active membership row for them (row.role comes back null),
+        // same as the pre-existing "no membership row at all" case, rather
+        // than silently still reporting stale access.
+        eq(academyMemberships.status, "active"),
       ),
     )
     .where(

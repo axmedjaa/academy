@@ -21,6 +21,7 @@ import {
   assignStaffRole,
   createStaff,
   listStaff,
+  removeStaffMembership,
   updateStaff,
   type CreateStaffInput,
 } from "./staff";
@@ -577,6 +578,117 @@ describe("assignStaffRole", () => {
       if (!result.ok) expect(result.error.code).toBe("forbidden");
     },
   );
+});
+
+describe("removeStaffMembership (owner-safety pass, delete/deletion-audit task)", () => {
+  it("sets the target's academy_memberships.status to 'removed' and audits before/after", async () => {
+    const { academyId, userId: actorUserId, context } = await setupAcademy("academy_owner");
+    const target = await createTargetStaff(academyId, "trainer");
+
+    const result = await removeStaffMembership(context, target.userId);
+    expect(result.ok).toBe(true);
+
+    const [membership] = await db
+      .select()
+      .from(academyMemberships)
+      .where(and(eq(academyMemberships.userId, target.userId), eq(academyMemberships.academyId, academyId)));
+    expect(membership.status).toBe("removed");
+    // The role column itself is left untouched — only access is revoked.
+    expect(membership.role).toBe("trainer");
+
+    const [audit] = await db.select().from(auditLogs).where(eq(auditLogs.entityId, membership.id));
+    expect(audit?.action).toBe("removeStaffMembership");
+    expect(audit?.actorUserId).toBe(actorUserId);
+  });
+
+  it("a removed member fails checkAcademyAccess — access is actually revoked, not just cosmetic", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createTargetStaff(academyId, "trainer");
+
+    await removeStaffMembership(context, target.userId);
+
+    const { checkAcademyAccess } = await import("./access-gate");
+    const access = await checkAcademyAccess(target.userId, academyId);
+    expect(access.level).toBe("blocked");
+  });
+
+  it("returns not_found for a user with no active membership in this academy", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const strangerUserId = await createUser();
+
+    const result = await removeStaffMembership(context, strangerUserId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("tenant isolation: Academy A owner cannot remove Academy B staff's access by supplying their userId", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherTarget = await createTargetStaff(other.academyId, "trainer");
+
+    const { context } = await setupAcademy("academy_owner");
+    const result = await removeStaffMembership(context, otherTarget.userId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    // Academy B's membership must remain active — completely untouched.
+    const [membership] = await db
+      .select()
+      .from(academyMemberships)
+      .where(and(eq(academyMemberships.userId, otherTarget.userId), eq(academyMemberships.academyId, other.academyId)));
+    expect(membership.status).toBe("active");
+  });
+
+  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+    "refuses %s with code 'forbidden'",
+    async (role) => {
+      const { academyId, context } = await setupAcademy(role);
+      const target = await createTargetStaff(academyId, "manager");
+      const result = await removeStaffMembership(context, target.userId);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("forbidden");
+    },
+  );
+
+  it("refuses a non-owner (Manager) removing the real owner's access", async () => {
+    const { academyId, userId: ownerUserId } = await setupAcademy("academy_owner");
+    const managerUserId = await createUser();
+    await addMembership(managerUserId, academyId, "manager");
+    const managerContext: AuthContext = { userId: managerUserId, branchIds: [], academyWide: false };
+
+    const result = await removeStaffMembership(managerContext, ownerUserId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+
+  it("refuses removing the last remaining owner, even by another owner", async () => {
+    const { academyId, userId: ownerUserId } = await setupAcademy("academy_owner");
+    const owner2UserId = await createUser();
+    await addMembership(owner2UserId, academyId, "academy_owner");
+    const owner2Context: AuthContext = { userId: owner2UserId, branchIds: [], academyWide: false };
+
+    // Two owners exist — removing the first one is fine.
+    const firstRemoval = await removeStaffMembership(owner2Context, ownerUserId);
+    expect(firstRemoval.ok).toBe(true);
+
+    // Now owner2 is the only remaining owner — must be refused.
+    const lastRemoval = await removeStaffMembership(owner2Context, owner2UserId);
+    expect(lastRemoval.ok).toBe(false);
+    if (!lastRemoval.ok) expect(lastRemoval.error.code).toBe("conflict");
+  });
+
+  it("listStaff shows null role for a removed member instead of their stale role", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const target = await createTargetStaff(academyId, "trainer");
+
+    await removeStaffMembership(context, target.userId);
+
+    const result = await listStaff(context);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const row = result.staff.find((s) => s.userId === target.userId);
+      expect(row?.role).toBeNull();
+    }
+  });
 });
 
 describe("listStaff — permission matrix (Full/Manage/View may list, Admissions/Finance refused)", () => {

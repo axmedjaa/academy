@@ -3,12 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
+  archiveExam as archiveExamForActor,
   createExam as createExamForActor,
+  deleteExam as deleteExamForActor,
   enterMarks as enterMarksForActor,
+  getExamDeletionEligibility as getExamDeletionEligibilityForActor,
   listExamResults as listExamResultsForActor,
+  restoreExam as restoreExamForActor,
   type CreateExamInput,
   type EnterMarksInput,
   type ExamActionError,
+  type GetExamDeletionEligibilityResult,
   type ListExamResultsResult,
 } from "@/lib/academies/exams";
 
@@ -77,6 +82,60 @@ export async function enterMarks(
   revalidatePath("/academy/exams");
   revalidatePath(`/academy/exams/${examId}`);
   return { ok: true };
+}
+
+/** Plain-callable, for the exams table's "Archive"/"Restore" row action —
+ * same convention as students-actions.ts's updateStudentStatus and this
+ * file's own enterMarks. */
+export async function setExamStatus(
+  examId: string,
+  status: "scheduled" | "archived",
+): Promise<{ ok: true } | { ok: false; error: ExamActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result =
+    status === "archived"
+      ? await archiveExamForActor(context, examId)
+      : await restoreExamForActor(context, examId);
+  if (!result.ok) {
+    return result;
+  }
+
+  revalidatePath("/academy/exams");
+  return { ok: true };
+}
+
+/** Plain-callable, for the exams table's "Delete" row action. Permanent —
+ * see lib/academies/exams.ts's deleteExam doc comment for the eligibility
+ * rule (no results attached) that keeps this from ever touching a
+ * protected exam_results row. */
+export async function deleteExam(examId: string): Promise<{ ok: true } | { ok: false; error: ExamActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await deleteExamForActor(context, examId);
+  if (!result.ok) {
+    return result;
+  }
+
+  revalidatePath("/academy/exams");
+  return { ok: true };
+}
+
+/** Read-only wrapper so the exams table can preview whether a given exam
+ * qualifies for permanent deletion (enabled/disabled Delete button) before
+ * the confirmation dialog opens. */
+export async function getExamDeletionEligibility(examId: string): Promise<GetExamDeletionEligibilityResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  return getExamDeletionEligibilityForActor(context, examId);
 }
 
 /** Read-only wrapper so the client-side "Enter marks" panel can fetch an
