@@ -45,6 +45,7 @@ export const UNGRANTABLE_CAPABILITIES = new Set([
   "reactivateAcademy",
   "cancelAcademy",
   "closeAcademy",
+  "deleteAcademy",
   "renewSubscription",
   "verifySubscriptionPayment",
   "rejectSubscriptionPayment",
