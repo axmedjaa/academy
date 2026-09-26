@@ -20,6 +20,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 export interface CertificateRow {
   id: string;
@@ -80,9 +81,11 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
       const result = await issueCertificateAction(issueStudentId, issueBatchId);
       if (!result.ok) {
         setError(result.error.message);
+        showErrorToast(result.error.message);
         return;
       }
       setIssueSuccess("Certificate issued.");
+      showSuccessToast("Certificate issued.");
       setIssueStudentId("");
       setIssueBatchId("");
     });
@@ -94,10 +97,12 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
       const result = await cancelCertificateAction(certificateId, cancelReason.trim());
       if (!result.ok) {
         setError(result.error.message);
+        showErrorToast(result.error.message);
         return;
       }
       setCancellingId(null);
       setCancelReason("");
+      showSuccessToast("Certificate cancelled.");
     });
   }
 

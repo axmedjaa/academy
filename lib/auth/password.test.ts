@@ -29,17 +29,15 @@ describe("hashPassword / verifyPassword", () => {
 });
 
 describe("passwordSchema", () => {
-  it("rejects passwords under 12 characters", () => {
-    expect(passwordSchema.safeParse("short1234567".slice(0, 11)).success).toBe(
-      false,
-    );
+  it("rejects passwords under 8 characters", () => {
+    expect(passwordSchema.safeParse("1234567").success).toBe(false);
   });
 
-  it("accepts passwords of exactly 12 characters", () => {
-    expect(passwordSchema.safeParse("123456789012").success).toBe(true);
+  it("accepts passwords of exactly 8 characters", () => {
+    expect(passwordSchema.safeParse("12345678").success).toBe(true);
   });
 
-  it("accepts passwords over 12 characters", () => {
+  it("accepts passwords over 8 characters", () => {
     expect(passwordSchema.safeParse("a-very-long-password-here").success).toBe(
       true,
     );

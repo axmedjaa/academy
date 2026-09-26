@@ -1,14 +1,33 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
+import { z } from "zod";
 import {
   updateAcademySettings,
   type AcademySettingsFormState,
 } from "@/lib/academies/settings-actions";
 import type { AcademySettingsRecord } from "@/lib/academies/settings";
+import { useFieldErrors } from "@/lib/validation/use-field-errors";
 import { Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialState: AcademySettingsFormState = { ok: false };
+
+// Mirrors lib/academies/settings.ts's own `updateAcademySettingsSchema" —
+// only the two checks worth instant client-side feedback for (name
+// required; email format when present). The optionalText() fields there
+// have no other meaningful client-checkable constraint.
+const settingsFieldSchema = z.object({
+  name: z.string().trim().min(1, "Academy name is required"),
+  email: z
+    .string()
+    .trim()
+    .optional()
+    .or(z.literal(""))
+    .refine((value) => !value || z.string().email().safeParse(value).success, {
+      message: "Enter a valid academy email address",
+    }),
+});
 
 interface Props {
   academy: AcademySettingsRecord;
@@ -35,6 +54,22 @@ interface Props {
  */
 export function AcademySettingsForm({ academy, permissionLevel }: Props) {
   const [state, formAction, pending] = useActionState(updateAcademySettings, initialState);
+  const { errors, validate } = useFieldErrors(settingsFieldSchema);
+
+  useEffect(() => {
+    if (state.ok) {
+      showSuccessToast("Academy settings saved.");
+    } else if (state.error) {
+      showErrorToast(state.error.message);
+    }
+  }, [state]);
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    const values = Object.fromEntries(new FormData(event.currentTarget));
+    if (!validate(values)) {
+      event.preventDefault();
+    }
+  }
 
   return (
     <Section>
@@ -51,8 +86,8 @@ export function AcademySettingsForm({ academy, permissionLevel }: Props) {
         <dd className="text-ink">{academy.defaultCurrency}</dd>
       </dl>
 
-      <form action={formAction} className="mt-5 flex max-w-lg flex-col gap-3">
-        <Field label="Name">
+      <form action={formAction} onSubmit={handleSubmit} className="mt-5 flex max-w-lg flex-col gap-3">
+        <Field label="Name" error={errors.name}>
           <input type="text" name="name" defaultValue={academy.name} required className={inputClass} />
         </Field>
         <Field label="Type">
@@ -65,7 +100,7 @@ export function AcademySettingsForm({ academy, permissionLevel }: Props) {
           <Field label="Phone">
             <input type="text" name="phone" defaultValue={academy.phone ?? ""} className={inputClass} />
           </Field>
-          <Field label="Email">
+          <Field label="Email" error={errors.email}>
             <input type="email" name="email" defaultValue={academy.email ?? ""} className={inputClass} />
           </Field>
         </div>
@@ -100,7 +135,6 @@ export function AcademySettingsForm({ academy, permissionLevel }: Props) {
         </div>
 
         {state.error && <ErrorMessage message={state.error.message} />}
-        {state.ok && <p className="text-sm font-medium text-success">Saved.</p>}
 
         <Button type="submit" disabled={pending} className="self-start">
           {pending ? "Saving..." : "Save changes"}

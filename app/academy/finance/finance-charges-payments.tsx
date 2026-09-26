@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 import {
   createStudentChargeAction,
   issueReceiptAction,
@@ -21,6 +21,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialState: StudentPaymentsFormState = { ok: false };
 
@@ -109,6 +110,22 @@ export function FinanceChargesPayments({
   const [adjustAmount, setAdjustAmount] = useState("");
   const [reversedIds, setReversedIds] = useState<Set<string>>(new Set());
 
+  useEffect(() => {
+    if (createChargeState.ok) {
+      showSuccessToast("Charge created.");
+    } else if (createChargeState.error) {
+      showErrorToast(createChargeState.error.message);
+    }
+  }, [createChargeState]);
+
+  useEffect(() => {
+    if (recordPaymentState.ok) {
+      showSuccessToast("Payment recorded (pending approval).");
+    } else if (recordPaymentState.error) {
+      showErrorToast(recordPaymentState.error.message);
+    }
+  }, [recordPaymentState]);
+
   function studentLabel(studentId: string): string {
     return studentLabels[studentId] ?? studentId;
   }
@@ -120,7 +137,10 @@ export function FinanceChargesPayments({
     setIssuingId(null);
     if (!result.ok) {
       setIssueError(result.error.message);
+      showErrorToast(result.error.message);
+      return;
     }
+    showSuccessToast("Receipt issued.");
   }
 
   function startReversal(paymentId: string, mode: "reverse" | "adjust") {
@@ -147,9 +167,11 @@ export function FinanceChargesPayments({
           : await reverseStudentPaymentAction(paymentId, reversalReason.trim());
       if (!result.ok) {
         setReversalError(result.error.message);
+        showErrorToast(result.error.message);
         return;
       }
       setReversedIds((prev) => new Set(prev).add(paymentId));
+      showSuccessToast(reversalMode === "adjust" ? "Payment adjusted." : "Payment reversed.");
       cancelReversal();
     });
   }

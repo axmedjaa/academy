@@ -205,7 +205,7 @@ describe("registerAcademy — validation", () => {
     }
   });
 
-  it("rejects an owner password shorter than 12 characters", async () => {
+  it("rejects an owner password shorter than 8 characters", async () => {
     const ownerContext = await resolveAuthContext(ownerUserId);
     const result = await registerAcademy(ownerContext, baseInput({ ownerPassword: "short1" }));
     expect(result.ok).toBe(false);

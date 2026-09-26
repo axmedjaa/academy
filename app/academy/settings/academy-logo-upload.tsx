@@ -9,6 +9,7 @@ import {
 } from "@/lib/academies/academy-logo-actions";
 import { ConfirmButton, type ConfirmActionResult } from "@/app/academy/_shell/confirm-dialog";
 import { Button, ErrorMessage, Section } from "@/app/academy/_shell/ui";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const MAX_SIZE_BYTES = 5 * 1024 * 1024;
@@ -29,6 +30,16 @@ type Status = "idle" | "uploading" | "confirming" | "success" | "error";
  * send the actual binary through a Server Action" rule). Plain
  * `XMLHttpRequest`, not `fetch`, specifically for `xhr.upload.onprogress` —
  * `fetch` has no upload-progress event.
+ *
+ * A CORS-blocked cross-origin PUT (the R2 bucket has no CORS policy
+ * allowing this app's origin) surfaces to JS as `xhr.status === 0` with no
+ * response body at all — browsers deliberately withhold the real reason
+ * from scripts for any CORS failure, so that specific case is called out
+ * by name here rather than left as an opaque "Upload failed" (still no
+ * secret/internal detail is exposed — CORS status is not sensitive). Any
+ * other failure logs its real HTTP status/response body to the browser
+ * console (visible in DevTools) for diagnosis, while the error thrown back
+ * to the caller stays a plain, non-technical message for the on-screen UI.
  */
 function uploadFileWithProgress(url: string, file: File, onProgress: (percent: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -43,11 +54,26 @@ function uploadFileWithProgress(url: string, file: File, onProgress: (percent: n
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve();
-      } else {
-        reject(new Error(`Upload failed with status ${xhr.status}`));
+        return;
       }
+      console.error("Logo upload to storage failed", { status: xhr.status, response: xhr.responseText });
+      reject(new Error(`The logo upload was rejected by storage (HTTP ${xhr.status}). Please try again.`));
     };
-    xhr.onerror = () => reject(new Error("Upload failed"));
+    xhr.onerror = () => {
+      if (xhr.status === 0) {
+        console.error(
+          "Logo upload blocked before any HTTP response was received — this usually means the storage bucket's CORS policy doesn't allow this app's origin.",
+        );
+        reject(
+          new Error(
+            "The upload was blocked by the browser. This usually means the storage bucket isn't configured to allow uploads from this site yet.",
+          ),
+        );
+        return;
+      }
+      console.error("Logo upload network error", { status: xhr.status });
+      reject(new Error("The logo upload failed due to a network error. Please try again."));
+    };
     xhr.send(file);
   });
 }
@@ -112,29 +138,36 @@ export function AcademyLogoUpload({ currentLogoUrl }: Props) {
       fileSizeBytes: selectedFile.size,
     });
     if (!requested.ok || !requested.uploadUrl || !requested.key) {
-      setError(requested.error?.message ?? "The logo could not be uploaded. Please try again.");
+      const message = requested.error?.message ?? "The logo could not be uploaded. Please try again.";
+      setError(message);
       setStatus("error");
+      showErrorToast(message);
       return;
     }
 
     try {
       await uploadFileWithProgress(requested.uploadUrl, selectedFile, setProgress);
-    } catch {
-      setError("The logo could not be uploaded. Please try again.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "The logo could not be uploaded. Please try again.";
+      setError(message);
       setStatus("error");
+      showErrorToast(message);
       return;
     }
 
     setStatus("confirming");
     const confirmed = await confirmAcademyLogoUploadAction(requested.key);
     if (!confirmed.ok) {
-      setError(confirmed.error?.message ?? "The logo upload could not be verified.");
+      const message = confirmed.error?.message ?? "The logo upload could not be verified.";
+      setError(message);
       setStatus("error");
+      showErrorToast(message);
       return;
     }
 
     setStatus("success");
     resetSelection();
+    showSuccessToast("Logo uploaded successfully.");
     router.refresh();
   }
 
@@ -177,7 +210,6 @@ export function AcademyLogoUpload({ currentLogoUrl }: Props) {
           />
 
           {error && <ErrorMessage message={error} />}
-          {status === "success" && <p className="text-sm font-medium text-success">Logo updated successfully.</p>}
           {(status === "uploading" || status === "confirming") && (
             <p className="text-sm text-muted">{status === "uploading" ? `Uploading... ${progress}%` : "Verifying..."}</p>
           )}
@@ -195,6 +227,7 @@ export function AcademyLogoUpload({ currentLogoUrl }: Props) {
                 label="Remove logo"
                 title="Remove academy logo?"
                 description="This permanently deletes the current logo. This cannot be undone."
+                successMessage="Logo removed successfully."
                 onConfirm={handleRemove}
                 onSuccess={() => router.refresh()}
               />

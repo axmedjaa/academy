@@ -68,7 +68,7 @@ These 17 decisions were made explicitly by the user (see `REQUIREMENTS_GAP_ANALY
 9. **Academy profile edits**: direct edit by Owner/Admin, no approval workflow.
 10. **Export scope**: CSV export on Reports, Student list, Finance, and Audit logs (platform + academy).
 11. **Suspicious login**: flagged when a session's IP/user-agent hasn't been seen before for that user (no geolocation).
-12. **Password policy**: minimum 12 characters, no forced expiry.
+12. **Password policy**: minimum 8 characters, no forced expiry.
 13. **Notification templates**: fixed, code-defined per event (no admin-editable template table).
 14. **Support process**: external only (email/phone) — no in-product support/contact feature.
 15. **`/academy/audit-logs`**: added, visible to Academy Owner/Admin only.
@@ -87,7 +87,7 @@ These 17 decisions were made explicitly by the user (see `REQUIREMENTS_GAP_ANALY
 - **Allowance enforcement**: a single `checkAllowance(academyId, resource)` helper (`lib/subscriptions/`) is called at the top of every capped-resource create action (branches, staff, students, courses, storage uploads) from Phase 1 onward. Hard block — the action fails with a clear error if the academy is at its plan limit. A plan **downgrade** is itself blocked server-side if current usage exceeds the target plan's limits. "Storage" specifically means academy-owned files — student/staff documents, ID card photos, academy logo; platform-administrative files (e.g. subscription-payment evidence, Phase 1) are stored separately and are never counted against an academy's plan storage allowance.
 - **File lifecycle rules** (apply to every academy-owned upload, Phase 1's logo field through Phase 2's documents): max individual file size and allowed MIME types are enforced by a shared Zod schema before any upload begins; a **failed** upload never consumes allowance, and any partially-written object from a failed upload is cleaned up (not left as an orphaned billable object). **No versioning for MVP** — replacing a file (e.g. re-uploading a student's ID photo) deletes the old object and allowance is freed immediately; only one active file per document slot, keeping storage accounting simple and avoiding double-counting. Deleted/replaced files are hard-removed from the storage backend (not soft-deleted or retained) — this is about *file* lifecycle, not the "no hard delete" principle, which applies to financial/result *records*, not attachments. Files are private by default (signed, time-limited download URLs; never a public bucket) and every download is tenant-scoped through `checkAllowance`'s sibling authorization path, never a static public URL. A periodic reconciliation job (Phase 5 monitoring) compares `academy_usage.storage_used_bytes` against actual object-storage contents and flags drift rather than silently trusting the counter.
 - **MFA**: TOTP-based, mandatory for `platform_owner` accounts only. Enrollment is forced on first login if not yet enrolled. Recovery codes are single-use, hashed with SHA-256 (not Argon2id — they're high-entropy random values, not user-chosen secrets).
-- **Password policy**: minimum 12 characters, enforced by a shared Zod schema used everywhere a password is set.
+- **Password policy**: minimum 8 characters, enforced by a shared Zod schema used everywhere a password is set.
 - **Validation**: every server action has a Zod schema for its input.
 - **DB access**: only through Drizzle; all academy-scoped tables carry `academy_id`, branch-specific ones also carry `branch_id`.
 
@@ -168,7 +168,7 @@ Project scaffold, Postgres + Drizzle + migrations, environment/config management
 Role constants defined (`platform_owner`, `platform_admin`, 6 academy roles), exercised via a seeded owner account. MFA enforcement is role-gated: mandatory for `platform_owner`, not required for any other role in this phase.
 
 **6. Security considerations**
-- Argon2id (Argon2id cost params tunable via env); shared password Zod schema enforcing **minimum 12 characters, no forced expiry**.
+- Argon2id (Argon2id cost params tunable via env); shared password Zod schema enforcing **minimum 8 characters, no forced expiry**.
 - Session token: 256-bit random value; DB stores only its SHA-256 hash. Cookie flags: `httpOnly`, `secure` (prod), `sameSite=lax`.
 - **MFA**: TOTP secret encrypted at rest (app-level encryption key via env, separate from password hashing); recovery codes are single-use, hashed with SHA-256, shown once at generation time only. `platform_owner` sign-in is blocked without a valid TOTP code once enrolled; first login forces enrollment before any platform action is possible.
 - **`revokeSession`** must verify the target session belongs to the calling user before revoking — an explicit IDOR-class check with its own test.

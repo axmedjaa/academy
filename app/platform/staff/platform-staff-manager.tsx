@@ -75,7 +75,7 @@ export function PlatformStaffManager({ staff, ungrantableCapabilities }: Props) 
             <input type="email" name="email" required className={inputClass} />
           </Field>
           <Field label="Temporary password">
-            <input type="password" name="password" required minLength={12} className={inputClass} />
+            <input type="password" name="password" required minLength={8} className={inputClass} />
           </Field>
           {createState.error && <ErrorMessage message={createState.error.message} />}
           {createState.ok && <p className="text-sm font-medium text-success">Account created.</p>}

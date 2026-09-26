@@ -1,22 +1,50 @@
 "use client";
 
-import { useActionState, useMemo, useState, useTransition } from "react";
+import { useActionState, useEffect, useMemo, useState, useTransition } from "react";
+import { z } from "zod";
 import {
   resendEmailChangeVerification,
   updateOwnAccount,
   type UpdateAccountState,
 } from "@/lib/auth/update-account-actions";
+import { useFieldErrors } from "@/lib/validation/use-field-errors";
 import {
   ErrorBanner,
   PrimaryButton,
   SecondaryButton,
-  SuccessBanner,
   fieldInputStyle,
   fieldLabelStyle,
 } from "@/lib/ui/auth-components";
 import { color, spacing } from "@/lib/ui/theme";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialState: UpdateAccountState = { ok: false };
+
+// Mirrors lib/auth/update-account.ts's own `updateAccountSchema` — not
+// imported directly (that file pulls in argon2 for changeOwnPassword,
+// which must never reach a client bundle). `currentPassword` isn't
+// validated here (its own emptiness already gates the Save button via
+// `canSubmit` below) — this covers what that gate doesn't: new-email
+// format and new-password length/confirmation match, both currently only
+// checked server-side.
+const accountFieldSchema = z
+  .object({
+    newEmail: z.string().trim(),
+    newPassword: z.string(),
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.newEmail === "" || z.string().email().safeParse(data.newEmail).success, {
+    message: "Enter a valid email address.",
+    path: ["newEmail"],
+  })
+  .refine((data) => data.newPassword === "" || data.newPassword.length >= 8, {
+    message: "New password must be at least 8 characters.",
+    path: ["newPassword"],
+  })
+  .refine((data) => data.newPassword === "" || data.newPassword === data.confirmPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmPassword"],
+  });
 
 /**
  * One form, one "current password" gate, either or both of a new email and
@@ -46,6 +74,13 @@ export function AccountForms({
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
+  const { errors, validate } = useFieldErrors(accountFieldSchema);
+
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    if (!validate({ newEmail, newPassword, confirmPassword })) {
+      event.preventDefault();
+    }
+  }
 
   // Derived, not stored: the server component's own pendingNewEmail read
   // covers every page load, and this submit's own result covers the
@@ -70,8 +105,16 @@ export function AccountForms({
     return null;
   }, [state]);
 
+  useEffect(() => {
+    if (successMessage) {
+      showSuccessToast(successMessage);
+    } else if (state.error) {
+      showErrorToast(state.error.message);
+    }
+  }, [state, successMessage]);
+
   return (
-    <form action={formAction} style={{ display: "flex", flexDirection: "column", gap: spacing.lg }}>
+    <form action={formAction} onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: spacing.lg }}>
       <p style={{ margin: 0, fontSize: "0.85rem", color: color.textMuted }}>
         Signed in as <span style={{ fontWeight: 600, color: color.text }}>{currentEmail}</span>
       </p>
@@ -102,8 +145,12 @@ export function AccountForms({
               startResendTransition(async () => {
                 const result = await resendEmailChangeVerification();
                 if (!result.ok) {
-                  setResendError(result.error ?? "Couldn't resend the verification email.");
+                  const message = result.error ?? "Couldn't resend the verification email.";
+                  setResendError(message);
+                  showErrorToast(message);
+                  return;
                 }
+                showSuccessToast("Verification email resent.");
               });
             }}
           >
@@ -123,6 +170,7 @@ export function AccountForms({
           placeholder="Leave blank to keep your current email"
           style={fieldInputStyle}
         />
+        {errors.newEmail && <small style={{ color: color.statusRed }}>{errors.newEmail}</small>}
       </label>
 
       <div
@@ -140,9 +188,10 @@ export function AccountForms({
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             placeholder="Leave blank to keep it"
-            minLength={12}
+            minLength={8}
             style={fieldInputStyle}
           />
+          {errors.newPassword && <small style={{ color: color.statusRed }}>{errors.newPassword}</small>}
         </label>
         <label style={fieldLabelStyle}>
           Confirm new password
@@ -152,13 +201,14 @@ export function AccountForms({
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             placeholder="Repeat it"
-            minLength={12}
+            minLength={8}
             style={fieldInputStyle}
           />
+          {errors.confirmPassword && <small style={{ color: color.statusRed }}>{errors.confirmPassword}</small>}
         </label>
       </div>
       {newPassword.length > 0 && (
-        <p style={{ margin: "-0.5rem 0 0", fontSize: "0.78rem", color: color.textMuted }}>At least 12 characters.</p>
+        <p style={{ margin: "-0.5rem 0 0", fontSize: "0.78rem", color: color.textMuted }}>At least 8 characters.</p>
       )}
 
       <div
@@ -183,7 +233,6 @@ export function AccountForms({
         </label>
 
         {state.error && <ErrorBanner message={state.error.message} />}
-        {successMessage && <SuccessBanner message={successMessage} />}
 
         <PrimaryButton type="submit" disabled={!canSubmit} style={{ width: "auto", alignSelf: "flex-start", padding: "0.6rem 1.25rem" }}>
           {pending ? "Saving..." : "Save changes"}

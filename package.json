@@ -19,9 +19,11 @@
     "@react-pdf/renderer": "^4.9.0",
     "argon2": "^0.45.1",
     "bullmq": "^6.3.6",
+    "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "ioredis": "^6.0.0",
+    "lucide-react": "^1.48.0",
     "next": "16.3.5",
     "otpauth": "^9.5.2",
     "pg": "^8.23.0",
@@ -29,6 +31,8 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "resend": "^6.28.1",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.7.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

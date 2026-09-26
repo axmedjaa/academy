@@ -198,7 +198,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
   }
 
   function canAdvanceFromOwner(): boolean {
-    return form.ownerEmail.trim().length > 0 && form.ownerPassword.length >= 12;
+    return form.ownerEmail.trim().length > 0 && form.ownerPassword.length >= 8;
   }
 
   function canAdvanceFromBranch(): boolean {
@@ -349,13 +349,13 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                   type="password"
                   className={inputClass}
                   value={form.ownerPassword}
-                  minLength={12}
+                  minLength={8}
                   onChange={(e) => update("ownerPassword", e.target.value)}
                   required
                 />
               </Field>
               <p className="text-xs text-muted">
-                At least 12 characters. Share it with the customer through a secure channel — it won&apos;t be shown again
+                At least 8 characters. Share it with the customer through a secure channel — it won&apos;t be shown again
                 after this.
               </p>
             </div>

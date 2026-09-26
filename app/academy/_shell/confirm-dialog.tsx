@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { Button } from "./ui";
+import { showSuccessToast } from "@/lib/ui/toast";
 
 type Variant = "primary" | "secondary" | "danger" | "dangerSolid";
 
@@ -26,6 +27,10 @@ interface ConfirmButtonProps {
   onConfirm: () => Promise<ConfirmActionResult>;
   /** Called after a successful confirm (e.g. to clear local row-editing state). */
   onSuccess?: () => void;
+  /** Toast shown after a successful confirm — defaults to `"${label} succeeded."`
+   * (e.g. "Delete succeeded.", "Archive succeeded."). Pass `false` to suppress
+   * the toast entirely for a caller that already gives its own feedback. */
+  successMessage?: string | false;
   /**
    * For maximum-consequence actions (e.g. permanently deleting an academy):
    * the Confirm button stays disabled until the typed value exactly matches
@@ -54,6 +59,7 @@ export function ConfirmButton({
   disabled,
   onConfirm,
   onSuccess,
+  successMessage,
   confirmInput,
 }: ConfirmButtonProps) {
   const [open, setOpen] = useState(false);
@@ -82,6 +88,9 @@ export function ConfirmButton({
       }
       setOpen(false);
       setTypedValue("");
+      if (successMessage !== false) {
+        showSuccessToast(successMessage ?? `${label} succeeded.`);
+      }
       onSuccess?.();
     });
   }

@@ -1,11 +1,12 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import {
   registerStudent,
   type RegisterStudentFormState,
 } from "@/lib/academies/register-student-actions";
 import { Button, ErrorMessage, Field, inputClass } from "@/app/academy/_shell/ui";
+import { showErrorToast, showInfoToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialState: RegisterStudentFormState = { ok: false };
 
@@ -32,6 +33,16 @@ interface StudentFormProps {
  */
 export function StudentForm({ branches, courseOptions }: StudentFormProps) {
   const [state, formAction, pending] = useActionState(registerStudent, initialState);
+
+  useEffect(() => {
+    if (state.ok && state.enrollmentWarning) {
+      showInfoToast(state.enrollmentWarning);
+    } else if (state.ok) {
+      showSuccessToast("Student registered.");
+    } else if (state.error) {
+      showErrorToast(state.error.message);
+    }
+  }, [state]);
 
   return (
     <form action={formAction} className="flex flex-col gap-3">

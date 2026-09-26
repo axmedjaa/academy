@@ -97,7 +97,7 @@ describe("createPlatformAdminAccount", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("rejects a password shorter than 12 characters", async () => {
+  it("rejects a password shorter than 8 characters", async () => {
     const ownerContext = await resolveAuthContext(ownerUserId);
     const result = await createPlatformAdminAccount(ownerContext, {
       email: `short-pw-${randomUUID()}@example.com`,

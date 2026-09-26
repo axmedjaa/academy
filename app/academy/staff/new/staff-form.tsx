@@ -1,9 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import { createStaff, type CreateStaffFormState } from "@/lib/academies/staff-actions";
 import { ACADEMY_ROLES } from "@/lib/auth/roles";
 import { Button, ErrorMessage, Field, inputClass } from "@/app/academy/_shell/ui";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialState: CreateStaffFormState = { ok: false };
 
@@ -19,13 +20,21 @@ const initialState: CreateStaffFormState = { ok: false };
 export function StaffForm() {
   const [state, formAction, pending] = useActionState(createStaff, initialState);
 
+  useEffect(() => {
+    if (state.ok) {
+      showSuccessToast("Staff member created.");
+    } else if (state.error) {
+      showErrorToast(state.error.message);
+    }
+  }, [state]);
+
   return (
     <form action={formAction} className="flex flex-col gap-3">
       <Field label="Email">
         <input type="email" name="email" required className={inputClass} />
       </Field>
       <Field label="Temporary password (only needed for a brand-new account)">
-        <input type="password" name="password" minLength={12} className={inputClass} />
+        <input type="password" name="password" minLength={8} className={inputClass} />
       </Field>
       <Field label="Full name">
         <input type="text" name="fullName" required className={inputClass} />

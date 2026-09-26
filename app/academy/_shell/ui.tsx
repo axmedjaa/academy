@@ -254,22 +254,29 @@ const FIELD_CONTROL =
 export const inputClass = FIELD_CONTROL;
 
 /** Label + control wrapper. `children` is the native form control; this
- * only supplies the label text and consistent spacing. */
+ * only supplies the label text and consistent spacing. `error`, when
+ * present, renders an inline red message below the control — additive and
+ * optional (existing callers that never pass it are unaffected), for forms
+ * using lib/validation/use-field-errors.ts's client-side pre-submit
+ * validation. */
 export function Field({
   label,
   htmlFor,
   className = "",
+  error,
   children,
 }: {
   label: string;
   htmlFor?: string;
   className?: string;
+  error?: string;
   children: ReactNode;
 }) {
   return (
     <label htmlFor={htmlFor} className={`block ${className}`}>
       <span className={FIELD_LABEL}>{label}</span>
       {children}
+      {error && <span className="mt-1 block text-xs text-danger">{error}</span>}
     </label>
   );
 }

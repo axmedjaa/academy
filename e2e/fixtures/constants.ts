@@ -14,7 +14,7 @@
  * scripts/seed.ts's guard against NODE_ENV=production is mirrored there.
  */
 
-// passwordSchema (lib/auth/password.ts) requires >=12 characters — this
+// passwordSchema (lib/auth/password.ts) requires >=8 characters — this
 // default clears that bar comfortably.
 const DEFAULT_E2E_PASSWORD = "E2eTestPassw0rd!";
 

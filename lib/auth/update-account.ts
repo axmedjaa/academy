@@ -215,8 +215,8 @@ const updateAccountSchema = z
     message: "Enter a new email or a new password — nothing to update otherwise.",
     path: ["newEmail"],
   })
-  .refine((data) => data.newPassword === undefined || data.newPassword.length >= 12, {
-    message: "New password must be at least 12 characters.",
+  .refine((data) => data.newPassword === undefined || data.newPassword.length >= 8, {
+    message: "New password must be at least 8 characters.",
     path: ["newPassword"],
   })
   .refine((data) => data.newPassword === undefined || data.newPassword === data.confirmPassword, {

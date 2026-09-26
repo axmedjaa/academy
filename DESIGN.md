@@ -179,7 +179,7 @@ Three generic patterns cover the large majority of screens in §7–§10. Each s
 | `/mfa/setup` (Platform Owner only, forced on first login) | C | Platform Owner | QR code + manual-entry fallback code + 6-digit confirmation input (MFA code component, §3). On success: **one-time** recovery-codes reveal with an explicit "Save these now — they will not be shown again" warning and a confirm-you've-saved checkbox before continuing. No skip option. |
 | `/mfa/challenge` (every login after enrollment) | C | Platform Owner | MFA code component (§3); "Use a recovery code instead" link; same lockout/error treatment as login. |
 | `/forgot-password` | C | All | Single email field; neutral confirmation regardless of whether the email exists (§11.8). |
-| `/reset-password` | C | All | New + confirm password, inline hint "At least 12 characters" (Decision #16, no complexity rules, no forced expiry); expired/invalid-token state offers "Request a new link." |
+| `/reset-password` | C | All | New + confirm password, inline hint "At least 8 characters" (Decision #16, no complexity rules, no forced expiry); expired/invalid-token state offers "Request a new link." |
 | `/account/security` | B | All (any authenticated user) | Active-sessions list (device/browser, IP, last-active, "this device" flag) with per-row Revoke + "Sign out of all other sessions." For Platform Owner accounts only: an MFA sub-section showing enrollment status + "Regenerate recovery codes" (re-confirmation required, then the same one-time reveal as setup). |
 
 ---

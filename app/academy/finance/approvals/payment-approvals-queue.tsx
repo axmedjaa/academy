@@ -7,6 +7,7 @@ import {
 } from "@/lib/academies/student-payments-actions";
 import type { StudentPaymentRecord } from "@/lib/academies/student-payments";
 import { Button, ErrorMessage, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 interface Props {
   payments: StudentPaymentRecord[];
@@ -55,9 +56,11 @@ export function PaymentApprovalsQueue({ payments: initialPayments, studentLabels
       const result = await approveStudentPaymentAction(paymentId);
       if (!result.ok) {
         setError(result.error.message);
+        showErrorToast(result.error.message);
         return;
       }
       setPayments((prev) => prev.filter((payment) => payment.id !== paymentId));
+      showSuccessToast("Payment approved.");
     });
   }
 
@@ -67,11 +70,13 @@ export function PaymentApprovalsQueue({ payments: initialPayments, studentLabels
       const result = await rejectStudentPaymentAction(paymentId, rejectReason.trim());
       if (!result.ok) {
         setError(result.error.message);
+        showErrorToast(result.error.message);
         return;
       }
       setPayments((prev) => prev.filter((payment) => payment.id !== paymentId));
       setRejectingId(null);
       setRejectReason("");
+      showSuccessToast("Payment rejected.");
     });
   }
 

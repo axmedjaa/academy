@@ -11,6 +11,7 @@ import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
 import type { StaffDeletionEligibilitySummary, StaffListRow } from "@/lib/academies/staff";
 import { Badge, Button, ErrorMessage, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 interface Props {
   staff: (StaffListRow & { deletionEligibility: StaffDeletionEligibilitySummary })[];
@@ -39,7 +40,12 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
     setError(null);
     startTransition(async () => {
       const result = await assignStaffRole(userId, role);
-      if (!result.ok) setError(result.error.message);
+      if (!result.ok) {
+        setError(result.error.message);
+        showErrorToast(result.error.message);
+        return;
+      }
+      showSuccessToast("Role updated.");
     });
   }
 
@@ -55,7 +61,12 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
         hireDate: row.hireDate ?? "",
         status: nextStatus,
       });
-      if (!result.ok) setError(result.error.message);
+      if (!result.ok) {
+        setError(result.error.message);
+        showErrorToast(result.error.message);
+        return;
+      }
+      showSuccessToast(nextStatus === "active" ? "Staff member restored." : "Staff member archived.");
     });
   }
 
