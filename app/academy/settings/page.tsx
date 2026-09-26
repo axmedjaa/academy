@@ -1,8 +1,10 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAcademySettings, getOwnAcademyUsage } from "@/lib/academies/settings";
+import { getAcademyLogoUrl } from "@/lib/academies/academy-logo";
 import { getNotificationPreferences } from "@/lib/notifications/preferences";
 import { AcademySettingsForm } from "./settings-form";
+import { AcademyLogoUpload } from "./academy-logo-upload";
 import { AcademyUsageWidget } from "./academy-usage-widget";
 import { NotificationPreferencesSection } from "./notification-preferences-section";
 import { PageHeader, PageMessage } from "@/app/academy/_shell/ui";
@@ -54,6 +56,11 @@ export default async function AcademySettingsPage() {
     ? await getNotificationPreferences(context, settingsResult.academy.id)
     : null;
 
+  // Freshly generated per render — a signed R2 GET URL, never stored,
+  // always short-lived (see lib/academies/academy-logo.ts's own comment on
+  // why regenerating this on every server render is cheap and correct).
+  const logoUrl = settingsResult.ok ? await getAcademyLogoUrl(settingsResult.academy.logoRef) : null;
+
   if (!settingsResult.ok) {
     return (
       <PageMessage
@@ -75,6 +82,8 @@ export default async function AcademySettingsPage() {
             limits={usageResult.limits}
           />
         ) : null}
+
+        <AcademyLogoUpload currentLogoUrl={logoUrl} />
 
         <AcademySettingsForm
           academy={settingsResult.academy}

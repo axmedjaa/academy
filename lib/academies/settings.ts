@@ -81,6 +81,15 @@ function optionalText(maxLength = 500) {
  * Both are judgment calls (DESIGN.md doesn't say "immutable" in so many
  * words, it simply never lists them as editable), documented here rather
  * than silently omitted.
+ *
+ * `logoRef` is deliberately EXCLUDED from this schema (this wave) — it
+ * used to be a free-text field here, but now stores a private R2 object
+ * key (lib/academies/academy-logo.ts), never something a caller should be
+ * able to set directly by resubmitting arbitrary text. It is exclusively
+ * managed by that file's `requestAcademyLogoUploadUrl`/
+ * `confirmAcademyLogoUpload`/`removeAcademyLogo` — this general update
+ * never reads or writes that column at all, so a profile-form save can
+ * never accidentally clear or overwrite the logo.
  */
 export const updateAcademySettingsSchema = z.object({
   name: z.string().trim().min(1, "Academy name is required").max(200),
@@ -99,7 +108,6 @@ export const updateAcademySettingsSchema = z.object({
       message: "Enter a valid academy email address",
     }),
   website: optionalText(300),
-  logoRef: optionalText(500),
   registrationNumber: optionalText(100),
   primaryContactName: optionalText(200),
   primaryContactPhone: optionalText(50),
@@ -251,7 +259,6 @@ export async function updateAcademySettings(
         phone: data.phone,
         email: data.email,
         website: data.website,
-        logoRef: data.logoRef,
         registrationNumber: data.registrationNumber,
         primaryContactName: data.primaryContactName,
         primaryContactPhone: data.primaryContactPhone,

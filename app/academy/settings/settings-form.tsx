@@ -27,7 +27,11 @@ interface Props {
  * (no approval step, no "pending change" state) for the full expanded
  * profile field set. `slug` and `defaultCurrency` are shown read-only, not
  * editable — see lib/academies/settings.ts's schema comment for why those
- * two columns are excluded from the editable set.
+ * two columns are excluded from the editable set. The logo has its own
+ * separate upload UI (academy-logo-upload.tsx, rendered alongside this
+ * form by page.tsx) — no "Logo reference" field here anymore, per that
+ * file's own comment on why logo management moved out of this general
+ * update entirely.
  */
 export function AcademySettingsForm({ academy, permissionLevel }: Props) {
   const [state, formAction, pending] = useActionState(updateAcademySettings, initialState);
@@ -67,9 +71,6 @@ export function AcademySettingsForm({ academy, permissionLevel }: Props) {
         </div>
         <Field label="Website">
           <input type="text" name="website" defaultValue={academy.website ?? ""} className={inputClass} />
-        </Field>
-        <Field label="Logo reference">
-          <input type="text" name="logoRef" defaultValue={academy.logoRef ?? ""} className={inputClass} />
         </Field>
         <Field label="Registration number">
           <input

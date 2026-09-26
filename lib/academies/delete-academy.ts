@@ -37,6 +37,8 @@ import {
 } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
+import { deleteObject } from "@/lib/storage/client";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -213,6 +215,14 @@ export type DeleteAcademyResult =
  * this file's own top comment); every protected table (financial,
  * subscription-payment, certificate, exam-result) is guaranteed empty by
  * the eligibility gate rather than ever being deleted by this code path.
+ *
+ * R2 logo cleanup: `academies.logoRef` (lib/academies/academy-logo.ts) is
+ * captured from the same locked row before the `academies` row itself is
+ * deleted, and the corresponding R2 object is removed AFTER this
+ * transaction commits — see the cleanup block right after this function's
+ * `db.transaction(...)` call for why that has to happen outside the
+ * transaction, and why it's best-effort. Eligibility rules, the deletion
+ * transaction itself, and the audit trail are all unchanged by this.
  */
 export async function deleteAcademy(
   actorContext: AuthContext,
@@ -229,9 +239,9 @@ export async function deleteAcademy(
     return { ok: false, error: { code: "validation", message: parsedId.error.issues[0]?.message ?? "Invalid input." } };
   }
 
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     const [academy] = await tx
-      .select({ id: academies.id, name: academies.name })
+      .select({ id: academies.id, name: academies.name, logoRef: academies.logoRef })
       .from(academies)
       .where(eq(academies.id, parsedId.data))
       .for("update");
@@ -354,6 +364,29 @@ export async function deleteAcademy(
 
     await tx.delete(academies).where(eq(academies.id, academy.id));
 
-    return { ok: true, academyId: academy.id } as const;
+    return { ok: true, academyId: academy.id, logoRef: academy.logoRef } as const;
   });
+
+  if (!result.ok) {
+    return result;
+  }
+
+  // R2 cleanup happens here, after the transaction has already committed —
+  // Postgres and Cloudflare R2 cannot share one atomic transaction (see
+  // this task's own "PostgreSQL transactions cannot atomically include
+  // Cloudflare R2" instruction), so this is deliberately best-effort and
+  // never rolls back the (already-successful, already-irreversible) academy
+  // deletion over a storage cleanup failure. Failure is logged as a safe,
+  // observable operational warning, same convention as
+  // lib/academies/academy-logo.ts's own replacement/removal cleanup.
+  if (result.logoRef) {
+    const deleted = await deleteObject(result.logoRef);
+    if (!deleted.ok) {
+      logger.warn("academy deletion: logo R2 object could not be deleted (orphaned)", {
+        academyId: result.academyId,
+      });
+    }
+  }
+
+  return { ok: true, academyId: result.academyId };
 }

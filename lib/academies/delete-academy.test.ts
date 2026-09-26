@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
+
+// Real Cloudflare R2 is never called from the test suite — mocking this
+// shared boundary lets these tests verify the logo-cleanup integration
+// (lib/academies/academy-logo.ts's own object key) without any real
+// network call, same convention as lib/academies/academy-logo.test.ts.
+vi.mock("@/lib/storage/client", () => ({ deleteObject: vi.fn() }));
 import {
   academies,
   academyMemberships,
@@ -26,7 +32,15 @@ import {
   users,
 } from "@/lib/db/schema";
 import type { AuthContext } from "@/lib/auth/auth-context";
+import { deleteObject } from "@/lib/storage/client";
 import { deleteAcademy, getAcademyDeletionEligibility } from "./delete-academy";
+
+const deleteObjectMock = vi.mocked(deleteObject);
+
+beforeEach(() => {
+  deleteObjectMock.mockReset();
+  deleteObjectMock.mockResolvedValue({ ok: true });
+});
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -410,6 +424,48 @@ describe("deleteAcademy — successful deletion", () => {
 
     // The academy is gone from the tracked-for-cleanup list's perspective —
     // remove it so afterAll doesn't try to re-delete it.
+    createdAcademyIds.splice(createdAcademyIds.indexOf(academyId), 1);
+  });
+
+  it("deletes the academy's R2 logo object (if it had one) after the transaction commits", async () => {
+    const creatorId = await createUser();
+    const academyId = await createBareAcademy(creatorId);
+    const logoKey = "academies/pre-existing/logos/x.png";
+    await db.update(academies).set({ logoRef: logoKey }).where(eq(academies.id, academyId));
+
+    const [{ name }] = await db.select({ name: academies.name }).from(academies).where(eq(academies.id, academyId));
+    const result = await deleteAcademy(ownerContext(creatorId), academyId, name);
+    expect(result.ok).toBe(true);
+    expect(deleteObjectMock).toHaveBeenCalledWith(logoKey);
+
+    createdAcademyIds.splice(createdAcademyIds.indexOf(academyId), 1);
+  });
+
+  it("never calls storage cleanup for an academy that never had a logo", async () => {
+    const creatorId = await createUser();
+    const academyId = await createBareAcademy(creatorId);
+
+    const [{ name }] = await db.select({ name: academies.name }).from(academies).where(eq(academies.id, academyId));
+    const result = await deleteAcademy(ownerContext(creatorId), academyId, name);
+    expect(result.ok).toBe(true);
+    expect(deleteObjectMock).not.toHaveBeenCalled();
+
+    createdAcademyIds.splice(createdAcademyIds.indexOf(academyId), 1);
+  });
+
+  it("still completes the (already-committed, irreversible) deletion even if R2 cleanup fails", async () => {
+    deleteObjectMock.mockResolvedValue({ ok: false, error: "boom" });
+    const creatorId = await createUser();
+    const academyId = await createBareAcademy(creatorId);
+    await db.update(academies).set({ logoRef: "academies/pre-existing/logos/x.png" }).where(eq(academies.id, academyId));
+
+    const [{ name }] = await db.select({ name: academies.name }).from(academies).where(eq(academies.id, academyId));
+    const result = await deleteAcademy(ownerContext(creatorId), academyId, name);
+    expect(result.ok).toBe(true);
+
+    const [academyRow] = await db.select().from(academies).where(eq(academies.id, academyId));
+    expect(academyRow).toBeUndefined();
+
     createdAcademyIds.splice(createdAcademyIds.indexOf(academyId), 1);
   });
 

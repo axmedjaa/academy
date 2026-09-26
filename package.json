@@ -14,6 +14,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1141.0",
+    "@aws-sdk/s3-request-presigner": "^3.1141.0",
     "@react-pdf/renderer": "^4.9.0",
     "argon2": "^0.45.1",
     "bullmq": "^6.3.6",

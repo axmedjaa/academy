@@ -121,7 +121,6 @@ function validInput(
     phone: "+1-555-0100",
     email: "contact@example.com",
     website: "https://example.com",
-    logoRef: "logos/example.png",
     registrationNumber: "REG-123",
     primaryContactName: "Jane Doe",
     primaryContactPhone: "+1-555-0101",
@@ -227,15 +226,23 @@ describe("updateAcademySettings — validation", () => {
 
   it("normalizes blank optional fields to null rather than empty strings", async () => {
     const { context } = await setupAcademy("academy_owner");
-    const result = await updateAcademySettings(
-      context,
-      validInput({ website: "", logoRef: "" }),
-    );
+    const result = await updateAcademySettings(context, validInput({ website: "" }));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.academy.website).toBeNull();
-      expect(result.academy.logoRef).toBeNull();
     }
+  });
+
+  it("never touches logoRef — it's exclusively managed by academy-logo.ts, not this general update", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    await db.update(academies).set({ logoRef: "academies/pre-existing/logos/x.png" }).where(eq(academies.id, academyId));
+
+    const result = await updateAcademySettings(context, validInput({ name: "Profile Only Update" }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.academy.logoRef).toBe("academies/pre-existing/logos/x.png");
+
+    const [row] = await db.select().from(academies).where(eq(academies.id, academyId));
+    expect(row?.logoRef).toBe("academies/pre-existing/logos/x.png");
   });
 });
 

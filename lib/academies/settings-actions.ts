@@ -33,7 +33,6 @@ function parseAcademySettingsFormData(formData: FormData): UpdateAcademySettings
     phone: String(formData.get("phone") ?? ""),
     email: String(formData.get("email") ?? ""),
     website: String(formData.get("website") ?? ""),
-    logoRef: String(formData.get("logoRef") ?? ""),
     registrationNumber: String(formData.get("registrationNumber") ?? ""),
     primaryContactName: String(formData.get("primaryContactName") ?? ""),
     primaryContactPhone: String(formData.get("primaryContactPhone") ?? ""),

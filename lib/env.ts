@@ -130,6 +130,16 @@ const envSchema = z.object({
     .int()
     .positive()
     .optional(),
+  // Cloudflare R2 (S3-compatible) object storage for academy-uploaded
+  // files — first consumer is the academy logo (lib/storage/client.ts).
+  // Deliberately optional here, same reasoning as RESEND_API_KEY above:
+  // the app must still boot and serve every unrelated feature when R2
+  // isn't configured; the storage client checks these at call time and
+  // fails just the upload/download request, not the whole app.
+  CLOUDFLARE_ACCOUNT_ID: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET_NAME: z.string().optional(),
   // Email-OTP MFA login method (additional to TOTP, never a replacement).
   // Code lifetime in minutes — short by design since it's re-sendable and
   // only 6 digits. Default: 10.
