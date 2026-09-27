@@ -22,6 +22,7 @@ import {
   trHover,
 } from "@/app/academy/_shell/ui";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import { getStatusTone } from "@/lib/ui/status";
 
 const initialState: StudentPaymentsFormState = { ok: false };
 
@@ -30,20 +31,6 @@ const SELF_APPROVAL_TOOLTIP = "You can't approve a transaction you recorded.";
 function formatMoney(amountCents: number, currency: string): string {
   return `${currency} ${(amountCents / 100).toFixed(2)}`;
 }
-
-const CHARGE_STATUS_TONE = {
-  open: "gray",
-  partially_paid: "amber",
-  paid: "green",
-  cancelled: "red",
-} as const;
-
-const PAYMENT_STATUS_TONE = {
-  pending_approval: "amber",
-  approved: "green",
-  rejected: "red",
-  reversed: "slate",
-} as const;
 
 interface Props {
   charges: StudentChargeRecord[];
@@ -198,7 +185,7 @@ export function FinanceChargesPayments({
       </div>
 
       {tab === "charges" && (
-        <>
+        <div key="charges" className="motion-safe:animate-fade-in">
           <TableWrap>
             <thead>
               <tr>
@@ -224,7 +211,7 @@ export function FinanceChargesPayments({
                     <td className={td}>{formatMoney(charge.amountCents, charge.currency)}</td>
                     <td className={td}>{charge.dueDate ?? "—"}</td>
                     <td className={td}>
-                      <Badge label={charge.status.replace("_", " ")} tone={CHARGE_STATUS_TONE[charge.status]} />
+                      <Badge label={charge.status.replace("_", " ")} tone={getStatusTone(charge.status)} />
                     </td>
                   </tr>
                 ))
@@ -268,11 +255,11 @@ export function FinanceChargesPayments({
               </form>
             </div>
           )}
-        </>
+        </div>
       )}
 
       {tab === "payments" && (
-        <>
+        <div key="payments" className="motion-safe:animate-fade-in">
           <TableWrap>
             <thead>
               <tr>
@@ -307,7 +294,7 @@ export function FinanceChargesPayments({
                       <td className={td}>{formatMoney(payment.amountCents, payment.currency)}</td>
                       <td className={td}>{payment.method.replace("_", " ")}</td>
                       <td className={td}>
-                        <Badge label={effectiveStatus.replace("_", " ")} tone={PAYMENT_STATUS_TONE[effectiveStatus]} />
+                        <Badge label={effectiveStatus.replace("_", " ")} tone={getStatusTone(effectiveStatus)} />
                       </td>
                       {canManage && (
                         <td className={td}>
@@ -476,7 +463,7 @@ export function FinanceChargesPayments({
               </form>
             </div>
           )}
-        </>
+        </div>
       )}
     </Section>
   );

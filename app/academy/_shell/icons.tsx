@@ -173,6 +173,27 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
       <circle cx="12" cy="15" r="1.2" fill="currentColor" stroke="none" />
     </Base>
   ),
+  // Phase 2 addition — the shell's "Sign out" action previously reused the
+  // "close" (X) glyph, which reads as "dismiss/cancel" rather than "sign
+  // out." A real logout glyph (door frame + outward arrow) removes that
+  // mismatch; same hand-rolled-SVG convention as every icon above.
+  // Phase 6 addition — "more actions" trigger for a row-actions dropdown
+  // menu (three vertical dots), same hand-rolled-SVG convention as every
+  // icon above.
+  more: (props) => (
+    <Base {...props}>
+      <circle cx="12" cy="5" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="19" r="1.3" fill="currentColor" stroke="none" />
+    </Base>
+  ),
+  logout: (props) => (
+    <Base {...props}>
+      <path d="M9 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3" />
+      <path d="M20 12H10" />
+      <path d="m15.5 8.5 3.5 3.5-3.5 3.5" />
+    </Base>
+  ),
 };
 
 export function Icon({ name, ...props }: { name: string } & IconProps) {

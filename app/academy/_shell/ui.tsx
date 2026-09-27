@@ -14,9 +14,18 @@ import { color, radius, shadow, spacing } from "@/lib/ui/theme";
  * approval queue, ...) is out of scope here; only what Phases B–D need.
  */
 
-export function Card({ children, style }: { children: ReactNode; style?: CSSProperties }) {
+export function Card({
+  children,
+  style,
+  className,
+}: {
+  children: ReactNode;
+  style?: CSSProperties;
+  className?: string;
+}) {
   return (
     <div
+      className={className}
       style={{
         backgroundColor: color.card,
         border: `1px solid ${color.border}`,
@@ -31,19 +40,47 @@ export function Card({ children, style }: { children: ReactNode; style?: CSSProp
   );
 }
 
+/**
+ * `index`, when passed, staggers this card's entrance slightly behind the
+ * ones before it (a KPI row appearing as a short cascade rather than all at
+ * once) — purely cosmetic, defaults to 0 (no delay) for any caller that
+ * doesn't pass it. `motion-safe:` means the animation never applies under
+ * `prefers-reduced-motion: reduce`; those users simply see the finished
+ * state immediately, with full functionality unaffected either way.
+ */
 export function StatCard({
   label,
   value,
   hint,
+  icon,
+  index = 0,
 }: {
   label: string;
   value: string | number;
   hint?: string;
+  icon?: ReactNode;
+  index?: number;
 }) {
   return (
-    <Card style={{ display: "flex", flexDirection: "column", gap: spacing.xs }}>
-      <span style={{ fontSize: "0.8rem", color: color.textMuted, fontWeight: 500 }}>{label}</span>
-      <span style={{ fontSize: "1.6rem", fontWeight: 700, color: color.text }}>{value}</span>
+    <Card
+      className="motion-safe:animate-fade-in-up"
+      style={{ display: "flex", flexDirection: "column", gap: spacing.xs, animationDelay: `${index * 60}ms` }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span style={{ fontSize: "0.8rem", color: color.textMuted, fontWeight: 500 }}>{label}</span>
+        {icon && <span style={{ color: color.textMuted, display: "flex" }}>{icon}</span>}
+      </div>
+      <span
+        style={{
+          fontSize: "1.75rem",
+          fontWeight: 700,
+          color: color.text,
+          letterSpacing: "-0.01em",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {value}
+      </span>
       {hint && <span style={{ fontSize: "0.75rem", color: color.textMuted }}>{hint}</span>}
     </Card>
   );
@@ -79,8 +116,19 @@ export function StatusBadge({ label, tone }: { label: string; tone: keyof typeof
   );
 }
 
-/** DESIGN.md §3.1 "Empty": line icon + one-line explanation + primary action. */
-export function EmptyState({ message, action }: { message: string; action?: ReactNode }) {
+/** DESIGN.md §3.1 "Empty": optional icon + one-line explanation + primary
+ * action (shown only when the caller has permission to act — see each call
+ * site). `icon` is optional and additive; existing callers that don't pass
+ * one keep the exact same plain-text layout as before. */
+export function EmptyState({
+  message,
+  action,
+  icon,
+}: {
+  message: string;
+  action?: ReactNode;
+  icon?: ReactNode;
+}) {
   return (
     <div
       style={{
@@ -89,6 +137,23 @@ export function EmptyState({ message, action }: { message: string; action?: Reac
         color: color.textMuted,
       }}
     >
+      {icon && (
+        <div
+          style={{
+            margin: `0 auto ${spacing.sm}`,
+            width: 44,
+            height: 44,
+            borderRadius: "50%",
+            backgroundColor: color.statusGrayBg,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: color.textMuted,
+          }}
+        >
+          {icon}
+        </div>
+      )}
       <p style={{ margin: 0, marginBottom: action ? spacing.sm : 0 }}>{message}</p>
       {action}
     </div>
@@ -157,10 +222,15 @@ export function SecondaryButton(props: React.ButtonHTMLAttributes<HTMLButtonElem
   );
 }
 
-/** DESIGN.md §3.1 "Loading": skeleton rows/cards matching the content shape. */
+/** DESIGN.md §3.1 "Loading": skeleton rows/cards matching the content shape.
+ * `animate-pulse` (Tailwind's built-in opacity pulse) signals "in progress"
+ * instead of sitting as an inert flat block; `motion-reduce:animate-none`
+ * keeps it a static placeholder for anyone who has asked for reduced
+ * motion. */
 export function SkeletonBlock({ height = "1rem", width = "100%" }: { height?: string; width?: string }) {
   return (
     <div
+      className="animate-pulse motion-reduce:animate-none"
       style={{
         height,
         width,
@@ -200,7 +270,7 @@ export function PageHeader({
   return (
     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
-        <h1 className="text-xl font-bold text-ink sm:text-2xl">{title}</h1>
+        <h1 className="text-xl font-bold tracking-tight text-ink sm:text-2xl">{title}</h1>
         {description && <p className="mt-1 text-sm text-muted">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
@@ -223,16 +293,28 @@ export function PageMessage({ title, message }: { title: string; message: string
 }
 
 /** Bordered content section — the Tailwind equivalent of `Card` above, for
- * pages built with class names rather than the `style` prop. */
+ * pages built with class names rather than the `style` prop. Pass
+ * `interactive` only for a section that is itself a click target (e.g.
+ * wrapped in a `<Link>`/`<button>`) — it adds a subtle hover elevation so
+ * the affordance is visible; a plain static content section should never
+ * set this, since a hover-shadow on something unclickable is misleading. */
 export function Section({
   children,
   className = "",
+  interactive = false,
 }: {
   children: ReactNode;
   className?: string;
+  interactive?: boolean;
 }) {
   return (
-    <div className={`rounded-card border border-border bg-surface p-5 shadow-card ${className}`}>{children}</div>
+    <div
+      className={`rounded-card border border-border bg-surface p-5 shadow-card ${
+        interactive ? "transition-shadow duration-150 hover:shadow-card-hover" : ""
+      } ${className}`}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -244,7 +326,7 @@ export function Toolbar({ children, className = "" }: { children: ReactNode; cla
 
 const FIELD_LABEL = "block text-xs font-medium text-muted mb-1";
 const FIELD_CONTROL =
-  "block w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30 disabled:cursor-not-allowed disabled:bg-app disabled:text-muted";
+  "block w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-sm text-ink transition-colors duration-150 placeholder:text-muted/70 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30 disabled:cursor-not-allowed disabled:bg-app disabled:text-muted";
 
 /** Class name for native `<input>`/`<select>`/`<textarea>` elements —
  * exported as a string (not a wrapping component) so existing
@@ -282,10 +364,19 @@ export function Field({
 }
 
 const BUTTON_BASE =
-  "inline-flex items-center justify-center gap-1.5 rounded-control px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex items-center justify-center gap-1.5 rounded-control px-4 py-2 text-sm font-semibold transition-colors duration-150 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100";
 const BUTTON_VARIANTS = {
   primary: `${BUTTON_BASE} bg-brand text-white hover:bg-brand-hover`,
   secondary: `${BUTTON_BASE} border border-border bg-surface text-ink hover:bg-app`,
+  /** Lighter-weight than `secondary` — border only, no filled background at
+   * rest. For a page's second-most-important action where a bordered white
+   * button would visually compete with `secondary` elsewhere on the same
+   * screen. */
+  outline: `${BUTTON_BASE} border border-border-strong bg-transparent text-ink hover:bg-app`,
+  /** No border, no background at rest — the lowest-emphasis action (e.g. a
+   * "Cancel" next to a dialog's primary/destructive button, or a repeated
+   * row-level action where a full bordered button would be too heavy). */
+  ghost: `${BUTTON_BASE} text-ink hover:bg-app`,
   danger: `${BUTTON_BASE} border border-danger/30 bg-danger-bg text-danger hover:bg-danger/10`,
   /** Solid fill, reserved for PERMANENT deletion — deliberately louder than
    * the outlined `danger` variant (used by reversible actions like

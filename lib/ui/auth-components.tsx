@@ -124,11 +124,22 @@ export const formColumnStyle: CSSProperties = {
   gap: spacing.md,
 };
 
+// Phase 1: hover/press/focus feedback for these two, layered on as Tailwind
+// utility classes rather than rewritten as inline `:hover` (which the
+// `style` attribute can't express at all — these buttons had zero hover
+// feedback before this). Only properties the inline `style` below doesn't
+// already set unconditionally (opacity, transform, outline/ring) — an
+// inline style always wins specificity over a class for the same property,
+// so a `hover:bg-*` class here would never actually apply and isn't used.
+const BUTTON_INTERACTION_CLASSNAME =
+  "transition-opacity duration-150 hover:opacity-90 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:active:scale-100";
+
 export function PrimaryButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  const { style, ...rest } = props;
+  const { style, className, ...rest } = props;
   return (
     <button
       {...rest}
+      className={`${BUTTON_INTERACTION_CLASSNAME} ${className ?? ""}`}
       style={{
         width: "100%",
         backgroundColor: color.primaryBlue,
@@ -147,10 +158,11 @@ export function PrimaryButton(props: React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 export function SecondaryButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>) {
-  const { style, ...rest } = props;
+  const { style, className, ...rest } = props;
   return (
     <button
       {...rest}
+      className={`${BUTTON_INTERACTION_CLASSNAME} ${className ?? ""}`}
       style={{
         backgroundColor: color.card,
         color: color.text,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { Button } from "./ui";
 import { showSuccessToast } from "@/lib/ui/toast";
 
@@ -37,6 +37,28 @@ interface ConfirmButtonProps {
    * `requiredValue` — a plain "are you sure" click is not enough.
    */
   confirmInput?: { label: string; requiredValue: string };
+  /**
+   * Controlled-mode escape hatch for embedding this dialog behind a
+   * different trigger than this component's own button — e.g. a dropdown
+   * menu item (see app/academy/staff/staff-table.tsx). Pass both together;
+   * when present, the internal trigger `<Button>` is not rendered at all,
+   * and `open`/`onOpenChange` fully own the dialog's visibility instead of
+   * this component's own internal state. Omit both (the default) for the
+   * original self-contained "this IS the trigger" usage — unaffected.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+/** Every `a[href]`/button/input/etc. inside `container` that can currently
+ * receive focus — the Tab-trap below cycles within exactly this list rather
+ * than letting focus escape to the page underneath the dialog. */
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ),
+  );
 }
 
 /**
@@ -48,6 +70,14 @@ interface ConfirmButtonProps {
  * remove action added by this pass uses this component instead of
  * `window.confirm()`, styled with the same tokens as the rest of the
  * Tailwind pass (Button, brand/danger colors, card surface).
+ *
+ * Phase 4 (frontend redesign) accessibility pass: on open, focus moves into
+ * the dialog and Tab cycles only among its own focusable elements (a
+ * standard modal focus trap — previously absent, meaning Tab could escape
+ * to the page behind the overlay); on close, focus returns to whichever
+ * button opened it, captured from the click event itself rather than a
+ * forwarded ref (sidesteps any question of whether the `Button` wrapper
+ * forwards refs — it doesn't need to for this).
  */
 export function ConfirmButton({
   label,
@@ -61,20 +91,61 @@ export function ConfirmButton({
   onSuccess,
   successMessage,
   confirmInput,
+  open: controlledOpen,
+  onOpenChange,
 }: ConfirmButtonProps) {
-  const [open, setOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined && onOpenChange !== undefined;
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [typedValue, setTypedValue] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerElRef = useRef<HTMLButtonElement | null>(null);
+
+  // "Adjusting state when a prop changes" (react.dev's own documented
+  // pattern for this) rather than a `useEffect` — resets these the instant
+  // `open` flips to true, during render, with no extra commit/flicker.
+  // Needed for controlled mode, which has no trigger `onClick` here to do
+  // this reset itself; harmless (merely redundant) for the uncontrolled
+  // path, where the trigger's own `onClick` already does the same reset.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) {
+      setError(null);
+      setTypedValue("");
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
+    dialogRef.current?.focus();
+
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerElRef.current?.focus();
+        return;
+      }
+      if (event.key === "Tab" && dialogRef.current) {
+        const focusable = getFocusableElements(dialogRef.current);
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [open, setOpen]);
 
   const inputSatisfied = !confirmInput || typedValue === confirmInput.requiredValue;
 
@@ -88,6 +159,7 @@ export function ConfirmButton({
       }
       setOpen(false);
       setTypedValue("");
+      triggerElRef.current?.focus();
       if (successMessage !== false) {
         showSuccessToast(successMessage ?? `${label} succeeded.`);
       }
@@ -97,36 +169,48 @@ export function ConfirmButton({
 
   return (
     <>
-      <Button
-        type="button"
-        variant={variant}
-        className={className}
-        disabled={disabled}
-        onClick={() => {
-          setError(null);
-          setTypedValue("");
-          setOpen(true);
-        }}
-      >
-        {label}
-      </Button>
+      {!isControlled && (
+        <Button
+          type="button"
+          variant={variant}
+          className={className}
+          disabled={disabled}
+          onClick={(event) => {
+            triggerElRef.current = event.currentTarget;
+            setError(null);
+            setTypedValue("");
+            setOpen(true);
+          }}
+        >
+          {label}
+        </Button>
+      )}
       {open && (
         <div
           role="presentation"
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-navy/40 p-4"
-          onClick={() => !isPending && setOpen(false)}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-navy/40 p-4 motion-safe:animate-fade-in"
+          onClick={() => {
+            if (isPending) return;
+            setOpen(false);
+            triggerElRef.current?.focus();
+          }}
         >
           <div
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="confirm-dialog-title"
-            className="w-full max-w-md rounded-card border border-border bg-surface p-5 shadow-card"
+            aria-describedby="confirm-dialog-description"
+            tabIndex={-1}
+            className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-card border border-border bg-surface p-5 shadow-card outline-none motion-safe:animate-scale-in"
             onClick={(event) => event.stopPropagation()}
           >
             <h2 id="confirm-dialog-title" className="text-base font-semibold text-ink">
               {title}
             </h2>
-            <div className="mt-2 text-sm text-muted">{description}</div>
+            <div id="confirm-dialog-description" className="mt-2 text-sm text-muted">
+              {description}
+            </div>
             {confirmInput && (
               <label className="mt-4 block">
                 <span className="mb-1 block text-xs font-medium text-muted">{confirmInput.label}</span>
@@ -145,7 +229,15 @@ export function ConfirmButton({
               </p>
             )}
             <div className="mt-5 flex justify-end gap-2">
-              <Button type="button" variant="secondary" onClick={() => setOpen(false)} disabled={isPending}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  setOpen(false);
+                  triggerElRef.current?.focus();
+                }}
+                disabled={isPending}
+              >
                 Cancel
               </Button>
               <Button type="button" variant={variant} onClick={handleConfirm} disabled={isPending || !inputSatisfied}>

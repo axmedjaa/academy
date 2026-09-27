@@ -9,9 +9,28 @@ import {
 } from "@/lib/academies/staff-actions";
 import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
 import type { StaffDeletionEligibilitySummary, StaffListRow } from "@/lib/academies/staff";
-import { Badge, Button, ErrorMessage, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
-import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
+import { Badge, EmptyState, ErrorMessage, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+/** First + last initial, e.g. "Jane Doe" -> "JD" — a small avatar-style
+ * identity cue so a row of names is easier to scan at a glance, matching
+ * the same pattern common to any polished people/staff table. Purely
+ * cosmetic; the actual identity is still `fullName`/`loginEmail`. */
+function getInitials(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (first + last).toUpperCase();
+}
 
 interface Props {
   staff: (StaffListRow & { deletionEligibility: StaffDeletionEligibilitySummary })[];
@@ -35,6 +54,11 @@ interface Props {
 export function StaffTable({ staff, canManage, canDelete }: Props) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Which row's "Remove access"/"Delete" confirmation dialog is open — the
+  // dropdown menu item opens it externally (ConfirmButton's controlled
+  // mode) rather than being its own visible trigger button.
+  const [removeAccessRowId, setRemoveAccessRowId] = useState<string | null>(null);
+  const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
 
   function onRoleChange(userId: string, role: AcademyRole) {
     setError(null);
@@ -73,32 +97,37 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
   return (
     <div className="flex flex-col gap-4">
       {error && <ErrorMessage message={error} />}
-      <TableWrap>
-        <thead>
-          <tr>
-            <th className={th}>Name</th>
-            <th className={th}>Employee #</th>
-            <th className={th}>Phone</th>
-            <th className={th}>Login email</th>
-            <th className={th}>Role</th>
-            <th className={th}>Status</th>
-            {canManage && <th className={th}>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {staff.length === 0 ? (
+      {staff.length === 0 ? (
+        <Section>
+          <EmptyState message="No staff members to show." icon={<Icon name="badge" />} />
+        </Section>
+      ) : (
+        <TableWrap>
+          <thead>
             <tr>
-              <td colSpan={canManage ? 7 : 6} className={`${td} text-center text-muted`}>
-                No staff members to show.
-              </td>
+              <th className={th}>Name</th>
+              <th className={th}>Employee #</th>
+              <th className={th}>Phone</th>
+              <th className={th}>Login email</th>
+              <th className={th}>Role</th>
+              <th className={th}>Status</th>
+              {canManage && <th className={`${th} text-right`}>Actions</th>}
             </tr>
-          ) : (
-            staff.map((row) => (
+          </thead>
+          <tbody>
+            {staff.map((row) => (
               <tr key={row.id} className={trHover}>
-                <td className={`${td} font-medium`}>{row.fullName}</td>
-                <td className={td}>{row.employeeNumber ?? "—"}</td>
-                <td className={td}>{row.phone}</td>
-                <td className={td}>{row.loginEmail}</td>
+                <td className={td}>
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-tint text-xs font-semibold text-brand">
+                      {getInitials(row.fullName)}
+                    </span>
+                    <span className="font-medium text-ink">{row.fullName}</span>
+                  </div>
+                </td>
+                <td className={`${td} text-muted`}>{row.employeeNumber ?? "—"}</td>
+                <td className={`${td} text-muted`}>{row.phone}</td>
+                <td className={`${td} text-muted`}>{row.loginEmail}</td>
                 <td className={td}>
                   {row.role === null ? (
                     <Badge label="No access" tone="gray" />
@@ -107,7 +136,7 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
                       value={row.role}
                       disabled={isPending}
                       onChange={(event) => onRoleChange(row.userId, event.target.value as AcademyRole)}
-                      className={`${inputClass} py-1.5`}
+                      className={`${inputClass} w-auto py-1.5 text-xs`}
                     >
                       {ACADEMY_ROLES.map((role) => (
                         <option key={role} value={role}>
@@ -123,49 +152,77 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
                   <Badge label={row.status} tone={row.status === "active" ? "green" : "gray"} />
                 </td>
                 {canManage && (
-                  <td className={td}>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        variant={row.status === "active" ? "danger" : "secondary"}
-                        className="px-2.5 py-1 text-xs"
-                        disabled={isPending}
-                        onClick={() => onToggleStatus(row)}
-                      >
-                        {row.status === "active" ? "Archive" : "Restore"}
-                      </Button>
-                      {row.role !== null && (
-                        <ConfirmButton
-                          label="Remove access"
-                          className="px-2.5 py-1 text-xs"
-                          title={`Remove ${row.fullName}'s access?`}
-                          description={
-                            <>
-                              They will no longer be able to sign in to this academy. Their employment record and
-                              history (results, payments, audit entries) are kept, but this specific action can&apos;t
-                              be undone from this screen.
-                            </>
-                          }
-                          onConfirm={() => removeStaffMembership(row.userId)}
-                        />
-                      )}
-                      {canDelete && (
-                        <EligibilityGatedDeleteButton
-                          entityLabel="Staff member"
-                          entityName={row.fullName}
-                          eligible={row.deletionEligibility.eligible}
-                          reasons={row.deletionEligibility.reasons}
-                          onConfirm={() => deleteStaff(row.id, row.fullName)}
-                        />
-                      )}
-                    </div>
+                  <td className={`${td} text-right`}>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={`Actions for ${row.fullName}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                        >
+                          <Icon name="more" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem disabled={isPending} onClick={() => onToggleStatus(row)}>
+                          {row.status === "active" ? "Archive" : "Restore"}
+                        </DropdownMenuItem>
+                        {row.role !== null && (
+                          <DropdownMenuItem onClick={() => setRemoveAccessRowId(row.id)}>
+                            Remove access
+                          </DropdownMenuItem>
+                        )}
+                        {canDelete &&
+                          (row.deletionEligibility.eligible ? (
+                            <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(row.id)}>
+                              Delete
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              disabled
+                              title={`This staff member cannot be permanently deleted because ${row.deletionEligibility.reasons.join("; ")}. Use Archive instead.`}
+                            >
+                              Delete
+                            </DropdownMenuItem>
+                          ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    {row.role !== null && (
+                      <ConfirmButton
+                        label="Remove access"
+                        open={removeAccessRowId === row.id}
+                        onOpenChange={(nextOpen) => setRemoveAccessRowId(nextOpen ? row.id : null)}
+                        title={`Remove ${row.fullName}'s access?`}
+                        description={
+                          <>
+                            They will no longer be able to sign in to this academy. Their employment record and
+                            history (results, payments, audit entries) are kept, but this specific action can&apos;t
+                            be undone from this screen.
+                          </>
+                        }
+                        onConfirm={() => removeStaffMembership(row.userId)}
+                      />
+                    )}
+                    {canDelete && row.deletionEligibility.eligible && (
+                      <ConfirmButton
+                        label="Delete"
+                        variant="dangerSolid"
+                        open={deleteRowId === row.id}
+                        onOpenChange={(nextOpen) => setDeleteRowId(nextOpen ? row.id : null)}
+                        title={`Delete "${row.fullName}" permanently?`}
+                        description={<>This cannot be undone.</>}
+                        confirmInput={{ label: `Type "${row.fullName}" to confirm`, requiredValue: row.fullName }}
+                        onConfirm={() => deleteStaff(row.id, row.fullName)}
+                      />
+                    )}
                   </td>
                 )}
               </tr>
-            ))
-          )}
-        </tbody>
-      </TableWrap>
+            ))}
+          </tbody>
+        </TableWrap>
+      )}
     </div>
   );
 }

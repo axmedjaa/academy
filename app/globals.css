@@ -26,6 +26,11 @@
 
   --color-brand: #2f5fe0;
   --color-brand-hover: #24499f;
+  /* Phase 1 addition: a light brand-blue surface for "selected/active" and
+     subtle highlight backgrounds (sidebar active item, info callouts) —
+     distinct from the *-bg status tokens below, which are reserved for
+     status semantics (success/warning/danger/info), not brand emphasis. */
+  --color-brand-tint: #eef2ff;
 
   --color-success: #047857;
   --color-success-bg: #ecfdf5;
@@ -42,8 +47,58 @@
   --radius-card: 12px;
 
   --shadow-card: 0 1px 3px 0 rgba(15, 23, 42, 0.06);
+  /* Phase 1 addition: a slightly deeper elevation for an interactive card
+     on hover (e.g. a clickable dashboard tile) — kept subtle by design,
+     never used as the resting state of a static card. */
+  --shadow-card-hover: 0 4px 16px 0 rgba(15, 23, 42, 0.1);
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+
+  /* Phase 3 addition — a one-time, subtle entrance for content that just
+     appeared (e.g. a KPI card on first render), never a looping/decorative
+     animation. Registering it under `--animate-*` (Tailwind v4's theme
+     namespace for animations) makes it available as the `animate-fade-in-up`
+     utility; always paired with the `motion-safe:` variant at the call site
+     so it never applies under `prefers-reduced-motion: reduce`. */
+  --animate-fade-in-up: fade-in-up 0.4s ease-out both;
+
+  /* Phase 4 addition — dialog/backdrop entrance (ConfirmButton and any
+     future overlay). Short and subtle by design: this is chrome appearing,
+     not content the user is meant to watch animate. Always paired with
+     `motion-safe:` at the call site. */
+  --animate-fade-in: fade-in 0.15s ease-out both;
+  --animate-scale-in: scale-in 0.15s ease-out both;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 /*
@@ -83,4 +138,48 @@ body {
 a {
   color: inherit;
   text-decoration: none;
+}
+
+/*
+ * Phase 1 — one consistent keyboard-focus treatment for every interactive
+ * element in the app, including the inline-`style`-based components
+ * (lib/ui/auth-components.tsx, app/academy/_shell/academy-shell.tsx) that
+ * have no Tailwind classes to opt into a ring utility. Tailwind-based
+ * components (Button, inputClass, ...) override this with a richer
+ * `focus-visible:ring-*` treatment where useful; everything else falls back
+ * to this single, always-visible, brand-colored outline — never removed,
+ * never color-alone (an outline is a shape, not just a color swatch).
+ */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+/*
+ * Redesign follow-up — thin, subtle scrollbars everywhere (sidebar,
+ * horizontally-scrolling tables, the confirmation dialog when its content
+ * is tall), replacing the OS-default chunky scrollbar. Firefox via the
+ * standard `scrollbar-*` properties (inherited, so setting it once on
+ * `html` covers the whole app); WebKit-based browsers (Chrome, Edge,
+ * Safari) have no inherited equivalent, so the pseudo-element is scoped
+ * with a universal selector instead. Purely cosmetic — never changes what
+ * scrolls or how, only how the scrollbar itself looks.
+ */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-border-strong);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-muted);
 }

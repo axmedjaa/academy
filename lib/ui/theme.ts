@@ -23,6 +23,11 @@ export const color = {
   primaryNavy: "#1B2A4A",
   primaryBlue: "#2F5FE0",
   primaryBlueHover: "#24499f",
+  // Phase 1 addition — mirrors app/globals.css's `--color-brand-tint`. A
+  // light brand-blue surface for "selected/active" and subtle highlight
+  // backgrounds, kept in sync with the Tailwind side rather than each
+  // system inventing its own value.
+  primaryBlueTint: "#EEF2FF",
   bg: "#F7F8FA",
   card: "#FFFFFF",
   border: "#E2E5EA",
@@ -62,6 +67,10 @@ export const radius = {
 
 export const shadow = {
   card: "0 1px 3px 0 rgba(15, 23, 42, 0.06)",
+  // Phase 1 addition — mirrors app/globals.css's `--shadow-card-hover`.
+  // Subtle elevation increase for an interactive card on hover only, never
+  // a static card's resting state.
+  cardHover: "0 4px 16px 0 rgba(15, 23, 42, 0.1)",
 } as const;
 
 // Stitch's own fixed shell proportions (dashboard_1/code.html: `sidebar-width:
@@ -71,4 +80,8 @@ export const shadow = {
 export const shell = {
   sidebarWidth: 260,
   headerHeight: 64,
+  // Phase 2 addition — was a bare inline "1400" literal in academy-shell.tsx;
+  // pulled out here alongside its two siblings above rather than left as a
+  // magic number, no value change.
+  contentMaxWidth: 1400,
 } as const;

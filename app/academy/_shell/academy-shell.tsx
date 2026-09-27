@@ -67,6 +67,18 @@ export function AcademyShell({
 
   return (
     <div className={className} style={{ minHeight: "100vh", backgroundColor: color.bg }}>
+      {/* Phase 5 addition: a standard "skip to main content" link — invisible
+       * until keyboard-focused, then it jumps straight past the sidebar's
+       * ~15 nav links to the page's own content. Every `/academy/*` page
+       * was previously unreachable by keyboard without first tabbing through
+       * the entire nav on every single page load. */}
+      <a
+        href="#main-content"
+        className="fixed left-3 top-3 z-[200] -translate-y-16 rounded-control bg-ink px-4 py-2 text-sm font-semibold text-white transition-transform duration-150 focus-visible:translate-y-0"
+      >
+        Skip to main content
+      </a>
+
       {/* Mobile drawer scrim */}
       {drawerOpen && (
         <div
@@ -129,30 +141,31 @@ export function AcademyShell({
             const active = isActive(item.href);
             return (
               <div key={item.key}>
+                {/* Active state: a tinted fill + brand-colored text/icon + a
+                 * 3px left accent, replacing the previous flat solid-blue
+                 * fill — a lighter-weight "you are here" cue that also
+                 * reads correctly for a whole section (parent items stay
+                 * highlighted while any of their sub-routes is open, via
+                 * `isActive`'s prefix match). The transparent border on the
+                 * inactive state reserves the same 3px so nothing shifts
+                 * width when a link becomes active. */}
                 <Link
                   href={item.href}
                   aria-current={active ? "page" : undefined}
                   onClick={() => setDrawerOpen(false)}
-                  className={active ? "" : "hover:bg-app"}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: spacing.sm,
-                    padding: "0.55rem 0.75rem",
-                    borderRadius: 10,
-                    textDecoration: "none",
-                    color: active ? "#fff" : color.text,
-                    backgroundColor: active ? color.primaryBlue : "transparent",
-                    fontSize: "0.9rem",
-                    fontWeight: active ? 600 : 500,
-                    transition: "background-color 0.15s ease",
-                  }}
+                  className={`flex items-center gap-3 rounded-control border-l-[3px] px-3 py-2 text-sm no-underline transition-colors duration-150 ${
+                    active
+                      ? "border-brand bg-brand-tint font-semibold text-brand"
+                      : "border-transparent font-medium text-ink hover:bg-app"
+                  }`}
                 >
                   <Icon name={item.icon} />
                   <span>{item.label}</span>
                 </Link>
                 {subItems.length > 0 && (
-                  <div style={{ display: "flex", flexDirection: "column", marginLeft: "2.2rem" }}>
+                  <div
+                    className="ml-[1.6rem] flex flex-col gap-px border-l border-border pl-3"
+                  >
                     {subItems.map((sub) => {
                       const subActive = pathname === sub.href;
                       return (
@@ -160,15 +173,11 @@ export function AcademyShell({
                           key={sub.href}
                           href={sub.href}
                           onClick={() => setDrawerOpen(false)}
-                          className="rounded-md hover:bg-app hover:text-ink"
-                          style={{
-                            padding: "0.35rem 0.5rem",
-                            fontSize: "0.82rem",
-                            textDecoration: "none",
-                            color: subActive ? color.primaryBlue : color.textMuted,
-                            fontWeight: subActive ? 600 : 400,
-                            transition: "background-color 0.15s ease",
-                          }}
+                          className={`rounded-control px-2.5 py-1.5 text-[0.82rem] no-underline transition-colors duration-150 ${
+                            subActive
+                              ? "bg-brand-tint font-semibold text-brand"
+                              : "font-normal text-muted hover:bg-app hover:text-ink"
+                          }`}
                         >
                           {sub.label}
                         </Link>
@@ -185,18 +194,7 @@ export function AcademyShell({
           <Link
             href="/account/security"
             onClick={() => setDrawerOpen(false)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: spacing.sm,
-              padding: "0.55rem 0.75rem",
-              borderRadius: 10,
-              textDecoration: "none",
-              color: color.textMuted,
-              fontSize: "0.9rem",
-              fontWeight: 500,
-            }}
-            className="rounded-md hover:bg-app hover:text-ink"
+            className="flex items-center gap-3 rounded-control px-3 py-2 text-sm font-medium text-muted no-underline transition-colors duration-150 hover:bg-app hover:text-ink"
           >
             <Icon name="settings" />
             <span>Account settings</span>
@@ -204,24 +202,9 @@ export function AcademyShell({
           <form action={signOut}>
             <button
               type="submit"
-              className="rounded-md hover:bg-app hover:text-ink"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: spacing.sm,
-                width: "100%",
-                padding: "0.55rem 0.75rem",
-                borderRadius: 10,
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                color: color.textMuted,
-                fontSize: "0.9rem",
-                fontWeight: 500,
-                textAlign: "left",
-              }}
+              className="flex w-full items-center gap-3 rounded-control border-none bg-transparent px-3 py-2 text-left text-sm font-medium text-muted transition-colors duration-150 hover:bg-app hover:text-ink"
             >
-              <Icon name="close" />
+              <Icon name="logout" />
               <span>Sign out</span>
             </button>
           </form>
@@ -254,22 +237,18 @@ export function AcademyShell({
             >
               <Icon name="menu" />
             </button>
-            <span style={{ fontWeight: 600, color: color.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {academyName}
-            </span>
+            <span className="truncate font-semibold tracking-tight text-ink">{academyName}</span>
             <span style={{ height: "1rem", width: 1, backgroundColor: color.border }} />
             {/* DESIGN.md §2.2 Academy/Branch Context Chip — static label, see lib/academies/shell.ts's module comment for why this isn't a functional filter yet. */}
-            <span style={{ fontSize: "0.8rem", color: color.textMuted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {branchChipLabel}
-            </span>
+            <span className="truncate text-[0.8rem] text-muted">{branchChipLabel}</span>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: spacing.md, flexShrink: 0 }}>
             <Link
               href="/academy/notifications"
               aria-label={`Notifications${unreadNotificationsCount > 0 ? `, ${unreadNotificationsCount} unread` : ""}`}
-              className="rounded-full p-1.5 hover:bg-app hover:text-ink"
-              style={{ position: "relative", color: color.textMuted, display: "flex", transition: "background-color 0.15s ease" }}
+              className="flex rounded-full p-1.5 text-muted transition-colors duration-150 hover:bg-app hover:text-ink"
+              style={{ position: "relative" }}
             >
               <Icon name="notifications" />
               {unreadNotificationsCount > 0 && (
@@ -298,27 +277,21 @@ export function AcademyShell({
             <Link
               href="/account/security"
               title="Account settings — update your email or password"
-              className="academy-shell-account-link"
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                textAlign: "right",
-                lineHeight: 1.1,
-                borderRadius: 8,
-                padding: "0.2rem 0.4rem",
-                textDecoration: "none",
-              }}
+              className="flex flex-col rounded-lg px-2 py-1 text-right leading-tight no-underline transition-colors duration-150 hover:bg-app"
             >
-              <span style={{ fontSize: "0.85rem", fontWeight: 600, color: color.text }}>
-                {ROLE_LABELS[membershipRole]}
-              </span>
+              <span className="text-[0.85rem] font-semibold text-ink">{ROLE_LABELS[membershipRole]}</span>
             </Link>
           </div>
         </header>
 
         {graceBanner}
 
-        <main className="px-4 py-6 sm:px-6 sm:py-8" style={{ maxWidth: 1400, margin: "0 auto" }}>
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="px-4 py-6 outline-none sm:px-6 sm:py-8"
+          style={{ maxWidth: shell.contentMaxWidth, margin: "0 auto" }}
+        >
           {children}
         </main>
       </div>
@@ -330,9 +303,6 @@ export function AcademyShell({
        * @media rules (app/globals.css) rather than a CSS-in-JS/breakpoint
        * library. */}
       <style>{`
-        .academy-shell-account-link:hover {
-          background-color: ${color.bg};
-        }
         @media (max-width: 1024px) {
           .academy-shell-sidebar {
             left: -${shell.sidebarWidth}px;

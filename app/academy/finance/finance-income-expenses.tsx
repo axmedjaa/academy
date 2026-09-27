@@ -29,6 +29,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { getStatusTone } from "@/lib/ui/status";
 
 const initialIncomeState: IncomeRecordFormState = { ok: false };
 const initialExpenseState: ExpenseRecordFormState = { ok: false };
@@ -38,15 +39,6 @@ const SELF_APPROVAL_TOOLTIP = "You can't approve a transaction you recorded.";
 function formatMoney(amountCents: number, currency: string): string {
   return `${currency} ${(amountCents / 100).toFixed(2)}`;
 }
-
-const INCOME_STATUS_TONE = { posted: "green", reversed: "slate" } as const;
-const EXPENSE_STATUS_TONE = {
-  draft: "gray",
-  pending_approval: "amber",
-  approved: "green",
-  rejected: "red",
-  reversed: "slate",
-} as const;
 
 interface Props {
   income: IncomeRecordRecord[] | null;
@@ -289,7 +281,7 @@ export function FinanceIncomeExpenses({
       )}
 
       {tab === "income" && income !== null && (
-        <>
+        <div key="income" className="motion-safe:animate-fade-in">
           <TableWrap>
             <thead>
               <tr>
@@ -319,7 +311,7 @@ export function FinanceIncomeExpenses({
                       <td className={td}>{record.description ?? "—"}</td>
                       <td className={td}>{formatMoney(record.amountCents, record.currency)}</td>
                       <td className={td}>
-                        <Badge label={effectiveStatus} tone={INCOME_STATUS_TONE[effectiveStatus]} />
+                        <Badge label={effectiveStatus} tone={getStatusTone(effectiveStatus)} />
                       </td>
                       {incomeCanCreate && (
                         <td className={td}>
@@ -361,11 +353,11 @@ export function FinanceIncomeExpenses({
               </form>
             </div>
           )}
-        </>
+        </div>
       )}
 
       {tab === "expenses" && expenses !== null && (
-        <>
+        <div key="expenses" className="motion-safe:animate-fade-in">
           <TableWrap>
             <thead>
               <tr>
@@ -398,7 +390,7 @@ export function FinanceIncomeExpenses({
                       <td className={`${td} font-medium`}>{record.category}</td>
                       <td className={td}>{formatMoney(record.amountCents, record.currency)}</td>
                       <td className={td}>
-                        <Badge label={effectiveStatus.replace("_", " ")} tone={EXPENSE_STATUS_TONE[effectiveStatus]} />
+                        <Badge label={effectiveStatus.replace("_", " ")} tone={getStatusTone(effectiveStatus)} />
                       </td>
                       {(expenseCanCreate || expenseCanApprove) && (
                         <td className={`${td} align-top`}>
@@ -496,7 +488,7 @@ export function FinanceIncomeExpenses({
               </form>
             </div>
           )}
-        </>
+        </div>
       )}
     </Section>
   );

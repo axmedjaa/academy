@@ -16,6 +16,7 @@ import type { StudentActiveCourse } from "@/lib/academies/batch-assignments";
 import {
   Badge,
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
   Section,
@@ -25,6 +26,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: StudentFormState = { ok: false };
@@ -92,28 +94,29 @@ export function StudentsList({ students, canManage, canDelete, showBranchField, 
 
   return (
     <section className="flex flex-col gap-6">
-      <TableWrap>
-        <thead>
-          <tr>
-            <th className={th}>Student #</th>
-            <th className={th}>Name</th>
-            <th className={th}>Status</th>
-            <th className={th}>Phone</th>
-            <th className={th}>Email</th>
-            <th className={th}>Guardian</th>
-            <th className={th}>Course</th>
-            {canManage && <th className={th}>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {students.length === 0 ? (
+      {students.length === 0 ? (
+        <Section>
+          <EmptyState
+            message="No students to show. Try adjusting your search or filters."
+            icon={<Icon name="group" />}
+          />
+        </Section>
+      ) : (
+        <TableWrap>
+          <thead>
             <tr>
-              <td colSpan={canManage ? 8 : 7} className={`${td} text-center text-muted`}>
-                No students to show. Try adjusting your search or filters.
-              </td>
+              <th className={th}>Student #</th>
+              <th className={th}>Name</th>
+              <th className={th}>Status</th>
+              <th className={th}>Phone</th>
+              <th className={th}>Email</th>
+              <th className={th}>Guardian</th>
+              <th className={th}>Course</th>
+              {canManage && <th className={th}>Actions</th>}
             </tr>
-          ) : (
-            students.map((student) => (
+          </thead>
+          <tbody>
+            {students.map((student) => (
               <tr key={student.id} className={trHover}>
                 <td className={`${td} font-medium`}>{student.studentNumber}</td>
                 <td className={td}>{student.fullName}</td>
@@ -167,10 +170,10 @@ export function StudentsList({ students, canManage, canDelete, showBranchField, 
                   </td>
                 )}
               </tr>
-            ))
-          )}
-        </tbody>
-      </TableWrap>
+            ))}
+          </tbody>
+        </TableWrap>
+      )}
 
       {canManage && editingStudent && (
         <Section>
