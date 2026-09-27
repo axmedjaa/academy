@@ -4,6 +4,7 @@ import { getAuditLogsForOwnAcademy } from "@/lib/academies/audit-logs-actions";
 import type { AuditResult } from "@/lib/audit-query";
 import { AuditLogExportButton } from "./audit-log-export-button";
 import { Badge, Button, ErrorMessage, PAGE_WRAP, PageHeader, TableWrap, Toolbar, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { PaginationNav } from "@/components/pagination-nav";
 
 /**
  * PLAN.md Item 42: `/academy/audit-logs`, Owner/Admin only, hard-scoped to
@@ -147,49 +148,14 @@ export default async function AcademyAuditLogsPage({
             </tbody>
           </TableWrap>
 
-          <p className="mt-4 text-sm text-muted">
-            Page {response.data.page} — {response.data.totalCount} total
-            {response.data.totalCount > response.data.pageSize && (
-              <>
-                {" "}
-                (
-                {response.data.page > 1 && (
-                  <a
-                    href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(response.data.page - 1) }).toString()}`}
-                    className="text-brand hover:underline"
-                  >
-                    Previous
-                  </a>
-                )}
-                {response.data.page > 1 &&
-                  response.data.page * response.data.pageSize < response.data.totalCount &&
-                  " | "}
-                {response.data.page * response.data.pageSize < response.data.totalCount && (
-                  <a
-                    href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(response.data.page + 1) }).toString()}`}
-                    className="text-brand hover:underline"
-                  >
-                    Next
-                  </a>
-                )}
-                )
-              </>
-            )}
-          </p>
+          <PaginationNav
+            page={response.data.page}
+            pageSize={response.data.pageSize}
+            totalCount={response.data.totalCount}
+            searchParams={params}
+          />
         </>
       )}
     </div>
   );
-}
-
-function paramsToRecord(
-  params: Record<string, string | string[] | undefined>,
-): Record<string, string> {
-  const record: Record<string, string> = {};
-  for (const [key, value] of Object.entries(params)) {
-    if (key === "page") continue;
-    const v = Array.isArray(value) ? value[0] : value;
-    if (v) record[key] = v;
-  }
-  return record;
 }

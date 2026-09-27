@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAdmissionsView } from "@/lib/academies/students";
 import { AdmissionsList } from "./admissions-list";
 import { Button, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
+import { PaginationNav } from "@/components/pagination-nav";
 
 /**
  * PLAN.md Item 39: `/academy/admissions` — admissions view, distinct from
@@ -55,14 +56,20 @@ export default async function AcademyAdmissionsPage({
 
   const { data, canManage, membershipRole } = result;
   const branchLimited = membershipRole === "admissions_officer" || membershipRole === "trainer";
+  // Same visibility-model correction as app/academy/students/page.tsx: this
+  // view reads from getAdmissionsView, which shares students.ts's
+  // resolveScope — Admissions Officer sees the whole academy, Trainer sees
+  // only students enrolled in courses/batches they teach. `branchLimited`
+  // is left as-is for the (unrelated) Branch ID filter field below.
+  const isTrainer = membershipRole === "trainer";
 
   return (
     <div className={PAGE_WRAP}>
       <PageHeader
         title="Admissions"
         description={
-          branchLimited
-            ? "Showing recently-registered or pending-documents students in your assigned branch(es) only."
+          isTrainer
+            ? "Showing recently-registered or pending-documents students enrolled in the courses or batches you teach."
             : "Recently-registered or pending-documents students across this academy."
         }
       />
@@ -83,45 +90,7 @@ export default async function AcademyAdmissionsPage({
 
       <AdmissionsList admissions={data.rows} canManage={canManage} />
 
-      <p className="mt-4 text-sm text-muted">
-        Page {data.page} — {data.totalCount} total
-        {data.totalCount > data.pageSize && (
-          <>
-            {" "}
-            (
-            {data.page > 1 && (
-              <a
-                href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(data.page - 1) }).toString()}`}
-                className="text-brand hover:underline"
-              >
-                Previous
-              </a>
-            )}
-            {data.page > 1 && data.page * data.pageSize < data.totalCount && " | "}
-            {data.page * data.pageSize < data.totalCount && (
-              <a
-                href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(data.page + 1) }).toString()}`}
-                className="text-brand hover:underline"
-              >
-                Next
-              </a>
-            )}
-            )
-          </>
-        )}
-      </p>
+      <PaginationNav page={data.page} pageSize={data.pageSize} totalCount={data.totalCount} searchParams={params} />
     </div>
   );
-}
-
-function paramsToRecord(
-  params: Record<string, string | string[] | undefined>,
-): Record<string, string> {
-  const record: Record<string, string> = {};
-  for (const [key, value] of Object.entries(params)) {
-    if (key === "page") continue;
-    const v = Array.isArray(value) ? value[0] : value;
-    if (v) record[key] = v;
-  }
-  return record;
 }

@@ -14,6 +14,10 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { PaginationNav } from "@/components/pagination-nav";
+import { parsePageParam } from "@/lib/ui/pagination";
+
+const PAGE_SIZE = 15;
 
 // "approveAcademy" is in UNGRANTABLE_CAPABILITIES (lib/auth/permissions.ts),
 // so hasPermission() returns true here only for platform_owner. DESIGN.md
@@ -98,7 +102,11 @@ function subscriptionStatusTone(status: SubscriptionStatus | null): "green" | "b
   }
 }
 
-export default async function AcademiesPage() {
+export default async function AcademiesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const context = await getAuthContext();
 
   if (!context) {
@@ -111,7 +119,19 @@ export default async function AcademiesPage() {
     return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
-  const academies = await listAcademies();
+  // `listAcademies()` is also used internally (e.g. onboarding-checklist.ts)
+  // where it must keep returning every row — it isn't changed to accept a
+  // `pagination` param. This page instead slices the already-fetched array
+  // itself before rendering: still fully server-side (nothing beyond the
+  // current page's rows is ever sent to the browser), just without a
+  // database-level LIMIT/OFFSET, since the platform's own academy count
+  // isn't at a scale where that distinction matters.
+  const params = await searchParams;
+  const page = parsePageParam(params);
+  const allAcademies = await listAcademies();
+  const totalCount = allAcademies.length;
+  const offset = (page - 1) * PAGE_SIZE;
+  const academies = allAcademies.slice(offset, offset + PAGE_SIZE);
 
   return (
     <div className={PAGE_WRAP}>
@@ -181,6 +201,8 @@ export default async function AcademiesPage() {
           ))}
         </tbody>
       </TableWrap>
+
+      <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} />
     </div>
   );
 }

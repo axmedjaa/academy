@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
+import Link from "next/link";
 import { color, radius, shadow, spacing } from "@/lib/ui/theme";
 
 /**
@@ -173,6 +174,34 @@ export function SecondaryButton(props: React.ButtonHTMLAttributes<HTMLButtonElem
         fontWeight: 500,
         cursor: rest.disabled ? "not-allowed" : "pointer",
         opacity: rest.disabled ? 0.6 : 1,
+        ...style,
+      }}
+    />
+  );
+}
+
+/** Same calm, secondary visual weight as `SecondaryButton`, but a real
+ * navigation link (Next's `<Link>`) rather than a `<button>` — for "Back to
+ * X" navigation such as /account/security's own Back-to-dashboard link.
+ * Never the page's primary action, so it's never brand-colored. */
+export function SecondaryLinkButton(props: React.ComponentProps<typeof Link>) {
+  const { style, className, ...rest } = props;
+  return (
+    <Link
+      {...rest}
+      className={`${BUTTON_INTERACTION_CLASSNAME} ${className ?? ""}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.35rem",
+        backgroundColor: color.card,
+        color: color.text,
+        border: `1px solid ${color.border}`,
+        borderRadius: radius.control,
+        padding: "0.5rem 0.9rem",
+        fontSize: "0.85rem",
+        fontWeight: 500,
+        textDecoration: "none",
         ...style,
       }}
     />

@@ -590,7 +590,7 @@ No `Draft`, `Generated`, `Reissued`, or `Expired` states exist (Planning Gaps Re
 
 | Rule | Value |
 |---|---|
-| Default page size | 25 |
+| Default page size | 15 |
 | Max page size | 100 |
 | Pagination style | offset (simplest, sufficient at MVP scale — no cursor pagination) |
 | Max export row count | 10,000 rows per export call; beyond that, `exportData` is rejected with a message asking the user to narrow filters, not a silent truncation |

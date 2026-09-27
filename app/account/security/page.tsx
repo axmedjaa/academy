@@ -6,7 +6,7 @@ import { getAuthContext, getCurrentSessionId } from "@/lib/auth/auth-context";
 import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
 import { getPendingEmailChange } from "@/lib/auth/email-change";
 import { listMySessions, revokeAllOtherSessions, revokeSession } from "@/lib/auth/session-actions";
-import { AuthLink, Card, Pill, SecondaryButton } from "@/lib/ui/auth-components";
+import { AuthLink, Card, Pill, SecondaryButton, SecondaryLinkButton } from "@/lib/ui/auth-components";
 import { color, spacing } from "@/lib/ui/theme";
 import { AccountForms } from "./account-forms";
 
@@ -34,10 +34,24 @@ export default async function AccountSecurityPage() {
     getPendingEmailChange(context.userId),
   ]);
 
+  // This page is reachable from both consoles (the academy shell's own
+  // "Account settings" link, and the Platform Owner console has no
+  // equivalent shell link yet but the route itself is still reachable) —
+  // a hardcoded "/academy/dashboard" sent Platform Owner/Admin accounts
+  // (who have no academy membership at all) straight into that page's own
+  // "You are not a member of this academy" block. Same platformRole-based
+  // "where's home" decision as lib/auth/auth-context.ts's own
+  // `getPostLoginRedirectPath` — computed inline here since `platformRole`
+  // is already resolved on `context`, without a second lookup.
+  const backHref = context.platformRole ? "/platform/academies" : "/academy/dashboard";
+
   return (
     <div style={{ minHeight: "100vh", backgroundColor: color.bg, padding: spacing.xl }}>
       <div style={{ maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: spacing.xl }}>
         <div>
+          <SecondaryLinkButton href={backHref} style={{ marginBottom: spacing.md }}>
+            {context.platformRole ? "← Back to platform console" : "← Back to dashboard"}
+          </SecondaryLinkButton>
           <h1 style={{ margin: 0, color: color.text }}>Account security</h1>
           <p style={{ margin: 0, marginTop: spacing.xxs, color: color.textMuted }}>
             Manage where you&apos;re signed in and your account&apos;s two-factor authentication.

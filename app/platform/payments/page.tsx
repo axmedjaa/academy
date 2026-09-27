@@ -7,9 +7,12 @@ import {
 } from "@/lib/subscriptions/payments";
 import { PaymentsManager } from "./payments-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PaginationNav } from "@/components/pagination-nav";
+import { parsePageParam } from "@/lib/ui/pagination";
 
 const RECORD_PAYMENT_CAPABILITY = "recordSubscriptionPayment";
 const VERIFY_PAYMENT_CAPABILITY = "verifySubscriptionPayment";
+const PAGE_SIZE = 15;
 
 // PLAN.md Item 25 / DESIGN.md §8: "/platform/payments... grantable to
 // platform_admin [for recording]. Row actions: Verify / Reject / Reverse...
@@ -21,7 +24,11 @@ const VERIFY_PAYMENT_CAPABILITY = "verifySubscriptionPayment";
 // check for "verifySubscriptionPayment" (in UNGRANTABLE_CAPABILITIES, so
 // only ever true for platform_owner) decides whether the row actions render
 // at all, passed down as a prop rather than re-checked client-side.
-export default async function PlatformPaymentsPage() {
+export default async function PlatformPaymentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const context = await getAuthContext();
 
   if (!context) {
@@ -35,10 +42,20 @@ export default async function PlatformPaymentsPage() {
   }
 
   const canVerify = await hasPermission(context, VERIFY_PAYMENT_CAPABILITY);
-  const [payments, subscriptionOptions] = await Promise.all([
+  const params = await searchParams;
+  const page = parsePageParam(params);
+  const [allPayments, subscriptionOptions] = await Promise.all([
     listSubscriptionPayments(),
     listAcademySubscriptionOptions(),
   ]);
+  // `listSubscriptionPayments()` has no other internal caller today, but
+  // sliced here (after fetching) rather than changed at the DB-query level
+  // anyway, for the same reason and the same shape as every other platform
+  // list page in this pass (see app/platform/academies/page.tsx) — still
+  // fully server-side, no client-side fetch-all.
+  const totalCount = allPayments.length;
+  const offset = (page - 1) * PAGE_SIZE;
+  const payments = allPayments.slice(offset, offset + PAGE_SIZE);
 
   return (
     <div className={PAGE_WRAP}>
@@ -51,6 +68,7 @@ export default async function PlatformPaymentsPage() {
         subscriptionOptions={subscriptionOptions}
         canVerify={canVerify}
       />
+      <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} />
     </div>
   );
 }

@@ -4,8 +4,8 @@ import { auditLogs } from "@/lib/db/schema";
 
 // PLAN.md "Pagination, Search & Export Limits" (Planning Gaps Resolution §9)
 // — the project-wide rule, applied here since this is the first real list
-// page that needs it: default 25 / max 100 / offset-based (page, pageSize).
-export const AUDIT_LOG_DEFAULT_PAGE_SIZE = 25;
+// page that needs it: default 15 / max 100 / offset-based (page, pageSize).
+export const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 export const AUDIT_LOG_MAX_PAGE_SIZE = 100;
 
 export type AuditResult = "success" | "failure";

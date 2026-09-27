@@ -8,6 +8,7 @@ import {
   academySubscriptions,
   auditLogs,
   batchEnrollments,
+  batchTrainerAssignments,
   batches,
   branches,
   certificates,
@@ -163,6 +164,49 @@ async function assignUserToBranches(
   }
 }
 
+/** Directly inserts staff_profiles + an active batch_trainer_assignments
+ * row — the authoritative "this Trainer teaches this batch" relationship
+ * (lib/academies/batch-assignments.ts's own `getAssignedBatchIds`),
+ * bypassing the not-yet-exercised `assignTrainerToBatch` action, per this
+ * file's own "insert fixtures directly" convention. Never combine with
+ * `assignUserToBranches` for the same (academyId, userId) pair in one test
+ * — `staff_profiles` has a real `unique (academy_id, user_id)` constraint,
+ * and this Trainer-visibility rule no longer depends on branch assignment
+ * at all, so no test needs both. */
+async function assignTrainerToBatchDirect(
+  academyId: string,
+  userId: string,
+  batchId: string,
+): Promise<void> {
+  // Reuse an existing profile (a Trainer teaching several batches calls
+  // this more than once) — `staff_profiles` has a real
+  // `unique (academy_id, user_id)` constraint, so a second unconditional
+  // insert for the same trainer would fail.
+  let [profile] = await db
+    .select({ id: staffProfiles.id })
+    .from(staffProfiles)
+    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)))
+    .limit(1);
+
+  if (!profile) {
+    [profile] = await db
+      .insert(staffProfiles)
+      .values({
+        academyId,
+        userId,
+        fullName: "Test Trainer",
+        phone: "+1-555-0199",
+      })
+      .returning({ id: staffProfiles.id });
+  }
+
+  await db.insert(batchTrainerAssignments).values({
+    academyId,
+    batchId,
+    staffProfileId: profile.id,
+  });
+}
+
 /** Directly inserts a `students` row, bypassing the not-yet-existing
  * registerStudent (Item 38) — per the task brief, this item's tests build
  * fixture students directly rather than exercising registration. */
@@ -302,6 +346,7 @@ afterAll(async () => {
     await db.delete(studentPayments).where(eq(studentPayments.academyId, academyId));
     await db.delete(studentCharges).where(eq(studentCharges.academyId, academyId));
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
+    await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -542,28 +587,7 @@ describe("updateStudent — permission matrix", () => {
   });
 });
 
-describe("branch-scoped IDOR — Admissions Officer / Trainer", () => {
-  it.each<AcademyRole>(["admissions_officer", "trainer"])(
-    "role %s: getStudent on a student in an unassigned branch returns 'not_found'",
-    async (role) => {
-      const { academyId, userId, context } = await setupAcademy(role);
-      const assignedBranch = await insertBranchDirect(academyId);
-      const otherBranch = await insertBranchDirect(academyId);
-      await assignUserToBranches(academyId, userId, [assignedBranch]);
-
-      const creatorId = await createUser();
-      const inScope = await insertStudentDirect(academyId, assignedBranch, creatorId);
-      const outOfScope = await insertStudentDirect(academyId, otherBranch, creatorId);
-
-      const okResult = await getStudent(context, inScope.id);
-      expect(okResult.ok).toBe(true);
-
-      const idorResult = await getStudent(context, outOfScope.id);
-      expect(idorResult.ok).toBe(false);
-      if (!idorResult.ok) expect(idorResult.error.code).toBe("not_found");
-    },
-  );
-
+describe("branch-scoped IDOR — Admissions Officer (mutation-side; unaffected by the visibility-scope change)", () => {
   it.each<AcademyRole>(["admissions_officer", "trainer"])(
     "role %s: getStudent on a guessed/nonexistent id returns the identical 'not_found'",
     async (role) => {
@@ -593,44 +617,323 @@ describe("branch-scoped IDOR — Admissions Officer / Trainer", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it("admissions_officer/trainer with no staff_profiles/assignment rows sees no students in search", async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
-    const branchId = await insertBranchDirect(academyId);
-    await insertStudentDirect(academyId, branchId, userId);
+});
 
-    const result = await searchStudents(context);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.rows).toEqual([]);
-  });
-
-  it("searchStudents scopes branch-limited roles to only their assigned branch(es)", async () => {
-    const { academyId, userId, context } = await setupAcademy("trainer");
-    const assignedBranch = await insertBranchDirect(academyId);
-    const otherBranch = await insertBranchDirect(academyId);
-    await assignUserToBranches(academyId, userId, [assignedBranch]);
-
+describe("Admissions Officer — academy-wide student visibility", () => {
+  it("sees all students in their academy, across multiple branches, with zero staff_profiles/branch-assignment rows at all", async () => {
+    const { academyId, context } = await setupAcademy("admissions_officer");
+    const branchA = await insertBranchDirect(academyId);
+    const branchB = await insertBranchDirect(academyId);
     const creatorId = await createUser();
-    const inScope = await insertStudentDirect(academyId, assignedBranch, creatorId);
-    await insertStudentDirect(academyId, otherBranch, creatorId);
+    const studentA = await insertStudentDirect(academyId, branchA, creatorId);
+    const studentB = await insertStudentDirect(academyId, branchB, creatorId);
+    // Deliberately no assignUserToBranches call — this officer has no
+    // staff_profiles row, and therefore no branch assignment, at all.
 
     const result = await searchStudents(context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.rows.map((r) => r.id)).toEqual([inScope.id]);
+    expect(result.data.rows.map((r) => r.id).sort()).toEqual([studentA.id, studentB.id].sort());
   });
 
-  it("a branch-limited caller requesting an out-of-scope branchId filter gets an empty result, not another branch's data", async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
-    const assignedBranch = await insertBranchDirect(academyId);
-    const otherBranch = await insertBranchDirect(academyId);
-    await assignUserToBranches(academyId, userId, [assignedBranch]);
-
+  it("getStudent succeeds for a student in any branch, with zero branch assignment", async () => {
+    const { academyId, context } = await setupAcademy("admissions_officer");
+    const branchId = await insertBranchDirect(academyId);
     const creatorId = await createUser();
-    await insertStudentDirect(academyId, otherBranch, creatorId);
+    const student = await insertStudentDirect(academyId, branchId, creatorId);
 
-    const result = await searchStudents(context, { branchId: otherBranch });
+    const result = await getStudent(context, student.id);
+    expect(result.ok).toBe(true);
+  });
+
+  it("cannot see students from another academy", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherBranch = await insertBranchDirect(other.academyId);
+    await insertStudentDirect(other.academyId, otherBranch, other.userId);
+
+    const { context } = await setupAcademy("admissions_officer");
+    const result = await searchStudents(context);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.rows).toEqual([]);
+  });
+
+  it("is still subject to the existing student-list permission — blocked by a suspended subscription like any other role", async () => {
+    const creatorUserId = await createUser();
+    const academyId = await createAcademy(creatorUserId);
+    const planId = await createPlan();
+    await db.insert(academySubscriptions).values({
+      academyId,
+      planId,
+      status: "suspended",
+      createdBy: creatorUserId,
+    });
+    const userId = await createUser();
+    await addMembership(userId, academyId, "admissions_officer");
+
+    const result = await searchStudents({ userId, branchIds: [], academyWide: false });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("blocked");
+  });
+
+  it("an explicit branchId filter narrows within the whole-academy dataset — never a restriction", async () => {
+    const { academyId, context } = await setupAcademy("admissions_officer");
+    const branchA = await insertBranchDirect(academyId);
+    const branchB = await insertBranchDirect(academyId);
+    const creatorId = await createUser();
+    const inBranchA = await insertStudentDirect(academyId, branchA, creatorId);
+    await insertStudentDirect(academyId, branchB, creatorId);
+
+    const result = await searchStudents(context, { branchId: branchA });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows.map((r) => r.id)).toEqual([inBranchA.id]);
+  });
+});
+
+describe("Trainer — teaching/enrollment-based student visibility", () => {
+  it("sees a student enrolled in a batch they teach", async () => {
+    const { academyId, userId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+    await assignTrainerToBatchDirect(academyId, userId, batchId);
+
+    const creatorId = await createUser();
+    const student = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, batchId, student.id);
+
+    const result = await searchStudents(context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows.map((r) => r.id)).toEqual([student.id]);
+  });
+
+  it("getStudent succeeds for a student enrolled in a batch they teach", async () => {
+    const { academyId, userId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+    await assignTrainerToBatchDirect(academyId, userId, batchId);
+
+    const creatorId = await createUser();
+    const student = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, batchId, student.id);
+
+    const result = await getStudent(context, student.id);
+    expect(result.ok).toBe(true);
+  });
+
+  it("does not see a student enrolled only in an unrelated batch they don't teach", async () => {
+    const { academyId, userId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const myBatch = await insertBatchDirect(academyId, branchId, courseId);
+    const otherBatch = await insertBatchDirect(academyId, branchId, courseId);
+    await assignTrainerToBatchDirect(academyId, userId, myBatch);
+
+    const creatorId = await createUser();
+    const unrelated = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, otherBatch, unrelated.id);
+
+    const result = await searchStudents(context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows).toEqual([]);
+  });
+
+  it("does not see a student merely for sharing the same branch, with no enrollment at all", async () => {
+    const { academyId, userId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+    await assignTrainerToBatchDirect(academyId, userId, batchId);
+
+    const creatorId = await createUser();
+    // Same branch as the Trainer's own batch, but never enrolled anywhere.
+    await insertStudentDirect(academyId, branchId, creatorId);
+
+    const result = await searchStudents(context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows).toEqual([]);
+  });
+
+  it("with no teaching assignments at all sees zero students — never falls back to the whole academy", async () => {
+    const { academyId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const creatorId = await createUser();
+    await insertStudentDirect(academyId, branchId, creatorId);
+    await insertStudentDirect(academyId, branchId, creatorId);
+
+    const result = await searchStudents(context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows).toEqual([]);
+    expect(result.data.totalCount).toBe(0);
+
+    // Same guarantee for the single-record read.
+    const anyStudent = await db.select().from(students).where(eq(students.academyId, academyId)).limit(1);
+    const singleResult = await getStudent(context, anyStudent[0].id);
+    expect(singleResult.ok).toBe(false);
+    if (!singleResult.ok) expect(singleResult.error.code).toBe("not_found");
+  });
+
+  it("a student enrolled in two batches taught by the same Trainer appears only once", async () => {
+    const { academyId, userId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchX = await insertBatchDirect(academyId, branchId, courseId);
+    const batchY = await insertBatchDirect(academyId, branchId, courseId);
+    await assignTrainerToBatchDirect(academyId, userId, batchX);
+    await assignTrainerToBatchDirect(academyId, userId, batchY);
+
+    const creatorId = await createUser();
+    const student = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, batchX, student.id);
+    await enrollStudentDirect(academyId, batchY, student.id);
+
+    const result = await searchStudents(context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows.map((r) => r.id)).toEqual([student.id]);
+    expect(result.data.totalCount).toBe(1);
+  });
+
+  it("never sees another academy's student, even when a batch/enrollment relationship is directly (and improperly) linked across academies", async () => {
+    const trainerAcademy = await setupAcademy("trainer");
+    const otherAcademy = await setupAcademy("academy_owner");
+
+    const trainerBranch = await insertBranchDirect(trainerAcademy.academyId);
+    const trainerCourseId = await insertProgramAndCourse(trainerAcademy.academyId);
+    const trainerBatch = await insertBatchDirect(trainerAcademy.academyId, trainerBranch, trainerCourseId);
+    await assignTrainerToBatchDirect(trainerAcademy.academyId, trainerAcademy.userId, trainerBatch);
+
+    // A batch and a student that genuinely belong to a DIFFERENT academy,
+    // enrolled in that other academy's own batch — never the Trainer's.
+    const otherBranch = await insertBranchDirect(otherAcademy.academyId);
+    const otherCourseId = await insertProgramAndCourse(otherAcademy.academyId);
+    const otherBatch = await insertBatchDirect(otherAcademy.academyId, otherBranch, otherCourseId);
+    const otherStudent = await insertStudentDirect(otherAcademy.academyId, otherBranch, otherAcademy.userId);
+    await enrollStudentDirect(otherAcademy.academyId, otherBatch, otherStudent.id);
+
+    // Deliberately (for this defense-in-depth test only) wire the
+    // Trainer's own staff_profiles row directly to the OTHER academy's
+    // batch — simulating a data inconsistency — to prove the final
+    // `students.academyId` tenant filter in resolveScope is what actually
+    // protects this, not just the shape of the join.
+    const [trainerProfile] = await db
+      .select({ id: staffProfiles.id })
+      .from(staffProfiles)
+      .where(
+        and(
+          eq(staffProfiles.academyId, trainerAcademy.academyId),
+          eq(staffProfiles.userId, trainerAcademy.userId),
+        ),
+      )
+      .limit(1);
+    await db.insert(batchTrainerAssignments).values({
+      academyId: trainerAcademy.academyId,
+      batchId: otherBatch,
+      staffProfileId: trainerProfile.id,
+    });
+
+    const result = await searchStudents(trainerAcademy.context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows).toEqual([]);
+  });
+});
+
+describe("Owner/Manager/Admin — unchanged academy-wide visibility", () => {
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
+    "role %s sees every student in their academy across multiple branches, unaffected by the Admissions Officer/Trainer visibility change",
+    async (role) => {
+      const { academyId, userId, context } = await setupAcademy(role);
+      const branchA = await insertBranchDirect(academyId);
+      const branchB = await insertBranchDirect(academyId);
+      const studentA = await insertStudentDirect(academyId, branchA, userId);
+      const studentB = await insertStudentDirect(academyId, branchB, userId);
+
+      const result = await searchStudents(context);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.rows.map((r) => r.id).sort()).toEqual([studentA.id, studentB.id].sort());
+    },
+  );
+});
+
+describe("Trainer scope composes correctly with search/filter/pagination (and the count query stays consistent)", () => {
+  async function setupTrainerWithOwnBatch() {
+    const { academyId, userId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+    await assignTrainerToBatchDirect(academyId, userId, batchId);
+    return { academyId, context, branchId, batchId };
+  }
+
+  it("search narrows within the Trainer-visible dataset, not the whole academy", async () => {
+    const { academyId, context, branchId, batchId } = await setupTrainerWithOwnBatch();
+    const creatorId = await createUser();
+    const visibleMatch = await insertStudentDirect(academyId, branchId, creatorId, { fullName: "Amina Yusuf" });
+    await enrollStudentDirect(academyId, batchId, visibleMatch.id);
+    // Same matching name, but not enrolled in anything this Trainer teaches.
+    await insertStudentDirect(academyId, branchId, creatorId, { fullName: "Amina Bello" });
+
+    const result = await searchStudents(context, { searchTerm: "amina" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows.map((r) => r.id)).toEqual([visibleMatch.id]);
+  });
+
+  it("status filter narrows within the Trainer-visible dataset", async () => {
+    const { academyId, context, branchId, batchId } = await setupTrainerWithOwnBatch();
+    const creatorId = await createUser();
+    const visibleArchived = await insertStudentDirect(academyId, branchId, creatorId, { status: "archived" });
+    await enrollStudentDirect(academyId, batchId, visibleArchived.id);
+    // Archived too, but outside this Trainer's taught batches.
+    await insertStudentDirect(academyId, branchId, creatorId, { status: "archived" });
+
+    const result = await searchStudents(context, { status: "archived" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows.map((r) => r.id)).toEqual([visibleArchived.id]);
+  });
+
+  it("an explicit branchId filter never expands visibility beyond the Trainer's taught-batch students", async () => {
+    const { academyId, context, branchId, batchId } = await setupTrainerWithOwnBatch();
+    const creatorId = await createUser();
+    const visible = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, batchId, visible.id);
+    // Same branch, but not enrolled in anything this Trainer teaches.
+    await insertStudentDirect(academyId, branchId, creatorId);
+
+    const result = await searchStudents(context, { branchId });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows.map((r) => r.id)).toEqual([visible.id]);
+  });
+
+  it("pagination total and the main data query both reflect only the Trainer-visible dataset, never the whole academy — proving the data and count queries share identical visibility conditions", async () => {
+    const { academyId, context, branchId, batchId } = await setupTrainerWithOwnBatch();
+    const creatorId = await createUser();
+    const visibleA = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, batchId, visibleA.id);
+    const visibleB = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, batchId, visibleB.id);
+    // Three more academy students this Trainer never taught.
+    await insertStudentDirect(academyId, branchId, creatorId);
+    await insertStudentDirect(academyId, branchId, creatorId);
+    await insertStudentDirect(academyId, branchId, creatorId);
+
+    const result = await searchStudents(context, {}, { page: 1, pageSize: 1 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The main query respects the small page size...
+    expect(result.data.rows).toHaveLength(1);
+    // ...but the count reports the full Trainer-visible total (2), never
+    // the whole academy's 5.
+    expect(result.data.totalCount).toBe(2);
   });
 });
 
@@ -770,20 +1073,38 @@ describe("getAdmissionsView — recently-registered/pending-onboarding subset", 
     expect(result.data.rows.map((r) => r.id)).not.toContain(archived.id);
   });
 
-  it("branch-limited caller only sees admissions candidates in their assigned branch(es)", async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
-    const assignedBranch = await insertBranchDirect(academyId);
-    const otherBranch = await insertBranchDirect(academyId);
-    await assignUserToBranches(academyId, userId, [assignedBranch]);
-
+  it("Admissions Officer sees admissions candidates across every branch in the academy, with zero branch assignment", async () => {
+    const { academyId, context } = await setupAcademy("admissions_officer");
+    const branchA = await insertBranchDirect(academyId);
+    const branchB = await insertBranchDirect(academyId);
     const creatorId = await createUser();
-    const inScope = await insertStudentDirect(academyId, assignedBranch, creatorId);
-    await insertStudentDirect(academyId, otherBranch, creatorId);
+    const candidateA = await insertStudentDirect(academyId, branchA, creatorId);
+    const candidateB = await insertStudentDirect(academyId, branchB, creatorId);
 
     const result = await getAdmissionsView(context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.rows.map((r) => r.id)).toEqual([inScope.id]);
+    expect(result.data.rows.map((r) => r.id).sort()).toEqual([candidateA.id, candidateB.id].sort());
+  });
+
+  it("Trainer only sees admissions candidates enrolled in a batch they teach, via the same shared resolveScope", async () => {
+    const { academyId, userId, context } = await setupAcademy("trainer");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+    await assignTrainerToBatchDirect(academyId, userId, batchId);
+
+    const creatorId = await createUser();
+    const taught = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, batchId, taught.id);
+    // Same branch, admissions-eligible, but not enrolled in anything this
+    // Trainer teaches.
+    await insertStudentDirect(academyId, branchId, creatorId);
+
+    const result = await getAdmissionsView(context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows.map((r) => r.id)).toEqual([taught.id]);
   });
 });
 

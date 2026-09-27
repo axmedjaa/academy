@@ -7,6 +7,7 @@ import { listBatches } from "@/lib/academies/batches";
 import { listCourses } from "@/lib/academies/courses";
 import { StudentsList } from "./students-list";
 import { Button, LinkButton, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
+import { PaginationNav } from "@/components/pagination-nav";
 
 /**
  * PLAN.md Item 39: `/academy/students` — student search/update.
@@ -67,6 +68,15 @@ export default async function AcademyStudentsPage({
 
   const { data, canManage, canDelete, membershipRole } = result;
   const branchLimited = membershipRole === "admissions_officer" || membershipRole === "trainer";
+  // Student *visibility* is no longer branch-based for either role (see
+  // lib/academies/students.ts's resolveScope): Admissions Officer sees
+  // every student in the academy, Trainer sees students enrolled in the
+  // courses/batches they teach. `branchLimited` above is intentionally left
+  // as-is — it still correctly governs the unrelated branch-transfer
+  // restriction (`showBranchField` below) — only this page's own
+  // description text needed correcting to stop describing the old,
+  // no-longer-true branch-based restriction.
+  const isTrainer = membershipRole === "trainer";
 
   // Display enrichment for the "Course" column + "change course" control —
   // same "page re-resolves its own academyId, no channel exists to receive
@@ -97,8 +107,8 @@ export default async function AcademyStudentsPage({
       <PageHeader
         title="Students"
         description={
-          branchLimited
-            ? "Showing students in your assigned branch(es) only."
+          isTrainer
+            ? "Showing students enrolled in the courses or batches you teach."
             : canManage
               ? "You can search, view, and edit students across this academy."
               : "You can view every student in this academy (read-only)."
@@ -141,45 +151,7 @@ export default async function AcademyStudentsPage({
         courseOptions={courseOptions}
       />
 
-      <p className="mt-4 text-sm text-muted">
-        Page {data.page} — {data.totalCount} total
-        {data.totalCount > data.pageSize && (
-          <>
-            {" "}
-            (
-            {data.page > 1 && (
-              <a
-                href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(data.page - 1) }).toString()}`}
-                className="text-brand hover:underline"
-              >
-                Previous
-              </a>
-            )}
-            {data.page > 1 && data.page * data.pageSize < data.totalCount && " | "}
-            {data.page * data.pageSize < data.totalCount && (
-              <a
-                href={`?${new URLSearchParams({ ...paramsToRecord(params), page: String(data.page + 1) }).toString()}`}
-                className="text-brand hover:underline"
-              >
-                Next
-              </a>
-            )}
-            )
-          </>
-        )}
-      </p>
+      <PaginationNav page={data.page} pageSize={data.pageSize} totalCount={data.totalCount} searchParams={params} />
     </div>
   );
-}
-
-function paramsToRecord(
-  params: Record<string, string | string[] | undefined>,
-): Record<string, string> {
-  const record: Record<string, string> = {};
-  for (const [key, value] of Object.entries(params)) {
-    if (key === "page") continue;
-    const v = Array.isArray(value) ? value[0] : value;
-    if (v) record[key] = v;
-  }
-  return record;
 }

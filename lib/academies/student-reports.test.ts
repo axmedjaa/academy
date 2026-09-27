@@ -366,22 +366,22 @@ describe("getStudentReports — permission gating", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("a branch-limited role (admissions_officer) only sees students in their assigned branch", async () => {
+  it("Admissions Officer sees students across every branch in the academy, regardless of branch assignment (lib/academies/students.ts's resolveScope — Admissions Officer is academy-wide, not branch-limited, for visibility)", async () => {
     const { academyId, branchId: branchA, creatorUserId, userId, context } = await setupAcademy("admissions_officer");
     const branchB = await insertBranchDirect(academyId);
     await insertStudentDirect(academyId, branchA, creatorUserId);
     await insertStudentDirect(academyId, branchB, creatorUserId);
 
+    // Even with a branch assignment on file (irrelevant to visibility now),
+    // an Admissions Officer still sees both branches' students.
     const staffProfileId = await insertStaffProfile(academyId, userId);
     await assignBranchToStaff(academyId, staffProfileId, branchA);
 
     const result = await getStudentReports(context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.report.totalStudents).toBe(1);
-    expect(result.report.branchDistribution).toEqual([
-      { branchId: branchA, branchName: expect.any(String), count: 1 },
-    ]);
+    expect(result.report.totalStudents).toBe(2);
+    expect(result.report.branchDistribution.reduce((sum, row) => sum + row.count, 0)).toBe(2);
   });
 
   it("a branch-limited role with zero assigned branches gets an empty report, not an error", async () => {

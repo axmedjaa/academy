@@ -15,6 +15,7 @@ import {
   students,
 } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { getAssignedBatchIds } from "@/lib/academies/batch-assignments";
 import {
   ACADEMY_STUDENTS_ACTION,
   getAcademyPermissionLevel,
@@ -294,7 +295,7 @@ async function resolveStudentAccess(
 // from this phase onward" — same default/max page size and offset-based
 // shape already established by lib/audit-query.ts (Item 32a) for the first
 // paginated list in this codebase; reused verbatim here as the second.
-export const STUDENTS_DEFAULT_PAGE_SIZE = 25;
+export const STUDENTS_DEFAULT_PAGE_SIZE = 15;
 export const STUDENTS_MAX_PAGE_SIZE = 100;
 
 function normalizePage(page: number | undefined): number {
@@ -358,21 +359,71 @@ export type SearchStudentsResult =
   | { ok: false; error: StudentActionError };
 
 /**
- * Resolves the scoping WHERE clause shared by searchStudents and
- * getAdmissionsView: always tenant-scoped to the caller's academy, and
- * additionally branch-scoped (via staff_branch_assignments) for
- * Admissions Officer/Trainer. Returns `null` scope conditions plus an
- * `unreachable: true` flag when a branch-limited caller has zero assigned
- * branches (nothing they could possibly see) or requested an out-of-scope
- * `branchId`, so callers can short-circuit to an empty result without a
- * wasted query.
+ * Resolves the caller's own `batch_trainer_assignments` rows (active only)
+ * and, from those, every distinct student with a `batch_enrollments` row in
+ * any of those batches — the one authoritative "which students can this
+ * Trainer see" relationship in this codebase (Trainer -> taught batches ->
+ * enrollments -> students), the same join
+ * lib/academies/batch-assignments.ts's own `getAssignedBatchIds` doc
+ * comment names as the intended reuse point for exactly this kind of check,
+ * rather than a new relationship invented here.
+ *
+ * Deliberately not filtered by `batch_enrollments.status` — a student who
+ * completed or withdrew from a batch this Trainer taught was still taught
+ * by them; only a student with *zero* enrollment rows in any of the
+ * Trainer's batches is excluded. `selectDistinct` (rather than relying on
+ * the caller's own `students.id` primary key to dedupe downstream) keeps
+ * the id list itself small when a student is enrolled in several of the
+ * Trainer's batches at once.
+ */
+async function getTrainerVisibleStudentIds(
+  executor: DbClient,
+  userId: string,
+  academyId: string,
+): Promise<string[]> {
+  const batchIds = await getAssignedBatchIds(executor, userId, academyId);
+  if (batchIds.length === 0) return [];
+
+  const rows = await executor
+    .selectDistinct({ studentId: batchEnrollments.studentId })
+    .from(batchEnrollments)
+    .where(inArray(batchEnrollments.batchId, batchIds));
+
+  return rows.map((row) => row.studentId);
+}
+
+/**
+ * Resolves the scoping WHERE clause shared by searchStudents,
+ * getAdmissionsView, and getStudent: always tenant-scoped to the caller's
+ * academy, plus a role-specific visibility scope on top:
+ *
+ * - Admissions Officer (and every academy-wide role — Owner/Admin/Manager/
+ *   Finance Officer): no restriction beyond the academy itself. An
+ *   Admissions Officer must see every student in their academy regardless
+ *   of branch assignment (explicit product requirement — branch assignment
+ *   is a separate, unrelated concern; see `isBranchLimited`'s remaining
+ *   uses below, which are about student *mutation* permissions, not this).
+ * - Trainer: restricted to `getTrainerVisibleStudentIds` above — students
+ *   enrolled in a batch this Trainer teaches, not their branch, not "all
+ *   active students," not students they personally registered.
+ *
+ * `requestedBranchId` (the search form's explicit Branch filter) is always
+ * an additional narrowing `AND`, for every role — it can only shrink the
+ * result, never expand a Trainer's own scope beyond their taught batches'
+ * students, and an Admissions Officer picking a specific branch is exactly
+ * as valid as an Owner doing the same.
+ *
+ * Returns `unreachable: true` when the caller's role-specific scope is
+ * provably empty (a Trainer with no active batch assignments, or whose
+ * batches currently have zero enrollments) so callers can short-circuit to
+ * an empty result without running the main query at all — this must never
+ * silently fall back to "show everything."
  *
  * Exported (Phase 5, Item 61a) for lib/academies/student-reports.ts to reuse
  * verbatim — its own conditions are plain `students.academyId`/
- * `students.branchId` SQL fragments, so they compose unchanged into any
- * query that joins through the `students` table, not just this file's own
- * `students`-rooted selects. Additive-only change, no existing behavior
- * touched.
+ * `students.branchId`/`students.id` SQL fragments, so they compose
+ * unchanged into any query that joins through the `students` table, not
+ * just this file's own `students`-rooted selects.
  */
 export async function resolveScope(
   academyId: string,
@@ -382,20 +433,15 @@ export async function resolveScope(
 ): Promise<{ conditions: SQL[]; unreachable: boolean }> {
   const conditions: SQL[] = [eq(students.academyId, academyId)];
 
-  if (isBranchLimited(membershipRole)) {
-    const assignedIds = await getAssignedBranchIds(db, academyId, userId);
-    if (assignedIds.length === 0) {
+  if (membershipRole === "trainer") {
+    const visibleStudentIds = await getTrainerVisibleStudentIds(db, userId, academyId);
+    if (visibleStudentIds.length === 0) {
       return { conditions, unreachable: true };
     }
-    if (requestedBranchId) {
-      if (!assignedIds.includes(requestedBranchId)) {
-        return { conditions, unreachable: true };
-      }
-      conditions.push(eq(students.branchId, requestedBranchId));
-    } else {
-      conditions.push(inArray(students.branchId, assignedIds));
-    }
-  } else if (requestedBranchId) {
+    conditions.push(inArray(students.id, visibleStudentIds));
+  }
+
+  if (requestedBranchId) {
     conditions.push(eq(students.branchId, requestedBranchId));
   }
 
@@ -499,10 +545,13 @@ export type GetStudentResult =
   | { ok: false; error: StudentActionError };
 
 /**
- * Single-student read, tenant- and (for branch-limited roles) branch-scoped.
- * IDOR-safe: a nonexistent id, a different academy's student, and an
- * unassigned-branch student for a branch-limited caller all return the
- * identical `NOT_FOUND` — including for a guessed id — matching
+ * Single-student read, tenant-scoped and (for a Trainer) further scoped to
+ * their own taught-batch enrollments via the same `resolveScope` every
+ * other read in this file uses — kept in sync automatically rather than a
+ * second, hand-maintained copy of the same visibility rule. IDOR-safe: a
+ * nonexistent id, a different academy's student, and (for a Trainer) a
+ * student outside their taught batches all return the identical
+ * `NOT_FOUND` — including for a guessed id — matching
  * lib/academies/branches.ts's getBranch exactly.
  */
 export async function getStudent(
@@ -522,20 +571,18 @@ export async function getStudent(
     return { ok: false, error: NOT_FOUND };
   }
 
-  const [row] = await db
-    .select()
-    .from(students)
-    .where(and(eq(students.id, studentId), eq(students.academyId, academyId)))
-    .limit(1);
-  if (!row) {
+  const scope = await resolveScope(academyId, membershipRole, actorContext.userId, undefined);
+  if (scope.unreachable) {
     return { ok: false, error: NOT_FOUND };
   }
 
-  if (isBranchLimited(membershipRole)) {
-    const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
-    if (!assignedIds.includes(row.branchId)) {
-      return { ok: false, error: NOT_FOUND };
-    }
+  const [row] = await db
+    .select()
+    .from(students)
+    .where(and(...scope.conditions, eq(students.id, studentId)))
+    .limit(1);
+  if (!row) {
+    return { ok: false, error: NOT_FOUND };
   }
 
   return { ok: true, student: toRecord(row) };
