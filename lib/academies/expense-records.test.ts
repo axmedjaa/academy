@@ -16,6 +16,7 @@ import {
 } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
+import { dollarsToCents } from "@/lib/ui/money";
 import {
   approveExpense,
   createExpenseRecord,
@@ -128,18 +129,6 @@ async function insertExpenseDirect(
   return row.id;
 }
 
-async function insertApprovalRequestDirect(
-  academyId: string,
-  entityId: string,
-  requestedBy: string,
-): Promise<string> {
-  const [row] = await db
-    .insert(approvalRequests)
-    .values({ academyId, entityType: "expense", entityId, requestedBy })
-    .returning({ id: approvalRequests.id });
-  return row.id;
-}
-
 async function fetchApprovalRequestForExpense(expenseRecordId: string) {
   const [row] = await db
     .select()
@@ -207,14 +196,14 @@ afterAll(async () => {
 
 describe("createExpenseRecord — permission matrix", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
-    ["academy_admin", false],
-    ["manager", false],
+    ["academy_owner", true],
+    ["academy_admin", true],
+    ["manager", true],
     ["admissions_officer", false],
     ["finance_officer", true],
     ["trainer", false],
   ])(
-    "role %s: create allowed = %s (per the matrix's Create/Submit cell — Admin/Manager only ever approve, they don't create)",
+    "role %s: create allowed = %s (Owner/Admin/Manager/Finance Officer, per the approved architecture decision — Admissions Officer/Trainer still refused)",
     async (role, allowed) => {
       const { context } = await setupAcademy(role);
       const result = await createExpenseRecord(context, validInput());
@@ -275,9 +264,9 @@ describe("createExpenseRecord — permission matrix", () => {
 
 describe("submitExpenseForApproval — draft -> pending_approval", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
-    ["academy_admin", false],
-    ["manager", false],
+    ["academy_owner", true],
+    ["academy_admin", true],
+    ["manager", true],
     ["admissions_officer", false],
     ["finance_officer", true],
     ["trainer", false],
@@ -333,7 +322,7 @@ describe("submitExpenseForApproval — draft -> pending_approval", () => {
   });
 });
 
-describe("approveExpense — pending_approval -> approved (authority: Admin/Manager only)", () => {
+describe("approveExpense — pending_approval -> approved", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", false],
     ["academy_admin", true],
@@ -342,13 +331,16 @@ describe("approveExpense — pending_approval -> approved (authority: Admin/Mana
     ["finance_officer", false],
     ["trainer", false],
   ])(
-    "role %s: approve allowed = %s (Owner is View-only and Finance Officer is Create/Submit-only on this row)",
+    "role %s: approving a DIFFERENT user's submission allowed = %s (GENERAL approve authority — Admin/Manager only; Owner/Finance Officer may still self-approve their OWN, tested separately below)",
     async (role, allowed) => {
       const owner = await setupAcademy("finance_officer");
       const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
       const submitResult = await submitExpenseForApproval(owner.context, expenseId);
       expect(submitResult.ok).toBe(true);
 
+      // A DIFFERENT user of the target role — never the submitter — so a
+      // "forbidden" result here is unambiguously about GENERAL approve
+      // authority, never self-approval.
       const approver = await addActingUser(owner.academyId, role);
       const result = await approveExpense(approver.context, expenseId);
       expect(result.ok).toBe(allowed);
@@ -421,30 +413,65 @@ describe("approveExpense — pending_approval -> approved (authority: Admin/Mana
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it(
-    "self-approval is refused via decideApprovalRequest's own guard — proven directly by manufacturing a pending " +
-      "approval_requests row 'requestedBy' the same Admin/Manager user who then attempts to decide it (structurally, " +
-      "a Finance Officer submitter can never simultaneously hold Admin/Manager's approve level, so this fixture " +
-      "isolates and exercises the guard itself rather than a permission-level refusal)",
-    async () => {
-      const owner = await setupAcademy("finance_officer");
-      const admin = await addActingUser(owner.academyId, "academy_admin");
-      const expenseId = await insertExpenseDirect(owner.academyId, admin.userId, "pending_approval");
-      await insertApprovalRequestDirect(owner.academyId, expenseId, admin.userId);
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager", "finance_officer"])(
+    "%s self-approval is ALLOWED: creates -> submits -> approves their own expense immediately (approved architecture decision)",
+    async (role) => {
+      const { context, userId } = await setupAcademy(role);
+      const created = await createExpenseRecord(context, validInput());
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
 
-      const result = await approveExpense(admin.context, expenseId);
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error.code).toBe("self_approval");
+      const submitted = await submitExpenseForApproval(context, created.record.id);
+      expect(submitted.ok).toBe(true);
 
-      // A different Admin/Manager can still approve it.
-      const otherAdmin = await addActingUser(owner.academyId, "manager");
-      const approved = await approveExpense(otherAdmin.context, expenseId);
-      expect(approved.ok).toBe(true);
+      const result = await approveExpense(context, created.record.id);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.record.status).toBe("approved");
+      expect(result.record.approvedBy).toBe(userId);
+
+      const request = await fetchApprovalRequestForExpense(created.record.id);
+      expect(request?.status).toBe("approved");
+      expect(request?.decidedBy).toBe(userId);
     },
   );
+
+  it("a self-approve-only role (Owner) still cannot approve a DIFFERENT Owner's submission — self-approval is scoped to their own record, not unrestricted authority", async () => {
+    const submitterAcademy = await setupAcademy("academy_owner");
+    const created = await createExpenseRecord(submitterAcademy.context, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const submitted = await submitExpenseForApproval(submitterAcademy.context, created.record.id);
+    expect(submitted.ok).toBe(true);
+
+    // A DIFFERENT Owner in the SAME academy — self-approve-eligible as a
+    // role, but this isn't their own submission, and Owner holds no
+    // GENERAL approve authority.
+    const otherOwner = await addActingUser(submitterAcademy.academyId, "academy_owner");
+    const result = await approveExpense(otherOwner.context, created.record.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+
+  it("a real pending expense id belonging to a DIFFERENT academy is rejected as not_found — never approved, even for a same-role self-approve attempt (tenant isolation)", async () => {
+    const other = await setupAcademy("finance_officer");
+    const otherCreated = await createExpenseRecord(other.context, validInput());
+    expect(otherCreated.ok).toBe(true);
+    if (!otherCreated.ok) return;
+    const otherSubmitted = await submitExpenseForApproval(other.context, otherCreated.record.id);
+    expect(otherSubmitted.ok).toBe(true);
+
+    // A same-role Finance Officer in a completely different academy — must
+    // never be able to decide a different academy's expense, self-approve
+    // path included.
+    const attacker = await setupAcademy("finance_officer");
+    const result = await approveExpense(attacker.context, otherCreated.record.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
 });
 
-describe("rejectExpense — pending_approval -> rejected (same authority as approve)", () => {
+describe("rejectExpense — pending_approval -> rejected", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", false],
     ["academy_admin", true],
@@ -452,16 +479,19 @@ describe("rejectExpense — pending_approval -> rejected (same authority as appr
     ["admissions_officer", false],
     ["finance_officer", false],
     ["trainer", false],
-  ])("role %s: reject allowed = %s", async (role, allowed) => {
-    const owner = await setupAcademy("finance_officer");
-    const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
-    await submitExpenseForApproval(owner.context, expenseId);
+  ])(
+    "role %s: rejecting a DIFFERENT user's submission allowed = %s (GENERAL approve authority — Admin/Manager only)",
+    async (role, allowed) => {
+      const owner = await setupAcademy("finance_officer");
+      const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
+      await submitExpenseForApproval(owner.context, expenseId);
 
-    const decider = await addActingUser(owner.academyId, role);
-    const result = await rejectExpense(decider.context, expenseId, "Missing receipts.");
-    expect(result.ok).toBe(allowed);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
+      const decider = await addActingUser(owner.academyId, role);
+      const result = await rejectExpense(decider.context, expenseId, "Missing receipts.");
+      expect(result.ok).toBe(allowed);
+      if (!result.ok) expect(result.error.code).toBe("forbidden");
+    },
+  );
 
   it("requires a non-empty reason with code 'validation'", async () => {
     const owner = await setupAcademy("finance_officer");
@@ -491,15 +521,35 @@ describe("rejectExpense — pending_approval -> rejected (same authority as appr
     expect(request?.reason).toBe("Duplicate expense.");
   });
 
-  it("refuses self-rejection via decideApprovalRequest's guard, same fixture technique as the self-approval test", async () => {
-    const owner = await setupAcademy("finance_officer");
-    const manager = await addActingUser(owner.academyId, "manager");
-    const expenseId = await insertExpenseDirect(owner.academyId, manager.userId, "pending_approval");
-    await insertApprovalRequestDirect(owner.academyId, expenseId, manager.userId);
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager", "finance_officer"])(
+    "%s self-rejection is ALLOWED (same approved architecture change as self-approval)",
+    async (role) => {
+      const { context } = await setupAcademy(role);
+      const created = await createExpenseRecord(context, validInput());
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
 
-    const result = await rejectExpense(manager.context, expenseId, "Changed my mind.");
+      const submitted = await submitExpenseForApproval(context, created.record.id);
+      expect(submitted.ok).toBe(true);
+
+      const result = await rejectExpense(context, created.record.id, "Changed my mind.");
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.record.status).toBe("rejected");
+    },
+  );
+
+  it("a self-approve-only role (Finance Officer) still cannot reject a DIFFERENT Finance Officer's submission", async () => {
+    const submitterAcademy = await setupAcademy("finance_officer");
+    const created = await createExpenseRecord(submitterAcademy.context, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const submitted = await submitExpenseForApproval(submitterAcademy.context, created.record.id);
+    expect(submitted.ok).toBe(true);
+
+    const otherFinanceOfficer = await addActingUser(submitterAcademy.academyId, "finance_officer");
+    const result = await rejectExpense(otherFinanceOfficer.context, created.record.id, "Not mine to decide.");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("self_approval");
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("refuses to reject an expense that isn't pending approval with code 'invalid_state'", async () => {
@@ -565,7 +615,7 @@ describe("listExpenseRecords — tenant isolation", () => {
     if (result.ok) expect(result.records).toEqual([]);
   });
 
-  it("view-only Owner/Trainer can list but neither canCreate nor canApprove", async () => {
+  it("Owner: can list, can create, canSelfApprove but NOT general canApprove (approved architecture decision)", async () => {
     const financeOfficer = await setupAcademy("finance_officer");
     await insertExpenseDirect(financeOfficer.academyId, financeOfficer.userId);
     const owner = await addActingUser(financeOfficer.academyId, "academy_owner");
@@ -574,8 +624,47 @@ describe("listExpenseRecords — tenant isolation", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.records).toHaveLength(1);
+      expect(result.canCreate).toBe(true);
+      expect(result.canApprove).toBe(false);
+      expect(result.canSelfApprove).toBe(true);
+    }
+  });
+
+  it("Academy Administrator/Manager: canCreate, GENERAL canApprove, AND canSelfApprove all true", async () => {
+    const { academyId } = await setupAcademy("finance_officer");
+    for (const role of ["academy_admin", "manager"] as const) {
+      const actor = await addActingUser(academyId, role);
+      const result = await listExpenseRecords(actor.context);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.canCreate).toBe(true);
+        expect(result.canApprove).toBe(true);
+        expect(result.canSelfApprove).toBe(true);
+      }
+    }
+  });
+
+  it("Finance Officer: canCreate, canSelfApprove, but NOT general canApprove", async () => {
+    const { context } = await setupAcademy("finance_officer");
+    const result = await listExpenseRecords(context);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.canCreate).toBe(true);
+      expect(result.canApprove).toBe(false);
+      expect(result.canSelfApprove).toBe(true);
+    }
+  });
+
+  it("Trainer: view-only — canCreate, canApprove, AND canSelfApprove all false (Trainer is not in the self-approve role set)", async () => {
+    const financeOfficer = await setupAcademy("finance_officer");
+    const trainer = await addActingUser(financeOfficer.academyId, "trainer");
+
+    const result = await listExpenseRecords(trainer.context);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
       expect(result.canCreate).toBe(false);
       expect(result.canApprove).toBe(false);
+      expect(result.canSelfApprove).toBe(false);
     }
   });
 
@@ -584,5 +673,17 @@ describe("listExpenseRecords — tenant isolation", () => {
     const result = await listExpenseRecords(context);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+});
+
+describe("money-input-system fix — expense amount entered in dollars", () => {
+  it('an amount entered as "10.01" is stored as 1001 cents ($10.01), never 10 cents', async () => {
+    const { context } = await setupAcademy("finance_officer");
+    const entered = dollarsToCents("10.01");
+    expect(entered).toBe(1001);
+    const result = await createExpenseRecord(context, validInput({ amountCents: entered! }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.record.amountCents).toBe(1001);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import {
   registerStudent,
   type RegisterStudentFormState,
@@ -9,6 +9,17 @@ import { Button, ErrorMessage, Field, inputClass } from "@/app/academy/_shell/ui
 import { showErrorToast, showInfoToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialState: RegisterStudentFormState = { ok: false };
+
+/** Mirrors lib/db/schema.ts's FEE_INTERVAL_MONTHS_OPTIONS — same list as
+ * app/academy/batches/[batchId]/roster-panel.tsx's enroll form. */
+const PAYMENT_PLAN_INTERVAL_OPTIONS: { value: number; label: string }[] = [
+  { value: 1, label: "Monthly" },
+  { value: 2, label: "Every 2 Months" },
+  { value: 3, label: "Every 3 Months" },
+  { value: 4, label: "Every 4 Months" },
+  { value: 6, label: "Every 6 Months" },
+  { value: 12, label: "Yearly" },
+];
 
 interface StudentFormProps {
   /** Already scoped to what the caller may register into — see
@@ -33,6 +44,7 @@ interface StudentFormProps {
  */
 export function StudentForm({ branches, courseOptions }: StudentFormProps) {
   const [state, formAction, pending] = useActionState(registerStudent, initialState);
+  const [selectedBatchId, setSelectedBatchId] = useState("");
 
   useEffect(() => {
     if (state.ok && state.enrollmentWarning) {
@@ -86,7 +98,12 @@ export function StudentForm({ branches, courseOptions }: StudentFormProps) {
         </Field>
       </div>
       <Field label="Course">
-        <select name="batchId" defaultValue="" className={inputClass}>
+        <select
+          name="batchId"
+          value={selectedBatchId}
+          onChange={(event) => setSelectedBatchId(event.target.value)}
+          className={inputClass}
+        >
           <option value="">No course selected yet</option>
           {courseOptions.map((option) => (
             <option key={option.batchId} value={option.batchId}>
@@ -95,6 +112,23 @@ export function StudentForm({ branches, courseOptions }: StudentFormProps) {
           ))}
         </select>
       </Field>
+
+      {selectedBatchId && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 rounded-control border border-border bg-app p-3">
+          <Field label="Payment Plan">
+            <select name="paymentPlanIntervalMonths" required defaultValue="1" className={inputClass}>
+              {PAYMENT_PLAN_INTERVAL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Amount per period (USD)">
+            <input type="number" name="paymentPlanAmountDollars" min={0.01} step="0.01" placeholder="0.00" required className={inputClass} />
+          </Field>
+        </div>
+      )}
 
       {state.error && <ErrorMessage message={state.error.message} />}
       {state.enrollmentWarning && (

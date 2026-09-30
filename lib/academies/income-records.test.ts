@@ -16,6 +16,7 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import * as incomeRecordsModule from "./income-records";
 import { createIncomeRecord, listIncomeRecords, type CreateIncomeRecordInput } from "./income-records";
+import { dollarsToCents } from "@/lib/ui/money";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -329,5 +330,17 @@ describe("listIncomeRecords — tenant isolation", () => {
     const result = await listIncomeRecords(context);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+});
+
+describe("money-input-system fix — income amount entered in dollars", () => {
+  it('an amount entered as "100" is stored as 10000 cents ($100.00), never $1.00', async () => {
+    const { context } = await setupAcademy("finance_officer");
+    const entered = dollarsToCents("100");
+    expect(entered).toBe(10_000);
+    const result = await createIncomeRecord(context, validInput({ amountCents: entered! }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.record.amountCents).toBe(10_000);
   });
 });

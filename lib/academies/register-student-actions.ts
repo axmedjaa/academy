@@ -8,6 +8,7 @@ import {
   type RegisterStudentInput,
 } from "@/lib/academies/register-student";
 import { enrollStudentInBatch } from "@/lib/academies/batch-assignments";
+import { dollarsToCents } from "@/lib/ui/money";
 
 const UNAUTHENTICATED: RegisterStudentActionError = {
   code: "forbidden",
@@ -80,7 +81,19 @@ export async function registerStudent(
 
   const batchId = String(formData.get("batchId") ?? "").trim();
   if (batchId) {
-    const enrollResult = await enrollStudentInBatch(context, { batchId, studentId: result.student.id });
+    const currency = String(formData.get("paymentPlanCurrency") ?? "").trim();
+    const anchorDate = String(formData.get("paymentPlanAnchorDate") ?? "").trim();
+    const enrollResult = await enrollStudentInBatch(context, {
+      batchId,
+      studentId: result.student.id,
+      paymentPlan: {
+        intervalMonths: Number(formData.get("paymentPlanIntervalMonths") ?? 0),
+        // Entered in dollars, not cents — see lib/ui/money.ts's dollarsToCents.
+        amountCents: dollarsToCents(String(formData.get("paymentPlanAmountDollars") ?? "")) ?? NaN,
+        currency: currency.length > 0 ? currency : undefined,
+        anchorDate: anchorDate.length > 0 ? anchorDate : undefined,
+      },
+    });
     if (!enrollResult.ok) {
       // The student row was already created successfully — this is a
       // secondary, recoverable failure (e.g. a race on the batch), not a

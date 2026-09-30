@@ -1,0 +1,1 @@
+ALTER TABLE "student_payments" ADD COLUMN "notes" text;

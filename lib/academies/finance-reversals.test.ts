@@ -29,7 +29,7 @@ import {
   reverseIncomeRecord,
   reverseStudentPayment,
 } from "./finance-reversals";
-import { approveStudentPayment, recordStudentPayment } from "./student-payments";
+import { recordStudentPayment } from "./student-payments";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -326,7 +326,7 @@ afterAll(async () => {
 // reverseStudentPayment
 // =============================================================================
 
-describe("reverseStudentPayment — permission matrix (same authority as approveStudentPayment: Manager only)", () => {
+describe("reverseStudentPayment — permission matrix (Manager only)", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", false],
     ["academy_admin", false],
@@ -502,19 +502,18 @@ describe("reverseStudentPayment — mechanics, state, reason, self-reversal, aud
 // =============================================================================
 // Confirmed Phase 4 post-implementation audit gap fix — reversing/adjusting
 // a charge-linked student payment must recalculate the linked
-// student_charges.status the same way approveStudentPayment already does.
-// Uses the REAL recordStudentPayment/approveStudentPayment functions (not
-// insertPaymentDirect) to build up the "approved, charge-linked" starting
-// state, since the recalculation only ever runs inside those functions'
-// own transactions — a direct insert of an "approved" row would never have
-// triggered it in the first place, which would make requirement 1 below
-// untestable as a REGRESSION check (it would trivially pass even if the
-// approval-side recalculation itself were broken).
+// student_charges.status the same way it already does at recording time.
+// Uses the REAL recordStudentPayment function (not insertPaymentDirect) to
+// build up the "approved, charge-linked" starting state, since the
+// recalculation only ever runs inside that function's own transaction — a
+// direct insert of an "approved" row would never have triggered it in the
+// first place, which would make requirement 1 below untestable as a
+// REGRESSION check (it would trivially pass even if the recording-side
+// recalculation itself were broken).
 // =============================================================================
 describe("reversal/adjustment recalculates the linked student_charges.status (Phase 4 audit gap fix)", () => {
-  it("1. sanity check: an approved, charge-linked payment makes the charge paid/partially_paid as appropriate (pre-existing approveStudentPayment behavior, unchanged)", async () => {
+  it("1. sanity check: recording a charge-linked payment makes the charge paid/partially_paid as appropriate, immediately (unchanged by removing the approval step)", async () => {
     const recorder = await setupAcademy("manager");
-    const approver = await addActingUser(recorder.academyId, "manager");
     const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
 
     const partial = await recordStudentPayment(recorder.context, {
@@ -525,8 +524,6 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
       receivedAt: new Date(),
     });
     expect(partial.ok).toBe(true);
-    if (!partial.ok) return;
-    await approveStudentPayment(approver.context, partial.payment.id);
 
     let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
     expect(charge.status).toBe("partially_paid");
@@ -539,16 +536,13 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
       receivedAt: new Date(),
     });
     expect(rest.ok).toBe(true);
-    if (!rest.ok) return;
-    await approveStudentPayment(approver.context, rest.payment.id);
 
     [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
     expect(charge.status).toBe("paid");
   });
 
-  it("2. reversing a fully-paid charge's only approved payment recalculates the charge back to 'open'", async () => {
+  it("2. reversing a fully-paid charge's only payment recalculates the charge back to 'open'", async () => {
     const recorder = await setupAcademy("manager");
-    const approver = await addActingUser(recorder.academyId, "manager");
     const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
 
     const payment = await recordStudentPayment(recorder.context, {
@@ -560,13 +554,12 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     });
     expect(payment.ok).toBe(true);
     if (!payment.ok) return;
-    await approveStudentPayment(approver.context, payment.payment.id);
 
     let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
     expect(charge.status).toBe("paid");
 
-    // Reversed by a THIRD user (not the recorder, not required to be the
-    // same approver) — any Manager who isn't the recorder may reverse.
+    // Reversed by a THIRD user (not the recorder) — any Manager who isn't
+    // the recorder may reverse.
     const reverser = await addActingUser(recorder.academyId, "manager");
     const reversed = await reverseStudentPayment(reverser.context, payment.payment.id, "Bounced cheque.");
     expect(reversed.ok).toBe(true);
@@ -575,9 +568,8 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     expect(charge.status).toBe("open");
   });
 
-  it("3. adjusting an approved payment down to a smaller corrected amount recalculates the charge from 'paid' to 'partially_paid'", async () => {
+  it("3. adjusting a payment down to a smaller corrected amount recalculates the charge from 'paid' to 'partially_paid'", async () => {
     const recorder = await setupAcademy("manager");
-    const approver = await addActingUser(recorder.academyId, "manager");
     const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
 
     const payment = await recordStudentPayment(recorder.context, {
@@ -589,7 +581,6 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     });
     expect(payment.ok).toBe(true);
     if (!payment.ok) return;
-    await approveStudentPayment(approver.context, payment.payment.id);
 
     let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
     expect(charge.status).toBe("paid");
@@ -609,9 +600,8 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     expect(charge.status).toBe("open");
   });
 
-  it("4. reversing one of several approved payments on the same charge leaves the charge reflecting the correct remaining aggregate", async () => {
+  it("4. reversing one of several payments on the same charge leaves the charge reflecting the correct remaining aggregate", async () => {
     const recorder = await setupAcademy("manager");
-    const approver = await addActingUser(recorder.academyId, "manager");
     const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
 
     const first = await recordStudentPayment(recorder.context, {
@@ -623,7 +613,6 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
-    await approveStudentPayment(approver.context, first.payment.id);
 
     const second = await recordStudentPayment(recorder.context, {
       studentId: recorder.studentId,
@@ -634,7 +623,6 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     });
     expect(second.ok).toBe(true);
     if (!second.ok) return;
-    await approveStudentPayment(approver.context, second.payment.id);
 
     const third = await recordStudentPayment(recorder.context, {
       studentId: recorder.studentId,
@@ -645,7 +633,6 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     });
     expect(third.ok).toBe(true);
     if (!third.ok) return;
-    await approveStudentPayment(approver.context, third.payment.id);
 
     let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
     expect(charge.status).toBe("paid"); // 3,000 + 4,000 + 3,000 = 10,000

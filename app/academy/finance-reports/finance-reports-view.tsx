@@ -172,10 +172,6 @@ export function FinanceReportsView({ initialReport }: Props) {
           <>
             <SummaryCard title="Outstanding charges" data={report.studentPayments.outstandingCharges} />
             <SummaryCard title="Payments received" data={report.studentPayments.paymentsReceived} />
-            <CountCard
-              title="Pending payment approvals"
-              count={report.studentPayments.pendingApprovalsCount}
-            />
           </>
         )}
         {report.income.visible && <SummaryCard title="Income" data={report.income} />}

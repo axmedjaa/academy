@@ -18,6 +18,19 @@ import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: BatchAssignmentFormState = { ok: false };
 
+/** §5/§13 of the approved architecture: payment-plan interval options shown
+ * anywhere a staff member sets up an enrollment's initial fee schedule —
+ * see lib/db/schema.ts's FEE_INTERVAL_MONTHS_OPTIONS (the single source of
+ * truth this list mirrors) for why these six and not a free-form value. */
+const PAYMENT_PLAN_INTERVAL_OPTIONS: { value: number; label: string }[] = [
+  { value: 1, label: "Monthly" },
+  { value: 2, label: "Every 2 Months" },
+  { value: 3, label: "Every 3 Months" },
+  { value: 4, label: "Every 4 Months" },
+  { value: 6, label: "Every 6 Months" },
+  { value: 12, label: "Yearly" },
+];
+
 interface StaffOption {
   id: string;
   fullName: string;
@@ -221,6 +234,18 @@ export function RosterPanel({
                     </option>
                   ))}
                 </select>
+              </Field>
+              <Field label="Payment Plan">
+                <select name="paymentPlanIntervalMonths" required defaultValue="1" className={inputClass}>
+                  {PAYMENT_PLAN_INTERVAL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Amount per period (USD)">
+                <input type="number" name="paymentPlanAmountDollars" min={0.01} step="0.01" placeholder="0.00" required className={inputClass} />
               </Field>
               <Button type="submit" variant="secondary" disabled={enrolling}>
                 {enrolling ? "Enrolling..." : "Enroll"}

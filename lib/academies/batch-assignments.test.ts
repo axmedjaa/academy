@@ -6,6 +6,7 @@ import {
   academies,
   academyMemberships,
   academySubscriptions,
+  approvalRequests,
   auditLogs,
   batchEnrollments,
   batchTrainerAssignments,
@@ -13,18 +14,24 @@ import {
   branches,
   certificates,
   courses,
+  enrollmentFeeSchedules,
   examResults,
   exams,
+  feePeriods,
   gradeConfigurations,
+  notifications,
+  paymentAllocations,
   programs,
   staffBranchAssignments,
   staffProfiles,
   students,
+  studentPayments,
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
+import { getEnrollmentPaymentSummary, recordFeePeriodPayment } from "./fee-periods";
 import {
   assignTrainerToBatch,
   deleteBatchEnrollment,
@@ -35,12 +42,24 @@ import {
   listBatchEnrollments,
   listBatchTrainerAssignments,
   listMyAssignedBatches,
+  type PaymentPlanInput,
   unassignTrainerFromBatch,
   updateStudentEnrollment,
   withdrawStudentFromBatch,
 } from "./batch-assignments";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Every enrollment now requires an initial payment plan (approved
+ * architecture: "no successful enrollment without its required initial
+ * payment plan") — this is the default plan every test in this file that
+ * doesn't care about the plan's own specifics uses, so each call site
+ * doesn't have to restate it. */
+const DEFAULT_PAYMENT_PLAN: PaymentPlanInput = {
+  intervalMonths: 1,
+  amountCents: 5_000,
+  anchorDate: "2026-01-01",
+};
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -94,6 +113,16 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
   await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+}
+
+/** Adds a second user with the given role to an existing academy — used
+ * where a test needs an approver distinct from the recorder (self-approval
+ * is allowed for Manager, but these tests specifically want a genuinely
+ * separate actor). */
+async function addActingUser(academyId: string, role: AcademyRole): Promise<{ userId: string; context: AuthContext }> {
+  const userId = await createUser();
+  await addMembership(userId, academyId, role);
+  return { userId, context: { userId, branchIds: [], academyWide: false } };
 }
 
 async function insertBranchDirect(academyId: string): Promise<string> {
@@ -254,11 +283,25 @@ afterAll(async () => {
         ...createdUserIds.map((id) => eq(auditLogs.actorUserId, id)),
       ),
     );
+  if (createdAcademyIds.length > 0) {
+    await db.delete(approvalRequests).where(or(...createdAcademyIds.map((id) => eq(approvalRequests.academyId, id))));
+    await db.delete(notifications).where(or(...createdAcademyIds.map((id) => eq(notifications.academyId, id))));
+  }
   for (const academyId of createdAcademyIds) {
     await db.delete(certificates).where(eq(certificates.academyId, academyId));
     await db.delete(examResults).where(eq(examResults.academyId, academyId));
     await db.delete(exams).where(eq(exams.academyId, academyId));
     await db.delete(gradeConfigurations).where(eq(gradeConfigurations.academyId, academyId));
+    // Every enrollment now creates an enrollment_fee_schedules row (and
+    // usually a fee_periods row too) in the same transaction — both
+    // reference batch_enrollments and must be cleaned up before it.
+    // student_payments/payment_allocations only exist for the handful of
+    // tests that also record a fee-period payment, but are cleaned up
+    // unconditionally for every academy in this file.
+    await db.delete(paymentAllocations).where(eq(paymentAllocations.academyId, academyId));
+    await db.delete(studentPayments).where(eq(studentPayments.academyId, academyId));
+    await db.delete(feePeriods).where(eq(feePeriods.academyId, academyId));
+    await db.delete(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.academyId, academyId));
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
     await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
@@ -462,7 +505,7 @@ describe("enrollStudentInBatch — permission matrix", () => {
     const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy(role);
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const result = await enrollStudentInBatch(context, { batchId, studentId });
+    const result = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(result.ok).toBe(allowed);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
@@ -473,7 +516,7 @@ describe("enrollStudentInBatch — permission matrix", () => {
     await assignUserToBranches(academyId, userId, [branchId]);
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const result = await enrollStudentInBatch(context, { batchId, studentId });
+    const result = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
@@ -483,7 +526,7 @@ describe("enrollStudentInBatch — permission matrix", () => {
     await assignUserToBranches(academyId, userId, [branchId]);
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const result = await enrollStudentInBatch(context, { batchId, studentId });
+    const result = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(result.ok).toBe(true);
   });
 
@@ -495,14 +538,14 @@ describe("enrollStudentInBatch — permission matrix", () => {
     const outOfScopeBatch = await insertBatchDirect(academyId, otherBranch, courseId);
     const studentId = await insertStudentDirect(academyId, otherBranch, creatorUserId);
 
-    const result = await enrollStudentInBatch(context, { batchId: outOfScopeBatch, studentId });
+    const result = await enrollStudentInBatch(context, { batchId: outOfScopeBatch, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
   it("rejects a nonexistent studentId with 'not_found'", async () => {
     const { context, batchId } = await setupAcademy("academy_owner");
-    const result = await enrollStudentInBatch(context, { batchId, studentId: randomUUID() });
+    const result = await enrollStudentInBatch(context, { batchId, studentId: randomUUID(), paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
@@ -513,7 +556,7 @@ describe("enrollStudentInBatch — permission matrix", () => {
     );
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const result = await enrollStudentInBatch(context, { batchId, studentId });
+    const result = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -537,6 +580,7 @@ describe("cross-academy integrity check — enrollStudentInBatch", () => {
     const result = await enrollStudentInBatch(home.context, {
       batchId: home.batchId,
       studentId: otherAcademyStudentId,
+      paymentPlan: DEFAULT_PAYMENT_PLAN,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
@@ -554,9 +598,102 @@ describe("cross-academy integrity check — enrollStudentInBatch", () => {
     const result = await enrollStudentInBatch(home.context, {
       batchId: other.batchId,
       studentId: homeStudentId,
+      paymentPlan: DEFAULT_PAYMENT_PLAN,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
+describe("enrollStudentInBatch — atomic initial payment plan", () => {
+  it("rejects enrollment with a missing payment plan, and creates no enrollment row at all", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("manager");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, {
+      batchId,
+      studentId,
+      // @ts-expect-error — deliberately omitted to prove the schema itself requires it.
+      paymentPlan: undefined,
+    });
+    expect(result.ok).toBe(false);
+
+    const rows = await db.select().from(batchEnrollments).where(eq(batchEnrollments.studentId, studentId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rejects an interval outside the supported set (1/2/3/4/6/12 months)", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("manager");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, {
+      batchId,
+      studentId,
+      paymentPlan: { intervalMonths: 5 as 6, amountCents: 5000 },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("atomically creates the enrollment, its fee schedule, and the first fee period in one transaction", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("manager");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, {
+      batchId,
+      studentId,
+      // Anchored in the future so the first period is never "overdue" —
+      // this test is about the initial UNPAID state, not overdue
+      // derivation (covered separately by fee-periods.test.ts).
+      paymentPlan: { intervalMonths: 3, amountCents: 15_000, anchorDate: "2030-01-01" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const [schedule] = await db
+      .select()
+      .from(enrollmentFeeSchedules)
+      .where(eq(enrollmentFeeSchedules.enrollmentId, result.enrollment.id));
+    expect(schedule.intervalMonths).toBe(3);
+    expect(schedule.amountCents).toBe(15_000);
+
+    const periods = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, result.enrollment.id));
+    expect(periods.length).toBeGreaterThan(0);
+    expect(periods[0].expectedAmountCents).toBe(15_000);
+
+    // Approved architecture: "Initial state: Expected > 0, Paid = 0, Status = UNPAID."
+    const summary = await getEnrollmentPaymentSummary(context, result.enrollment.id);
+    expect(summary.ok).toBe(true);
+    if (summary.ok) {
+      expect(summary.summary.expectedCents).toBeGreaterThan(0);
+      expect(summary.summary.paidCents).toBe(0);
+      expect(summary.summary.status).toBe("unpaid");
+    }
+
+    // No fake payment was ever created just because the enrollment/schedule
+    // exists — zero student_payments rows for this student.
+    const payments = await db.select().from(studentPayments).where(eq(studentPayments.studentId, studentId));
+    expect(payments).toHaveLength(0);
+  });
+
+  it("defaults the anchor date to the batch's own start_date when none is given", async () => {
+    const { context, academyId, branchId, courseId, creatorUserId } = await setupAcademy("manager");
+    const specificBatchId = await insertBatchDirect(academyId, branchId, courseId); // startDate fixed at "2026-01-01" (insertBatchDirect's own default)
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, {
+      batchId: specificBatchId,
+      studentId,
+      paymentPlan: { intervalMonths: 1, amountCents: 5000 },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const [schedule] = await db
+      .select()
+      .from(enrollmentFeeSchedules)
+      .where(eq(enrollmentFeeSchedules.enrollmentId, result.enrollment.id));
+    expect(schedule.anchorDate).toBe("2026-01-01");
   });
 });
 
@@ -565,10 +702,10 @@ describe("enroll/withdraw student — unique-for-active-enrollment enforcement",
     const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const first = await enrollStudentInBatch(context, { batchId, studentId });
+    const first = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(first.ok).toBe(true);
 
-    const second = await enrollStudentInBatch(context, { batchId, studentId });
+    const second = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error.code).toBe("conflict");
   });
@@ -577,7 +714,7 @@ describe("enroll/withdraw student — unique-for-active-enrollment enforcement",
     const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const first = await enrollStudentInBatch(context, { batchId, studentId });
+    const first = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
 
@@ -585,7 +722,7 @@ describe("enroll/withdraw student — unique-for-active-enrollment enforcement",
     expect(withdrawn.ok).toBe(true);
     if (withdrawn.ok) expect(withdrawn.enrollment.status).toBe("withdrawn");
 
-    const reenrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const reenrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(reenrolled.ok).toBe(true);
     if (reenrolled.ok) {
       expect(reenrolled.enrollment.id).not.toBe(first.enrollment.id);
@@ -603,7 +740,7 @@ describe("enroll/withdraw student — unique-for-active-enrollment enforcement",
     const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const created = await enrollStudentInBatch(context, { batchId, studentId });
+    const created = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
@@ -708,7 +845,7 @@ describe("getActiveCoursesForStudents", () => {
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
     const otherStudentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
 
     const result = await getActiveCoursesForStudents(academyId, [studentId, otherStudentId]);
@@ -721,7 +858,7 @@ describe("getActiveCoursesForStudents", () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
     if (!enrolled.ok) return;
     const withdrawn = await withdrawStudentFromBatch(context, enrolled.enrollment.id);
@@ -742,7 +879,7 @@ describe("updateStudentEnrollment", () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const result = await updateStudentEnrollment(context, studentId, batchId);
+    const result = await updateStudentEnrollment(context, studentId, batchId, DEFAULT_PAYMENT_PLAN);
     expect(result.ok).toBe(true);
 
     const active = await getActiveCoursesForStudents(academyId, [studentId]);
@@ -754,10 +891,10 @@ describe("updateStudentEnrollment", () => {
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
     const secondBatchId = await insertBatchDirect(academyId, branchId, courseId);
 
-    const first = await updateStudentEnrollment(context, studentId, batchId);
+    const first = await updateStudentEnrollment(context, studentId, batchId, DEFAULT_PAYMENT_PLAN);
     expect(first.ok).toBe(true);
 
-    const changed = await updateStudentEnrollment(context, studentId, secondBatchId);
+    const changed = await updateStudentEnrollment(context, studentId, secondBatchId, DEFAULT_PAYMENT_PLAN);
     expect(changed.ok).toBe(true);
 
     const active = await getActiveCoursesForStudents(academyId, [studentId]);
@@ -769,7 +906,7 @@ describe("updateStudentEnrollment", () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const enrolled = await updateStudentEnrollment(context, studentId, batchId);
+    const enrolled = await updateStudentEnrollment(context, studentId, batchId, DEFAULT_PAYMENT_PLAN);
     expect(enrolled.ok).toBe(true);
 
     const cleared = await updateStudentEnrollment(context, studentId, undefined);
@@ -783,8 +920,10 @@ describe("updateStudentEnrollment", () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
-    const first = await updateStudentEnrollment(context, studentId, batchId);
+    const first = await updateStudentEnrollment(context, studentId, batchId, DEFAULT_PAYMENT_PLAN);
     expect(first.ok).toBe(true);
+    // Already-enrolled-in-this-batch short-circuits before ever needing a
+    // payment plan — omitting one here proves that.
     const second = await updateStudentEnrollment(context, studentId, batchId);
     expect(second.ok).toBe(true);
 
@@ -797,7 +936,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   it("an enrollment with no exam results/certificates is eligible and deletes, regardless of status", async () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
-    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
     if (!enrolled.ok) return;
 
@@ -818,7 +957,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   it("an enrollment with an exam result for that student+batch is blocked from deletion, and nothing is deleted", async () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
-    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
     if (!enrolled.ok) return;
     await insertExamResultDirect(academyId, batchId, studentId, creatorUserId);
@@ -841,7 +980,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   it("an enrollment with a certificate for that student+batch is blocked from deletion", async () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
-    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
     if (!enrolled.ok) return;
     await insertCertificateDirect(academyId, studentId, batchId, creatorUserId);
@@ -861,7 +1000,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   it("a withdrawn enrollment with no protected history is still eligible for deletion", async () => {
     const { branchId, batchId, creatorUserId, academyId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
-    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
     if (!enrolled.ok) return;
     const withdrawn = await withdrawStudentFromBatch(context, enrolled.enrollment.id);
@@ -880,7 +1019,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   ])("role %s: delete allowed = %s (Trainer's own-branch withdraw access does not extend to delete)", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(owner.academyId, owner.branchId, owner.creatorUserId);
-    const enrolled = await enrollStudentInBatch(owner.context, { batchId: owner.batchId, studentId });
+    const enrolled = await enrollStudentInBatch(owner.context, { batchId: owner.batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
     if (!enrolled.ok) return;
 
@@ -899,7 +1038,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   it("never deletes another academy's enrollment (tenant isolation)", async () => {
     const other = await setupAcademy("academy_owner");
     const otherStudentId = await insertStudentDirect(other.academyId, other.branchId, other.creatorUserId);
-    const otherEnrolled = await enrollStudentInBatch(other.context, { batchId: other.batchId, studentId: otherStudentId });
+    const otherEnrolled = await enrollStudentInBatch(other.context, { batchId: other.batchId, studentId: otherStudentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(otherEnrolled.ok).toBe(true);
     if (!otherEnrolled.ok) return;
 
@@ -919,7 +1058,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   it("writes an audit row before deleting, and the audit row survives the deletion", async () => {
     const { academyId, userId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
-    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
     if (!enrolled.ok) return;
 
@@ -938,7 +1077,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   it("race condition: an exam result recorded after the eligibility check still blocks the delete transaction", async () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
-    const enrolled = await enrollStudentInBatch(context, { batchId, studentId });
+    const enrolled = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(enrolled.ok).toBe(true);
     if (!enrolled.ok) return;
 
@@ -953,5 +1092,40 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
     const result = await deleteBatchEnrollment(context, enrolled.enrollment.id);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("ineligible");
+  });
+
+  it("an enrollment with an approved fee-period payment is blocked from deletion (never destroys financial history)", async () => {
+    const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    const manager = await addActingUser(academyId, "manager");
+    const enrolled = await enrollStudentInBatch(manager.context, {
+      batchId,
+      studentId,
+      paymentPlan: { intervalMonths: 1, amountCents: 5000, anchorDate: "2020-01-01" },
+    });
+    expect(enrolled.ok).toBe(true);
+    if (!enrolled.ok) return;
+
+    const [period] = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, enrolled.enrollment.id));
+    const recorded = await recordFeePeriodPayment(manager.context, {
+      studentId,
+      enrollmentId: enrolled.enrollment.id,
+      allocations: [{ feePeriodId: period.id, amountCents: 1000 }],
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(recorded.ok).toBe(true);
+    if (!recorded.ok) return;
+
+    const eligibility = await getEnrollmentDeletionEligibility(context, enrolled.enrollment.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.paymentActivityCount).toBe(1);
+    }
+
+    const deleted = await deleteBatchEnrollment(context, enrolled.enrollment.id);
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
   });
 });

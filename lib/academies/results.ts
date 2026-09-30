@@ -100,6 +100,22 @@ import { logger } from "@/lib/logger";
  * `rejectGradeConfig` already established. No self-approval or
  * already-decided logic is reimplemented in this file.
  *
+ * Self-decision (later architecture decision, "no approval workflow should
+ * ever block Owner/Academy Administrator/Manager on an action they are
+ * already authorized to perform"): `approveResult`/`rejectResult` pass
+ * `allowSelfDecision: canApproveLevel(level)` — since Owner, Academy
+ * Administrator, and Manager are the only three roles that ever reach
+ * `"approve"` level on `ACADEMY_RESULTS_ACTION`, this lets any of the three
+ * decide their own submitted result immediately, without waiting for a
+ * different approver, while changing nothing for Trainer: Trainer never
+ * holds `"approve"` level on this row at all, so `canApproveLevel(level)`
+ * is `false` before this line is ever reached — Trainer is refused at the
+ * `FORBIDDEN` check above, the same as before this change, and never
+ * reaches `decideApprovalRequest` as either submitter or decider.
+ * `result_corrections` (lib/academies/result-corrections.ts) makes the
+ * identical change for the identical reason, reusing its own
+ * `canRequestOrDecide` check.
+ *
  * ---------------------------------------------------------------------
  * Skipped resting states — `submitted` and `rejected` are never actually
  * persisted as a row's live status by this file
@@ -566,9 +582,14 @@ export async function approveResult(
     const pending = await findPendingApprovalRequest(tx, resultId);
     if (!pending) return { kind: "invalid_state" as const };
 
+    // Owner/Academy Administrator/Manager may decide their own submitted
+    // result — see this file's own module comment ("Self-decision") for
+    // why this can never reach Trainer.
+    const canSelfDecide = canApproveLevel(level);
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "approved",
+      allowSelfDecision: canSelfDecide,
     });
     if (!decision.ok) return { kind: "decision_error" as const, error: decision.error };
 
@@ -664,9 +685,14 @@ export async function rejectResult(
     const pending = await findPendingApprovalRequest(tx, resultId);
     if (!pending) return { kind: "invalid_state" as const };
 
+    // Owner/Academy Administrator/Manager may decide their own submitted
+    // result — see this file's own module comment ("Self-decision") for
+    // why this can never reach Trainer.
+    const canSelfDecide = canApproveLevel(level);
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "rejected",
+      allowSelfDecision: canSelfDecide,
     });
     if (!decision.ok) return { kind: "decision_error" as const, error: decision.error };
 

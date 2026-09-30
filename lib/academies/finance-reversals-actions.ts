@@ -50,6 +50,7 @@ export async function reverseStudentPaymentAction(
   }
 
   revalidatePath("/academy/finance");
+  revalidatePath("/academy/students", "layout");
   return { ok: true };
 }
 
@@ -69,6 +70,7 @@ export async function adjustStudentPaymentAction(
   }
 
   revalidatePath("/academy/finance");
+  revalidatePath("/academy/students", "layout");
   return { ok: true };
 }
 

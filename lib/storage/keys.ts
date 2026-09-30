@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
  */
 
 const ACADEMY_LOGO_SEGMENT = "logos";
+const BOOK_COVER_SEGMENT = "book-covers";
 
 // Future entities (NOT implemented in this task — see lib/academies/academy-logo.ts's
 // own module comment for the current task's scope): students, staff,
@@ -47,6 +48,28 @@ const UUID_FILENAME_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
  */
 export function isAcademyLogoKey(key: string, academyId: string): boolean {
   const expectedPrefix = `academies/${academyId}/${ACADEMY_LOGO_SEGMENT}/`;
+  if (!key.startsWith(expectedPrefix)) {
+    return false;
+  }
+  const rest = key.slice(expectedPrefix.length);
+  return UUID_FILENAME_PATTERN.test(rest);
+}
+
+export interface BookCoverKeyInput {
+  academyId: string;
+  /** Server-derived from an allowlisted content-type map — never the
+   * client's original filename/extension. Same convention as
+   * AcademyLogoKeyInput.extension. */
+  extension: string;
+}
+
+export function getBookCoverKey({ academyId, extension }: BookCoverKeyInput): string {
+  return `academies/${academyId}/${BOOK_COVER_SEGMENT}/${randomUUID()}.${extension}`;
+}
+
+/** Same exact-shape gate as isAcademyLogoKey — see its own doc comment. */
+export function isBookCoverKey(key: string, academyId: string): boolean {
+  const expectedPrefix = `academies/${academyId}/${BOOK_COVER_SEGMENT}/`;
   if (!key.startsWith(expectedPrefix)) {
     return false;
   }

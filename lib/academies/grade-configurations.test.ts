@@ -606,16 +606,16 @@ describe("submitGradeConfigForApproval — Draft -> Pending Approval", () => {
   });
 });
 
-describe("approveGradeConfig — Pending Approval -> Approved (authority: Manager/Owner via Full only)", () => {
+describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/Academy Administrator/Manager, all via Full)", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", true],
-    ["academy_admin", false],
+    ["academy_admin", true],
     ["manager", true],
     ["admissions_officer", false],
     ["finance_officer", false],
     ["trainer", false],
   ])(
-    "role %s: approve allowed = %s (Admin's 'manage' level must be refused even though it can submit)",
+    "role %s: approve allowed = %s (Academy Administrator raised to 'full' — architecture decision: never blocked waiting for approval)",
     async (role, allowed) => {
       const owner = await setupAcademy("academy_owner");
       const configId = await insertConfigDirect(owner.academyId, owner.userId);
@@ -651,28 +651,62 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Manage
     expect(request?.decidedAt).not.toBeNull();
   });
 
-  it("refuses self-approval with code 'self_approval', even for a submitter who holds Full authority", async () => {
+  it("Manager self-approval is ALLOWED: Manager holds both create and approve authority on this row (approved architecture change)", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    // The submitter here is a Manager (holds "full" on academy.grade_bands,
-    // i.e. approval-capable in general) — proving the refusal is specifically
-    // about self-approval, not merely an insufficient permission level.
     const submitter = await addActingUser(owner.academyId, "manager");
     await submitGradeConfigForApproval(submitter.context, configId);
 
     const result = await approveGradeConfig(submitter.context, configId);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("self_approval");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.configuration.status).toBe("approved");
+      expect(result.configuration.approvedBy).toBe(submitter.userId);
+    }
+  });
 
-    // Never the submitter, but the config is untouched by the refused call.
-    const stillPending = await getGradeConfiguration(owner.context, configId);
-    expect(stillPending.ok).toBe(true);
-    if (stillPending.ok) expect(stillPending.configuration.status).toBe("pending_approval");
+  it("Owner self-approval is ALLOWED: Owner also holds both create and approve authority on this row", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const configId = await insertConfigDirect(owner.academyId, owner.userId);
+    await submitGradeConfigForApproval(owner.context, configId);
 
-    // A different Manager can still approve it.
-    const otherManager = await addActingUser(owner.academyId, "manager");
-    const approved = await approveGradeConfig(otherManager.context, configId);
+    const result = await approveGradeConfig(owner.context, configId);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.configuration.approvedBy).toBe(owner.userId);
+
+    // A different Manager can still approve someone else's submission too —
+    // self-approval being allowed doesn't remove cross-user approval.
+    const owner2 = await setupAcademy("academy_owner");
+    const configId2 = await insertConfigDirect(owner2.academyId, owner2.userId);
+    const manager = await addActingUser(owner2.academyId, "manager");
+    await submitGradeConfigForApproval(owner2.context, configId2);
+    const approved = await approveGradeConfig(manager.context, configId2);
     expect(approved.ok).toBe(true);
+  });
+
+  it("Academy Administrator self-approval is ALLOWED: Administrator was raised to 'full' and holds both create and approve authority on this row", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const configId = await insertConfigDirect(owner.academyId, owner.userId);
+    const admin = await addActingUser(owner.academyId, "academy_admin");
+    await submitGradeConfigForApproval(admin.context, configId);
+
+    const result = await approveGradeConfig(admin.context, configId);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.configuration.status).toBe("approved");
+      expect(result.configuration.approvedBy).toBe(admin.userId);
+    }
+  });
+
+  it("Academy Administrator can also approve a DIFFERENT user's submission (real approve authority, not just self-decide)", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const configId = await insertConfigDirect(owner.academyId, owner.userId);
+    await submitGradeConfigForApproval(owner.context, configId);
+
+    const admin = await addActingUser(owner.academyId, "academy_admin");
+    const result = await approveGradeConfig(admin.context, configId);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.configuration.approvedBy).toBe(admin.userId);
   });
 
   it("refuses to approve a configuration that was never submitted (still 'draft') with code 'invalid_state'", async () => {
@@ -702,12 +736,27 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Manage
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
+
+  it("a real pending configuration id belonging to a DIFFERENT academy is rejected as not_found — never approved (tenant isolation, self-decide included)", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherConfigId = await insertConfigDirect(other.academyId, other.userId);
+    await submitGradeConfigForApproval(other.context, otherConfigId);
+
+    // A same-role Academy Administrator in a completely different academy
+    // — holds "full" level in their OWN academy, but that must never let
+    // them decide a different academy's configuration.
+    const attackerAcademy = await setupAcademy("academy_owner");
+    const admin = await addActingUser(attackerAcademy.academyId, "academy_admin");
+    const result = await approveGradeConfig(admin.context, otherConfigId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
 });
 
 describe("rejectGradeConfig — Pending Approval back to Draft (same authority as approve)", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", true],
-    ["academy_admin", false],
+    ["academy_admin", true],
     ["manager", true],
     ["admissions_officer", false],
     ["finance_officer", false],
@@ -734,15 +783,37 @@ describe("rejectGradeConfig — Pending Approval back to Draft (same authority a
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
-  it("refuses self-rejection with code 'self_approval'", async () => {
+  it("Manager self-rejection is ALLOWED (same approved architecture change as self-approval)", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
     const submitter = await addActingUser(owner.academyId, "manager");
     await submitGradeConfigForApproval(submitter.context, configId);
 
     const result = await rejectGradeConfig(submitter.context, configId, "Changed my mind.");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("self_approval");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.configuration.status).toBe("draft");
+  });
+
+  it("Academy Administrator self-rejection is ALLOWED (Administrator raised to 'full')", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const configId = await insertConfigDirect(owner.academyId, owner.userId);
+    const admin = await addActingUser(owner.academyId, "academy_admin");
+    await submitGradeConfigForApproval(admin.context, configId);
+
+    const result = await rejectGradeConfig(admin.context, configId, "Changed my mind.");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.configuration.status).toBe("draft");
+  });
+
+  it("Academy Administrator can also reject a DIFFERENT user's submission (real approve authority)", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const configId = await insertConfigDirect(owner.academyId, owner.userId);
+    await submitGradeConfigForApproval(owner.context, configId);
+
+    const admin = await addActingUser(owner.academyId, "academy_admin");
+    const result = await rejectGradeConfig(admin.context, configId, "Bands need revision.");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.configuration.status).toBe("draft");
   });
 
   it("rejects: status returns to 'draft' on the SAME row, reason persisted, and it becomes editable again", async () => {
@@ -789,7 +860,7 @@ describe("activateGradeConfiguration — Approved -> Active (two-row atomic tran
     ["admissions_officer", false],
     ["finance_officer", false],
     ["trainer", false],
-  ])("role %s: activate allowed = %s (Admin IS allowed here, unlike approve/reject)", async (role, allowed) => {
+  ])("role %s: activate allowed = %s (gated on canManage, not the narrower canApprove)", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId, "approved");
     const actor = await addActingUser(owner.academyId, role);

@@ -7,6 +7,7 @@ import {
   type CreateIncomeRecordInput,
   type IncomeRecordActionError,
 } from "@/lib/academies/income-records";
+import { dollarsToCents } from "@/lib/ui/money";
 
 /**
  * PLAN.md Phase 4, Item 53's income server action — thin `"use server"`
@@ -24,6 +25,9 @@ export interface IncomeRecordFormState {
   error?: IncomeRecordActionError;
 }
 
+/** The form's "Amount" field is entered in dollars — see
+ * expense-records-actions.ts's identical parse function for the full
+ * rationale. */
 function parseCreateIncomeRecordFormData(formData: FormData): CreateIncomeRecordInput {
   const branchId = String(formData.get("branchId") ?? "").trim();
   const currency = String(formData.get("currency") ?? "").trim();
@@ -32,7 +36,7 @@ function parseCreateIncomeRecordFormData(formData: FormData): CreateIncomeRecord
     branchId: branchId.length > 0 ? branchId : undefined,
     category: String(formData.get("category") ?? ""),
     description: description.length > 0 ? description : undefined,
-    amountCents: Number(formData.get("amountCents") ?? 0),
+    amountCents: dollarsToCents(String(formData.get("amountDollars") ?? "")) ?? NaN,
     currency: currency.length > 0 ? currency : undefined,
   };
 }

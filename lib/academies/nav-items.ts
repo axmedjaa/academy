@@ -1,15 +1,16 @@
 import {
   ACADEMY_AUDIT_LOG_ACTION,
+  ACADEMY_BOOKS_ACTION,
   ACADEMY_CERTIFICATES_ACTION,
   ACADEMY_COURSES_BATCHES_ACTION,
   ACADEMY_EXAMS_ACTION,
+  ACADEMY_FEE_PERIODS_ACTION,
   ACADEMY_GRADE_BANDS_ACTION,
   ACADEMY_INCOME_ACTION,
   ACADEMY_RESULTS_ACTION,
   ACADEMY_SETTINGS_ACTION,
   ACADEMY_STAFF_ACTION,
   ACADEMY_STUDENT_ID_CARDS_ACTION,
-  ACADEMY_STUDENT_PAYMENTS_ACTION,
   ACADEMY_STUDENTS_ACTION,
   getAcademyPermissionLevel,
 } from "@/lib/auth/academy-permissions";
@@ -88,6 +89,13 @@ export const ACADEMY_NAV_ITEMS: readonly AcademyNavItem[] = [
     // judgment call: this is a nav-visibility choice only, not a new
     // permission row; page-level reads still gate independently.
     requiredAction: ACADEMY_INCOME_ACTION,
+  },
+  {
+    key: "books",
+    label: "Books",
+    href: "/academy/books",
+    icon: "menu_book",
+    requiredAction: ACADEMY_BOOKS_ACTION,
   },
   {
     key: "certificates",
@@ -182,18 +190,11 @@ export const ACADEMY_NAV_SUBITEMS: readonly AcademyNavSubItem[] = [
   { parentKey: "exams", label: "Grade Bands", href: "/academy/grades", requiredAction: ACADEMY_GRADE_BANDS_ACTION },
 
   { parentKey: "finance", label: "Finance", href: "/academy/finance", requiredAction: ACADEMY_INCOME_ACTION },
-  {
-    parentKey: "finance",
-    label: "Approvals",
-    href: "/academy/finance/approvals",
-    // Confirmed Phase 4 audit gap fix — reads the same
-    // ACADEMY_STUDENT_PAYMENTS_ACTION row the page itself gates on
-    // (listStudentPayments). Visible to any non-"none" level; the page's
-    // own `canApprove` check (Manager-only) decides whether the actual
-    // queue or a permission-denied message renders.
-    requiredAction: ACADEMY_STUDENT_PAYMENTS_ACTION,
-  },
   { parentKey: "finance", label: "Finance Reports", href: "/academy/finance-reports", requiredAction: ACADEMY_INCOME_ACTION },
+  { parentKey: "finance", label: "Fee Periods", href: "/academy/finance/fee-periods", requiredAction: ACADEMY_FEE_PERIODS_ACTION },
+
+  { parentKey: "books", label: "Books", href: "/academy/books", requiredAction: ACADEMY_BOOKS_ACTION },
+  { parentKey: "books", label: "Book Sales", href: "/academy/books/sales", requiredAction: ACADEMY_BOOKS_ACTION },
 
   {
     parentKey: "certificates",

@@ -382,17 +382,20 @@ describe("getFinanceReports — outstanding charges / pending approvals aggregat
     ]);
   });
 
-  it("counts pending student-payment approvals directly off status, independent of the status filter", async () => {
+  it("has no pendingApprovalsCount for student payments — no approval workflow to count (unlike expenses, below)", async () => {
     const { academyId, studentId, creatorUserId, context } = await setupAcademy("manager");
-    await insertPaymentDirect(academyId, studentId, creatorUserId, "pending_approval");
+    // Historical pending_approval/rejected rows can still exist (never
+    // rewritten), but there is no metric surfacing them anymore.
     await insertPaymentDirect(academyId, studentId, creatorUserId, "pending_approval");
     await insertPaymentDirect(academyId, studentId, creatorUserId, "approved");
     await insertPaymentDirect(academyId, studentId, creatorUserId, "rejected");
 
-    const result = await getFinanceReports(context, { status: "approved" });
+    const result = await getFinanceReports(context, {});
     expect(result.ok).toBe(true);
     if (!result.ok || !result.report.studentPayments.visible) return;
-    expect(result.report.studentPayments.pendingApprovalsCount).toBe(2);
+    expect("pendingApprovalsCount" in result.report.studentPayments).toBe(false);
+    // paymentsReceived still correctly defaults to approved-only.
+    expect(result.report.studentPayments.paymentsReceived.count).toBe(1);
   });
 
   it("counts pending expense approvals directly off status", async () => {
@@ -574,7 +577,6 @@ describe("getFinanceReports — cross-academy tenant isolation", () => {
       visible: true,
       outstandingCharges: { count: 0, totalsByCurrency: [] },
       paymentsReceived: { count: 0, totalsByCurrency: [] },
-      pendingApprovalsCount: 0,
     });
     expect(result.report.income).toEqual({ visible: true, count: 0, totalsByCurrency: [] });
     expect(result.report.expenses).toEqual({

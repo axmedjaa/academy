@@ -9,6 +9,7 @@ import {
   type PlanActionError,
   type PlanInput,
 } from "@/lib/subscriptions/plans";
+import { dollarsToCents } from "@/lib/ui/money";
 
 const UNAUTHENTICATED: PlanActionError = {
   code: "forbidden",
@@ -27,12 +28,14 @@ export interface PlanFormState {
  * (Cross-Cutting Architecture Decisions: "every server action's input is
  * Zod-validated" happens one layer down, in the pure logic module).
  */
+/** The "Price" field is entered in dollars, not cents (Platform Owner
+ * screen) — see lib/ui/money.ts's dollarsToCents. */
 function parsePlanFormData(formData: FormData): PlanInput {
   const description = String(formData.get("description") ?? "").trim();
   return {
     name: String(formData.get("name") ?? ""),
     description: description.length > 0 ? description : null,
-    priceAmountCents: Number(formData.get("priceAmountCents")),
+    priceAmountCents: dollarsToCents(String(formData.get("priceDollars") ?? "")) ?? NaN,
     currency: String(formData.get("currency") ?? ""),
     billingPeriod: String(formData.get("billingPeriod") ?? "") as PlanInput["billingPeriod"],
     maxBranches: Number(formData.get("maxBranches")),

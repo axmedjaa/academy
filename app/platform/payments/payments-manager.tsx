@@ -227,8 +227,8 @@ function RecordPaymentForm({
       <input type="hidden" name="academyId" value={selectedOption?.academyId ?? ""} />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Amount (in cents)">
-          <input type="number" name="amountCents" min={0} step={1} required className={inputClass} />
+        <Field label="Amount (USD)">
+          <input type="number" name="amountDollars" min={0} step="0.01" placeholder="0.00" required className={inputClass} />
         </Field>
         <Field label="Currency (3-letter code)">
           <input type="text" name="currency" maxLength={3} required defaultValue="USD" className={inputClass} />

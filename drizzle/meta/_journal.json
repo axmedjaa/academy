@@ -169,6 +169,41 @@
       "when": 1790255202604,
       "tag": "0023_curvy_marauders",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790652523179,
+      "tag": "0024_bumpy_proteus",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790652915305,
+      "tag": "0025_exotic_magik",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790656514347,
+      "tag": "0026_fee_schedule_interval_months",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790743070231,
+      "tag": "0027_flowery_nuke",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790781316650,
+      "tag": "0028_fee_periods_no_overlap",
+      "breakpoints": true
     }
   ]
 }

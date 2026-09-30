@@ -1,4 +1,4 @@
-import type { AnchorHTMLAttributes, CSSProperties, ReactNode } from "react";
+import { forwardRef, type AnchorHTMLAttributes, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { color, radius, shadow, spacing } from "@/lib/ui/theme";
 
@@ -387,13 +387,21 @@ const BUTTON_VARIANTS = {
 
 type ButtonVariant = keyof typeof BUTTON_VARIANTS;
 
-export function Button({
-  variant = "primary",
-  className = "",
-  ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }) {
-  return <button {...rest} className={`${BUTTON_VARIANTS[variant]} ${className}`} />;
-}
+/**
+ * `forwardRef` (added for the shadcn `AlertDialog` integration —
+ * `components/ui/confirm-dialog.tsx` renders this as the child of an
+ * `asChild` Radix trigger/action/cancel, which clones its child and injects
+ * a ref; a plain function component would only warn, not actually break,
+ * but forwarding it properly is what lets Radix track the real trigger/
+ * action DOM node for its own focus-management) — every existing call site
+ * (a plain `<Button ...>`) is unaffected, since a forwardRef component is
+ * used in JSX exactly the same way as a function component.
+ */
+export const Button = forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }>(
+  function Button({ variant = "primary", className = "", ...rest }, ref) {
+    return <button ref={ref} {...rest} className={`${BUTTON_VARIANTS[variant]} ${className}`} />;
+  },
+);
 
 /** Same visual treatment as `Button`, for navigation actions that must be a
  * `<Link>` (e.g. "Add student") rather than a form submit. */

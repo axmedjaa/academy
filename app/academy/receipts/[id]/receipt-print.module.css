@@ -1,0 +1,181 @@
+/* A5-ish printable receipt: a centered, shadowed "sheet" on screen; @media
+   print removes the surrounding chrome and lets the sheet fill the page. */
+
+.page {
+  min-height: 100vh;
+  background: #f1f3f6;
+  padding: 2rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  width: 148mm;
+  max-width: 100%;
+}
+
+.sheet {
+  width: 148mm;
+  max-width: 100%;
+  background: #fff;
+  box-shadow: 0 4px 24px rgba(17, 24, 39, 0.18);
+  padding: 12mm;
+  display: flex;
+  flex-direction: column;
+  gap: 6mm;
+  font-family: Arial, Helvetica, sans-serif;
+  color: #1b2a4a;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 2px solid #1b2a4a;
+  padding-bottom: 4mm;
+}
+
+.logo {
+  max-height: 16mm;
+  max-width: 45mm;
+  object-fit: contain;
+}
+
+.academyName {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.academyMeta {
+  font-size: 0.7rem;
+  color: #6b7280;
+  max-width: 70mm;
+}
+
+.receiptTitle {
+  text-align: right;
+}
+
+.receiptTitle h1 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.receiptNumber {
+  font-family: "Courier New", monospace;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3mm 6mm;
+  font-size: 0.85rem;
+}
+
+.field dt {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  margin: 0;
+}
+
+.field dd {
+  margin: 0.15rem 0 0;
+  font-weight: 600;
+}
+
+.amountBlock {
+  border: 1.5px solid #1b2a4a;
+  border-radius: 4px;
+  padding: 4mm 6mm;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.amountLabel {
+  font-size: 0.8rem;
+  color: #4b5563;
+}
+
+.amountValue {
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+.notesBlock {
+  font-size: 0.8rem;
+  color: #374151;
+}
+
+.notesBlock dt {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  margin: 0 0 0.2rem;
+}
+
+.footer {
+  margin-top: auto;
+  padding-top: 4mm;
+  border-top: 1px solid #d1d5db;
+  font-size: 0.65rem;
+  color: #6b7280;
+  text-align: center;
+}
+
+.voidBanner {
+  position: relative;
+  text-align: center;
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: #b91c1c;
+  border: 3px solid #b91c1c;
+  border-radius: 4px;
+  padding: 0.3em 0.6em;
+  text-transform: uppercase;
+}
+
+@media print {
+  @page {
+    size: A5 portrait;
+    margin: 8mm;
+  }
+
+  html,
+  body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  .noPrint {
+    display: none !important;
+  }
+
+  .page {
+    min-height: 0;
+    padding: 0;
+    background: #fff;
+    gap: 0;
+  }
+
+  .sheet {
+    box-shadow: none;
+    width: auto;
+  }
+}

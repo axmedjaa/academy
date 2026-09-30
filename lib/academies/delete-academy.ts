@@ -11,17 +11,22 @@ import {
   batchEnrollments,
   batchTrainerAssignments,
   batches,
+  bookSales,
+  books,
   branches,
   certificates,
   courses,
+  enrollmentFeeSchedules,
   examResults,
   exams,
   expenseRecords,
+  feePeriods,
   gradeBands,
   gradeConfigurations,
   incomeRecords,
   notificationPreferences,
   notifications,
+  paymentAllocations,
   programs,
   resultCorrections,
   staffBranchAssignments,
@@ -101,7 +106,13 @@ const FORBIDDEN = forbidden("Only the platform owner can permanently delete an a
 const academyIdSchema = z.string().uuid("Invalid academy id.");
 
 export interface AcademyDeletionBlockers {
-  /** student_charges, student_payments, income_records, or expense_records. */
+  /** student_charges, student_payments, income_records, expense_records,
+   * enrollment_fee_schedules, fee_periods, payment_allocations, books, or
+   * book_sales — any tenant-side financial record at all. Deliberately
+   * conservative (approved architecture decision: "Academy deletion must
+   * remain conservative. Do not make deletion easier.") — a book catalog
+   * with zero sales still blocks deletion, the same way an unused
+   * student_charges row already did before this list existed. */
   hasFinancialHistory: boolean;
   /** subscription_payments — real platform revenue, not tenant finance. */
   hasSubscriptionPayments: boolean;
@@ -122,18 +133,38 @@ async function computeDeletionBlockers(
   executor: DbClient,
   academyId: string,
 ): Promise<AcademyDeletionBlockers> {
-  const [[charge], [payment], [income], [expense], [subPayment], [certificate], [examResult]] = await Promise.all([
+  const [
+    [charge],
+    [payment],
+    [income],
+    [expense],
+    [feeSchedule],
+    [feePeriod],
+    [allocation],
+    [book],
+    [bookSale],
+    [subPayment],
+    [certificate],
+    [examResult],
+  ] = await Promise.all([
     executor.select({ id: studentCharges.id }).from(studentCharges).where(eq(studentCharges.academyId, academyId)).limit(1),
     executor.select({ id: studentPayments.id }).from(studentPayments).where(eq(studentPayments.academyId, academyId)).limit(1),
     executor.select({ id: incomeRecords.id }).from(incomeRecords).where(eq(incomeRecords.academyId, academyId)).limit(1),
     executor.select({ id: expenseRecords.id }).from(expenseRecords).where(eq(expenseRecords.academyId, academyId)).limit(1),
+    executor.select({ id: enrollmentFeeSchedules.id }).from(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.academyId, academyId)).limit(1),
+    executor.select({ id: feePeriods.id }).from(feePeriods).where(eq(feePeriods.academyId, academyId)).limit(1),
+    executor.select({ id: paymentAllocations.id }).from(paymentAllocations).where(eq(paymentAllocations.academyId, academyId)).limit(1),
+    executor.select({ id: books.id }).from(books).where(eq(books.academyId, academyId)).limit(1),
+    executor.select({ id: bookSales.id }).from(bookSales).where(eq(bookSales.academyId, academyId)).limit(1),
     executor.select({ id: subscriptionPayments.id }).from(subscriptionPayments).where(eq(subscriptionPayments.academyId, academyId)).limit(1),
     executor.select({ id: certificates.id }).from(certificates).where(eq(certificates.academyId, academyId)).limit(1),
     executor.select({ id: examResults.id }).from(examResults).where(eq(examResults.academyId, academyId)).limit(1),
   ]);
 
   return {
-    hasFinancialHistory: Boolean(charge || payment || income || expense),
+    hasFinancialHistory: Boolean(
+      charge || payment || income || expense || feeSchedule || feePeriod || allocation || book || bookSale,
+    ),
     hasSubscriptionPayments: Boolean(subPayment),
     hasCertificates: Boolean(certificate),
     hasExamResults: Boolean(examResult),

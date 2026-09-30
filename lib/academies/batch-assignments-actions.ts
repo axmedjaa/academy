@@ -13,6 +13,7 @@ import {
   type BatchAssignmentActionError,
   type EnrollStudentInput,
 } from "@/lib/academies/batch-assignments";
+import { dollarsToCents } from "@/lib/ui/money";
 
 const UNAUTHENTICATED: BatchAssignmentActionError = {
   code: "forbidden",
@@ -31,10 +32,26 @@ function parseAssignTrainerFormData(formData: FormData): AssignTrainerInput {
   };
 }
 
+/** The "Amount per period" field is entered in dollars, not cents — see
+ * lib/ui/money.ts's dollarsToCents. Shared by both enrollStudentInBatch
+ * (roster-panel.tsx's enroll form) and updateStudentEnrollment
+ * (students-list.tsx's "change course" form). */
+function parsePaymentPlanFormData(formData: FormData): EnrollStudentInput["paymentPlan"] {
+  const currency = String(formData.get("paymentPlanCurrency") ?? "").trim();
+  const anchorDate = String(formData.get("paymentPlanAnchorDate") ?? "").trim();
+  return {
+    intervalMonths: Number(formData.get("paymentPlanIntervalMonths") ?? 0),
+    amountCents: dollarsToCents(String(formData.get("paymentPlanAmountDollars") ?? "")) ?? NaN,
+    currency: currency.length > 0 ? currency : undefined,
+    anchorDate: anchorDate.length > 0 ? anchorDate : undefined,
+  };
+}
+
 function parseEnrollStudentFormData(formData: FormData): EnrollStudentInput {
   return {
     batchId: String(formData.get("batchId") ?? ""),
     studentId: String(formData.get("studentId") ?? ""),
+    paymentPlan: parsePaymentPlanFormData(formData),
   };
 }
 
@@ -152,7 +169,12 @@ export async function updateStudentEnrollment(
 
   const studentId = String(formData.get("studentId") ?? "");
   const batchId = String(formData.get("batchId") ?? "").trim();
-  const result = await updateStudentEnrollmentForActor(context, studentId, batchId || undefined);
+  // Only relevant when enrolling into a NEW course (a plain withdraw, empty
+  // batchId, needs no plan) — parsed unconditionally since it's harmless
+  // when unused, and updateStudentEnrollment itself only requires it when
+  // batchId is present.
+  const paymentPlan = batchId ? parsePaymentPlanFormData(formData) : undefined;
+  const result = await updateStudentEnrollmentForActor(context, studentId, batchId || undefined, paymentPlan);
   if (!result.ok) {
     return { ok: false, error: result.error };
   }

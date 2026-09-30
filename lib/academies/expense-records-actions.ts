@@ -10,6 +10,7 @@ import {
   type CreateExpenseRecordInput,
   type ExpenseRecordActionError,
 } from "@/lib/academies/expense-records";
+import { dollarsToCents } from "@/lib/ui/money";
 
 /**
  * PLAN.md Phase 4, Item 53's four expense server actions — thin
@@ -26,6 +27,15 @@ export interface ExpenseRecordFormState {
   error?: ExpenseRecordActionError;
 }
 
+/**
+ * The form's "Amount" field is entered in dollars (e.g. "10", "5.55") —
+ * never raw cents; `dollarsToCents` is the one centralized conversion
+ * (lib/ui/money.ts). An unparseable amount (empty, negative, non-numeric,
+ * more than 2 decimals) becomes `NaN`, which createExpenseRecord's own Zod
+ * schema already rejects via its `.int()` check — same "invalid amount is
+ * refused, never silently coerced to 0" outcome as before this fix, just
+ * driven by a real dollars->cents parse instead of a raw-cents field.
+ */
 function parseCreateExpenseRecordFormData(formData: FormData): CreateExpenseRecordInput {
   const branchId = String(formData.get("branchId") ?? "").trim();
   const currency = String(formData.get("currency") ?? "").trim();
@@ -34,7 +44,7 @@ function parseCreateExpenseRecordFormData(formData: FormData): CreateExpenseReco
     branchId: branchId.length > 0 ? branchId : undefined,
     category: String(formData.get("category") ?? ""),
     description: description.length > 0 ? description : undefined,
-    amountCents: Number(formData.get("amountCents") ?? 0),
+    amountCents: dollarsToCents(String(formData.get("amountDollars") ?? "")) ?? NaN,
     currency: currency.length > 0 ? currency : undefined,
   };
 }

@@ -30,11 +30,10 @@ import {
   trHover,
 } from "@/app/academy/_shell/ui";
 import { getStatusTone } from "@/lib/ui/status";
+import { dollarsToCents } from "@/lib/ui/money";
 
 const initialIncomeState: IncomeRecordFormState = { ok: false };
 const initialExpenseState: ExpenseRecordFormState = { ok: false };
-
-const SELF_APPROVAL_TOOLTIP = "You can't approve a transaction you recorded.";
 
 function formatMoney(amountCents: number, currency: string): string {
   return `${currency} ${(amountCents / 100).toFixed(2)}`;
@@ -45,11 +44,18 @@ interface Props {
   incomeCanCreate: boolean;
   expenses: ExpenseRecordRecord[] | null;
   expenseCanCreate: boolean;
+  /** GENERAL approve authority — may decide ANY pending expense. Also
+   * still exactly what gates the Reverse/Adjust column (unchanged). */
   expenseCanApprove: boolean;
-  /** Confirmed Phase 4 audit gap fix (self-approval visual disable,
-   * DESIGN.md §9.6/§11.7) and Reverse/Adjust self-reversal disable — the
-   * backend already refuses both unconditionally; this is presentation
-   * only. */
+  /** May decide a pending expense only when `record.submittedBy ===
+   * currentUserId` — combined with that per-row check below to decide
+   * whether to render Approve/Reject on a given row (approved architecture
+   * decision: Owner/Admin/Manager/Finance Officer may all approve their
+   * own expense immediately; this flag alone does not mean "can decide any
+   * row"). Reverse/Adjust's self-reversal block is unrelated and still
+   * unconditional for everyone — the backend refuses that regardless of
+   * role; this is presentation only for that part. */
+  expenseCanSelfApprove: boolean;
   currentUserId: string;
 }
 
@@ -62,9 +68,19 @@ interface Props {
  * "nav item and every action tied to it are absent... not rendered, not
  * disabled" rule.
  *
- * UI-quality pass (this wave): restyled onto the shared Tailwind shell
- * (Section/TableWrap/Badge/Button/Field), matching the rest of `/academy/*`
- * — no business logic changed, same props/handlers as before.
+ * UI-quality pass: restyled onto the shared Tailwind shell
+ * (Section/TableWrap/Badge/Button/Field), matching the rest of `/academy/*`.
+ *
+ * Self-approval (later architecture decision): Owner/Academy
+ * Administrator/Manager/Finance Officer may all approve/reject an expense
+ * they submitted themselves, immediately — no longer blocked waiting for a
+ * different approver. Approve/Reject now render per-row based on
+ * `canDecideThisRow` (general approve authority, OR self-approve-eligible
+ * AND this is the viewer's own submission) rather than a flat
+ * `expenseCanApprove` gate with a disabled-self-submitted button — DESIGN.md
+ * §5's "not rendered, not disabled" rule, and matches exactly what the
+ * server (`expense-records.ts`'s `approveExpense`/`rejectExpense`) allows,
+ * so there is no UI-allows/server-blocks or UI-hides/server-allows gap.
  */
 export function FinanceIncomeExpenses({
   income,
@@ -72,6 +88,7 @@ export function FinanceIncomeExpenses({
   expenses,
   expenseCanCreate,
   expenseCanApprove,
+  expenseCanSelfApprove,
   currentUserId,
 }: Props) {
   const availableTabs: ("income" | "expenses")[] = [
@@ -142,10 +159,17 @@ export function FinanceIncomeExpenses({
 
   function confirmIncomeReversal(incomeRecordId: string) {
     setReversalError(null);
+    // The "corrected amount" field is entered in dollars — never cents; see
+    // lib/ui/money.ts's dollarsToCents. An unparseable amount is refused
+    // client-side rather than silently sent as NaN/0.
+    if (reversalMode === "adjust" && dollarsToCents(adjustAmount) === null) {
+      setReversalError("Enter a valid corrected amount.");
+      return;
+    }
     startReversalTransition(async () => {
       const result =
         reversalMode === "adjust"
-          ? await adjustIncomeRecordAction(incomeRecordId, reversalReason.trim(), Number(adjustAmount))
+          ? await adjustIncomeRecordAction(incomeRecordId, reversalReason.trim(), dollarsToCents(adjustAmount)!)
           : await reverseIncomeRecordAction(incomeRecordId, reversalReason.trim());
       if (!result.ok) {
         setReversalError(result.error.message);
@@ -158,10 +182,14 @@ export function FinanceIncomeExpenses({
 
   function confirmExpenseReversal(expenseRecordId: string) {
     setReversalError(null);
+    if (reversalMode === "adjust" && dollarsToCents(adjustAmount) === null) {
+      setReversalError("Enter a valid corrected amount.");
+      return;
+    }
     startReversalTransition(async () => {
       const result =
         reversalMode === "adjust"
-          ? await adjustExpenseRecordAction(expenseRecordId, reversalReason.trim(), Number(adjustAmount))
+          ? await adjustExpenseRecordAction(expenseRecordId, reversalReason.trim(), dollarsToCents(adjustAmount)!)
           : await reverseExpenseRecordAction(expenseRecordId, reversalReason.trim());
       if (!result.ok) {
         setReversalError(result.error.message);
@@ -188,8 +216,9 @@ export function FinanceIncomeExpenses({
           {reversalMode === "adjust" && (
             <input
               type="number"
-              placeholder="Corrected amount (cents)"
+              placeholder="Corrected amount (USD)"
               min={0}
+              step="0.01"
               value={adjustAmount}
               onChange={(event) => setAdjustAmount(event.target.value)}
               className={`${inputClass} py-1.5`}
@@ -339,8 +368,8 @@ export function FinanceIncomeExpenses({
                 <Field label="Description (optional)">
                   <input type="text" name="description" className={inputClass} />
                 </Field>
-                <Field label="Amount (cents)">
-                  <input type="number" name="amountCents" min={0} required className={inputClass} />
+                <Field label="Amount (USD)">
+                  <input type="number" name="amountDollars" min={0} step="0.01" placeholder="0.00" required className={inputClass} />
                 </Field>
                 <Field label="Currency (optional — defaults to academy currency)">
                   <input type="text" name="currency" maxLength={3} className={inputClass} />
@@ -364,7 +393,7 @@ export function FinanceIncomeExpenses({
                 <th className={th}>Category</th>
                 <th className={th}>Amount</th>
                 <th className={th}>Status</th>
-                {(expenseCanCreate || expenseCanApprove) && <th className={th}>Actions</th>}
+                {(expenseCanCreate || expenseCanApprove || expenseCanSelfApprove) && <th className={th}>Actions</th>}
                 {expenseCanApprove && <th className={th}>Reverse / Adjust</th>}
               </tr>
             </thead>
@@ -372,7 +401,11 @@ export function FinanceIncomeExpenses({
               {expenses.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={3 + (expenseCanCreate || expenseCanApprove ? 1 : 0) + (expenseCanApprove ? 1 : 0)}
+                    colSpan={
+                      3 +
+                      (expenseCanCreate || expenseCanApprove || expenseCanSelfApprove ? 1 : 0) +
+                      (expenseCanApprove ? 1 : 0)
+                    }
                     className={`${td} text-center text-muted`}
                   >
                     No expense records to show.
@@ -384,6 +417,12 @@ export function FinanceIncomeExpenses({
                   const alreadyReversed = reversedKeys.has(rowKey);
                   const canReverse = expenseCanApprove && record.status === "approved" && !alreadyReversed;
                   const isSelfSubmitted = record.submittedBy === currentUserId;
+                  // GENERAL approvers (Admin/Manager) may decide any row;
+                  // self-approve-only roles (Owner/Finance Officer, and
+                  // Admin/Manager too — harmless overlap) may decide only
+                  // their own — the server enforces this identically, see
+                  // expense-records.ts's approveExpense/rejectExpense.
+                  const canDecideThisRow = expenseCanApprove || (expenseCanSelfApprove && isSelfSubmitted);
                   const effectiveStatus = alreadyReversed ? "reversed" : record.status;
                   return (
                     <tr key={record.id} className={trHover}>
@@ -392,7 +431,7 @@ export function FinanceIncomeExpenses({
                       <td className={td}>
                         <Badge label={effectiveStatus.replace("_", " ")} tone={getStatusTone(effectiveStatus)} />
                       </td>
-                      {(expenseCanCreate || expenseCanApprove) && (
+                      {(expenseCanCreate || expenseCanApprove || expenseCanSelfApprove) && (
                         <td className={`${td} align-top`}>
                           <div className="flex flex-wrap items-center gap-2">
                             {expenseCanCreate && record.status === "draft" && (
@@ -406,13 +445,12 @@ export function FinanceIncomeExpenses({
                                 Submit for approval
                               </Button>
                             )}
-                            {expenseCanApprove && record.status === "pending_approval" && (
+                            {canDecideThisRow && record.status === "pending_approval" && (
                               <>
                                 <Button
                                   type="button"
                                   className="px-2.5 py-1 text-xs"
-                                  disabled={busyExpenseId === record.id || isSelfSubmitted}
-                                  title={isSelfSubmitted ? SELF_APPROVAL_TOOLTIP : undefined}
+                                  disabled={busyExpenseId === record.id}
                                   onClick={() => handleApprove(record.id)}
                                 >
                                   Approve
@@ -474,8 +512,8 @@ export function FinanceIncomeExpenses({
                 <Field label="Description (optional)">
                   <input type="text" name="description" className={inputClass} />
                 </Field>
-                <Field label="Amount (cents)">
-                  <input type="number" name="amountCents" min={0} required className={inputClass} />
+                <Field label="Amount (USD)">
+                  <input type="number" name="amountDollars" min={0} step="0.01" placeholder="0.00" required className={inputClass} />
                 </Field>
                 <Field label="Currency (optional — defaults to academy currency)">
                   <input type="text" name="currency" maxLength={3} className={inputClass} />

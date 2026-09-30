@@ -246,6 +246,30 @@ export async function createApprovalRequest(
 const decideApprovalRequestInputSchema = z.object({
   decidedBy: z.string().uuid("Invalid decider id"),
   status: z.enum(["approved", "rejected"]),
+  /**
+   * Approved architecture decision: "Manager creates/records -> Manager
+   * CAN approve their own work," later generalized to "Owner/Academy
+   * Administrator/Manager should never be blocked waiting for approval on
+   * an action they are already authorized to perform" — computed by each
+   * consumer from its OWN existing `canManage`/`canApprove`-equivalent
+   * gates (see student-payments.ts's, grade-configurations.ts's,
+   * results.ts's, and result-corrections.ts's own `canSelfDecide`
+   * computations) — never a new permission grant, never a client-supplied
+   * flag (always a boolean literal computed server-side from the actor's
+   * already-resolved permission level before this function is ever
+   * called).
+   *
+   * Defaults to `false` — `expense` (confirmed to have no realistic
+   * self-approval scenario under its own permission matrix — Admin/Manager
+   * only ever approve Finance Officer's submissions, never their own) keeps
+   * today's unconditional self-approval block, byte for byte, with zero
+   * risk of accidental loosening. `student_payment`, `grade_configuration`,
+   * and `result` (reused as-is by result_corrections.ts) each opt in,
+   * computing their own `canSelfDecide` from their own existing permission
+   * gates — for `result`, this can never reach Trainer, since Trainer never
+   * holds the `"approve"` level `canSelfDecide` checks there.
+   */
+  allowSelfDecision: z.boolean().default(false),
 });
 
 export type DecideApprovalRequestInput = z.input<typeof decideApprovalRequestInputSchema>;
@@ -255,9 +279,11 @@ export type DecideApprovalRequestResult =
   | { ok: false; error: ApprovalRequestError };
 
 /**
- * PLAN.md/DESIGN.md §11.4's universal self-approval rule, encoded once
- * here: `requestedBy === decidedBy` is refused unconditionally, regardless
- * of entity type, before any DB write. Also enforces the table's own
+ * PLAN.md/DESIGN.md §11.4's self-approval rule, encoded once here:
+ * `requestedBy === decidedBy` is refused before any DB write — UNLESS the
+ * caller explicitly opts in via `input.allowSelfDecision` (see that field's
+ * own doc comment on `decideApprovalRequestInputSchema` for exactly which
+ * consumers opt in and why). Also enforces the table's own
  * `pending -> approved|rejected` shape as a one-shot decision: a request
  * that has already been decided (status !== "pending") cannot be decided
  * again — `already_decided`, not a silent overwrite of `decided_by`/
@@ -291,7 +317,7 @@ export async function decideApprovalRequest(
     return { ok: false, error: { code: "not_found", message: "Approval request not found." } };
   }
 
-  if (existing.requestedBy === data.decidedBy) {
+  if (existing.requestedBy === data.decidedBy && !data.allowSelfDecision) {
     return {
       ok: false,
       error: {

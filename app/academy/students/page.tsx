@@ -3,10 +3,13 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { searchStudents } from "@/lib/academies/students";
 import { getActiveCoursesForStudents } from "@/lib/academies/batch-assignments";
+import { canManageFeePeriodPayments, getStudentPaymentSummaries } from "@/lib/academies/fee-periods";
 import { listBatches } from "@/lib/academies/batches";
 import { listCourses } from "@/lib/academies/courses";
+import { ACADEMY_FEE_PERIODS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { StudentsList } from "./students-list";
-import { Button, LinkButton, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
+import { Button, LinkButton, PAGE_WRAP, PageHeader, PageMessage, Section, inputClass } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
 
 /**
@@ -85,14 +88,23 @@ export default async function AcademyStudentsPage({
   // populate rather than failing the whole page.
   const access = await checkAcademyAccessForContext(context);
   const academyId = access.level !== "blocked" ? access.academyId : null;
+  // Independent of `canManage` above (that's ACADEMY_STUDENTS_ACTION's edit
+  // gate) — this is ACADEMY_FEE_PERIODS_ACTION's own "manage" gate, the same
+  // permission recordFeePeriodPayment itself requires. A Finance Officer,
+  // for example, has "view" on students but "manage" on fee periods, and
+  // must still see the Students-list Record Payment action.
+  const canManagePayments =
+    access.level !== "blocked" &&
+    canManageFeePeriodPayments(getAcademyPermissionLevel(access.membershipRole, ACADEMY_FEE_PERIODS_ACTION));
 
-  const [coursesByStudent, batchesResult, coursesResult] = academyId
+  const [coursesByStudent, paymentSummaries, batchesResult, coursesResult] = academyId
     ? await Promise.all([
         getActiveCoursesForStudents(academyId, data.rows.map((s) => s.id)),
+        getStudentPaymentSummaries(academyId, data.rows.map((s) => s.id)),
         listBatches(context),
         listCourses(context),
       ])
-    : [new Map(), null, null];
+    : [new Map(), new Map(), null, null];
 
   const courseNameById = new Map((coursesResult?.ok ? coursesResult.courses : []).map((c) => [c.id, c.name]));
   const courseOptions = (batchesResult?.ok ? batchesResult.batches : [])
@@ -116,38 +128,60 @@ export default async function AcademyStudentsPage({
         actions={canManage ? <LinkButton href="/academy/students/new">Register student</LinkButton> : undefined}
       />
 
-      <form method="get">
-        <Toolbar>
-          <label className="min-w-[220px] flex-1">
-            <span className="mb-1 block text-xs font-medium text-muted">Search (name or student #)</span>
-            <input type="text" name="q" defaultValue={searchTerm} className={inputClass} />
-          </label>
-          {!branchLimited && (
-            <label className="min-w-[160px]">
-              <span className="mb-1 block text-xs font-medium text-muted">Branch ID</span>
-              <input type="text" name="branchId" defaultValue={branchId} className={inputClass} />
+      <Section className="mb-6">
+        <form method="get">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="min-w-[240px] flex-1">
+              <span className="mb-1 block text-xs font-medium text-muted">Search</span>
+              <div className="relative">
+                <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-muted">
+                  <Icon name="search" width={16} height={16} />
+                </span>
+                <input
+                  type="text"
+                  name="q"
+                  defaultValue={searchTerm}
+                  placeholder="Name or student number"
+                  className={`${inputClass} pl-9`}
+                />
+              </div>
             </label>
-          )}
-          <label className="min-w-[140px]">
-            <span className="mb-1 block text-xs font-medium text-muted">Status</span>
-            <select name="status" defaultValue={status} className={inputClass}>
-              <option value="">Any</option>
-              <option value="active">Active</option>
-              <option value="archived">Archived</option>
-            </select>
-          </label>
-          <Button type="submit" variant="secondary">
-            Search
-          </Button>
-        </Toolbar>
-      </form>
+            {!branchLimited && (
+              <label className="min-w-[160px]">
+                <span className="mb-1 block text-xs font-medium text-muted">Branch ID</span>
+                <input type="text" name="branchId" defaultValue={branchId} className={inputClass} />
+              </label>
+            )}
+            <label className="min-w-[140px]">
+              <span className="mb-1 block text-xs font-medium text-muted">Status</span>
+              <select name="status" defaultValue={status} className={inputClass}>
+                <option value="">Any status</option>
+                <option value="active">Active</option>
+                <option value="archived">Archived</option>
+              </select>
+            </label>
+            <div className="flex gap-2">
+              <Button type="submit" variant="secondary">
+                Search
+              </Button>
+              {(searchTerm || branchId || status) && (
+                <LinkButton href="/academy/students" variant="ghost">
+                  Clear
+                </LinkButton>
+              )}
+            </div>
+          </div>
+        </form>
+      </Section>
 
       <StudentsList
         students={data.rows}
         canManage={canManage}
         canDelete={canDelete}
+        canManagePayments={canManagePayments}
         showBranchField={!branchLimited}
         coursesByStudent={coursesByStudent}
+        paymentSummaries={paymentSummaries}
         courseOptions={courseOptions}
       />
 

@@ -81,6 +81,12 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
       <path d="M6 14.5h4" />
     </Base>
   ),
+  menu_book: (props) => (
+    <Base {...props}>
+      <path d="M4 5.5c2-1 5-1 8 0v13c-3-1-6-1-8 0v-13z" />
+      <path d="M20 5.5c-2-1-5-1-8 0v13c3-1 6-1 8 0v-13z" />
+    </Base>
+  ),
   workspace_premium: (props) => (
     <Base {...props}>
       <circle cx="12" cy="9" r="6" />

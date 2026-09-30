@@ -21,6 +21,7 @@ describe("getVisibleAcademyNavItems", () => {
       "academics",
       "exams",
       "finance",
+      "books",
       "certificates",
       "reports",
       "notifications",
@@ -75,16 +76,17 @@ describe("getVisibleAcademyNavSubItems", () => {
     expect(subItems.map((item) => item.label).sort()).toEqual(["Certificates", "ID Cards"]);
   });
 
-  it("Phase 4 gap fix: gives every role with student-payments access an Approvals sub-item, and hides it for admissions_officer", () => {
-    // ACADEMY_STUDENT_PAYMENTS_ACTION: owner/admin/manager/trainer = "view"
-    // or above, finance_officer = "manage" — all five are non-"none".
-    // admissions_officer has no entry ("none").
-    for (const role of ["academy_owner", "academy_admin", "manager", "finance_officer", "trainer"] as const) {
-      expect(getVisibleAcademyNavSubItems(role, "finance").some((item) => item.label === "Approvals")).toBe(true);
+  it("no longer has an Approvals sub-item under Finance for any role (student-payment approval workflow removed)", () => {
+    for (const role of [
+      "academy_owner",
+      "academy_admin",
+      "manager",
+      "finance_officer",
+      "trainer",
+      "admissions_officer",
+    ] as const) {
+      expect(getVisibleAcademyNavSubItems(role, "finance").some((item) => item.label === "Approvals")).toBe(false);
     }
-    expect(getVisibleAcademyNavSubItems("admissions_officer", "finance").some((item) => item.label === "Approvals")).toBe(
-      false,
-    );
   });
 
   it("F3: gives trainer the Results sub-item via the exams/enter_marks alternate action", () => {

@@ -1,6 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { useState, useTransition, type ReactNode } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "./ui";
 import { showSuccessToast } from "@/lib/ui/toast";
 
@@ -50,34 +61,24 @@ interface ConfirmButtonProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-/** Every `a[href]`/button/input/etc. inside `container` that can currently
- * receive focus — the Tab-trap below cycles within exactly this list rather
- * than letting focus escape to the page underneath the dialog. */
-function getFocusableElements(container: HTMLElement): HTMLElement[] {
-  return Array.from(
-    container.querySelectorAll<HTMLElement>(
-      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  );
-}
-
 /**
- * The one reusable destructive-action confirmation dialog for the whole app
- * — no reusable dialog/modal existed before this (the only prior
- * "confirmation" anywhere was a raw `window.confirm()` in
- * app/platform/subscriptions/subscriptions-manager.tsx, which this does not
- * touch or replace, per this task's own scope). Every new delete/archive/
- * remove action added by this pass uses this component instead of
- * `window.confirm()`, styled with the same tokens as the rest of the
- * Tailwind pass (Button, brand/danger colors, card surface).
+ * The one reusable destructive-action confirmation dialog for the whole app,
+ * built on shadcn/Radix `AlertDialog` (components/ui/alert-dialog.tsx) —
+ * previously a hand-rolled `<div role="dialog">` with its own focus-trap/
+ * Escape-key wiring; Radix now owns all of that (focus trap, Escape-to-
+ * close, return-focus-to-trigger, `aria-modal`/`aria-labelledby`/
+ * `aria-describedby` wiring) instead of this file reimplementing it. Every
+ * external prop and calling convention is unchanged, so none of this
+ * component's ~11 call sites across the app needed to change.
  *
- * Phase 4 (frontend redesign) accessibility pass: on open, focus moves into
- * the dialog and Tab cycles only among its own focusable elements (a
- * standard modal focus trap — previously absent, meaning Tab could escape
- * to the page behind the overlay); on close, focus returns to whichever
- * button opened it, captured from the click event itself rather than a
- * forwarded ref (sidesteps any question of whether the `Button` wrapper
- * forwards refs — it doesn't need to for this).
+ * One deliberate behavior difference from the old hand-rolled dialog:
+ * clicking the overlay no longer dismisses it (Radix's `AlertDialog`
+ * disables outside-dismiss by design, specifically for
+ * confirmation/destructive dialogs — Escape and the Cancel button are the
+ * only ways out). This is a safety improvement, not a regression: it
+ * matches how every other production AlertDialog behaves, and prevents an
+ * accidental stray click from silently dismissing a delete/archive
+ * confirmation.
  */
 export function ConfirmButton({
   label,
@@ -101,15 +102,13 @@ export function ConfirmButton({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [typedValue, setTypedValue] = useState("");
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const triggerElRef = useRef<HTMLButtonElement | null>(null);
 
   // "Adjusting state when a prop changes" (react.dev's own documented
   // pattern for this) rather than a `useEffect` — resets these the instant
   // `open` flips to true, during render, with no extra commit/flicker.
-  // Needed for controlled mode, which has no trigger `onClick` here to do
-  // this reset itself; harmless (merely redundant) for the uncontrolled
-  // path, where the trigger's own `onClick` already does the same reset.
+  // The single reset path for both modes: Radix's own Trigger opens the
+  // dialog without any custom onClick of ours to hook a reset into, so this
+  // is not merely the controlled-mode path anymore — it's the only one.
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
@@ -118,34 +117,6 @@ export function ConfirmButton({
       setTypedValue("");
     }
   }
-
-  useEffect(() => {
-    if (!open) return;
-    dialogRef.current?.focus();
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpen(false);
-        triggerElRef.current?.focus();
-        return;
-      }
-      if (event.key === "Tab" && dialogRef.current) {
-        const focusable = getFocusableElements(dialogRef.current);
-        if (focusable.length === 0) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault();
-          last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, setOpen]);
 
   const inputSatisfied = !confirmInput || typedValue === confirmInput.requiredValue;
 
@@ -159,7 +130,6 @@ export function ConfirmButton({
       }
       setOpen(false);
       setTypedValue("");
-      triggerElRef.current?.focus();
       if (successMessage !== false) {
         showSuccessToast(successMessage ?? `${label} succeeded.`);
       }
@@ -168,86 +138,65 @@ export function ConfirmButton({
   }
 
   return (
-    <>
+    <AlertDialog open={open} onOpenChange={setOpen}>
       {!isControlled && (
-        <Button
-          type="button"
-          variant={variant}
-          className={className}
-          disabled={disabled}
-          onClick={(event) => {
-            triggerElRef.current = event.currentTarget;
-            setError(null);
-            setTypedValue("");
-            setOpen(true);
-          }}
-        >
-          {label}
-        </Button>
+        <AlertDialogTrigger asChild>
+          <Button type="button" variant={variant} className={className} disabled={disabled}>
+            {label}
+          </Button>
+        </AlertDialogTrigger>
       )}
-      {open && (
-        <div
-          role="presentation"
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-navy/40 p-4 motion-safe:animate-fade-in"
-          onClick={() => {
-            if (isPending) return;
-            setOpen(false);
-            triggerElRef.current?.focus();
-          }}
-        >
-          <div
-            ref={dialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="confirm-dialog-title"
-            aria-describedby="confirm-dialog-description"
-            tabIndex={-1}
-            className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-card border border-border bg-surface p-5 shadow-card outline-none motion-safe:animate-scale-in"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h2 id="confirm-dialog-title" className="text-base font-semibold text-ink">
-              {title}
-            </h2>
-            <div id="confirm-dialog-description" className="mt-2 text-sm text-muted">
-              {description}
-            </div>
-            {confirmInput && (
-              <label className="mt-4 block">
-                <span className="mb-1 block text-xs font-medium text-muted">{confirmInput.label}</span>
-                <input
-                  type="text"
-                  value={typedValue}
-                  onChange={(event) => setTypedValue(event.target.value)}
-                  autoComplete="off"
-                  className="block w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"
-                />
-              </label>
-            )}
-            {error && (
-              <p role="alert" className="mt-3 rounded-control border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
-                {error}
-              </p>
-            )}
-            <div className="mt-5 flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setOpen(false);
-                  triggerElRef.current?.focus();
-                }}
-                disabled={isPending}
-              >
-                Cancel
-              </Button>
-              <Button type="button" variant={variant} onClick={handleConfirm} disabled={isPending || !inputSatisfied}>
-                {isPending ? "Working..." : (confirmLabel ?? label)}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+
+        {confirmInput && (
+          <label className="mt-4 block">
+            <span className="mb-1 block text-xs font-medium text-muted">{confirmInput.label}</span>
+            <input
+              type="text"
+              value={typedValue}
+              onChange={(event) => setTypedValue(event.target.value)}
+              autoComplete="off"
+              className="block w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/30"
+            />
+          </label>
+        )}
+        {error && (
+          <p role="alert" className="mt-3 rounded-control border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
+            {error}
+          </p>
+        )}
+
+        <AlertDialogFooter>
+          <AlertDialogCancel asChild>
+            <Button type="button" variant="ghost" disabled={isPending}>
+              Cancel
+            </Button>
+          </AlertDialogCancel>
+          <AlertDialogAction asChild>
+            <Button
+              type="button"
+              variant={variant}
+              disabled={isPending || !inputSatisfied}
+              onClick={(event) => {
+                // AlertDialogAction does not auto-close (unlike Cancel) —
+                // but this preventDefault makes that explicit rather than
+                // relying on it, since `handleConfirm` decides whether to
+                // close (only on success, keeping the dialog open with the
+                // error message shown on failure).
+                event.preventDefault();
+                handleConfirm();
+              }}
+            >
+              {isPending ? "Working..." : (confirmLabel ?? label)}
+            </Button>
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

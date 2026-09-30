@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { auditLogs, platformMemberships, subscriptionPlans, users } from "@/lib/db/schema";
 import { resolveAuthContext } from "@/lib/auth/auth-context";
+import { dollarsToCents } from "@/lib/ui/money";
 import {
   createSubscriptionPlan,
   listSubscriptionPlans,
@@ -171,6 +172,17 @@ describe("createSubscriptionPlan", () => {
       expect(audit?.action).toBe("createSubscriptionPlan");
       expect(audit?.entityType).toBe("subscription_plan");
     }
+  });
+
+  it('money-input-system fix — a Platform Owner price entered as "49.99" is stored as 4999 cents, never 49 cents or $4999', async () => {
+    const ownerContext = await resolveAuthContext(ownerUserId);
+    const entered = dollarsToCents("49.99");
+    expect(entered).toBe(4999);
+    const result = await createSubscriptionPlan(ownerContext, validPlanInput({ priceAmountCents: entered! }));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    createdPlanIds.push(result.plan.id);
+    expect(result.plan.priceAmountCents).toBe(4999);
   });
 });
 

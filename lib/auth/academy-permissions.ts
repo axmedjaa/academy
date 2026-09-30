@@ -273,35 +273,46 @@ ACADEMY_PERMISSIONS.trainer[ACADEMY_COURSES_BATCHES_ACTION] = "manage";
 
 /**
  * PLAN.md Phase 3, Item 46 — Master Permission Matrix "Grade-band
- * configuration" row: Full(owner)/Manage(admin)/"Manage/Approve"(manager)/
- * —/—/—, scope n/a (no branch-limited variant — this row has no
- * "assigned" scope column entry in the matrix). Additive row only.
+ * configuration" row, ORIGINALLY: Full(owner)/Manage(admin)/
+ * "Manage/Approve"(manager)/—/—/—, scope n/a (no branch-limited variant —
+ * this row has no "assigned" scope column entry in the matrix). Additive
+ * row only.
  *
- * Judgment call: the matrix's Manager cell reads "Manage/Approve" — both
- * manage AND approve authority in one cell, unlike Academy Administrator's
- * plain "Manage" (no approve). Rather than inventing a compound level (this
- * table's `AcademyPermissionLevel` union has no "manage_approve" member,
- * and adding one would ripple through every existing consumer of that
- * union for a single row), Manager is given the existing "full" level here
- * — this table's convention elsewhere already treats "full" and "manage"
- * as equally create/edit-capable (see e.g. createBranch's `canManage()`
- * treating both as capable), so the distinguishing fact that actually
- * matters — Manager can approve, Academy Administrator cannot — is *not*
- * expressible as a difference between "full" and "manage" anyway. Academy
- * Owner also reaches Approve authority per the grade-configuration
- * lifecycle table ("Manager, and Academy Owner via their existing `Full`
- * authority — not Academy Administrator"), which already has "full" here,
- * consistent with this choice. This item builds no approval flow itself
- * (that's a separate, later item — see lib/academies/
- * grade-configurations.ts's module comment) — the level distinction here
- * only needs to exist now so that later item can gate `approveGradeConfig`
- * on `getAcademyPermissionLevel(role, ACADEMY_GRADE_BANDS_ACTION) === "full"`
- * (Owner/Manager) without redesigning this row, while Academy
- * Administrator's "manage" level continues to gate plain CRUD only.
+ * Original judgment call (Item 46): the matrix's Manager cell read
+ * "Manage/Approve" — both manage AND approve authority in one cell, unlike
+ * Academy Administrator's plain "Manage" (no approve). Rather than
+ * inventing a compound level (this table's `AcademyPermissionLevel` union
+ * has no "manage_approve" member), Manager was given the existing "full"
+ * level here — this table's convention elsewhere already treats "full" and
+ * "manage" as equally create/edit-capable — so the distinguishing fact that
+ * mattered at the time — Manager can approve, Academy Administrator cannot
+ * — was expressed by gating `approveGradeConfig`/`rejectGradeConfig` on
+ * `level === "full"` specifically (see lib/academies/
+ * grade-configurations.ts's `canApprove`), while Academy Administrator's
+ * "manage" level gated plain CRUD only.
+ *
+ * ---------------------------------------------------------------------
+ * Later architecture decision — Academy Administrator raised to "full"
+ * ---------------------------------------------------------------------
+ * "No approval workflow should ever block Owner/Academy Administrator/
+ * Manager on an action they are already authorized to perform" —
+ * explicitly approved, scoped to this row only. Academy Administrator's
+ * level here is raised from "manage" to "full", matching Owner/Manager
+ * exactly: Academy Administrator can now approve/reject ANY submitted
+ * grade configuration (not just self-decide their own), the same authority
+ * Owner/Manager already had. `grade-configurations.ts`'s existing
+ * `canSelfDecide = canManage(level) && canApprove(level)` needed no code
+ * change at all — both checks already pass at `"full"`, so Academy
+ * Administrator automatically gained self-decide the instant this level
+ * changed. This is a genuine, deliberate reversal of the original Item 46
+ * decision above (documented rather than silently overwritten) — every
+ * OTHER permission row (expenses, student payments, results, ...) is
+ * unaffected; Academy Administrator gains nothing here beyond grade-band
+ * configuration authority.
  */
 export const ACADEMY_GRADE_BANDS_ACTION = "academy.grade_bands";
 ACADEMY_PERMISSIONS.academy_owner[ACADEMY_GRADE_BANDS_ACTION] = "full";
-ACADEMY_PERMISSIONS.academy_admin[ACADEMY_GRADE_BANDS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_GRADE_BANDS_ACTION] = "full";
 ACADEMY_PERMISSIONS.manager[ACADEMY_GRADE_BANDS_ACTION] = "full";
 
 /**
@@ -439,17 +450,29 @@ ACADEMY_PERMISSIONS.manager[ACADEMY_RESULTS_ACTION] = "approve";
  * treatment), and Finance Officer is given "manage". Both "full" and
  * "manage" pass `canManage`'s "full"-or-"manage" gate identically (so both
  * roles can call createStudentCharge/recordStudentPayment/issueReceipt),
- * but only `level === "full"` passes the narrower `canApprove` gate a
- * future Item 52's approveStudentPayment/rejectStudentPayment will use —
- * so Finance Officer structurally can never reach approve authority on this
- * row, for anyone's submission, not just their own. Owner/Admin get "view"
- * (deliberately NOT "full"/"manage" despite that being this codebase's
- * pattern almost everywhere else — PLAN.md/DESIGN.md state this inversion
- * identically in both documents).
+ * but only `level === "full"` passes the narrower `canReverse` gate that
+ * `lib/academies/finance-reversals.ts` uses to gate reversal/adjustment —
+ * so Finance Officer structurally can never reach reversal authority on this
+ * row, for anyone's submission, not just their own. (Student-payment
+ * recording itself has no approval step at all anymore — recording is
+ * immediately effective for Manager, Finance Officer, and Academy
+ * Administrator alike; see `lib/academies/student-payments.ts`'s module
+ * comment.)
+ *
+ * Academy Administrator was originally "view" here (deliberately NOT
+ * "full"/"manage", per PLAN.md/DESIGN.md's stated inversion for this one
+ * row) — explicitly revised afterward (per the Afoogy manual student-payment
+ * verification report's staff list, which names "Administrator" as
+ * authorized to record payments) to "manage": the same level as Finance
+ * Officer, granting record/create/issue-receipt authority but NOT reversal
+ * (`canReverse` still requires "full", i.e. Manager only — this change does
+ * not give Administrator the ability to reverse or adjust anyone's
+ * payment). Academy Owner remains "view" — this revision was scoped to
+ * Administrator only, matching what was explicitly approved.
  */
 export const ACADEMY_STUDENT_PAYMENTS_ACTION = "academy.student_payments";
 ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
-ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_PAYMENTS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.manager[ACADEMY_STUDENT_PAYMENTS_ACTION] = "full";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_STUDENT_PAYMENTS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.trainer[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
@@ -457,22 +480,49 @@ ACADEMY_PERMISSIONS.trainer[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
 /**
  * PLAN.md Phase 4, Item 53 — Master Permission Matrix "Expenses
  * (create/approve)" row (PLAN.md line 133, DESIGN.md §5 line 150,
- * identical): View(owner)/Approve(admin)/Approve(manager)/
+ * identical), ORIGINALLY: View(owner)/Approve(admin)/Approve(manager)/
  * —(admissions_officer)/"Create/Submit"(finance_officer)/View(trainer),
- * scope n/a. A genuinely new level distinction from
- * ACADEMY_STUDENT_PAYMENTS_ACTION above: here Academy Administrator
- * (not just Manager) reaches Approve, and Finance Officer's cell is
- * "Create/Submit" only — never Approve, on anyone's submission (self-
- * approval is separately, universally blocked by decideApprovalRequest
- * regardless of role). Uses the existing "approve" level (same one
+ * scope n/a. Uses the existing "approve" level (same one
  * ACADEMY_RESULTS_ACTION already established) for Admin/Manager, and
  * "manage" for Finance Officer's create/submit capability — kept distinct
  * from ACADEMY_STUDENT_PAYMENTS_ACTION's row (decision D) since no
  * expense-approval action would ever check a level meaningful only for
  * income, and vice versa.
+ *
+ * ---------------------------------------------------------------------
+ * Later architecture decision — Owner raised to "manage"; self-approval
+ * widened for all four
+ * ---------------------------------------------------------------------
+ * "Owner, Academy Administrator, Manager, and Finance Officer must all be
+ * able to create/record AND approve their own Expense" — explicitly
+ * approved, scoped to this row only:
+ *
+ *  - Owner raised from "view" to "manage" (matching Finance Officer) so
+ *    Owner can create/submit an expense — Owner previously had no create
+ *    capability on this row at all.
+ *  - Admin/Manager stay at "approve" (level UNCHANGED) — their EXISTING
+ *    general approve-anyone authority (and `canReverseExpense`'s
+ *    `level === "approve"` reversal gate) is untouched. `canCreate` in
+ *    expense-records.ts was widened to also accept `"approve"`, so
+ *    Admin/Manager gain create/submit WITHOUT any matrix change here.
+ *  - Finance Officer's level is UNCHANGED ("manage") — Finance Officer
+ *    does NOT gain general approve-anyone authority (still `level !==
+ *    "approve"`). Finance Officer's new ability to decide their OWN
+ *    submission is granted entirely in expense-records.ts's
+ *    `approveExpense`/`rejectExpense` via a role-based check
+ *    (`SELF_APPROVE_ROLES`), independent of this permission level — the
+ *    first case in this codebase where self-decide is granted to a role
+ *    that never reaches the entity's own general "approve" level at all
+ *    (contrast the grade-configuration/results precedent, where self-decide
+ *    was always "the actor already independently qualifies for both the
+ *    create and the approve gate").
+ *
+ * Net effect on this row: Owner "view" -> "manage". Admin/Manager/Finance
+ * Officer levels are byte-for-byte unchanged; every behavior difference
+ * for them lives in expense-records.ts's function-level logic instead.
  */
 export const ACADEMY_EXPENSES_ACTION = "academy.expenses";
-ACADEMY_PERMISSIONS.academy_owner[ACADEMY_EXPENSES_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_EXPENSES_ACTION] = "manage";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_EXPENSES_ACTION] = "approve";
 ACADEMY_PERMISSIONS.manager[ACADEMY_EXPENSES_ACTION] = "approve";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_EXPENSES_ACTION] = "manage";
@@ -530,3 +580,36 @@ ACADEMY_PERMISSIONS.academy_owner[ACADEMY_CERTIFICATES_ACTION] = "full";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_CERTIFICATES_ACTION] = "manage";
 ACADEMY_PERMISSIONS.manager[ACADEMY_CERTIFICATES_ACTION] = "manage";
 ACADEMY_PERMISSIONS.trainer[ACADEMY_CERTIFICATES_ACTION] = "view";
+
+/**
+ * Student Fee Periods (new feature, not in PLAN.md/DESIGN.md's original
+ * matrix). Mirrors ACADEMY_STUDENT_PAYMENTS_ACTION exactly, row for row —
+ * fee-period payments are recorded through the SAME student_payments table
+ * (see lib/academies/fee-periods.ts's module comment), so the authority to
+ * manage them must be identical: Owner/Trainer view-only, Manager full,
+ * Finance Officer and Academy Administrator manage, Admissions Officer no
+ * access. (Academy Administrator raised from "view" to "manage" alongside
+ * ACADEMY_STUDENT_PAYMENTS_ACTION above — see that row's own comment for
+ * why.)
+ */
+export const ACADEMY_FEE_PERIODS_ACTION = "academy.fee_periods";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_FEE_PERIODS_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_FEE_PERIODS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.manager[ACADEMY_FEE_PERIODS_ACTION] = "full";
+ACADEMY_PERMISSIONS.finance_officer[ACADEMY_FEE_PERIODS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.trainer[ACADEMY_FEE_PERIODS_ACTION] = "view";
+
+/**
+ * Academy Books (new feature). No approval workflow exists for this domain
+ * (book-sale income posts directly, matching ACADEMY_INCOME_ACTION's
+ * no-approval design) — "manage" is therefore the top level anyone reaches,
+ * same shape as ACADEMY_INCOME_ACTION's row. Owner/Admin get read-only
+ * visibility (can see the catalogue/sales history), Manager and Finance
+ * Officer can create books, sell, record additional payments, and refund.
+ * Admissions Officer/Trainer have no entry ("none").
+ */
+export const ACADEMY_BOOKS_ACTION = "academy.books";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_BOOKS_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_BOOKS_ACTION] = "view";
+ACADEMY_PERMISSIONS.manager[ACADEMY_BOOKS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.finance_officer[ACADEMY_BOOKS_ACTION] = "manage";

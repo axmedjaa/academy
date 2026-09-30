@@ -84,17 +84,11 @@ import type { AuthContext } from "@/lib/auth/auth-context";
  * - `studentPayments.paymentsReceived`: `student_payments` rows, defaulting
  *   to `status = "approved"` (money actually confirmed received) unless the
  *   caller's `status` filter names a different `student_payments` status
- *   value explicitly.
- * - `studentPayments.pendingApprovalsCount`: `student_payments` rows with
- *   `status = "pending_approval"`, counted directly off that column —
- *   deliberately NOT computed via `approval_requests`
- *   (`entityType: "student_payment"`), because `recordStudentPayment`
- *   (Item 51) never creates an `approval_requests` row for a payment today;
- *   that only starts happening once Item 52's `approveStudentPayment`/
- *   `rejectStudentPayment` exist, which this item is explicitly told not to
- *   build or depend on. Counting the entity's own status column directly
- *   is correct today and stays correct once Item 52 lands (the status
- *   column is still the source of truth either way).
+ *   value explicitly. There is no `pendingApprovalsCount` for student
+ *   payments (unlike expenses, below) — student payments have no approval
+ *   workflow anymore (see lib/academies/student-payments.ts's module
+ *   comment); every new payment is `"approved"` the instant it's recorded,
+ *   so a "pending" count for this entity would only ever read zero.
  * - `income`: `income_records` rows, defaulting to `status = "posted"`
  *   (excludes `reversed`) unless overridden by a valid `income_records`
  *   status in the filter.
@@ -211,7 +205,6 @@ export type StudentPaymentsReportSection =
       visible: true;
       outstandingCharges: OutstandingChargesSection;
       paymentsReceived: PaymentsReceivedSection;
-      pendingApprovalsCount: number;
     };
 
 export type IncomeReportSection =
@@ -326,32 +319,6 @@ async function computePaymentsReceived(
   return { count: totalCount(rows), totalsByCurrency: toAmountsByCurrency(rows) };
 }
 
-/** Pending student-payment approvals, counted directly off
- * `student_payments.status` — see this module's doc comment on why this
- * never queries `approval_requests`. Always `status = "pending_approval"`,
- * never overridden by `filters.status` (same "fixed metric" reasoning as
- * outstanding charges). */
-async function computePendingPaymentApprovals(
-  academyId: string,
-  filters: ParsedFinanceReportFilters,
-): Promise<number> {
-  const conditions: SQL[] = [
-    eq(studentPayments.academyId, academyId),
-    eq(studentPayments.status, "pending_approval"),
-  ];
-  if (filters.dateFrom) conditions.push(gte(studentPayments.receivedAt, filters.dateFrom));
-  if (filters.dateTo) conditions.push(lte(studentPayments.receivedAt, filters.dateTo));
-  if (filters.branchId) conditions.push(eq(students.branchId, filters.branchId));
-
-  const [row] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(studentPayments)
-    .innerJoin(students, eq(studentPayments.studentId, students.id))
-    .where(and(...conditions));
-
-  return row?.count ?? 0;
-}
-
 /** Income: defaults to `status = "posted"` (excludes `reversed`) unless the
  * filter names a valid `income_records` status explicitly. */
 async function computeIncomeTotals(
@@ -403,9 +370,11 @@ async function computeExpenseTotals(
 }
 
 /** Pending expense approvals, counted directly off `expense_records.status`
- * — same "always pending_approval, never overridden by filters.status,
- * doesn't query approval_requests" reasoning as
- * `computePendingPaymentApprovals`. */
+ * — always `status = "pending_approval"`, never overridden by
+ * `filters.status` (same "fixed metric" reasoning as outstanding charges),
+ * and deliberately not computed via `approval_requests` (the entity's own
+ * status column is the source of truth either way). Expenses keep their
+ * existing approval workflow unchanged — only student payments lost theirs. */
 async function computePendingExpenseApprovals(
   academyId: string,
   filters: ParsedFinanceReportFilters,
@@ -460,12 +429,11 @@ export async function getFinanceReports(
   const [studentPaymentsSection, incomeSection, expensesSection] = await Promise.all([
     studentPaymentsLevel !== "none"
       ? (async (): Promise<StudentPaymentsReportSection> => {
-          const [outstandingCharges, paymentsReceived, pendingApprovalsCount] = await Promise.all([
+          const [outstandingCharges, paymentsReceived] = await Promise.all([
             computeOutstandingCharges(academyId, filters),
             computePaymentsReceived(academyId, filters),
-            computePendingPaymentApprovals(academyId, filters),
           ]);
-          return { visible: true, outstandingCharges, paymentsReceived, pendingApprovalsCount };
+          return { visible: true, outstandingCharges, paymentsReceived };
         })()
       : Promise.resolve<StudentPaymentsReportSection>({ visible: false }),
     incomeLevel !== "none"

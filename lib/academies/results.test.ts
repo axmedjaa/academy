@@ -625,19 +625,44 @@ describe("approveResult — state machine", () => {
     expect(decided.decidedBy).toBe(setup.userId);
   });
 
-  it("the submitter cannot approve their own submission (self-approval block)", async () => {
-    const setup = await setupAcademy("academy_owner");
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
+    "%s self-approval is ALLOWED: the submitter can approve their own submission (architecture decision — Owner/Academy Administrator/Manager are never blocked waiting for approval)",
+    async (role) => {
+      const setup = await setupAcademy(role);
+      const examId = await insertExamDirect(setup.academyId, setup.batchId);
+      const resultId = await insertExamResultDirect(
+        setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId,
+        { status: "under_review", marksObtained: 70, submittedAt: new Date() },
+      );
+      // The approval request was requested by this same user.
+      await insertApprovalRequestDirect(setup.academyId, resultId, setup.userId);
+
+      const result = await approveResult(setup.context, resultId);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.result.status).toBe("approved");
+      expect(result.result.approvedBy).toBe(setup.userId);
+    },
+  );
+
+  it("Trainer cannot self-decide their own submitted result — still fully forbidden from approving, self-submitted or not", async () => {
+    const setup = await setupAcademy("trainer");
     const examId = await insertExamDirect(setup.academyId, setup.batchId);
     const resultId = await insertExamResultDirect(
       setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId,
       { status: "under_review", marksObtained: 70, submittedAt: new Date() },
     );
-    // The approval request was requested by the owner themselves.
+    // Trainer legitimately submitted this result themselves (Trainer holds
+    // "enter_marks" on ACADEMY_EXAMS_ACTION, which canSubmitLevel accepts).
     await insertApprovalRequestDirect(setup.academyId, resultId, setup.userId);
 
     const result = await approveResult(setup.context, resultId);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("self_approval");
+    // "forbidden", never "self_approval" — Trainer never reaches
+    // ACADEMY_RESULTS_ACTION's "approve" level at all, so this is refused
+    // at the permission gate before decideApprovalRequest's self-approval
+    // check is ever reached.
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
 
     const row = await fetchResultRow(resultId);
     expect(row.status).toBe("under_review");
@@ -660,6 +685,27 @@ describe("approveResult — state machine", () => {
     const result = await approveResult(setup.context, randomUUID());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("a real result id belonging to a DIFFERENT academy is rejected as not_found — never approved (tenant isolation, self-decide included)", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherExamId = await insertExamDirect(other.academyId, other.batchId);
+    const otherResultId = await insertExamResultDirect(
+      other.academyId, otherExamId, other.studentId, other.batchId, other.activeGradeConfigId!, other.creatorUserId,
+      { status: "under_review", marksObtained: 70, submittedAt: new Date() },
+    );
+    await insertApprovalRequestDirect(other.academyId, otherResultId, other.userId);
+
+    // A same-role Owner in a completely different academy — holds "approve"
+    // level in their OWN academy, but that must never let them decide a
+    // different academy's result, self-decide or not.
+    const attacker = await setupAcademy("academy_owner");
+    const result = await approveResult(attacker.context, otherResultId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const row = await fetchResultRow(otherResultId);
+    expect(row.status).toBe("under_review");
   });
 });
 
@@ -707,8 +753,25 @@ describe("rejectResult — state machine", () => {
     expect(row.status).toBe("under_review");
   });
 
-  it("the requester cannot reject their own submission (self-approval block reused)", async () => {
-    const setup = await setupAcademy("academy_owner");
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
+    "%s self-rejection is ALLOWED (same architecture decision as self-approval)",
+    async (role) => {
+      const setup = await setupAcademy(role);
+      const examId = await insertExamDirect(setup.academyId, setup.batchId);
+      const resultId = await insertExamResultDirect(
+        setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId,
+        { status: "under_review", marksObtained: 70, submittedAt: new Date() },
+      );
+      await insertApprovalRequestDirect(setup.academyId, resultId, setup.userId);
+
+      const result = await rejectResult(setup.context, resultId, "some reason");
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.result.status).toBe("draft");
+    },
+  );
+
+  it("Trainer cannot self-decide (reject) their own submitted result", async () => {
+    const setup = await setupAcademy("trainer");
     const examId = await insertExamDirect(setup.academyId, setup.batchId);
     const resultId = await insertExamResultDirect(
       setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId,
@@ -718,7 +781,7 @@ describe("rejectResult — state machine", () => {
 
     const result = await rejectResult(setup.context, resultId, "some reason");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("self_approval");
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("refuses to reject a result not currently under_review", async () => {
@@ -1001,15 +1064,19 @@ describe("full lifecycle integration", () => {
     const submitted = await submitResults(owner.context, examId);
     expect(submitted.ok).toBe(true);
 
-    // Owner submitted it, so Owner cannot approve their own submission —
-    // a different Manager must.
-    const selfApprove = await approveResult(owner.context, resultId);
-    expect(selfApprove.ok).toBe(false);
-    if (!selfApprove.ok) expect(selfApprove.error.code).toBe("self_approval");
-
-    const approved = await approveResult(managerContext, resultId);
+    // Owner submitted it AND can approve it themselves (architecture
+    // decision — Owner/Academy Administrator/Manager are never blocked
+    // waiting for approval; see the "self-approval is ALLOWED" tests
+    // above). Cross-user approval (a different Manager approving someone
+    // else's submission) is already covered by the permission-matrix tests
+    // above, so this end-to-end test exercises the self-decide path
+    // instead of duplicating that coverage.
+    const approved = await approveResult(owner.context, resultId);
     expect(approved.ok).toBe(true);
 
+    // publishResults is a plain "approve"-gated action with no requestedBy
+    // check at all — any approve-capable role may publish, including a
+    // different one from whoever approved.
     const published = await publishResults(managerContext, examId);
     expect(published.ok).toBe(true);
     if (!published.ok) return;

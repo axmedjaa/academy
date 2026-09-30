@@ -95,9 +95,15 @@ import { evaluateGradeBand, type ResultRecord } from "@/lib/academies/results";
  * "one exported action per PLAN.md-named transition" convention this
  * codebase already follows everywhere else) calls the SAME
  * `decideApprovalRequest` (Item 50a) `approveResult`/`rejectResult`
- * delegate to — so the self-approval guard ("the requester cannot decide
- * their own correction request") and the one-shot-decision guard are
- * reused, not reimplemented, exactly as instructed.
+ * delegate to — so the one-shot-decision guard is reused, not
+ * reimplemented. The self-approval guard is ALSO reused, but no longer
+ * unconditional: both functions pass `allowSelfDecision: canRequestOrDecide(level)`
+ * (later architecture decision — see lib/academies/results.ts's own module
+ * comment, "Self-decision"), so Owner/Academy Administrator/Manager may
+ * decide their own requested correction; the guard still fully blocks
+ * anyone without `"approve"` level on `ACADEMY_RESULTS_ACTION` from
+ * deciding ANY correction, their own or otherwise (nobody but those three
+ * roles ever reaches this function at all — see `canRequestOrDecide`).
  *
  * ---------------------------------------------------------------------
  * Approval and application happen atomically — "the instant it's
@@ -460,9 +466,17 @@ export async function approveResultCorrection(
     const pending = await findPendingApprovalRequest(tx, correction.originalResultId);
     if (!pending) return { kind: "invalid_state" as const };
 
+    // Owner/Academy Administrator/Manager may decide their own requested
+    // correction — same "no approval workflow should block an already-
+    // authorized role" change as lib/academies/results.ts's
+    // approveResult/rejectResult, reusing this file's own
+    // `canRequestOrDecide` (the same check requesting a correction and
+    // deciding one both already use).
+    const canSelfDecide = canRequestOrDecide(level);
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "approved",
+      allowSelfDecision: canSelfDecide,
     });
     if (!decision.ok) return { kind: "decision_error" as const, error: decision.error };
 
@@ -654,9 +668,13 @@ export async function rejectResultCorrection(
     const pending = await findPendingApprovalRequest(tx, correction.originalResultId);
     if (!pending) return { kind: "invalid_state" as const };
 
+    // Owner/Academy Administrator/Manager may decide their own requested
+    // correction — see approveResultCorrection's own comment above.
+    const canSelfDecide = canRequestOrDecide(level);
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "rejected",
+      allowSelfDecision: canSelfDecide,
     });
     if (!decision.ok) return { kind: "decision_error" as const, error: decision.error };
 

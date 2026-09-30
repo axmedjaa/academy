@@ -18,49 +18,64 @@ import { createApprovalRequest, decideApprovalRequest } from "@/lib/academies/ap
  * `approveExpense`, `rejectExpense`, `listExpenseRecords`.
  *
  * ---------------------------------------------------------------------
- * Permission gating and the create-vs-approve split
+ * Permission gating (as later revised — see ACADEMY_EXPENSES_ACTION's own
+ * comment in lib/auth/academy-permissions.ts for the full history)
  * ---------------------------------------------------------------------
- * `ACADEMY_EXPENSES_ACTION`: Owner = "view", Admin/Manager = "approve",
- * Finance Officer = "manage", Trainer = "view", Admissions Officer = no
- * entry ("none"). Two distinct, non-overlapping gates:
+ * `ACADEMY_EXPENSES_ACTION`: Owner/Finance Officer = "manage", Admin/Manager
+ * = "approve", Trainer = "view", Admissions Officer = no entry ("none").
  *
- *  - `canCreate` (`level === "manage"`, Finance Officer only) — gates
- *    `createExpenseRecord` AND `submitExpenseForApproval` (the creator
- *    submits their own draft).
- *  - `canApprove` (`level === "approve"`, Admin/Manager only) — gates
- *    `approveExpense`/`rejectExpense`.
+ *  - `canCreate` (`level === "manage" || level === "approve"`) — now ALL
+ *    FOUR of Owner/Admin/Manager/Finance Officer, so every role that must
+ *    be able to "record/record their own Expense" per the approved
+ *    architecture decision can. Gates `createExpenseRecord` AND
+ *    `submitExpenseForApproval`.
+ *  - `canApprove` (`level === "approve"`, Admin/Manager only, UNCHANGED) —
+ *    GENERAL approve authority: may decide ANY pending expense, their own
+ *    or someone else's. Still gates `approveExpense`/`rejectExpense`'s
+ *    outer permission check, same as before.
+ *  - `SELF_APPROVE_ROLES` (Owner/Admin/Manager/Finance Officer) — NEW.
+ *    Independent of `canApprove`: a role in this set may decide a pending
+ *    expense it did NOT submit only when it also holds general
+ *    `canApprove` authority (Admin/Manager); when it does NOT
+ *    (Owner/Finance Officer), it may still decide a request ONLY when
+ *    `pending.requestedBy === actorContext.userId` — enforced explicitly in
+ *    `approveExpense`/`rejectExpense` below, since `decideApprovalRequest`
+ *    itself has no concept of "may decide only their own but nobody
+ *    else's" (its own guard is purely "self vs. not-self," never "is this
+ *    actor allowed to decide non-self requests at all" — that authorization
+ *    question is always the caller's job, per this module's own comment).
+ *    `allowSelfDecision: SELF_APPROVE_ROLES.has(membershipRole)` is what
+ *    actually lets `requestedBy === decidedBy` through
+ *    `decideApprovalRequest`'s own guard for all four roles.
  *
- * ---------------------------------------------------------------------
- * Judgment call — Admin/Manager are refused on `createExpenseRecord`
- * ---------------------------------------------------------------------
- * PLAN.md's Master Permission Matrix names this row "Expenses
- * (create/approve)" but its per-role cells are View(owner)/Approve(admin)/
- * Approve(manager)/—/Create-Submit(finance_officer)/View(trainer) — nothing
- * in that row's own text grants Admin or Manager a *create* capability,
- * only Approve. The Finance Lifecycle table is even more explicit: "draft
- * -> pending_approval (submitExpenseForApproval, by Finance Officer per its
- * Create/Submit cell)" names Finance Officer as the only actor for the
- * create/submit half of this entity's lifecycle; Admin/Manager's actor
- * column only ever appears on the approve/reject transition. Since
- * `ACADEMY_EXPENSES_ACTION`'s "approve" level is a distinct value from
- * "manage" (not a superset — see academy-permissions.ts's own comment: this
- * row's "approve" level exists specifically because Admin's cell here needs
- * to be Approve-only, unlike its Owner-gets-View-here quirk), gating
- * `createExpenseRecord` on `canCreate` (`level === "manage"` exactly, not
- * `canManage`'s more permissive "full-or-manage") already, structurally,
- * refuses Admin/Manager — no extra check needed. This is confirmed, not
- * merely assumed: student-payments.test.ts's sibling module documents the
- * analogous inversion explicitly, and this file's own test suite asserts
- * Admin/Manager get `forbidden` on `createExpenseRecord` while still
- * passing `approveExpense`/`rejectExpense`.
+ * This is the first entity in this codebase where self-decide is granted
+ * to a role (Finance Officer) that never independently reaches the
+ * entity's own general "approve" level at all — contrast
+ * grade-configurations.ts/results.ts, where self-decide was always "the
+ * actor already independently qualifies for both the create gate and the
+ * approve gate," never a role-specific carve-out for a role lacking
+ * general approve authority.
  */
 function canCreate(level: AcademyPermissionLevel): boolean {
-  return level === "manage";
+  return level === "manage" || level === "approve";
 }
 
 function canApprove(level: AcademyPermissionLevel): boolean {
   return level === "approve";
 }
+
+/** Roles allowed to decide (approve/reject) a pending expense THEY
+ * THEMSELVES submitted, even without general `canApprove` authority — see
+ * this file's own module comment. Admin/Manager are included here too
+ * (harmless/redundant for them, since `canApprove` already lets them
+ * decide anyone's) so `allowSelfDecision` is computed identically for all
+ * four roles without a role-by-role special case. */
+const SELF_APPROVE_ROLES = new Set<AcademyRole>([
+  "academy_owner",
+  "academy_admin",
+  "manager",
+  "finance_officer",
+]);
 
 function canView(level: AcademyPermissionLevel): boolean {
   return level !== "none";
@@ -235,19 +250,30 @@ export type ListExpenseRecordsResult =
   | {
       ok: true;
       records: ExpenseRecordRecord[];
-      /** Can create/submit (canCreate's "manage"-only gate, Finance
-       * Officer). */
+      /** Can create/submit — Owner/Admin/Manager/Finance Officer, all four,
+       * per the approved architecture decision. */
       canCreate: boolean;
-      /** Can approve/reject (canApprove's "approve"-only gate,
-       * Admin/Manager). */
+      /** GENERAL approve authority — may decide ANY pending expense, not
+       * just their own. Admin/Manager only, unchanged. Also still exactly
+       * what `canReverseExpense` (lib/academies/finance-reversals.ts)
+       * requires, so this flag continues to correctly gate the UI's
+       * Reverse/Adjust controls with no change needed there. */
       canApprove: boolean;
+      /** May decide a pending expense THEY THEMSELVES submitted, even
+       * without general approve authority — true for all four of
+       * Owner/Admin/Manager/Finance Officer. The UI must combine this with
+       * a per-row `record.submittedBy === currentUserId` check (this flag
+       * alone does not mean "can decide any row" — only `canApprove`
+       * means that) to decide whether to show Approve/Reject on a given
+       * row. See this file's own module comment. */
+      canSelfApprove: boolean;
     }
   | { ok: false; error: ExpenseRecordActionError };
 
 export async function listExpenseRecords(actorContext: AuthContext): Promise<ListExpenseRecordsResult> {
   const resolved = await resolveExpenseAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
 
   const rows = await db.select().from(expenseRecords).where(eq(expenseRecords.academyId, academyId));
 
@@ -256,6 +282,7 @@ export async function listExpenseRecords(actorContext: AuthContext): Promise<Lis
     records: rows.map(toRecord),
     canCreate: canCreate(permissionLevel),
     canApprove: canApprove(permissionLevel),
+    canSelfApprove: SELF_APPROVE_ROLES.has(membershipRole),
   };
 }
 
@@ -263,7 +290,9 @@ export type CreateExpenseRecordResult =
   | { ok: true; record: ExpenseRecordRecord }
   | { ok: false; error: ExpenseRecordActionError };
 
-/** Finance Lifecycle table: `— -> draft`, actor Finance Officer only. */
+/** Finance Lifecycle table: `— -> draft`, originally Finance Officer only —
+ * now Owner/Admin/Manager/Finance Officer, per `canCreate`'s widened gate
+ * above (approved architecture decision). */
 export async function createExpenseRecord(
   actorContext: AuthContext,
   input: CreateExpenseRecordInput,
@@ -338,13 +367,16 @@ export type SubmitExpenseForApprovalResult =
   | { ok: false; error: ExpenseRecordActionError };
 
 /**
- * Finance Lifecycle table: `draft -> pending_approval`, actor Finance
- * Officer (same `canCreate` gate as `createExpenseRecord` — "the
- * creator/Finance Officer submits their own draft," per this item's
- * brief). Flips the expense's own status AND creates the
+ * Finance Lifecycle table: `draft -> pending_approval`, same `canCreate`
+ * gate as `createExpenseRecord` (originally Finance Officer only — now
+ * Owner/Admin/Manager/Finance Officer, "the creator submits their own
+ * draft"). Flips the expense's own status AND creates the
  * `entityType: "expense"` `approval_requests` row (Item 50a's
  * `createApprovalRequest`) in one transaction — same shape as
  * lib/academies/grade-configurations.ts's `submitGradeConfigForApproval`.
+ * No ownership check here — same as before, ANY create-capable role may
+ * submit ANY draft in the academy (not just one they personally created),
+ * matching this file's existing convention.
  */
 export async function submitExpenseForApproval(
   actorContext: AuthContext,
@@ -454,13 +486,25 @@ export type ApproveExpenseResult =
   | { ok: false; error: ExpenseRecordActionError };
 
 /**
- * Finance Lifecycle table: `pending_approval -> approved`, actor Academy
- * Administrator or Manager only (`canApprove`'s `level === "approve"` gate
- * — Owner is View-only on this row, Finance Officer is Create/Submit-only,
- * neither ever reaches "approve"). Delegates the actual decision —
- * including the self-approval block and one-shot-decision guard — to Item
- * 50a's `decideApprovalRequest`; this function's own added value is
- * resolving which pending `approval_requests` row belongs to this expense
+ * Finance Lifecycle table: `pending_approval -> approved`. Two ways in,
+ * per the approved architecture decision:
+ *
+ *  - GENERAL approve authority (`canApprove`, `level === "approve"`,
+ *    Admin/Manager, unchanged): may decide ANY pending expense.
+ *  - SELF-approve only (`SELF_APPROVE_ROLES`, all four of
+ *    Owner/Admin/Manager/Finance Officer): may decide ONLY a request they
+ *    themselves submitted — enforced explicitly below once the pending
+ *    request is loaded (`pending.requestedBy`), since neither the outer
+ *    permission gate nor `decideApprovalRequest` itself can express "may
+ *    decide only their own but nobody else's."
+ *
+ * Delegates the actual decision — including the one-shot-decision guard —
+ * to Item 50a's `decideApprovalRequest`, passing
+ * `allowSelfDecision: SELF_APPROVE_ROLES.has(membershipRole)` so
+ * `requestedBy === decidedBy` is no longer unconditionally refused for
+ * these four roles. This function's own added value is resolving which
+ * pending `approval_requests` row belongs to this expense, enforcing the
+ * "self-approve-only roles may not decide someone else's request" rule,
  * and flipping the expense's own `status`/`approved_by`/`approved_at` in
  * the same transaction as that decision.
  */
@@ -472,7 +516,9 @@ export async function approveExpense(
   if (!resolved.ok) return resolved;
   const { academyId, membershipRole, permissionLevel } = resolved.access;
 
-  if (!canApprove(permissionLevel)) {
+  const hasGeneralApprove = canApprove(permissionLevel);
+  const isSelfApproveRole = SELF_APPROVE_ROLES.has(membershipRole);
+  if (!hasGeneralApprove && !isSelfApproveRole) {
     return { ok: false, error: FORBIDDEN };
   }
 
@@ -499,9 +545,17 @@ export async function approveExpense(
       return { kind: "invalid_state" as const };
     }
 
+    // A self-approve-only role (no general authority) may decide ONLY a
+    // request it submitted itself — never someone else's, even though it
+    // passed the outer gate above.
+    if (!hasGeneralApprove && pending.requestedBy !== actorContext.userId) {
+      return { kind: "forbidden" as const };
+    }
+
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "approved",
+      allowSelfDecision: isSelfApproveRole,
     });
     if (!decision.ok) {
       return { kind: "decision_error" as const, error: decision.error };
@@ -538,6 +592,9 @@ export async function approveExpense(
   if (result.kind === "not_found") {
     return { ok: false, error: NOT_FOUND };
   }
+  if (result.kind === "forbidden") {
+    return { ok: false, error: FORBIDDEN };
+  }
   if (result.kind === "invalid_state") {
     return {
       ok: false,
@@ -556,11 +613,12 @@ export type RejectExpenseResult =
 
 /**
  * Finance Lifecycle table: `pending_approval -> rejected`, "reason
- * required", same approval authority as `approveExpense`. Same
- * `canApprove`/`decideApprovalRequest` delegation, plus persisting the
- * required reason onto BOTH the `approval_requests` row (same convention
- * as `rejectGradeConfig`, since `decideApprovalRequest`'s own input shape
- * has no reason-at-decision-time field) and `expense_records.rejection_reason`
+ * required", same authority split as `approveExpense` — see that
+ * function's own comment. Same `canApprove`/self-approve-role/
+ * `decideApprovalRequest` delegation, plus persisting the required reason
+ * onto BOTH the `approval_requests` row (same convention as
+ * `rejectGradeConfig`, since `decideApprovalRequest`'s own input shape has
+ * no reason-at-decision-time field) and `expense_records.rejection_reason`
  * itself (a real schema column on this table, unlike `grade_configurations`).
  */
 export async function rejectExpense(
@@ -572,7 +630,9 @@ export async function rejectExpense(
   if (!resolved.ok) return resolved;
   const { academyId, membershipRole, permissionLevel } = resolved.access;
 
-  if (!canApprove(permissionLevel)) {
+  const hasGeneralApprove = canApprove(permissionLevel);
+  const isSelfApproveRole = SELF_APPROVE_ROLES.has(membershipRole);
+  if (!hasGeneralApprove && !isSelfApproveRole) {
     return { ok: false, error: FORBIDDEN };
   }
 
@@ -610,9 +670,16 @@ export async function rejectExpense(
       return { kind: "invalid_state" as const };
     }
 
+    // A self-approve-only role (no general authority) may decide ONLY a
+    // request it submitted itself — never someone else's.
+    if (!hasGeneralApprove && pending.requestedBy !== actorContext.userId) {
+      return { kind: "forbidden" as const };
+    }
+
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "rejected",
+      allowSelfDecision: isSelfApproveRole,
     });
     if (!decision.ok) {
       return { kind: "decision_error" as const, error: decision.error };
@@ -648,6 +715,9 @@ export async function rejectExpense(
 
   if (result.kind === "not_found") {
     return { ok: false, error: NOT_FOUND };
+  }
+  if (result.kind === "forbidden") {
+    return { ok: false, error: FORBIDDEN };
   }
   if (result.kind === "invalid_state") {
     return {

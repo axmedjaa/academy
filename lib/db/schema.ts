@@ -2053,6 +2053,10 @@ export const studentPayments = pgTable(
     currency: text("currency").notNull(),
     method: studentPaymentMethodEnum("method").notNull(),
     reference: text("reference"),
+    // Distinct from `reference` (a transaction/reference number) — free-form
+    // staff notes, e.g. "Second installment". Added per the Afoogy manual
+    // student-payment verification report's Notes requirement.
+    notes: text("notes"),
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
     recordedBy: uuid("recorded_by")
       .notNull()
@@ -2475,5 +2479,343 @@ export const notificationPreferences = pgTable(
     // Read path for both getNotificationPreferences (all templates for one
     // user+academy) and the settings-page upsert lookup.
     index("notification_preferences_user_id_academy_id_idx").on(table.userId, table.academyId),
+  ],
+);
+
+// ===========================================================================
+// Student Fee Periods (new feature — not in PLAN.md/DESIGN.md's original
+// scope; see lib/academies/fee-periods.ts's module comment for the full
+// design rationale).
+//
+// Two tables, deliberately separate from `student_charges`/`student_payments`:
+//   - `enrollment_fee_schedules`: the recurring rule ("$50/month starting
+//     this date") for one enrollment. At most one per enrollment.
+//   - `fee_periods`: the concrete, deterministically-generated periods that
+//     rule produces ("September 2026, expected $50") — what the student
+//     OWES for a period, never what they've paid.
+//
+// A fee period's paid/remaining/status is intentionally NOT a stored column
+// here (unlike `student_charges.status`) — it's derived at read time from
+// `payment_allocations` joined to `student_payments` where
+// `status = 'approved'`. This means the entire existing approve/reject/
+// reverse/adjust machinery on `student_payments` (lib/academies/
+// student-payments.ts, lib/academies/finance-reversals.ts) works for
+// fee-period payments completely unchanged — approving, rejecting, or
+// reversing a payment automatically changes what a later read computes,
+// with no separate recalculation step to keep in sync (and no risk of it
+// drifting out of sync, unlike a stored+recalculated status).
+// ===========================================================================
+
+// Interval, in whole calendar months, between one fee period's start and
+// the next — a plain checked integer rather than a named pgEnum
+// (monthly/quarterly/yearly), deliberately: it generalizes to every
+// interval the business actually needs (1/2/3/4/6/12 months) through the
+// exact same calendar-accurate period-boundary math
+// (lib/academies/fee-periods.ts's addMonths/addDays), with no per-name
+// branch to add whenever a new interval is needed. The fixed allowed set
+// is enforced by the CHECK constraint below, not by a closed DB enum type.
+export const FEE_INTERVAL_MONTHS_OPTIONS = [1, 2, 3, 4, 6, 12] as const;
+
+export const enrollmentFeeSchedules = pgTable(
+  "enrollment_fee_schedules",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    enrollmentId: uuid("enrollment_id")
+      .notNull()
+      .references(() => batchEnrollments.id),
+    intervalMonths: integer("interval_months").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    // The first period's start date — every later period is derived from
+    // this anchor by stepping forward whole `interval_months` units, so
+    // period boundaries never drift (see generateFeePeriodsForEnrollment).
+    anchorDate: date("anchor_date").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // At most one fee schedule per enrollment — setEnrollmentFeeSchedule
+    // upserts this row rather than inserting a second one.
+    uniqueIndex("enrollment_fee_schedules_enrollment_id_unique").on(table.enrollmentId),
+    index("enrollment_fee_schedules_academy_id_idx").on(table.academyId),
+    check("enrollment_fee_schedules_amount_cents_positive", sql`${table.amountCents} > 0`),
+    check(
+      "enrollment_fee_schedules_interval_months_valid",
+      sql`${table.intervalMonths} IN (1, 2, 3, 4, 6, 12)`,
+    ),
+  ],
+);
+
+// IMPORTANT — read before touching this table: like `gradeBands` above, the
+// no-overlap guarantee for fee_periods within one enrollment is NOT fully
+// expressed by this Drizzle table definition. The `uniqueIndex` below only
+// blocks an EXACT duplicate (enrollment_id, period_start, period_end)
+// triple — it does NOT stop two rows with different boundaries from
+// overlapping (e.g. a 1-month period and a 6-month period both anchored on
+// the same start date, which is exactly what an enrollment's fee schedule
+// interval being changed without moving its anchorDate used to produce —
+// see lib/academies/fee-periods.ts's generateFeePeriodsForEnrollment for
+// the application-level fix). drizzle-orm 0.45.2 / drizzle-kit 0.31.10
+// still have no declarative builder for a Postgres `EXCLUDE USING gist`
+// constraint, so the real database-level guarantee is a hand-appended
+// custom migration, same mechanism as gradeBands' own (see that table's
+// comment above for the full rationale) —
+// drizzle/0028_fee_periods_no_overlap.sql:
+//   CREATE EXTENSION IF NOT EXISTS btree_gist;
+//   ALTER TABLE fee_periods ADD CONSTRAINT fee_periods_no_overlap
+//     EXCLUDE USING gist (enrollment_id WITH =, daterange(period_start, period_end, '[]') WITH &&);
+// That migration is NOT guaranteed to be applied in every environment: it
+// will fail to apply (and does, on at least one real dataset found by this
+// task's own read-only audit — see scripts/audit-fee-periods.ts) wherever
+// fee_periods already contains overlapping rows from before the generation
+// fix existed. Do not assume this constraint is live without checking
+// `pg_constraint` — lib/academies/fee-periods.test.ts's own
+// "fee_periods_no_overlap exclusion constraint" test does exactly that and
+// skips itself when the constraint isn't present, rather than assuming it.
+export const feePeriods = pgTable(
+  "fee_periods",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    enrollmentId: uuid("enrollment_id")
+      .notNull()
+      .references(() => batchEnrollments.id),
+    // Copied from the schedule at generation time (not re-read live) so a
+    // period's own history stays accurate even if the schedule's interval
+    // is later changed — a later schedule change only affects periods
+    // generated after that change, never rewrites history.
+    intervalMonths: integer("interval_months").notNull(),
+    periodStart: date("period_start").notNull(),
+    periodEnd: date("period_end").notNull(),
+    dueDate: date("due_date").notNull(),
+    expectedAmountCents: integer("expected_amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Prevents duplicate periods for the same enrollment/window — the real
+    // safety net against a generation race, same role the DB unique
+    // constraint plays for receipt numbers (see student-payments.ts's
+    // generateReceiptNumber comment).
+    uniqueIndex("fee_periods_enrollment_id_period_start_period_end_unique").on(
+      table.enrollmentId,
+      table.periodStart,
+      table.periodEnd,
+    ),
+    index("fee_periods_academy_id_idx").on(table.academyId),
+    check("fee_periods_expected_amount_cents_nonnegative", sql`${table.expectedAmountCents} >= 0`),
+    check("fee_periods_interval_months_valid", sql`${table.intervalMonths} IN (1, 2, 3, 4, 6, 12)`),
+  ],
+);
+
+// Junction table letting one `student_payments` row cover one-or-more fee
+// periods (or, symmetrically, one fee period receive several separate
+// payments over time) without touching `student_payments.charge_id` at all
+// — a fee-period payment always has `charge_id = null` and one-or-more rows
+// here instead; a one-off-charge payment keeps using `charge_id` exactly as
+// it does today, with zero rows here. See lib/academies/fee-periods.ts's
+// `recordFeePeriodPayment`.
+export const paymentAllocations = pgTable(
+  "payment_allocations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    studentPaymentId: uuid("student_payment_id")
+      .notNull()
+      .references(() => studentPayments.id),
+    feePeriodId: uuid("fee_period_id")
+      .notNull()
+      .references(() => feePeriods.id),
+    amountCents: integer("amount_cents").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("payment_allocations_payment_id_fee_period_id_unique").on(
+      table.studentPaymentId,
+      table.feePeriodId,
+    ),
+    index("payment_allocations_fee_period_id_idx").on(table.feePeriodId),
+    index("payment_allocations_student_payment_id_idx").on(table.studentPaymentId),
+    check("payment_allocations_amount_cents_positive", sql`${table.amountCents} > 0`),
+  ],
+);
+
+// ===========================================================================
+// Academy Books + Book Sales (new feature). Academy-scoped, never
+// platform-wide (§32). Reuses `income_records` for the money-received side
+// (see lib/academies/book-sales.ts) rather than a parallel finance ledger.
+// ===========================================================================
+
+export const bookStatusEnum = pgEnum("book_status", ["active", "inactive"]);
+
+export const books = pgTable(
+  "books",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    name: text("name").notNull(),
+    description: text("description"),
+    author: text("author"),
+    isbn: text("isbn"),
+    category: text("category"),
+    priceCents: integer("price_cents").notNull(),
+    currency: text("currency").notNull(),
+    stockQuantity: integer("stock_quantity").notNull().default(0),
+    // R2 object key (never a URL — same convention as academies.logoRef),
+    // nullable: a book may be created before a cover is uploaded.
+    coverRef: text("cover_ref"),
+    status: bookStatusEnum("status").notNull().default("active"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("books_academy_id_idx").on(table.academyId),
+    check("books_price_cents_nonnegative", sql`${table.priceCents} >= 0`),
+    check("books_stock_quantity_nonnegative", sql`${table.stockQuantity} >= 0`),
+  ],
+);
+
+export const bookBuyerTypeEnum = pgEnum("book_buyer_type", ["student", "other_person"]);
+export const bookDiscountTypeEnum = pgEnum("book_discount_type", ["none", "fixed", "percentage"]);
+export const bookSalePaymentStatusEnum = pgEnum("book_sale_payment_status", [
+  "unpaid",
+  "partially_paid",
+  "paid",
+]);
+
+export const bookSales = pgTable(
+  "book_sales",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    branchId: uuid("branch_id").references(() => branches.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    buyerType: bookBuyerTypeEnum("buyer_type").notNull(),
+    studentId: uuid("student_id").references(() => students.id),
+    otherBuyerName: text("other_buyer_name"),
+    otherBuyerPhone: text("other_buyer_phone"),
+    quantity: integer("quantity").notNull(),
+    // Snapshot of the book's price/currency at sale time — a later price
+    // change on the book must never alter a historical sale (§38, §63).
+    unitPriceCents: integer("unit_price_cents").notNull(),
+    currency: text("currency").notNull(),
+    subtotalCents: integer("subtotal_cents").notNull(),
+    discountType: bookDiscountTypeEnum("discount_type").notNull().default("none"),
+    // For "fixed": whole cents. For "percentage": whole percentage points
+    // (0-100). Meaningless (and always 0) when discountType is "none".
+    discountValue: integer("discount_value").notNull().default(0),
+    discountAmountCents: integer("discount_amount_cents").notNull().default(0),
+    finalAmountCents: integer("final_amount_cents").notNull(),
+    // Recalculated transactionally on every payment/refund against this
+    // sale (recalculateBookSalePaymentStatus) — safe to store because,
+    // unlike student_payments, book-sale payments have no approval lag
+    // (§46-47 describe no approval step for this domain at all).
+    paymentStatus: bookSalePaymentStatusEnum("payment_status").notNull().default("unpaid"),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("book_sales_academy_id_idx").on(table.academyId),
+    index("book_sales_book_id_idx").on(table.bookId),
+    index("book_sales_student_id_idx").on(table.studentId),
+    check("book_sales_quantity_positive", sql`${table.quantity} > 0`),
+    check("book_sales_subtotal_cents_nonnegative", sql`${table.subtotalCents} >= 0`),
+    check("book_sales_discount_amount_cents_nonnegative", sql`${table.discountAmountCents} >= 0`),
+    check("book_sales_final_amount_cents_nonnegative", sql`${table.finalAmountCents} >= 0`),
+  ],
+);
+
+export const bookSalePaymentMethodEnum = pgEnum("book_sale_payment_method", ["cash", "mobile_money"]);
+
+export const bookSalePayments = pgTable(
+  "book_sale_payments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    bookSaleId: uuid("book_sale_id")
+      .notNull()
+      .references(() => bookSales.id),
+    amountCents: integer("amount_cents").notNull(),
+    method: bookSalePaymentMethodEnum("method").notNull(),
+    reference: text("reference"),
+    paidAt: timestamp("paid_at", { withTimezone: true }).notNull(),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    // Set once this payment's own income_records row has been posted — see
+    // book-sales.ts's module comment on why income is booked per payment
+    // event rather than once at sale creation for the full final amount.
+    incomeRecordId: uuid("income_record_id").references(() => incomeRecords.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("book_sale_payments_book_sale_id_idx").on(table.bookSaleId),
+    check("book_sale_payments_amount_cents_positive", sql`${table.amountCents} > 0`),
+  ],
+);
+
+export const bookSaleRefunds = pgTable(
+  "book_sale_refunds",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    bookSaleId: uuid("book_sale_id")
+      .notNull()
+      .references(() => bookSales.id),
+    amountCents: integer("amount_cents").notNull(),
+    reason: text("reason").notNull(),
+    returnedQuantity: integer("returned_quantity").notNull().default(0),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("book_sale_refunds_book_sale_id_idx").on(table.bookSaleId),
+    check("book_sale_refunds_amount_cents_positive", sql`${table.amountCents} > 0`),
+    check("book_sale_refunds_returned_quantity_nonnegative", sql`${table.returnedQuantity} >= 0`),
   ],
 );

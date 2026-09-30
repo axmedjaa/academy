@@ -14,6 +14,7 @@ import {
   Button,
   ErrorMessage,
   Field,
+  LinkButton,
   Section,
   TableWrap,
   inputClass,
@@ -21,12 +22,14 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
+import { dollarsToCents } from "@/lib/ui/money";
 
 const initialState: StudentPaymentsFormState = { ok: false };
 
-const SELF_APPROVAL_TOOLTIP = "You can't approve a transaction you recorded.";
+const SELF_REVERSAL_TOOLTIP = "You can't reverse or adjust a payment you recorded yourself.";
 
 function formatMoney(amountCents: number, currency: string): string {
   return `${currency} ${(amountCents / 100).toFixed(2)}`;
@@ -42,16 +45,26 @@ interface Props {
   studentLabels: Record<string, string>;
   /** Active students for the Create Charge/Record Payment forms' student
    * picker — see page.tsx's own comment. */
-  studentOptions: { id: string; fullName: string; studentNumber: string }[];
-  /** Only "full"/"manage" callers (Manager/Finance Officer) get
-   * create/record/issue controls — Owner/Admin/Trainer are read-only here,
-   * per this row's confirmed View/View/Full/—/Manage/View matrix. */
+  studentOptions: StudentPickerOption[];
+  /** paymentId -> "Course — Batch" for a fee-period-linked payment; absent
+   * for a charge-linked (or unlinked) payment — see page.tsx's own comment
+   * on why this is a display-only, separately-resolved lookup. */
+  courseByPayment: Record<string, string>;
+  /** paymentId -> already-issued receipt, for the Receipt column's
+   * View/Issue toggle — see page.tsx's own comment. */
+  receiptsByPayment: Record<string, { id: string; receiptNumber: string }>;
+  /** Only "full"/"manage" callers (Manager/Finance Officer/Academy
+   * Administrator) get create/record/issue controls — Owner/Trainer are
+   * read-only here, per this row's View/Manage/Full/—/Manage/View matrix
+   * (Administrator raised from view-only to manage-level per the manual
+   * student-payment verification report). */
   canManage: boolean;
-  /** Confirmed Phase 4 audit gap fix: Manager-only ("full" level exactly —
-   * Finance Officer's "manage" does not reach this). Gates Reverse/Adjust,
-   * which lib/academies/finance-reversals.ts's `canReversePayment` requires
-   * the exact same level for. */
-  canApprove: boolean;
+  /** Manager-only ("full" level exactly — Finance Officer's "manage" does
+   * not reach this). Gates Reverse/Adjust, which
+   * lib/academies/finance-reversals.ts's `canReversePayment` requires the
+   * exact same level for. Not an approval gate — there is no approval
+   * workflow for student payments anymore. */
+  canReverse: boolean;
   /** For the self-reversal visual-disable + tooltip (DESIGN.md §9.6/§11.7)
    * — the backend (`reverseStudentPayment`/`adjustStudentPayment`) already
    * refuses this unconditionally; this is presentation only. */
@@ -63,8 +76,10 @@ export function FinanceChargesPayments({
   payments,
   studentLabels,
   studentOptions,
+  courseByPayment,
+  receiptsByPayment,
   canManage,
-  canApprove,
+  canReverse,
   currentUserId,
 }: Props) {
   const [tab, setTab] = useState<"charges" | "payments">("charges");
@@ -76,6 +91,7 @@ export function FinanceChargesPayments({
     recordStudentPaymentAction,
     initialState,
   );
+  const [chargeStudentId, setChargeStudentId] = useState("");
   // Narrows the "Charge id" picker below to that student's own open/
   // partially-paid charges — "" (no selection yet) shows every payable
   // charge across all students, each already labeled with its own student
@@ -88,6 +104,7 @@ export function FinanceChargesPayments({
   );
   const [issuingId, setIssuingId] = useState<string | null>(null);
   const [issueError, setIssueError] = useState<string | null>(null);
+  const [issuedReceipts, setIssuedReceipts] = useState<Map<string, { id: string; receiptNumber: string }>>(new Map());
 
   const [isReversalPending, startReversalTransition] = useTransition();
   const [reversalError, setReversalError] = useState<string | null>(null);
@@ -107,7 +124,7 @@ export function FinanceChargesPayments({
 
   useEffect(() => {
     if (recordPaymentState.ok) {
-      showSuccessToast("Payment recorded (pending approval).");
+      showSuccessToast("Payment recorded.");
     } else if (recordPaymentState.error) {
       showErrorToast(recordPaymentState.error.message);
     }
@@ -127,6 +144,7 @@ export function FinanceChargesPayments({
       showErrorToast(result.error.message);
       return;
     }
+    setIssuedReceipts((prev) => new Map(prev).set(paymentId, { id: result.receiptId, receiptNumber: result.receiptNumber }));
     showSuccessToast("Receipt issued.");
   }
 
@@ -147,10 +165,16 @@ export function FinanceChargesPayments({
 
   function confirmReversal(paymentId: string) {
     setReversalError(null);
+    // The "corrected amount" field is entered in dollars, not cents — see
+    // lib/ui/money.ts's dollarsToCents.
+    if (reversalMode === "adjust" && dollarsToCents(adjustAmount) === null) {
+      setReversalError("Enter a valid corrected amount.");
+      return;
+    }
     startReversalTransition(async () => {
       const result =
         reversalMode === "adjust"
-          ? await adjustStudentPaymentAction(paymentId, reversalReason.trim(), Number(adjustAmount))
+          ? await adjustStudentPaymentAction(paymentId, reversalReason.trim(), dollarsToCents(adjustAmount)!)
           : await reverseStudentPaymentAction(paymentId, reversalReason.trim());
       if (!result.ok) {
         setReversalError(result.error.message);
@@ -224,22 +248,19 @@ export function FinanceChargesPayments({
               <h2 className="text-base font-semibold text-ink">Create charge</h2>
               <form action={createChargeFormAction} className="mt-3 flex max-w-md flex-col gap-3">
                 <Field label="Student">
-                  <select name="studentId" required defaultValue="" className={inputClass}>
-                    <option value="" disabled>
-                      {studentOptions.length === 0 ? "No active students yet" : "Select a student…"}
-                    </option>
-                    {studentOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.fullName} ({option.studentNumber})
-                      </option>
-                    ))}
-                  </select>
+                  <StudentPicker
+                    name="studentId"
+                    options={studentOptions}
+                    value={chargeStudentId}
+                    onChange={setChargeStudentId}
+                    required
+                  />
                 </Field>
                 <Field label="Description">
                   <input type="text" name="description" required className={inputClass} />
                 </Field>
-                <Field label="Amount (cents)">
-                  <input type="number" name="amountCents" min={0} required className={inputClass} />
+                <Field label="Amount (USD)">
+                  <input type="number" name="amountDollars" min={0} step="0.01" placeholder="0.00" required className={inputClass} />
                 </Field>
                 <Field label="Currency (optional — defaults to academy currency)">
                   <input type="text" name="currency" maxLength={3} className={inputClass} />
@@ -264,18 +285,19 @@ export function FinanceChargesPayments({
             <thead>
               <tr>
                 <th className={th}>Student</th>
+                <th className={th}>Course</th>
                 <th className={th}>Amount</th>
                 <th className={th}>Method</th>
                 <th className={th}>Status</th>
-                {canManage && <th className={th}>Receipt</th>}
-                {canApprove && <th className={th}>Reverse / Adjust</th>}
+                <th className={th}>Receipt</th>
+                {canReverse && <th className={th}>Reverse / Adjust</th>}
               </tr>
             </thead>
             <tbody>
               {payments.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={4 + (canManage ? 1 : 0) + (canApprove ? 1 : 0)}
+                    colSpan={6 + (canReverse ? 1 : 0)}
                     className={`${td} text-center text-muted`}
                   >
                     No payments to show.
@@ -286,18 +308,27 @@ export function FinanceChargesPayments({
                   const alreadyReversedThisSession = reversedIds.has(payment.id);
                   const isSelfRecorded = payment.recordedBy === currentUserId;
                   const canReverseThisRow =
-                    canApprove && payment.status === "approved" && !alreadyReversedThisSession;
+                    canReverse && payment.status === "approved" && !alreadyReversedThisSession;
                   const effectiveStatus = alreadyReversedThisSession ? "reversed" : payment.status;
+                  const issuedThisSession = issuedReceipts.get(payment.id);
+                  const existingReceipt = receiptsByPayment[payment.id];
+                  const receiptId = issuedThisSession?.id ?? existingReceipt?.id ?? null;
+                  const receiptNumber = issuedThisSession?.receiptNumber ?? existingReceipt?.receiptNumber ?? null;
                   return (
                     <tr key={payment.id} className={trHover}>
                       <td className={`${td} font-medium`}>{studentLabel(payment.studentId)}</td>
+                      <td className={td}>{courseByPayment[payment.id] ?? "—"}</td>
                       <td className={td}>{formatMoney(payment.amountCents, payment.currency)}</td>
                       <td className={td}>{payment.method.replace("_", " ")}</td>
                       <td className={td}>
                         <Badge label={effectiveStatus.replace("_", " ")} tone={getStatusTone(effectiveStatus)} />
                       </td>
-                      {canManage && (
-                        <td className={td}>
+                      <td className={td}>
+                        {receiptId ? (
+                          <LinkButton href={`/academy/receipts/${receiptId}`} variant="secondary" className="px-2.5 py-1 text-xs" target="_blank">
+                            View {receiptNumber ?? "receipt"}
+                          </LinkButton>
+                        ) : canManage ? (
                           <Button
                             type="button"
                             variant="secondary"
@@ -307,9 +338,11 @@ export function FinanceChargesPayments({
                           >
                             {issuingId === payment.id ? "Issuing..." : "Issue receipt"}
                           </Button>
-                        </td>
-                      )}
-                      {canApprove && (
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </td>
+                      {canReverse && (
                         <td className={td}>
                           {!canReverseThisRow ? (
                             <span className="text-muted">—</span>
@@ -318,8 +351,9 @@ export function FinanceChargesPayments({
                               {reversalMode === "adjust" && (
                                 <input
                                   type="number"
-                                  placeholder="Corrected amount (cents)"
+                                  placeholder="Corrected amount (USD)"
                                   min={0}
+                                  step="0.01"
                                   value={adjustAmount}
                                   onChange={(event) => setAdjustAmount(event.target.value)}
                                   className={`${inputClass} py-1.5`}
@@ -361,7 +395,7 @@ export function FinanceChargesPayments({
                               </div>
                             </div>
                           ) : (
-                            <div className="flex flex-wrap gap-2" title={isSelfRecorded ? SELF_APPROVAL_TOOLTIP : undefined}>
+                            <div className="flex flex-wrap gap-2" title={isSelfRecorded ? SELF_REVERSAL_TOOLTIP : undefined}>
                               <Button
                                 type="button"
                                 variant="danger"
@@ -406,22 +440,13 @@ export function FinanceChargesPayments({
               <h2 className="text-base font-semibold text-ink">Record payment</h2>
               <form action={recordPaymentFormAction} className="mt-3 flex max-w-md flex-col gap-3">
                 <Field label="Student">
-                  <select
+                  <StudentPicker
                     name="studentId"
-                    required
+                    options={studentOptions}
                     value={paymentStudentId}
-                    onChange={(event) => setPaymentStudentId(event.target.value)}
-                    className={inputClass}
-                  >
-                    <option value="" disabled>
-                      {studentOptions.length === 0 ? "No active students yet" : "Select a student…"}
-                    </option>
-                    {studentOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.fullName} ({option.studentNumber})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setPaymentStudentId}
+                    required
+                  />
                 </Field>
                 <Field label="Charge (optional — leave blank if this payment isn't against a specific charge)">
                   <select name="chargeId" defaultValue="" className={inputClass}>
@@ -434,8 +459,8 @@ export function FinanceChargesPayments({
                     ))}
                   </select>
                 </Field>
-                <Field label="Amount (cents)">
-                  <input type="number" name="amountCents" min={0} required className={inputClass} />
+                <Field label="Amount (USD)">
+                  <input type="number" name="amountDollars" min={0} step="0.01" placeholder="0.00" required className={inputClass} />
                 </Field>
                 <Field label="Currency (optional — defaults to academy currency)">
                   <input type="text" name="currency" maxLength={3} className={inputClass} />
@@ -453,9 +478,12 @@ export function FinanceChargesPayments({
                 <Field label="Received at">
                   <input type="datetime-local" name="receivedAt" required className={inputClass} />
                 </Field>
+                <Field label="Notes (optional)">
+                  <input type="text" name="notes" placeholder="e.g. Second installment" className={inputClass} />
+                </Field>
                 {recordPaymentState.error && <ErrorMessage message={recordPaymentState.error.message} />}
                 {recordPaymentState.ok && (
-                  <p className="text-sm font-medium text-success">Payment recorded (pending approval).</p>
+                  <p className="text-sm font-medium text-success">Payment recorded.</p>
                 )}
                 <Button type="submit" disabled={recordingPayment} className="self-start">
                   {recordingPayment ? "Recording..." : "Record payment"}

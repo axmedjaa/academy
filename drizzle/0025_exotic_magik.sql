@@ -1,0 +1,1 @@
+ALTER TABLE "book_sales" ADD COLUMN "currency" text NOT NULL;

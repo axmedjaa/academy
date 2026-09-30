@@ -3,21 +3,29 @@ import { inArray } from "drizzle-orm";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { db } from "@/lib/db";
 import { students } from "@/lib/db/schema";
-import { listStudentCharges, listStudentPayments } from "@/lib/academies/student-payments";
+import { listReceiptsForPayments, listStudentCharges, listStudentPayments } from "@/lib/academies/student-payments";
+import { listFeePeriodPaymentHistory } from "@/lib/academies/fee-periods";
 import { searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
 import { listIncomeRecords } from "@/lib/academies/income-records";
 import { listExpenseRecords } from "@/lib/academies/expense-records";
-import { LinkButton, PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { FinanceChargesPayments } from "./finance-charges-payments";
 import { FinanceIncomeExpenses } from "./finance-income-expenses";
 
 /**
  * PLAN.md Phase 4, Item 51 — `/academy/finance` (Charges/Payments tabs),
- * extended by Item 53 with Income/Expenses tabs. DESIGN.md §9.6 also lists
- * a dashboard tab, an approvals queue, and finance reports — the approvals
- * queue now lives at its own dedicated `/academy/finance/approvals` route
- * (confirmed Phase 4 audit gap fix; linked from here when the caller can
- * approve), and reports remain Item 55's separate page.
+ * extended by Item 53 with Income/Expenses tabs. Reports remain Item 55's
+ * separate page (`/academy/finance-reports`).
+ *
+ * This is now the ADMINISTRATIVE/reporting side of student finance —
+ * one-off charges, manual/unlinked payment recording, receipts, and
+ * income/expenses. The normal day-to-day workflow for a recurring
+ * enrollment payment lives on the student's own page
+ * (`/academy/students/[id]`), not here. There is no approvals queue
+ * anymore (`/academy/finance/approvals` removed) — student payments,
+ * charge-linked or not, are immediately effective the instant they're
+ * recorded; see lib/academies/student-payments.ts's module comment for
+ * the full "no approval workflow" architecture decision.
  *
  * Same gating shape as app/academy/branches/page.tsx: the `/academy/*`
  * layout already ran a base subscription/membership check but has no
@@ -127,18 +135,37 @@ export default async function AcademyFinancePage() {
         }))
       : [];
 
+  // Course/Program column (display-only, "where the data model safely
+  // supports it" — only a fee-period-linked payment has a course/batch at
+  // all; a charge-linked or unlinked payment simply has no entry, rendered
+  // as "—"). Re-derives from the SEPARATE academy.fee_periods permission
+  // row (see listFeePeriodPaymentHistory's own gate) — a role with no
+  // access there (e.g. Admissions Officer) just gets an empty map, and
+  // every payment row falls back to "—" rather than the page failing.
+  const feePeriodHistoryResult =
+    paymentsResult.ok ? await listFeePeriodPaymentHistory(context, {}) : null;
+  const courseByPayment = Object.fromEntries(
+    (feePeriodHistoryResult?.ok ? feePeriodHistoryResult.rows : []).map((row) => [
+      row.paymentId,
+      `${row.courseName} — ${row.batchName}`,
+    ]),
+  );
+
+  const receiptsResult = paymentsResult.ok
+    ? await listReceiptsForPayments(context, paymentsResult.payments.map((payment) => payment.id))
+    : new Map();
+  const receiptsByPayment = Object.fromEntries(
+    [...receiptsResult.entries()].map(([paymentId, receipt]) => [
+      paymentId,
+      { id: receipt.id, receiptNumber: receipt.receiptNumber },
+    ]),
+  );
+
   return (
     <div className={PAGE_WRAP}>
       <PageHeader
         title="Finance"
-        description="Student charges, manual payment recording, receipts, and income/expense records. Not a general ledger — every payment is manually recorded after the fact."
-        actions={
-          paymentsResult.ok && paymentsResult.canApprove ? (
-            <LinkButton href="/academy/finance/approvals" variant="secondary">
-              Pending approvals
-            </LinkButton>
-          ) : undefined
-        }
+        description="Student charges, one-off payments, receipts, and income/expense records. Recurring enrollment payments are recorded from each student's own page — see Students."
       />
 
       <div className="flex flex-col gap-8">
@@ -148,8 +175,10 @@ export default async function AcademyFinancePage() {
             payments={paymentsResult.payments}
             studentLabels={studentLabels}
             studentOptions={studentOptions}
+            courseByPayment={courseByPayment}
+            receiptsByPayment={receiptsByPayment}
             canManage={chargesResult.canManage}
-            canApprove={paymentsResult.canApprove}
+            canReverse={paymentsResult.canReverse}
             currentUserId={context.userId}
           />
         )}
@@ -159,6 +188,7 @@ export default async function AcademyFinancePage() {
           expenses={expensesResult.ok ? expensesResult.records : null}
           expenseCanCreate={expensesResult.ok ? expensesResult.canCreate : false}
           expenseCanApprove={expensesResult.ok ? expensesResult.canApprove : false}
+          expenseCanSelfApprove={expensesResult.ok ? expensesResult.canSelfApprove : false}
           currentUserId={context.userId}
         />
       </div>

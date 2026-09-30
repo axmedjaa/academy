@@ -10,6 +10,7 @@ import {
   type PaymentActionError,
   type RecordPaymentInput,
 } from "@/lib/subscriptions/payments";
+import { dollarsToCents } from "@/lib/ui/money";
 
 const UNAUTHENTICATED: PaymentActionError = {
   code: "forbidden",
@@ -27,6 +28,10 @@ export interface PaymentFormState {
  * right after this runs, matching lib/subscriptions/plans-actions.ts's
  * parsePlanFormData convention (shape translation only, not validation).
  */
+/** The "Amount" field is entered in dollars, not cents (Platform Owner
+ * screen) — see lib/ui/money.ts's dollarsToCents. Left loose/untyped-
+ * looking on purpose otherwise — every field is re-validated by
+ * lib/subscriptions/payments.ts's Zod schema right after this runs. */
 function parseRecordPaymentFormData(formData: FormData): RecordPaymentInput {
   const paymentReference = String(formData.get("paymentReference") ?? "").trim();
   const evidenceFileRef = String(formData.get("evidenceFileRef") ?? "").trim();
@@ -34,7 +39,7 @@ function parseRecordPaymentFormData(formData: FormData): RecordPaymentInput {
   return {
     academyId: String(formData.get("academyId") ?? ""),
     subscriptionId: String(formData.get("subscriptionId") ?? ""),
-    amountCents: Number(formData.get("amountCents")),
+    amountCents: dollarsToCents(String(formData.get("amountDollars") ?? "")) ?? NaN,
     currency: String(formData.get("currency") ?? ""),
     paymentMethod: String(formData.get("paymentMethod") ?? ""),
     paymentReference: paymentReference.length > 0 ? paymentReference : null,

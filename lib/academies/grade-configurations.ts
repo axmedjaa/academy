@@ -47,16 +47,17 @@ import { createApprovalRequest, decideApprovalRequest } from "@/lib/academies/ap
  * ---------------------------------------------------------------------
  * Permission gating
  * ---------------------------------------------------------------------
- * Master Permission Matrix "Grade-band configuration" row:
- * Full(owner)/Manage(admin)/"Manage/Approve"(manager)/—/—/—, scope n/a (no
+ * Master Permission Matrix "Grade-band configuration" row, as later
+ * revised: Full(owner)/Full(admin)/Full(manager)/—/—/—, scope n/a (no
  * branch-limited variant at all — unlike every other row this codebase has
  * gated so far, Admissions Officer/Trainer get no visibility here). See
  * lib/auth/academy-permissions.ts's ACADEMY_GRADE_BANDS_ACTION comment for
- * the "full" vs. "manage" level judgment call on Manager/Admin. Both
- * levels are treated identically by this item's plain CRUD (create/update
- * bands) — the distinction only starts mattering once the later approval
- * item gates `approveGradeConfig` on "full" specifically (Owner/Manager,
- * never Academy Administrator).
+ * the original Item 46 "full" vs. "manage" split on Manager/Admin and the
+ * later architecture decision that raised Academy Administrator to "full"
+ * too (so Owner/Academy Administrator/Manager are never blocked waiting
+ * for someone else's approval). `approveGradeConfig`/`rejectGradeConfig`
+ * gate on `level === "full"` — now all three of Owner/Academy
+ * Administrator/Manager, not just Owner/Manager.
  *
  * ---------------------------------------------------------------------
  * Item 47 addendum — the approval flow this file's own comment above once
@@ -755,11 +756,13 @@ export type ApproveGradeConfigResult =
   | { ok: false; error: GradeConfigActionError };
 
 /**
- * Lifecycle table: `Pending Approval -> Approved`, actor "Manager, and
- * Academy Owner via their existing Full authority — not Academy
- * Administrator" — gated on `canApprove` (permissionLevel === "full"
- * exactly), never `canManage`. Delegates the actual decision — including
- * the self-approval block and the one-shot-decision guard — to Item 50a's
+ * Lifecycle table: `Pending Approval -> Approved`, actor originally
+ * "Manager, and Academy Owner via their existing Full authority — not
+ * Academy Administrator," later revised to include Academy Administrator
+ * too (see lib/auth/academy-permissions.ts's ACADEMY_GRADE_BANDS_ACTION
+ * comment) — gated on `canApprove` (permissionLevel === "full" exactly),
+ * never `canManage`. Delegates the actual decision — including the
+ * self-approval block and the one-shot-decision guard — to Item 50a's
  * `decideApprovalRequest`; this function's only added value is resolving
  * which pending `approval_requests` row belongs to this configuration and
  * flipping the configuration's own `status`/`approved_by`/`approved_at` in
@@ -776,6 +779,19 @@ export async function approveGradeConfig(
   if (!canApprove(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
   }
+
+  // Approved architecture decision: "Academy Owner / Academy Administrator
+  // / Manager create -> Academy Owner / Academy Administrator / Manager CAN
+  // approve their own configuration" — generalized rule (same as
+  // student-payments.ts's identical comment): a role may decide its own
+  // submission only when that SAME role also holds this entity's own
+  // create/manage permission, not merely its approve permission. For this
+  // row (ACADEMY_GRADE_BANDS_ACTION), Owner, Academy Administrator, and
+  // Manager all hold "full" (satisfying both `canManage` and `canApprove`)
+  // — Academy Administrator was raised from "manage" (create-only) to
+  // "full" by that later decision specifically so this line would include
+  // them too, with no code change needed here.
+  const canSelfDecide = canManage(permissionLevel) && canApprove(permissionLevel);
 
   const parsedId = z.string().uuid().safeParse(gradeConfigurationId);
   if (!parsedId.success) {
@@ -805,6 +821,7 @@ export async function approveGradeConfig(
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "approved",
+      allowSelfDecision: canSelfDecide,
     });
     if (!decision.ok) {
       return { kind: "decision_error" as const, error: decision.error };
@@ -897,6 +914,9 @@ export async function rejectGradeConfig(
     return { ok: false, error: FORBIDDEN };
   }
 
+  // See approveGradeConfig's identical comment — same generalized rule.
+  const canSelfDecide = canManage(permissionLevel) && canApprove(permissionLevel);
+
   const parsedId = z.string().uuid().safeParse(gradeConfigurationId);
   if (!parsedId.success) {
     return { ok: false, error: NOT_FOUND };
@@ -936,6 +956,7 @@ export async function rejectGradeConfig(
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "rejected",
+      allowSelfDecision: canSelfDecide,
     });
     if (!decision.ok) {
       return { kind: "decision_error" as const, error: decision.error };

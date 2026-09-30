@@ -20,6 +20,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { centsToDollars } from "@/lib/ui/money";
 
 const initialState: PlanFormState = { ok: false };
 
@@ -186,14 +187,15 @@ function PlanForm({
       </Field>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Price (in cents)">
+        <Field label="Price (USD)">
           <input
             type="number"
-            name="priceAmountCents"
+            name="priceDollars"
             min={0}
-            step={1}
+            step="0.01"
+            placeholder="0.00"
             required
-            defaultValue={plan?.priceAmountCents ?? 0}
+            defaultValue={plan ? centsToDollars(plan.priceAmountCents) : undefined}
             className={inputClass}
           />
         </Field>

@@ -219,13 +219,9 @@ export function flattenFinanceReport(report: FinanceReportsData): Record<string,
     for (const t of report.studentPayments.paymentsReceived.totalsByCurrency) {
       rows.push({ section: "studentPayments", metric: "paymentsReceived", currency: t.currency, amountCents: t.amountCents, count: t.count });
     }
-    rows.push({
-      section: "studentPayments",
-      metric: "pendingApprovalsCount",
-      currency: null,
-      amountCents: null,
-      count: report.studentPayments.pendingApprovalsCount,
-    });
+    // No pendingApprovalsCount row anymore — student payments have no
+    // approval workflow (unlike expenses, below), so this metric no longer
+    // exists on this section at all.
   }
 
   if (report.income.visible) {

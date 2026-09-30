@@ -567,29 +567,30 @@ describe("approveResultCorrection — full lifecycle: request -> approve -> appl
     expect(approved.result.gradeConfigurationId).toBe(setup.activeGradeConfigId);
   });
 
-  it("the requester cannot approve their own correction request (self-approval block reused)", async () => {
-    const setup = await setupAcademy("academy_owner");
-    const examId = await insertExamDirect(setup.academyId, setup.batchId);
-    const resultId = await insertExamResultDirect(
-      setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
-      { status: "published", marksObtained: 40 },
-    );
-    const requested = await requestResultCorrection(setup.context, resultId, {
-      reason: "some reason",
-      proposedMarksObtained: 65,
-    });
-    expect(requested.ok).toBe(true);
-    if (!requested.ok) return;
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
+    "%s self-approval is ALLOWED: the requester can approve their own correction request (architecture decision — Owner/Academy Administrator/Manager are never blocked waiting for approval; requestResultCorrection itself is already Owner/Admin/Manager-only, so no Trainer scenario exists on this row)",
+    async (role) => {
+      const setup = await setupAcademy(role);
+      const examId = await insertExamDirect(setup.academyId, setup.batchId);
+      const resultId = await insertExamResultDirect(
+        setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
+        { status: "published", marksObtained: 40 },
+      );
+      const requested = await requestResultCorrection(setup.context, resultId, {
+        reason: "some reason",
+        proposedMarksObtained: 65,
+      });
+      expect(requested.ok).toBe(true);
+      if (!requested.ok) return;
 
-    const result = await approveResultCorrection(setup.context, requested.correction.id);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("self_approval");
-
-    const row = await fetchResultRow(resultId);
-    expect(row.marksObtained).toBe("40");
-    const correctionRow = await fetchCorrectionRow(requested.correction.id);
-    expect(correctionRow.status).toBe("requested");
-  });
+      const result = await approveResultCorrection(setup.context, requested.correction.id);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.result.marksObtained).toBe(65);
+      const correctionRow = await fetchCorrectionRow(requested.correction.id);
+      expect(correctionRow.status).toBe("applied");
+    },
+  );
 
   it("refuses to approve a correction that isn't in requested status", async () => {
     const setup = await setupAcademy("academy_owner");
@@ -620,6 +621,28 @@ describe("approveResultCorrection — full lifecycle: request -> approve -> appl
   it("cross-academy / nonexistent correction id is rejected as not_found", async () => {
     const setup = await setupAcademy("academy_owner");
     const result = await approveResultCorrection(setup.context, randomUUID());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("a real pending correction id belonging to a DIFFERENT academy is rejected as not_found — never approved (tenant isolation, self-decide included)", async () => {
+    const other = await setupAcademy("academy_owner");
+    const otherExamId = await insertExamDirect(other.academyId, other.batchId);
+    const otherResultId = await insertExamResultDirect(
+      other.academyId, otherExamId, other.studentId, other.batchId, other.activeGradeConfigId, other.creatorUserId,
+      { status: "published", marksObtained: 40 },
+    );
+    const otherRequested = await requestResultCorrection(other.context, otherResultId, {
+      reason: "some reason",
+      proposedMarksObtained: 65,
+    });
+    expect(otherRequested.ok).toBe(true);
+    if (!otherRequested.ok) return;
+
+    // A same-role Owner in a completely different academy — must never be
+    // able to decide a different academy's correction request.
+    const attacker = await setupAcademy("academy_owner");
+    const result = await approveResultCorrection(attacker.context, otherRequested.correction.id);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
@@ -686,22 +709,30 @@ describe("rejectResultCorrection — request -> reject -> exam_results untouched
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
-  it("the requester cannot reject their own correction request", async () => {
-    const setup = await setupAcademy("academy_owner");
-    const examId = await insertExamDirect(setup.academyId, setup.batchId);
-    const resultId = await insertExamResultDirect(
-      setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
-      { status: "published", marksObtained: 40 },
-    );
-    const requested = await requestResultCorrection(setup.context, resultId, {
-      reason: "some reason",
-      proposedMarksObtained: 65,
-    });
-    expect(requested.ok).toBe(true);
-    if (!requested.ok) return;
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
+    "%s self-rejection is ALLOWED (same architecture decision as self-approval)",
+    async (role) => {
+      const setup = await setupAcademy(role);
+      const examId = await insertExamDirect(setup.academyId, setup.batchId);
+      const resultId = await insertExamResultDirect(
+        setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
+        { status: "published", marksObtained: 40 },
+      );
+      const requested = await requestResultCorrection(setup.context, resultId, {
+        reason: "some reason",
+        proposedMarksObtained: 65,
+      });
+      expect(requested.ok).toBe(true);
+      if (!requested.ok) return;
 
-    const result = await rejectResultCorrection(setup.context, requested.correction.id, "some reason");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("self_approval");
-  });
+      const result = await rejectResultCorrection(setup.context, requested.correction.id, "some reason");
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.correction.status).toBe("rejected");
+
+      // The underlying result is untouched by a rejected correction.
+      const row = await fetchResultRow(resultId);
+      expect(row.marksObtained).toBe("40");
+    },
+  );
 });

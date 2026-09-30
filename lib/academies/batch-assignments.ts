@@ -7,7 +7,11 @@ import {
   batches,
   certificates,
   courses,
+  enrollmentFeeSchedules,
   examResults,
+  FEE_INTERVAL_MONTHS_OPTIONS,
+  feePeriods,
+  paymentAllocations,
   staffBranchAssignments,
   staffProfiles,
   students,
@@ -19,6 +23,11 @@ import {
   type AcademyPermissionLevel,
 } from "@/lib/auth/academy-permissions";
 import { recordAudit } from "@/lib/audit";
+import {
+  createInitialEnrollmentFeeSchedule,
+  generateFeePeriodsForEnrollment,
+  resolveCurrency,
+} from "@/lib/academies/fee-periods";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 
@@ -597,9 +606,50 @@ export async function listBatchTrainerAssignments(
 // Student enrollments
 // ===========================================================================
 
+// z.union of literals (not z.number().refine) — see fee-periods.ts's
+// identical intervalMonthsSchema for why; kept as its own copy here rather
+// than imported, since this file authorizes and creates the schedule
+// directly (see createInitialEnrollmentFeeSchedule's own module comment on
+// why enrollment doesn't call into fee-periods.ts's permission-gated
+// setEnrollmentFeeSchedule).
+const enrollmentIntervalMonthsSchema = z.union(
+  FEE_INTERVAL_MONTHS_OPTIONS.map((value) => z.literal(value)) as [
+    z.ZodLiteral<number>,
+    ...z.ZodLiteral<number>[],
+  ],
+  { message: "Payment plan interval must be one of: 1, 2, 3, 4, 6, or 12 months." },
+);
+
+/**
+ * A payment plan is a REQUIRED part of enrollment (approved architecture
+ * decision: "There must never be a successful enrollment without its
+ * required initial payment plan") — `amountCents`/`intervalMonths` are not
+ * optional. `anchorDate` IS optional: it defaults to the batch's own
+ * `start_date` (see `enrollStudentInBatch` below) rather than "today",
+ * since a student enrolling mid-term into an already-running batch should
+ * anchor to when the batch itself started, not the enrollment moment.
+ */
+const paymentPlanSchema = z.object({
+  intervalMonths: enrollmentIntervalMonthsSchema,
+  amountCents: z.number().int("Amount must be a whole number of cents").positive("Amount must be greater than zero"),
+  currency: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .length(3, "Currency must be a 3-letter code, e.g. USD")
+    .optional(),
+  anchorDate: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "A valid start date is required")
+    .optional(),
+});
+
+export type PaymentPlanInput = z.input<typeof paymentPlanSchema>;
+
 export const enrollStudentSchema = z.object({
   batchId: z.string().uuid("Select a batch"),
   studentId: z.string().uuid("Select a student"),
+  paymentPlan: paymentPlanSchema,
 });
 
 export type EnrollStudentInput = z.input<typeof enrollStudentSchema>;
@@ -709,6 +759,39 @@ export async function enrollStudentInBatch(
         })
         .returning();
 
+      // Atomically create the enrollment's initial payment plan in the SAME
+      // transaction — approved architecture decision: "There must never be
+      // a successful enrollment without its required initial payment
+      // plan." If this insert fails for any reason, the whole transaction
+      // (including the batch_enrollments row just above) rolls back with
+      // it. This is a bare, permission-agnostic insert — see
+      // createInitialEnrollmentFeeSchedule's own module comment for why it
+      // deliberately does NOT go through setEnrollmentFeeSchedule's
+      // ACADEMY_FEE_PERIODS_ACTION gate: authorization for this step is
+      // this file's own ACADEMY_COURSES_BATCHES_ACTION check above, already
+      // passed. This does not grant the enroller any standing ability to
+      // modify the schedule afterward.
+      const currency = await resolveCurrency(tx, academyId, data.paymentPlan.currency);
+      const schedule = await createInitialEnrollmentFeeSchedule(tx, {
+        academyId,
+        enrollmentId: row.id,
+        intervalMonths: data.paymentPlan.intervalMonths,
+        amountCents: data.paymentPlan.amountCents,
+        currency,
+        // Defaults to the batch's own start date — a student enrolling
+        // mid-term into an already-running batch anchors to when the batch
+        // started, not the enrollment moment.
+        anchorDate: data.paymentPlan.anchorDate ?? batch.startDate,
+        createdBy: actorContext.userId,
+      });
+
+      // Eagerly generate the first fee period (not left purely lazy) so
+      // reading the enrollment's payment summary immediately after this
+      // transaction commits already sees `expected > 0` — the approved
+      // "Initial state: Expected > 0, Paid = 0, Status = UNPAID" contract,
+      // never a fake payment, just the real, already-owed first period.
+      await generateFeePeriodsForEnrollment(tx, row.id, academyId);
+
       await recordAudit(
         {
           actorUserId: actorContext.userId,
@@ -718,7 +801,7 @@ export async function enrollStudentInBatch(
           entityType: "batch_enrollment",
           entityId: row.id,
           branchId: batch.branchId,
-          after: toEnrollmentRecord(row),
+          after: { ...toEnrollmentRecord(row), paymentPlan: { intervalMonths: schedule.intervalMonths, amountCents: schedule.amountCents, currency: schedule.currency, anchorDate: schedule.anchorDate } },
         },
         tx,
       );
@@ -856,6 +939,7 @@ export interface EnrollmentDeletionEligibility {
   reasons: string[];
   examResultCount: number;
   certificateCount: number;
+  paymentActivityCount: number;
 }
 
 export type GetEnrollmentDeletionEligibilityResult =
@@ -866,8 +950,9 @@ async function countEnrollmentHistory(
   executor: DbClient,
   studentId: string,
   batchId: string,
-): Promise<{ examResultCount: number; certificateCount: number }> {
-  const [[examResultRow], [certificateRow]] = await Promise.all([
+  enrollmentId: string,
+): Promise<{ examResultCount: number; certificateCount: number; paymentActivityCount: number }> {
+  const [[examResultRow], [certificateRow], [paymentRow]] = await Promise.all([
     executor
       .select({ count: sql<number>`count(*)::int` })
       .from(examResults)
@@ -876,20 +961,39 @@ async function countEnrollmentHistory(
       .select({ count: sql<number>`count(*)::int` })
       .from(certificates)
       .where(and(eq(certificates.studentId, studentId), eq(certificates.batchId, batchId))),
+    // Financial-history safety (approved architecture: "never destroy
+    // historical financial records"): a fee-period payment allocated
+    // against this enrollment blocks permanent deletion, same as an exam
+    // result or certificate does — withdraw instead, never delete.
+    executor
+      .select({ count: sql<number>`count(*)::int` })
+      .from(paymentAllocations)
+      .innerJoin(feePeriods, eq(paymentAllocations.feePeriodId, feePeriods.id))
+      .where(eq(feePeriods.enrollmentId, enrollmentId)),
   ]);
   return {
     examResultCount: examResultRow?.count ?? 0,
     certificateCount: certificateRow?.count ?? 0,
+    paymentActivityCount: paymentRow?.count ?? 0,
   };
 }
 
-function buildEnrollmentDeletionReasons(counts: { examResultCount: number; certificateCount: number }): string[] {
+function buildEnrollmentDeletionReasons(counts: {
+  examResultCount: number;
+  certificateCount: number;
+  paymentActivityCount: number;
+}): string[] {
   const reasons: string[] = [];
   if (counts.examResultCount > 0) {
     reasons.push(`${counts.examResultCount} exam result${counts.examResultCount === 1 ? "" : "s"} exist for this student in this batch`);
   }
   if (counts.certificateCount > 0) {
     reasons.push(`${counts.certificateCount} certificate${counts.certificateCount === 1 ? "" : "s"} exist for this student in this batch`);
+  }
+  if (counts.paymentActivityCount > 0) {
+    reasons.push(
+      `${counts.paymentActivityCount} payment${counts.paymentActivityCount === 1 ? " has" : "s have"} been recorded against this enrollment's fee schedule`,
+    );
   }
   return reasons;
 }
@@ -930,7 +1034,7 @@ export async function getEnrollmentDeletionEligibility(
     }
   }
 
-  const counts = await countEnrollmentHistory(db, existing.enrollment.studentId, existing.enrollment.batchId);
+  const counts = await countEnrollmentHistory(db, existing.enrollment.studentId, existing.enrollment.batchId, existing.enrollment.id);
   const reasons = buildEnrollmentDeletionReasons(counts);
 
   return {
@@ -985,7 +1089,7 @@ export async function deleteBatchEnrollment(
       }
     }
 
-    const counts = await countEnrollmentHistory(tx, existing.enrollment.studentId, existing.enrollment.batchId);
+    const counts = await countEnrollmentHistory(tx, existing.enrollment.studentId, existing.enrollment.batchId, enrollmentId);
     const reasons = buildEnrollmentDeletionReasons(counts);
     if (reasons.length > 0) {
       return {
@@ -1011,6 +1115,15 @@ export async function deleteBatchEnrollment(
       tx,
     );
 
+    // Every enrollment now carries an enrollment_fee_schedules row (and
+    // usually fee_periods too — see enrollStudentInBatch) that references
+    // this row by FK. `paymentActivityCount === 0` was just confirmed above
+    // (a nonzero count would have already returned "ineligible"), so no
+    // payment_allocations reference any of this enrollment's fee periods —
+    // safe to remove the unused schedule/periods before the enrollment
+    // itself, in the same order the FKs require.
+    await tx.delete(feePeriods).where(eq(feePeriods.enrollmentId, enrollmentId));
+    await tx.delete(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.enrollmentId, enrollmentId));
     await tx.delete(batchEnrollments).where(eq(batchEnrollments.id, enrollmentId));
 
     return { ok: true, enrollmentId };
@@ -1065,7 +1178,8 @@ export async function listBatchEnrollments(
     .where(eq(batchEnrollments.batchId, batchId));
 
   const studentIds = rows.map((row) => row.enrollment.studentId);
-  const [examResultRows, certificateRows] = studentIds.length
+  const enrollmentIds = rows.map((row) => row.enrollment.id);
+  const [examResultRows, certificateRows, paymentRows] = studentIds.length
     ? await Promise.all([
         db
           .select({ studentId: examResults.studentId, count: sql<number>`count(*)::int` })
@@ -1077,10 +1191,20 @@ export async function listBatchEnrollments(
           .from(certificates)
           .where(and(eq(certificates.batchId, batchId), inArray(certificates.studentId, studentIds)))
           .groupBy(certificates.studentId),
+        // Payment activity is scoped per ENROLLMENT (not student+batch) —
+        // a re-enrolled student's earlier withdrawn enrollment keeps its
+        // own fee history separate from a fresh one.
+        db
+          .select({ enrollmentId: feePeriods.enrollmentId, count: sql<number>`count(*)::int` })
+          .from(paymentAllocations)
+          .innerJoin(feePeriods, eq(paymentAllocations.feePeriodId, feePeriods.id))
+          .where(inArray(feePeriods.enrollmentId, enrollmentIds))
+          .groupBy(feePeriods.enrollmentId),
       ])
-    : [[], []];
+    : [[], [], []];
   const examResultByStudent = new Map(examResultRows.map((r) => [r.studentId, r.count]));
   const certificateByStudent = new Map(certificateRows.map((r) => [r.studentId, r.count]));
+  const paymentActivityByEnrollment = new Map(paymentRows.map((r) => [r.enrollmentId, r.count]));
 
   return {
     ok: true,
@@ -1088,6 +1212,7 @@ export async function listBatchEnrollments(
       const counts = {
         examResultCount: examResultByStudent.get(row.enrollment.studentId) ?? 0,
         certificateCount: certificateByStudent.get(row.enrollment.studentId) ?? 0,
+        paymentActivityCount: paymentActivityByEnrollment.get(row.enrollment.id) ?? 0,
       };
       const reasons = buildEnrollmentDeletionReasons(counts);
       return {
@@ -1206,6 +1331,7 @@ export async function updateStudentEnrollment(
   actorContext: AuthContext,
   studentId: string,
   newBatchId: string | undefined,
+  paymentPlan?: PaymentPlanInput,
 ): Promise<UpdateStudentEnrollmentResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -1238,7 +1364,14 @@ export async function updateStudentEnrollment(
     return { ok: true };
   }
 
-  const enrollResult = await enrollStudentInBatch(actorContext, { batchId: newBatchId, studentId });
+  if (!paymentPlan) {
+    return {
+      ok: false,
+      error: { code: "validation", message: "A payment plan is required to enroll in a new course." },
+    };
+  }
+
+  const enrollResult = await enrollStudentInBatch(actorContext, { batchId: newBatchId, studentId, paymentPlan });
   if (!enrollResult.ok) return enrollResult;
 
   return { ok: true };
