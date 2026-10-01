@@ -78,7 +78,7 @@ export default async function AcademyCertificatesPage() {
   const studentNameById = new Map(studentRows.map((row) => [row.id, row.fullName]));
   const batchInfoById = new Map(batchRows.map((row) => [row.id, row]));
 
-  let studentOptions: { id: string; fullName: string; studentNumber: string }[] = [];
+  let studentOptions: { id: string; fullName: string; studentNumber: string; phone: string | null }[] = [];
   let batchOptions: { id: string; name: string; code: string }[] = [];
   if (result.canManage) {
     const [studentPickerResult, batchPickerResult] = await Promise.all([
@@ -86,7 +86,7 @@ export default async function AcademyCertificatesPage() {
       listBatches(context),
     ]);
     studentOptions = studentPickerResult.ok
-      ? studentPickerResult.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber }))
+      ? studentPickerResult.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber, phone: row.phone }))
       : [];
     batchOptions = batchPickerResult.ok
       ? batchPickerResult.batches.map((batch) => ({ id: batch.id, name: batch.name, code: batch.code }))

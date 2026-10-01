@@ -132,6 +132,7 @@ export default async function AcademyFinancePage() {
           id: row.id,
           fullName: row.fullName,
           studentNumber: row.studentNumber,
+          phone: row.phone,
         }))
       : [];
 

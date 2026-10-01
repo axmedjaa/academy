@@ -39,7 +39,7 @@ export default async function AcademyBooksPage() {
     ? await searchStudents(context, { status: "active" }, { pageSize: STUDENTS_MAX_PAGE_SIZE })
     : null;
   const studentOptions = studentPickerResult?.ok
-    ? studentPickerResult.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber }))
+    ? studentPickerResult.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber, phone: row.phone }))
     : [];
 
   return (

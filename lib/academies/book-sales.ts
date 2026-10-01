@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { books, bookSalePayments, bookSaleRefunds, bookSales, branches, incomeRecords, students } from "@/lib/db/schema";
@@ -9,6 +9,7 @@ import {
   type AcademyPermissionLevel,
 } from "@/lib/auth/academy-permissions";
 import { recordAudit } from "@/lib/audit";
+import { resolveStaffLabels } from "@/lib/academies/staff-labels";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 
@@ -318,6 +319,26 @@ export async function createBookSale(actorContext: AuthContext, input: CreateBoo
       tx,
     );
 
+    // Distinct, independently-auditable stock-movement event — same
+    // "bookStockChanged" action as the manual-edit path in
+    // lib/academies/books.ts's `updateBook`, so every stock change (sale,
+    // refund-with-return, or manual correction) is findable under one
+    // action name regardless of source.
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "bookStockChanged",
+        entityType: "book",
+        entityId: book.id,
+        before: { stockQuantity: book.stockQuantity },
+        after: { stockQuantity: book.stockQuantity - data.quantity },
+        context: { source: "sale", delta: -data.quantity, bookSaleId: sale.id },
+      },
+      tx,
+    );
+
     return { kind: "ok" as const, sale };
   });
 
@@ -354,7 +375,9 @@ export const addBookSalePaymentSchema = z.object({
 
 export type AddBookSalePaymentInput = z.input<typeof addBookSalePaymentSchema>;
 
-export type AddBookSalePaymentResult = { ok: true; sale: BookSaleRecord } | { ok: false; error: BookSaleActionError };
+export type AddBookSalePaymentResult =
+  | { ok: true; sale: BookSaleRecord; paymentId: string }
+  | { ok: false; error: BookSaleActionError };
 
 export async function addBookSalePayment(actorContext: AuthContext, input: AddBookSalePaymentInput): Promise<AddBookSalePaymentResult> {
   const resolved = await resolveAccess(actorContext);
@@ -397,16 +420,19 @@ export async function addBookSalePayment(actorContext: AuthContext, input: AddBo
       })
       .returning();
 
-    await tx.insert(bookSalePayments).values({
-      academyId,
-      bookSaleId: sale.id,
-      amountCents: data.amountCents,
-      method: data.method,
-      reference: data.reference,
-      paidAt: data.paidAt ?? new Date(),
-      recordedBy: actorContext.userId,
-      incomeRecordId: income.id,
-    });
+    const [paymentRow] = await tx
+      .insert(bookSalePayments)
+      .values({
+        academyId,
+        bookSaleId: sale.id,
+        amountCents: data.amountCents,
+        method: data.method,
+        reference: data.reference,
+        paidAt: data.paidAt ?? new Date(),
+        recordedBy: actorContext.userId,
+        incomeRecordId: income.id,
+      })
+      .returning({ id: bookSalePayments.id });
 
     const newTotalPaid = totalPaid + data.amountCents;
     const [updated] = await tx
@@ -420,14 +446,14 @@ export async function addBookSalePayment(actorContext: AuthContext, input: AddBo
       tx,
     );
 
-    return { kind: "ok" as const, sale: updated };
+    return { kind: "ok" as const, sale: updated, paymentId: paymentRow.id };
   });
 
   if (result.kind === "not_found") return { ok: false, error: SALE_NOT_FOUND };
   if (result.kind === "exceeds_balance") {
     return { ok: false, error: { code: "conflict", message: `Amount exceeds the outstanding balance (remaining: ${result.remainingCents} cents).` } };
   }
-  return { ok: true, sale: toSaleRecord(result.sale) };
+  return { ok: true, sale: toSaleRecord(result.sale), paymentId: result.paymentId };
 }
 
 // ===========================================================================
@@ -511,7 +537,22 @@ export async function refundBookSale(actorContext: AuthContext, input: RefundBoo
     if (data.returnedQuantity > 0) {
       const [book] = await tx.select().from(books).where(eq(books.id, sale.bookId)).for("update");
       if (book) {
-        await tx.update(books).set({ stockQuantity: book.stockQuantity + data.returnedQuantity, updatedAt: new Date() }).where(eq(books.id, book.id));
+        const newStockQuantity = book.stockQuantity + data.returnedQuantity;
+        await tx.update(books).set({ stockQuantity: newStockQuantity, updatedAt: new Date() }).where(eq(books.id, book.id));
+        await recordAudit(
+          {
+            actorUserId: actorContext.userId,
+            actorRole: membershipRole,
+            academyId,
+            action: "bookStockChanged",
+            entityType: "book",
+            entityId: book.id,
+            before: { stockQuantity: book.stockQuantity },
+            after: { stockQuantity: newStockQuantity },
+            context: { source: "refund", delta: data.returnedQuantity, bookSaleId: sale.id },
+          },
+          tx,
+        );
       }
     }
 
@@ -563,6 +604,16 @@ export interface BookSaleListRow extends BookSaleRecord {
   totalRefundedCents: number;
   netPaidCents: number;
   remainingCents: number;
+  /** Display label for `recordedBy` — this academy's current role for that
+   * user, or their email if the membership no longer exists. See
+   * lib/academies/staff-labels.ts's `resolveStaffLabels`. */
+  recordedByLabel: string;
+  /** The most recent payment event's method/reference (a sale can have
+   * several payment events — initial + additional — so "the" payment
+   * method shown in a one-row-per-sale history table is necessarily the
+   * latest one). Null when the sale has no payments yet (fully unpaid). */
+  latestPaymentMethod: "cash" | "mobile_money" | null;
+  latestPaymentReference: string | null;
 }
 
 export type ListBookSalesResult = { ok: true; sales: BookSaleListRow[]; canManage: boolean } | { ok: false; error: BookSaleActionError };
@@ -585,29 +636,56 @@ export async function listBookSales(
     .from(bookSales)
     .innerJoin(books, eq(bookSales.bookId, books.id))
     .leftJoin(students, eq(bookSales.studentId, students.id))
-    .where(and(...conditions));
+    .where(and(...conditions))
+    .orderBy(desc(bookSales.createdAt));
 
   const saleIds = saleRows.map((row) => row.sale.id);
-  const paidTotals = saleIds.length
-    ? await db
-        .select({ bookSaleId: bookSalePayments.bookSaleId, total: sql<string>`coalesce(sum(${bookSalePayments.amountCents}), 0)` })
-        .from(bookSalePayments)
-        .where(sql`${bookSalePayments.bookSaleId} = ANY(${saleIds})`)
-        .groupBy(bookSalePayments.bookSaleId)
-    : [];
+  // `inArray` (not a raw `sql`ANY(${array})`` template) — drizzle's `sql`
+  // tag does not reliably bind a JS array as a single Postgres array
+  // parameter, which previously raised "malformed array literal" the
+  // moment this path was actually exercised (it never was, until the
+  // history-table enrichment below started calling `listBookSales` in
+  // tests for the first time).
   const refundTotals = saleIds.length
     ? await db
         .select({ bookSaleId: bookSaleRefunds.bookSaleId, total: sql<string>`coalesce(sum(${bookSaleRefunds.amountCents}), 0)` })
         .from(bookSaleRefunds)
-        .where(sql`${bookSaleRefunds.bookSaleId} = ANY(${saleIds})`)
+        .where(inArray(bookSaleRefunds.bookSaleId, saleIds))
         .groupBy(bookSaleRefunds.bookSaleId)
     : [];
-  const paidById = new Map(paidTotals.map((row) => [row.bookSaleId, Number(row.total)]));
   const refundedById = new Map(refundTotals.map((row) => [row.bookSaleId, Number(row.total)]));
 
+  // Fetch every payment row (not just sums) so the latest method/reference
+  // per sale can be derived alongside the paid total in one query/pass —
+  // avoids an extra round trip just for "most recent payment".
+  const paymentRows = saleIds.length
+    ? await db
+        .select({
+          bookSaleId: bookSalePayments.bookSaleId,
+          amountCents: bookSalePayments.amountCents,
+          method: bookSalePayments.method,
+          reference: bookSalePayments.reference,
+          paidAt: bookSalePayments.paidAt,
+        })
+        .from(bookSalePayments)
+        .where(inArray(bookSalePayments.bookSaleId, saleIds))
+    : [];
+  const paidTotalById = new Map<string, number>();
+  const latestPaymentById = new Map<string, { method: "cash" | "mobile_money"; reference: string | null; paidAt: Date }>();
+  for (const payment of paymentRows) {
+    paidTotalById.set(payment.bookSaleId, (paidTotalById.get(payment.bookSaleId) ?? 0) + payment.amountCents);
+    const current = latestPaymentById.get(payment.bookSaleId);
+    if (!current || payment.paidAt > current.paidAt) {
+      latestPaymentById.set(payment.bookSaleId, { method: payment.method, reference: payment.reference, paidAt: payment.paidAt });
+    }
+  }
+
+  const recordedByLabels = await resolveStaffLabels(academyId, saleRows.map((row) => row.sale.recordedBy));
+
   const sales = saleRows.map(({ sale, bookName, studentName }) => {
-    const totalPaidCents = paidById.get(sale.id) ?? 0;
+    const totalPaidCents = paidTotalById.get(sale.id) ?? 0;
     const totalRefundedCents = refundedById.get(sale.id) ?? 0;
+    const latestPayment = latestPaymentById.get(sale.id);
     return {
       ...toSaleRecord(sale),
       bookName,
@@ -616,6 +694,9 @@ export async function listBookSales(
       totalRefundedCents,
       netPaidCents: totalPaidCents - totalRefundedCents,
       remainingCents: Math.max(0, sale.finalAmountCents - totalPaidCents),
+      recordedByLabel: recordedByLabels.get(sale.recordedBy) ?? sale.recordedBy,
+      latestPaymentMethod: latestPayment?.method ?? null,
+      latestPaymentReference: latestPayment?.reference ?? null,
     };
   });
 
@@ -623,7 +704,7 @@ export async function listBookSales(
 }
 
 export interface BookSaleDetail extends BookSaleListRow {
-  payments: { id: string; amountCents: number; method: "cash" | "mobile_money"; reference: string | null; paidAt: Date }[];
+  payments: { id: string; amountCents: number; method: "cash" | "mobile_money"; reference: string | null; paidAt: Date; recordedBy: string }[];
   refunds: { id: string; amountCents: number; reason: string; returnedQuantity: number; createdAt: Date }[];
 }
 
@@ -651,6 +732,11 @@ export async function getBookSale(actorContext: AuthContext, bookSaleId: string)
 
   const totalPaidCents = payments.reduce((sum, p) => sum + p.amountCents, 0);
   const totalRefundedCents = refunds.reduce((sum, r) => sum + r.amountCents, 0);
+  const latestPayment = payments.reduce<(typeof payments)[number] | null>(
+    (latest, p) => (!latest || p.paidAt > latest.paidAt ? p : latest),
+    null,
+  );
+  const recordedByLabels = await resolveStaffLabels(academyId, [row.sale.recordedBy]);
 
   return {
     ok: true,
@@ -662,10 +748,43 @@ export async function getBookSale(actorContext: AuthContext, bookSaleId: string)
       totalRefundedCents,
       netPaidCents: totalPaidCents - totalRefundedCents,
       remainingCents: Math.max(0, row.sale.finalAmountCents - totalPaidCents),
-      payments: payments.map((p) => ({ id: p.id, amountCents: p.amountCents, method: p.method, reference: p.reference, paidAt: p.paidAt })),
+      recordedByLabel: recordedByLabels.get(row.sale.recordedBy) ?? row.sale.recordedBy,
+      latestPaymentMethod: latestPayment?.method ?? null,
+      latestPaymentReference: latestPayment?.reference ?? null,
+      payments: payments.map((p) => ({ id: p.id, amountCents: p.amountCents, method: p.method, reference: p.reference, paidAt: p.paidAt, recordedBy: p.recordedBy })),
       refunds: refunds.map((r) => ({ id: r.id, amountCents: r.amountCents, reason: r.reason, returnedQuantity: r.returnedQuantity, createdAt: r.createdAt })),
     },
   };
+}
+
+const RECENT_SALES_WINDOW_DAYS = 30;
+
+/**
+ * "Recent sales" count per book for the Stock page (§ Stock requirements) —
+ * a lightweight, academy-scoped count of sales in the last 30 days, grouped
+ * by book. Deliberately not reusing `listBookSales` (which returns full
+ * enriched rows per sale, far more than this needs) — just one grouped
+ * count query. Tenant-scoped the same way as every other read here: the
+ * caller must already hold `ACADEMY_BOOKS_ACTION` access.
+ */
+export async function getRecentSaleCountsByBook(
+  actorContext: AuthContext,
+  bookIds: string[],
+): Promise<{ ok: true; counts: Map<string, number> } | { ok: false; error: BookSaleActionError }> {
+  const resolved = await resolveAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId } = resolved.access;
+
+  if (bookIds.length === 0) return { ok: true, counts: new Map() };
+
+  const since = new Date(Date.now() - RECENT_SALES_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const rows = await db
+    .select({ bookId: bookSales.bookId, count: sql<string>`count(*)` })
+    .from(bookSales)
+    .where(and(eq(bookSales.academyId, academyId), inArray(bookSales.bookId, bookIds), sql`${bookSales.createdAt} >= ${since}`))
+    .groupBy(bookSales.bookId);
+
+  return { ok: true, counts: new Map(rows.map((row) => [row.bookId, Number(row.count)])) };
 }
 
 export { isUniqueViolation as isBookSalesUniqueViolation };

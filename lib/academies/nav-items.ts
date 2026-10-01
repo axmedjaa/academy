@@ -194,6 +194,7 @@ export const ACADEMY_NAV_SUBITEMS: readonly AcademyNavSubItem[] = [
   { parentKey: "finance", label: "Fee Periods", href: "/academy/finance/fee-periods", requiredAction: ACADEMY_FEE_PERIODS_ACTION },
 
   { parentKey: "books", label: "Books", href: "/academy/books", requiredAction: ACADEMY_BOOKS_ACTION },
+  { parentKey: "books", label: "Stock", href: "/academy/books/stock", requiredAction: ACADEMY_BOOKS_ACTION },
   { parentKey: "books", label: "Book Sales", href: "/academy/books/sales", requiredAction: ACADEMY_BOOKS_ACTION },
 
   {

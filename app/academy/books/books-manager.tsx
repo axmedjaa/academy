@@ -3,9 +3,16 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { BookRecord } from "@/lib/academies/books";
-import { confirmBookCoverUploadAction, createBookAction, requestBookCoverUploadUrlAction, updateBookAction } from "@/lib/academies/books-actions";
+import {
+  confirmBookCoverUploadAction,
+  createBookAction,
+  requestBookCoverUploadUrlAction,
+  requestNewBookCoverUploadUrlAction,
+  updateBookAction,
+} from "@/lib/academies/books-actions";
 import { createBookSaleAction } from "@/lib/academies/book-sales-actions";
-import { Badge, Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
+import { Badge, Button, ErrorMessage, Field, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
 import { dollarsToCents } from "@/lib/ui/money";
@@ -21,7 +28,7 @@ interface Props {
   books: BookRecord[];
   coverUrls: Record<string, string | null>;
   canManage: boolean;
-  studentOptions: { id: string; fullName: string; studentNumber: string }[];
+  studentOptions: StudentPickerOption[];
 }
 
 interface NewBookForm {
@@ -47,9 +54,69 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
+  // The new book's cover is uploaded to R2 as soon as a file is chosen
+  // (before "Create book" is even clicked) — see requestNewBookCoverUploadUrl's
+  // own doc comment for why this can happen before the book row exists.
+  // `coverKey` only becomes non-null once the upload is confirmed in R2,
+  // which is what "Create book" is gated on below.
+  const coverFileInputRef = useRef<HTMLInputElement>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string | null>(null);
+  const [coverKey, setCoverKey] = useState<string | null>(null);
+  const [coverUploading, setCoverUploading] = useState(false);
+  const [coverError, setCoverError] = useState<string | null>(null);
+
   const [sellingBookId, setSellingBookId] = useState<string | null>(null);
 
-  const visibleBooks = books.filter((book) => book.name.toLowerCase().includes(search.trim().toLowerCase()));
+  const visibleBooks = books.filter((book) => {
+    const q = search.trim().toLowerCase();
+    if (q === "") return true;
+    return (
+      book.name.toLowerCase().includes(q) ||
+      (book.isbn?.toLowerCase().includes(q) ?? false) ||
+      (book.author?.toLowerCase().includes(q) ?? false)
+    );
+  });
+
+  function resetAddForm() {
+    setNewBook(EMPTY_NEW_BOOK);
+    setShowAddForm(false);
+    setCoverPreviewUrl(null);
+    setCoverKey(null);
+    setCoverError(null);
+    if (coverFileInputRef.current) coverFileInputRef.current.value = "";
+  }
+
+  async function handleCoverFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setCoverError(null);
+    if (!ALLOWED_COVER_TYPES.includes(file.type)) {
+      setCoverError("Cover must be JPEG, PNG, or WebP.");
+      return;
+    }
+    if (file.size > MAX_COVER_SIZE_BYTES) {
+      setCoverError("Cover must be 5 MB or smaller.");
+      return;
+    }
+    setCoverUploading(true);
+    setCoverKey(null);
+    const requested = await requestNewBookCoverUploadUrlAction({ contentType: file.type, fileSizeBytes: file.size });
+    if (!requested.ok || !requested.uploadUrl || !requested.key) {
+      setCoverUploading(false);
+      setCoverError(requested.error?.message ?? "Failed to start cover upload.");
+      return;
+    }
+    try {
+      await uploadCoverFile(requested.uploadUrl, file);
+    } catch (err) {
+      setCoverUploading(false);
+      setCoverError(err instanceof Error ? err.message : "Cover upload failed.");
+      return;
+    }
+    setCoverUploading(false);
+    setCoverKey(requested.key);
+    setCoverPreviewUrl(URL.createObjectURL(file));
+  }
 
   async function handleCreateBook() {
     setCreateError(null);
@@ -57,6 +124,10 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
     const stockQuantity = Number(newBook.stockQuantity);
     if (!newBook.name.trim() || priceCents === null || !Number.isFinite(stockQuantity)) {
       setCreateError("Book name, price, and stock quantity are required.");
+      return;
+    }
+    if (!coverKey) {
+      setCreateError("A cover image is required before the book can be created.");
       return;
     }
     setCreating(true);
@@ -68,6 +139,7 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
       category: newBook.category.trim() || undefined,
       priceCents,
       stockQuantity,
+      coverRef: coverKey,
     });
     setCreating(false);
     if (!result.ok) {
@@ -76,8 +148,7 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
       return;
     }
     showSuccessToast("Book created.");
-    setNewBook(EMPTY_NEW_BOOK);
-    setShowAddForm(false);
+    resetAddForm();
     router.refresh();
   }
 
@@ -92,7 +163,7 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
           className={`${inputClass} max-w-xs`}
         />
         {canManage && (
-          <Button type="button" onClick={() => setShowAddForm((value) => !value)}>
+          <Button type="button" onClick={() => (showAddForm ? resetAddForm() : setShowAddForm(true))}>
             {showAddForm ? "Cancel" : "Add book"}
           </Button>
         )}
@@ -102,6 +173,33 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
         <div className="mb-6 rounded-card border border-border bg-app p-4">
           <h2 className="text-sm font-semibold text-ink">Add book</h2>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Field label="Cover image (required)" className="sm:col-span-2">
+              <div className="flex items-center gap-3">
+                <div className="flex h-16 w-12 items-center justify-center overflow-hidden rounded border border-border bg-surface">
+                  {coverPreviewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- local object URL preview, never uploaded anywhere else.
+                    <img src={coverPreviewUrl} alt="Cover preview" className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="text-[10px] text-muted">No cover</span>
+                  )}
+                </div>
+                <div>
+                  <label className="cursor-pointer text-sm text-brand hover:underline">
+                    {coverUploading ? "Uploading..." : coverKey ? "Change image" : "Choose image"}
+                    <input
+                      ref={coverFileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      disabled={coverUploading}
+                      onChange={handleCoverFileChange}
+                    />
+                  </label>
+                  <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 5 MB. Every new book needs a cover.</p>
+                  {coverError && <p className="mt-1 text-xs text-danger">{coverError}</p>}
+                </div>
+              </div>
+            </Field>
             <Field label="Name">
               <input className={inputClass} value={newBook.name} onChange={(e) => setNewBook({ ...newBook, name: e.target.value })} />
             </Field>
@@ -129,7 +227,7 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
               <ErrorMessage message={createError} />
             </div>
           )}
-          <Button type="button" className="mt-3" disabled={creating} onClick={handleCreateBook}>
+          <Button type="button" className="mt-3" disabled={creating || coverUploading || !coverKey} onClick={handleCreateBook}>
             {creating ? "Creating..." : "Create book"}
           </Button>
         </div>
@@ -186,7 +284,7 @@ interface RowProps {
   book: BookRecord;
   coverUrl: string | null;
   canManage: boolean;
-  studentOptions: { id: string; fullName: string; studentNumber: string }[];
+  studentOptions: StudentPickerOption[];
   isSelling: boolean;
   onToggleSell: () => void;
   onDone: () => void;
@@ -299,7 +397,14 @@ function BookRow({ book, coverUrl, canManage, studentOptions, isSelling, onToggl
   );
 }
 
-function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentOptions: { id: string; fullName: string; studentNumber: string }[]; onDone: () => void }) {
+/** Local "now" formatted for a `datetime-local` input's default value. */
+function nowForDateTimeLocal(): string {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 16);
+}
+
+function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentOptions: StudentPickerOption[]; onDone: () => void }) {
   const [buyerType, setBuyerType] = useState<"student" | "other_person">("student");
   const [studentId, setStudentId] = useState("");
   const [otherBuyerName, setOtherBuyerName] = useState("");
@@ -314,8 +419,18 @@ function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentO
   const [amountPaidDollars, setAmountPaidDollars] = useState("");
   const [method, setMethod] = useState<"cash" | "mobile_money">("cash");
   const [reference, setReference] = useState("");
+  /** The payment's transaction date — maps to bookSalePayments.paidAt
+   * (already a schema column; only ever applied when a payment is actually
+   * recorded now). Defaults to "now" but can be backdated, e.g. entering a
+   * sale from a paper log. */
+  const [paidAtLocal, setPaidAtLocal] = useState(() => nowForDateTimeLocal());
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  /** Set once the sale is recorded — switches this form over to a
+   * confirmation state with an immediate "View Receipt" link (book sales
+   * have no approval step, so the receipt exists the instant the sale
+   * does — see lib/academies/book-sale-receipt-print.ts's module comment). */
+  const [justCreatedSaleId, setJustCreatedSaleId] = useState<string | null>(null);
 
   const qty = Math.max(0, Number(quantity) || 0);
   const subtotalCents = book.priceCents * qty;
@@ -358,6 +473,7 @@ function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentO
       amountPaidCents: paid,
       method: paid > 0 ? method : undefined,
       reference: reference || undefined,
+      paidAt: paid > 0 && paidAtLocal ? new Date(paidAtLocal) : undefined,
     });
     setSubmitting(false);
     if (!result.ok) {
@@ -366,7 +482,30 @@ function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentO
       return;
     }
     showSuccessToast("Sale recorded.");
-    onDone();
+    if (result.saleId) {
+      // Stay open on a confirmation state (rather than immediately calling
+      // onDone, which would collapse this row) so the receipt is reachable
+      // in the same place the sale was just recorded — no need to scroll
+      // down and relocate the row in the refreshed table.
+      setJustCreatedSaleId(result.saleId);
+    } else {
+      onDone();
+    }
+  }
+
+  if (justCreatedSaleId) {
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-control border border-border bg-surface p-3 text-sm">
+        <span className="font-medium text-ink">Sale recorded.</span>
+        <LinkButton href={`/academy/books/sales/${justCreatedSaleId}/receipt`} variant="secondary" className="px-2.5 py-1 text-xs" target="_blank">
+          View Receipt
+        </LinkButton>
+        <div className="flex-1" />
+        <Button type="button" variant="outline" className="px-2.5 py-1 text-xs" onClick={onDone}>
+          Done
+        </Button>
+      </div>
+    );
   }
 
   return (
@@ -379,16 +518,7 @@ function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentO
       </Field>
       {buyerType === "student" ? (
         <Field label="Student" className="sm:col-span-2">
-          <select className={inputClass} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
-            <option value="" disabled>
-              Select a student…
-            </option>
-            {studentOptions.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.fullName} ({option.studentNumber})
-              </option>
-            ))}
-          </select>
+          <StudentPicker name="studentId" options={studentOptions} value={studentId} onChange={setStudentId} />
         </Field>
       ) : (
         <>
@@ -428,6 +558,10 @@ function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentO
 
       <div className="sm:col-span-3 rounded-control border border-border bg-surface p-3 text-sm">
         <div className="flex justify-between">
+          <span className="text-muted">Unit price</span>
+          <span>{formatMoney(book.priceCents, book.currency)}</span>
+        </div>
+        <div className="flex justify-between">
           <span className="text-muted">Subtotal</span>
           <span>{formatMoney(subtotalCents, book.currency)}</span>
         </div>
@@ -452,6 +586,9 @@ function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentO
       </Field>
       <Field label="Reference (optional)">
         <input className={inputClass} value={reference} onChange={(e) => setReference(e.target.value)} />
+      </Field>
+      <Field label="Payment date">
+        <input type="datetime-local" className={inputClass} value={paidAtLocal} onChange={(e) => setPaidAtLocal(e.target.value)} />
       </Field>
 
       {error && (

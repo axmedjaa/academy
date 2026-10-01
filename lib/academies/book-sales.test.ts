@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { eq, or } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { and, eq, or } from "drizzle-orm";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
   academies,
@@ -17,10 +17,27 @@ import {
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
+import { getBookCoverKey } from "@/lib/storage/keys";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { createBook } from "./books";
-import { addBookSalePayment, computeBookSalePricing, createBookSale, refundBookSale } from "./book-sales";
+import { addBookSalePayment, computeBookSalePricing, createBookSale, listBookSales, refundBookSale } from "./book-sales";
+
+// `createBook` (used by `insertBookDirect` below) now requires a verified
+// cover — same mock pattern as lib/academies/books.test.ts.
+vi.mock("@/lib/storage/client", () => ({
+  getUploadUrl: vi.fn(),
+  deleteObject: vi.fn(),
+  getDownloadUrl: vi.fn(),
+  headObject: vi.fn(),
+}));
+import { headObject } from "@/lib/storage/client";
+const headObjectMock = vi.mocked(headObject);
+
+beforeEach(() => {
+  headObjectMock.mockReset();
+  headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 1000 } });
+});
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -99,7 +116,12 @@ async function setupFixture(): Promise<Fixture> {
 }
 
 async function insertBookDirect(academyId: string, context: AuthContext, priceCents = 1000, stockQuantity = 20) {
-  const result = await createBook(context, { name: `Book ${randomUUID()}`, priceCents, stockQuantity });
+  const result = await createBook(context, {
+    name: `Book ${randomUUID()}`,
+    priceCents,
+    stockQuantity,
+    coverRef: getBookCoverKey({ academyId, extension: "png" }),
+  });
   if (!result.ok) throw new Error("failed to create book");
   return result.book;
 }
@@ -239,10 +261,16 @@ describe("addBookSalePayment", () => {
 
     const additional = await addBookSalePayment(fixture.managerContext, { bookSaleId: sale.sale.id, amountCents: 1000, method: "cash" });
     expect(additional.ok).toBe(true);
-    if (additional.ok) expect(additional.sale.paymentStatus).toBe("paid");
+    if (additional.ok) {
+      expect(additional.sale.paymentStatus).toBe("paid");
+      // paymentId lets the UI link straight to this specific payment's own
+      // receipt immediately after it's recorded.
+      expect(additional.paymentId).toBeTruthy();
+    }
 
     const payments = await db.select().from(bookSalePayments).where(eq(bookSalePayments.bookSaleId, sale.sale.id));
     expect(payments.length).toBe(2); // both payment events remain visible, never merged
+    if (additional.ok) expect(payments.map((p) => p.id)).toContain(additional.paymentId);
   });
 
   it("rejects an additional payment that would exceed the remaining balance", async () => {
@@ -315,5 +343,114 @@ describe("refundBookSale", () => {
     const second = await refundBookSale(fixture.managerContext, { bookSaleId: sale.sale.id, amountCents: 1, reason: "Nothing left" });
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error.code).toBe("conflict");
+  });
+});
+
+describe("stock-changed audit trail", () => {
+  it("records a bookStockChanged row for a sale (negative delta) and for a refund-with-return (positive delta)", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 1000, 20);
+    const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 3, amountPaidCents: 3000, method: "cash" });
+    if (!sale.ok) throw new Error("expected ok");
+
+    const afterSale = await db.select().from(auditLogs).where(eq(auditLogs.action, "bookStockChanged"));
+    const saleEvent = afterSale.find((row) => row.entityId === book.id && (row.context as { source?: string } | null)?.source === "sale");
+    expect(saleEvent).toBeDefined();
+    expect((saleEvent?.context as { delta?: number } | null)?.delta).toBe(-3);
+
+    await refundBookSale(fixture.managerContext, { bookSaleId: sale.sale.id, amountCents: 1000, reason: "Return 1 copy", returnedQuantity: 1 });
+    const afterRefund = await db.select().from(auditLogs).where(eq(auditLogs.action, "bookStockChanged"));
+    const refundEvent = afterRefund.find((row) => row.entityId === book.id && (row.context as { source?: string } | null)?.source === "refund");
+    expect(refundEvent).toBeDefined();
+    expect((refundEvent?.context as { delta?: number } | null)?.delta).toBe(1);
+  });
+
+  it("does not record a bookStockChanged row for a refund with no physical return", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 1000, 20);
+    const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 1, amountPaidCents: 1000, method: "cash" });
+    if (!sale.ok) throw new Error("expected ok");
+    // Scoped to this book's own entityId — an unscoped full-table count
+    // would race with other test files' concurrent inserts under parallel
+    // vitest workers.
+    const countFor = async () =>
+      (
+        await db
+          .select()
+          .from(auditLogs)
+          .where(and(eq(auditLogs.action, "bookStockChanged"), eq(auditLogs.entityId, book.id)))
+      ).length;
+    const beforeCount = await countFor();
+
+    await refundBookSale(fixture.managerContext, { bookSaleId: sale.sale.id, amountCents: 500, reason: "Goodwill, no return" });
+    const afterCount = await countFor();
+    expect(afterCount).toBe(beforeCount);
+  });
+});
+
+describe("listBookSales — history enrichment", () => {
+  it("resolves recordedByLabel to the manager's current role label", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 1000, 20);
+    const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 1, amountPaidCents: 1000, method: "cash" });
+    if (!sale.ok) throw new Error("expected ok");
+
+    const listed = await listBookSales(fixture.managerContext);
+    expect(listed.ok).toBe(true);
+    if (listed.ok) {
+      const row = listed.sales.find((s) => s.id === sale.sale.id);
+      expect(row?.recordedByLabel).toBe("Manager");
+    }
+  });
+
+  it("surfaces the most recent payment's method/reference, updating as additional payments are made", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 1000, 20);
+    const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 2, amountPaidCents: 1000, method: "cash", reference: "CASH-1" });
+    if (!sale.ok) throw new Error("expected ok");
+
+    let listed = await listBookSales(fixture.managerContext);
+    if (!listed.ok) throw new Error("expected ok");
+    expect(listed.sales.find((s) => s.id === sale.sale.id)?.latestPaymentMethod).toBe("cash");
+
+    await addBookSalePayment(fixture.managerContext, { bookSaleId: sale.sale.id, amountCents: 1000, method: "mobile_money", reference: "MM-2" });
+    listed = await listBookSales(fixture.managerContext);
+    if (!listed.ok) throw new Error("expected ok");
+    const row = listed.sales.find((s) => s.id === sale.sale.id);
+    expect(row?.latestPaymentMethod).toBe("mobile_money");
+    expect(row?.latestPaymentReference).toBe("MM-2");
+  });
+
+  it("reports null payment method/reference for a fully unpaid sale", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 1000, 20);
+    const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 1, amountPaidCents: 0 });
+    if (!sale.ok) throw new Error("expected ok");
+
+    const listed = await listBookSales(fixture.managerContext);
+    if (!listed.ok) throw new Error("expected ok");
+    const row = listed.sales.find((s) => s.id === sale.sale.id);
+    expect(row?.latestPaymentMethod).toBeNull();
+    expect(row?.latestPaymentReference).toBeNull();
+  });
+
+  it("stores and returns a backdated payment date (paidAt) distinct from the audit createdAt", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 1000, 20);
+    const backdated = new Date("2026-01-15T10:00:00.000Z");
+    const sale = await createBookSale(fixture.managerContext, {
+      bookId: book.id,
+      buyerType: "other_person",
+      otherBuyerName: "Walk-in",
+      quantity: 1,
+      amountPaidCents: 1000,
+      method: "cash",
+      paidAt: backdated,
+    });
+    if (!sale.ok) throw new Error("expected ok");
+
+    const [payment] = await db.select().from(bookSalePayments).where(eq(bookSalePayments.bookSaleId, sale.sale.id));
+    expect(payment.paidAt.toISOString()).toBe(backdated.toISOString());
+    expect(payment.createdAt.toISOString()).not.toBe(backdated.toISOString());
   });
 });

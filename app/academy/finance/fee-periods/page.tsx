@@ -33,7 +33,7 @@ export default async function FeePeriodsPage() {
 
   const studentPickerResult = await searchStudents(context, { status: "active" }, { pageSize: STUDENTS_MAX_PAGE_SIZE });
   const studentOptions = studentPickerResult.ok
-    ? studentPickerResult.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber }))
+    ? studentPickerResult.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber, phone: row.phone }))
     : [];
 
   return (

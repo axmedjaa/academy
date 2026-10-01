@@ -1,4 +1,4 @@
-import { and, eq, ilike } from "drizzle-orm";
+import { and, eq, ilike, or } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { academies, books } from "@/lib/db/schema";
@@ -69,6 +69,70 @@ async function resolveCurrency(executor: DbClient, academyId: string, provided: 
   return academy?.defaultCurrency ?? "USD";
 }
 
+// ===========================================================================
+// Cover-image verification — shared by `createBook` (a NEW book's cover,
+// uploaded before the row exists) and `confirmBookCoverUpload` (an EXISTING
+// book's replacement cover). Both paths must apply the exact same
+// content-type/size authority check against the real uploaded object, never
+// the client's claims — defined once here so neither can drift.
+// ===========================================================================
+
+export const MAX_COVER_SIZE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_COVER_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+type AllowedCoverContentType = (typeof ALLOWED_COVER_CONTENT_TYPES)[number];
+const EXTENSION_BY_CONTENT_TYPE: Record<AllowedCoverContentType, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+function isAllowedContentType(value: string): value is AllowedCoverContentType {
+  return (ALLOWED_COVER_CONTENT_TYPES as readonly string[]).includes(value);
+}
+
+const INVALID_FORMAT: BookActionError = { code: "validation", message: "Cover image must be JPEG, PNG, or WebP." };
+const TOO_LARGE: BookActionError = { code: "validation", message: "Cover image must be 5 MB or smaller." };
+const VERIFICATION_FAILED: BookActionError = { code: "verification_failed", message: "The cover upload could not be verified." };
+
+type VerifyCoverUploadResult = { ok: true } | { ok: false; error: BookActionError };
+
+/**
+ * Re-verifies an already-PUT-to-R2 object actually matches this academy's
+ * key shape and the allowed format/size — the real authority, never the
+ * client's claims from the presigned-URL request step. An object that fails
+ * verification is deleted from R2 immediately (never left orphaned). Shared
+ * by `createBook` and `confirmBookCoverUpload` — see this section's own
+ * header comment.
+ */
+async function verifyCoverUpload(key: string, academyId: string): Promise<VerifyCoverUploadResult> {
+  if (!isBookCoverKey(key, academyId)) {
+    return { ok: false, error: { code: "validation", message: "Invalid upload reference." } };
+  }
+  const head = await headObject(key);
+  if (!head.ok) return { ok: false, error: VERIFICATION_FAILED };
+  if (!head.exists) {
+    return { ok: false, error: { code: "not_found", message: "The uploaded file could not be found. Please try uploading again." } };
+  }
+  if (!head.info.contentType || !isAllowedContentType(head.info.contentType)) {
+    await deleteObject(key);
+    return { ok: false, error: INVALID_FORMAT };
+  }
+  if (!head.info.contentLength || head.info.contentLength > MAX_COVER_SIZE_BYTES) {
+    await deleteObject(key);
+    return { ok: false, error: TOO_LARGE };
+  }
+  return { ok: true };
+}
+
+// Stock-status bucketing (LOW_STOCK_THRESHOLD/StockStatus/getStockStatus)
+// lives in lib/academies/book-stock.ts — a pure, server/client-safe module
+// — and is re-exported here so existing server-side importers of
+// lib/academies/books.ts keep working unchanged. The Stock page's client
+// component imports directly from book-stock.ts instead of here, so it
+// never pulls this file's `pg`-dependent server code into the browser
+// bundle (next build caught exactly that when this lived only in this file).
+export { LOW_STOCK_THRESHOLD, getStockStatus, type StockStatus } from "@/lib/academies/book-stock";
+
 export interface BookRecord {
   id: string;
   academyId: string;
@@ -124,6 +188,15 @@ export const createBookSchema = z.object({
   priceCents: z.number().int("Price must be a whole number of cents").nonnegative("Price cannot be negative"),
   currency: z.string().trim().toUpperCase().length(3, "Currency must be a 3-letter code, e.g. USD").optional(),
   stockQuantity: z.number().int("Stock must be a whole number").nonnegative("Stock cannot be negative"),
+  // The R2 key of an already-uploaded (but not yet DB-confirmed) cover —
+  // see `requestNewBookCoverUploadUrl`'s own doc comment for why a NEW
+  // book's cover is uploaded before the book row exists, unlike an EXISTING
+  // book's cover replace flow (requestBookCoverUploadUrl/
+  // confirmBookCoverUpload, which still needs a bookId). Required: every
+  // newly created book must have a cover (this task's own requirement) —
+  // legacy books created before this requirement remain nullable and
+  // unaffected (display falls back to a placeholder, see books-manager.tsx).
+  coverRef: z.string().trim().min(1, "A cover image is required."),
 });
 
 export type CreateBookInput = z.input<typeof createBookSchema>;
@@ -142,6 +215,9 @@ export async function createBook(actorContext: AuthContext, input: CreateBookInp
   }
   const data = parsed.data;
 
+  const coverVerification = await verifyCoverUpload(data.coverRef, academyId);
+  if (!coverVerification.ok) return { ok: false, error: coverVerification.error };
+
   const result = await db.transaction(async (tx) => {
     const currency = await resolveCurrency(tx, academyId, data.currency);
     const [row] = await tx
@@ -156,6 +232,7 @@ export async function createBook(actorContext: AuthContext, input: CreateBookInp
         priceCents: data.priceCents,
         currency,
         stockQuantity: data.stockQuantity,
+        coverRef: data.coverRef,
         createdBy: actorContext.userId,
       })
       .returning();
@@ -230,6 +307,27 @@ export async function updateBook(actorContext: AuthContext, bookId: string, inpu
       { actorUserId: actorContext.userId, actorRole: membershipRole, academyId, action: "updateBook", entityType: "book", entityId: row.id, before: toBookRecord(existing), after: toBookRecord(row) },
       tx,
     );
+
+    // A distinct, specifically-named event for stock changes (as opposed to
+    // the generic "updateBook" above) so stock movements are independently
+    // auditable/searchable — only fired when stock actually moved, never on
+    // every edit of an unrelated field (name, price, etc.).
+    if (data.stockQuantity !== undefined && data.stockQuantity !== existing.stockQuantity) {
+      await recordAudit(
+        {
+          actorUserId: actorContext.userId,
+          actorRole: membershipRole,
+          academyId,
+          action: "bookStockChanged",
+          entityType: "book",
+          entityId: row.id,
+          before: { stockQuantity: existing.stockQuantity },
+          after: { stockQuantity: row.stockQuantity },
+          context: { source: "manual_update", delta: row.stockQuantity - existing.stockQuantity },
+        },
+        tx,
+      );
+    }
     return row;
   });
 
@@ -250,7 +348,11 @@ export async function listBooks(
   const conditions = [eq(books.academyId, academyId)];
   if (filters.status) conditions.push(eq(books.status, filters.status));
   if (filters.search && filters.search.trim().length > 0) {
-    conditions.push(ilike(books.name, `%${filters.search.trim()}%`));
+    const term = `%${filters.search.trim()}%`;
+    // Matches name, ISBN, or author — a staff member looking up a book
+    // rarely has the exact catalogue name on hand but often has the ISBN
+    // printed on the back cover, or remembers the author.
+    conditions.push(or(ilike(books.name, term), ilike(books.isbn, term), ilike(books.author, term))!);
   }
 
   const rows = await db.select().from(books).where(and(...conditions));
@@ -275,25 +377,10 @@ export async function getBook(actorContext: AuthContext, bookId: string): Promis
 // ===========================================================================
 // Cover upload — same three-step presigned-URL flow as
 // lib/academies/academy-logo.ts (requestUploadUrl -> browser PUT ->
-// confirmUpload with server-side headObject verification).
+// confirmUpload with server-side headObject verification). The
+// content-type/size constants and `verifyCoverUpload` live earlier in this
+// file (right after `resolveCurrency`) since `createBook` needs them too.
 // ===========================================================================
-
-export const MAX_COVER_SIZE_BYTES = 5 * 1024 * 1024;
-const ALLOWED_COVER_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-type AllowedCoverContentType = (typeof ALLOWED_COVER_CONTENT_TYPES)[number];
-const EXTENSION_BY_CONTENT_TYPE: Record<AllowedCoverContentType, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-};
-
-function isAllowedContentType(value: string): value is AllowedCoverContentType {
-  return (ALLOWED_COVER_CONTENT_TYPES as readonly string[]).includes(value);
-}
-
-const INVALID_FORMAT: BookActionError = { code: "validation", message: "Cover image must be JPEG, PNG, or WebP." };
-const TOO_LARGE: BookActionError = { code: "validation", message: "Cover image must be 5 MB or smaller." };
-const VERIFICATION_FAILED: BookActionError = { code: "verification_failed", message: "The cover upload could not be verified." };
 
 export type RequestBookCoverUploadUrlResult =
   | { ok: true; uploadUrl: string; key: string; expiresInSeconds: number }
@@ -312,6 +399,35 @@ export async function requestBookCoverUploadUrl(
   const book = await getScopedBook(db, bookId, academyId);
   if (!book) return { ok: false, error: NOT_FOUND };
 
+  return requestCoverUploadUrlFor(academyId, input);
+}
+
+/**
+ * Step 1 for a NEW book's cover — no bookId exists yet, so this skips
+ * `getScopedBook` entirely and only checks permission. The key is
+ * academy-scoped (never book-scoped — see lib/storage/keys.ts's
+ * `getBookCoverKey`), so it can be generated and uploaded to before the
+ * book row is created, then passed straight into `createBookSchema.coverRef`
+ * for `createBook` to verify and persist in one step. This is what lets
+ * "every new book must have a cover" be enforced server-side without a
+ * two-phase "create a coverless book, then force a cover onto it" dance.
+ */
+export async function requestNewBookCoverUploadUrl(
+  actorContext: AuthContext,
+  input: { contentType: string; fileSizeBytes: number },
+): Promise<RequestBookCoverUploadUrlResult> {
+  const resolved = await resolveBooksAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, permissionLevel } = resolved.access;
+  if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
+
+  return requestCoverUploadUrlFor(academyId, input);
+}
+
+async function requestCoverUploadUrlFor(
+  academyId: string,
+  input: { contentType: string; fileSizeBytes: number },
+): Promise<RequestBookCoverUploadUrlResult> {
   if (!isAllowedContentType(input.contentType)) return { ok: false, error: INVALID_FORMAT };
   if (!Number.isFinite(input.fileSizeBytes) || input.fileSizeBytes <= 0 || input.fileSizeBytes > MAX_COVER_SIZE_BYTES) {
     return { ok: false, error: TOO_LARGE };
@@ -337,23 +453,8 @@ export async function confirmBookCoverUpload(
   const { academyId, membershipRole, permissionLevel } = resolved.access;
   if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
 
-  if (!isBookCoverKey(input.key, academyId)) {
-    return { ok: false, error: { code: "validation", message: "Invalid upload reference." } };
-  }
-
-  const head = await headObject(input.key);
-  if (!head.ok) return { ok: false, error: VERIFICATION_FAILED };
-  if (!head.exists) {
-    return { ok: false, error: { code: "not_found", message: "The uploaded file could not be found. Please try uploading again." } };
-  }
-  if (!head.info.contentType || !isAllowedContentType(head.info.contentType)) {
-    await deleteObject(input.key);
-    return { ok: false, error: INVALID_FORMAT };
-  }
-  if (!head.info.contentLength || head.info.contentLength > MAX_COVER_SIZE_BYTES) {
-    await deleteObject(input.key);
-    return { ok: false, error: TOO_LARGE };
-  }
+  const verification = await verifyCoverUpload(input.key, academyId);
+  if (!verification.ok) return { ok: false, error: verification.error };
 
   const result = await db.transaction(async (tx) => {
     const existing = await getScopedBook(tx, bookId, academyId);

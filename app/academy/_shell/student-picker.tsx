@@ -7,6 +7,9 @@ export interface StudentPickerOption {
   id: string;
   fullName: string;
   studentNumber: string;
+  /** Optional so existing callers that haven't threaded it through yet keep
+   * compiling — phone search/display is simply skipped when absent. */
+  phone?: string | null;
 }
 
 interface Props {
@@ -39,11 +42,19 @@ export function StudentPicker({ name, options, value, onChange, required, disabl
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const qDigits = query.replace(/\D/g, "");
     const matches =
       q === ""
         ? options
         : options.filter(
-            (option) => option.fullName.toLowerCase().includes(q) || option.studentNumber.toLowerCase().includes(q),
+            (option) =>
+              option.fullName.toLowerCase().includes(q) ||
+              option.studentNumber.toLowerCase().includes(q) ||
+              (option.phone ? option.phone.toLowerCase().includes(q) : false) ||
+              // A phone search often omits spacing/punctuation the stored
+              // number has — comparing digits-only lets "0771234567" match
+              // a stored "077 123 4567" and vice versa.
+              (qDigits.length > 0 && option.phone ? option.phone.replace(/\D/g, "").includes(qDigits) : false),
           );
     return matches.slice(0, MAX_VISIBLE_MATCHES);
   }, [options, query]);
@@ -56,7 +67,7 @@ export function StudentPicker({ name, options, value, onChange, required, disabl
         disabled={disabled}
         className={inputClass}
         value={open ? query : (selected ? `${selected.fullName} (${selected.studentNumber})` : "")}
-        placeholder={options.length === 0 ? "No active students yet" : "Search by name or student #…"}
+        placeholder={options.length === 0 ? "No active students yet" : "Search by name, student #, or phone…"}
         onFocus={() => {
           setOpen(true);
           setQuery("");
@@ -86,6 +97,7 @@ export function StudentPicker({ name, options, value, onChange, required, disabl
                 }}
               >
                 {option.fullName} ({option.studentNumber})
+                {option.phone && <span className="text-muted"> — {option.phone}</span>}
               </button>
             ))
           )}

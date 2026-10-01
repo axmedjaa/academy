@@ -44,6 +44,11 @@ const STATUS_TONE_MAP: Record<string, StatusTone> = {
   paid: "green",
   unpaid: "amber",
   overdue: "red",
+
+  // Book stock (lib/academies/books.ts's getStockStatus)
+  out_of_stock: "red",
+  low_stock: "amber",
+  in_stock: "green",
 };
 
 /** Falls back to "gray" for any status string not in the map above — a

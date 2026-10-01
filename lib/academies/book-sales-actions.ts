@@ -17,6 +17,14 @@ const UNAUTHENTICATED: BookSaleActionError = { code: "forbidden", message: "You 
 export interface BookSaleFormState {
   ok: boolean;
   error?: BookSaleActionError;
+  /** Set on a successful `createBookSaleAction` — lets the UI link straight
+   * to that sale's receipt immediately, without a page reload/refetch. */
+  saleId?: string;
+  /** Set on a successful `addBookSalePaymentAction` — lets the UI link
+   * straight to THIS payment's own receipt (distinct from the sale's
+   * overall receipt — see book-sale-receipt-print.ts's module comment on
+   * why each payment gets its own, never conflated with the running total). */
+  paymentId?: string;
 }
 
 export async function createBookSaleAction(input: CreateBookSaleInput): Promise<BookSaleFormState> {
@@ -28,7 +36,7 @@ export async function createBookSaleAction(input: CreateBookSaleInput): Promise<
 
   revalidatePath("/academy/books");
   revalidatePath("/academy/books/sales");
-  return { ok: true };
+  return { ok: true, saleId: result.sale.id };
 }
 
 export async function addBookSalePaymentAction(input: AddBookSalePaymentInput): Promise<BookSaleFormState> {
@@ -39,7 +47,7 @@ export async function addBookSalePaymentAction(input: AddBookSalePaymentInput): 
   if (!result.ok) return { ok: false, error: result.error };
 
   revalidatePath("/academy/books/sales");
-  return { ok: true };
+  return { ok: true, saleId: result.sale.id, paymentId: result.paymentId };
 }
 
 export async function refundBookSaleAction(input: RefundBookSaleInput): Promise<BookSaleFormState> {

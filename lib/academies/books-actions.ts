@@ -6,6 +6,7 @@ import {
   confirmBookCoverUpload as confirmBookCoverUploadForActor,
   createBook as createBookForActor,
   requestBookCoverUploadUrl as requestBookCoverUploadUrlForActor,
+  requestNewBookCoverUploadUrl as requestNewBookCoverUploadUrlForActor,
   updateBook as updateBookForActor,
   type BookActionError,
   type CreateBookInput,
@@ -57,6 +58,20 @@ export async function requestBookCoverUploadUrlAction(
   if (!context) return { ok: false, error: UNAUTHENTICATED };
 
   const result = await requestBookCoverUploadUrlForActor(context, bookId, input);
+  if (!result.ok) return { ok: false, error: result.error };
+
+  return { ok: true, uploadUrl: result.uploadUrl, key: result.key };
+}
+
+/** Step 1 for a NEW book's cover (no bookId yet) — see
+ * `requestNewBookCoverUploadUrl`'s own doc comment in lib/academies/books.ts. */
+export async function requestNewBookCoverUploadUrlAction(
+  input: { contentType: string; fileSizeBytes: number },
+): Promise<RequestBookCoverUploadUrlState> {
+  const context = await getAuthContext();
+  if (!context) return { ok: false, error: UNAUTHENTICATED };
+
+  const result = await requestNewBookCoverUploadUrlForActor(context, input);
   if (!result.ok) return { ok: false, error: result.error };
 
   return { ok: true, uploadUrl: result.uploadUrl, key: result.key };
