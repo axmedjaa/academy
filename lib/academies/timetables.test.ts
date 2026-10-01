@@ -21,7 +21,9 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
   createTimetableEntry,
+  createWeeklyTimetableEntries,
   deleteTimetableEntry,
+  listAcademyTimetable,
   listTimetableEntries,
   updateTimetableEntry,
 } from "./timetables";
@@ -507,5 +509,560 @@ describe("deleteTimetableEntry", () => {
     const result = await deleteTimetableEntry(context, randomUUID());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("deleting one day's entry for a batch leaves the batch's other days untouched", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const monday = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    const wednesday = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "wed", startTime: "09:00", endTime: "11:00" });
+    expect(monday.ok && wednesday.ok).toBe(true);
+    if (!monday.ok || !wednesday.ok) return;
+
+    const result = await deleteTimetableEntry(context, monday.entry.id);
+    expect(result.ok).toBe(true);
+
+    const remaining = await listTimetableEntries(context, batchId);
+    expect(remaining.ok).toBe(true);
+    if (remaining.ok) {
+      expect(remaining.entries).toHaveLength(1);
+      expect(remaining.entries[0].id).toBe(wednesday.entry.id);
+      expect(remaining.entries[0].dayOfWeek).toBe("wed");
+    }
+  });
+});
+
+describe("createTimetableEntry / updateTimetableEntry — conflict detection", () => {
+  it("creates a basic entry with Branch + Course + Batch + Monday + 09:00-11:00 (course is derived via the batch, never its own field)", async () => {
+    const { context, branchId, batchId, courseId } = await setupAcademy("academy_owner");
+    const result = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(result.ok).toBe(true);
+
+    const listed = await listAcademyTimetable(context);
+    expect(listed.ok).toBe(true);
+    if (listed.ok) {
+      const entry = listed.entries.find((e) => e.id === (result.ok ? result.entry.id : undefined));
+      expect(entry).toBeDefined();
+      expect(entry?.branchName).toBeTruthy();
+      expect(entry?.batchName).toBeTruthy();
+      // courseId isn't a field anywhere — confirm the joined courseName
+      // actually resolves to the batch's own course, not a coincidence.
+      const [course] = await db.select({ name: courses.name }).from(courses).where(eq(courses.id, courseId));
+      expect(entry?.courseName).toBe(course.name);
+    }
+  });
+
+  it("allows the same batch to teach on multiple different days (Monday + Wednesday = two entries)", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const monday = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    const wednesday = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "wed", startTime: "09:00", endTime: "11:00" });
+    expect(monday.ok).toBe(true);
+    expect(wednesday.ok).toBe(true);
+
+    const entries = await listTimetableEntries(context, batchId);
+    expect(entries.ok).toBe(true);
+    if (entries.ok) expect(entries.entries).toHaveLength(2);
+  });
+
+  it("allows the same batch on the same day at non-overlapping times", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const morning = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    const afternoon = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "13:00", endTime: "15:00" });
+    expect(morning.ok).toBe(true);
+    expect(afternoon.ok).toBe(true);
+  });
+
+  it("rejects the same batch overlapping on the same day (09:00-11:00 vs 10:00-12:00)", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const first = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(first.ok).toBe(true);
+
+    const second = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "10:00", endTime: "12:00" });
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error.code).toBe("conflict");
+  });
+
+  it("rejects the same instructor double-booked across two different batches on an overlapping day/time", async () => {
+    const { academyId, context, branchId, courseId, batchId } = await setupAcademy("academy_owner");
+    const instructorUserId = await createUser();
+    const trainerStaffProfileId = await insertStaffProfile(academyId, instructorUserId);
+    const otherBatchId = await insertBatchDirect(academyId, branchId, courseId);
+
+    const first = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00", trainerStaffProfileId });
+    expect(first.ok).toBe(true);
+
+    const second = await createTimetableEntry(context, { branchId, batchId: otherBatchId, dayOfWeek: "mon", startTime: "10:00", endTime: "12:00", trainerStaffProfileId });
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error.code).toBe("conflict");
+  });
+
+  it("rejects the same room double-booked (same branch) on an overlapping day/time, case/whitespace-insensitively", async () => {
+    const { academyId, context, branchId, courseId, batchId } = await setupAcademy("academy_owner");
+    const otherBatchId = await insertBatchDirect(academyId, branchId, courseId);
+
+    const first = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00", room: "Room A" });
+    expect(first.ok).toBe(true);
+
+    const second = await createTimetableEntry(context, { branchId, batchId: otherBatchId, dayOfWeek: "mon", startTime: "10:00", endTime: "12:00", room: "  room a  " });
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error.code).toBe("conflict");
+  });
+
+  it("never compares across different days — same batch/instructor/room on different days is allowed", async () => {
+    const { academyId, context, branchId, courseId, batchId } = await setupAcademy("academy_owner");
+    const instructorUserId = await createUser();
+    const trainerStaffProfileId = await insertStaffProfile(academyId, instructorUserId);
+    const otherBatchId = await insertBatchDirect(academyId, branchId, courseId);
+
+    const monday = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00", room: "Room A", trainerStaffProfileId });
+    expect(monday.ok).toBe(true);
+
+    // Same instructor AND same room AND overlapping time, but a DIFFERENT
+    // day and a different batch — must be allowed, never cross-day compared.
+    const tuesday = await createTimetableEntry(context, { branchId, batchId: otherBatchId, dayOfWeek: "tue", startTime: "09:00", endTime: "11:00", room: "Room A", trainerStaffProfileId });
+    expect(tuesday.ok).toBe(true);
+  });
+
+  it("two entries with no instructor set on an overlapping day/time do not conflict with each other", async () => {
+    const { academyId, context, branchId, courseId, batchId } = await setupAcademy("academy_owner");
+    const otherBatchId = await insertBatchDirect(academyId, branchId, courseId);
+
+    const first = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(first.ok).toBe(true);
+    const second = await createTimetableEntry(context, { branchId, batchId: otherBatchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(second.ok).toBe(true);
+  });
+
+  it("two entries with no room set on an overlapping day/time do not conflict with each other", async () => {
+    const { academyId, context, branchId, courseId, batchId } = await setupAcademy("academy_owner");
+    const otherBatchId = await insertBatchDirect(academyId, branchId, courseId);
+
+    const first = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(first.ok).toBe(true);
+    const second = await createTimetableEntry(context, { branchId, batchId: otherBatchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(second.ok).toBe(true);
+  });
+
+  it("the conflict check is tenant-isolated — an identical slot in a different academy never conflicts", async () => {
+    const { context: contextA, branchId: branchA, batchId: batchA } = await setupAcademy("academy_owner");
+    const { context: contextB, branchId: branchB, batchId: batchB } = await setupAcademy("academy_owner");
+
+    const first = await createTimetableEntry(contextA, { branchId: branchA, batchId: batchA, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00", room: "Room A" });
+    expect(first.ok).toBe(true);
+
+    // Same day/time/room string, but a completely different academy/batch —
+    // must not be treated as a conflict.
+    const second = await createTimetableEntry(contextB, { branchId: branchB, batchId: batchB, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00", room: "Room A" });
+    expect(second.ok).toBe(true);
+  });
+
+  it("edit: moving an entry from Monday to Wednesday succeeds, and re-checks conflicts against the NEW day", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const monday = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(monday.ok).toBe(true);
+    if (!monday.ok) return;
+
+    // Nothing else on Wednesday yet — the move should succeed.
+    const moved = await updateTimetableEntry(context, monday.entry.id, { dayOfWeek: "wed" });
+    expect(moved.ok).toBe(true);
+    if (moved.ok) expect(moved.entry.dayOfWeek).toBe("wed");
+
+    // A second entry already sitting on Wednesday at the same time should
+    // now block a second move into that slot.
+    const anotherBatchEntry = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(anotherBatchEntry.ok).toBe(true);
+    if (!anotherBatchEntry.ok) return;
+    const blockedMove = await updateTimetableEntry(context, anotherBatchEntry.entry.id, { dayOfWeek: "wed" });
+    expect(blockedMove.ok).toBe(false);
+    if (!blockedMove.ok) expect(blockedMove.error.code).toBe("conflict");
+  });
+
+  it("edit: an entry never conflicts with itself when the patch doesn't change anything relevant", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const created = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00", room: "Room A" });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const updated = await updateTimetableEntry(context, created.entry.id, { room: "Room A" });
+    expect(updated.ok).toBe(true);
+  });
+
+  it("edit: changing a time range so it would now overlap a different existing entry is rejected", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const first = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    const second = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "13:00", endTime: "15:00" });
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+
+    const result = await updateTimetableEntry(context, second.entry.id, { startTime: "10:00", endTime: "12:00" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("conflict");
+  });
+});
+
+describe("createWeeklyTimetableEntries — multi-day creation", () => {
+  it("creates one row per selected day, all sharing the same time/batch/instructor/room", async () => {
+    const { academyId, context, branchId, batchId } = await setupAcademy("academy_owner");
+    const instructorUserId = await createUser();
+    const trainerStaffProfileId = await insertStaffProfile(academyId, instructorUserId);
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "wed"],
+      startTime: "09:00",
+      endTime: "11:00",
+      room: "Room A",
+      trainerStaffProfileId,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries.map((e) => e.dayOfWeek).sort()).toEqual(["mon", "wed"]);
+    for (const entry of result.entries) {
+      // Postgres `time` columns round-trip with seconds appended.
+      expect(entry.startTime).toBe("09:00:00");
+      expect(entry.endTime).toBe("11:00:00");
+      expect(entry.room).toBe("Room A");
+      expect(entry.trainerStaffProfileId).toBe(trainerStaffProfileId);
+      expect(entry.batchId).toBe(batchId);
+    }
+  });
+
+  it("Monday through Friday creates five rows", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "tue", "wed", "thu", "fri"],
+      startTime: "09:00",
+      endTime: "11:00",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.entries).toHaveLength(5);
+  });
+
+  it("a single selected day creates exactly one row", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["fri"],
+      startTime: "09:00",
+      endTime: "11:00",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.entries).toHaveLength(1);
+  });
+
+  it("rejects an empty day selection, server-side, regardless of client validation", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: [],
+      startTime: "09:00",
+      endTime: "11:00",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("validation");
+      expect(result.error.message).toMatch(/at least one/i);
+    }
+  });
+
+  it("deduplicates a day submitted more than once — never creates duplicate rows", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "mon", "wed", "mon"],
+      startTime: "09:00",
+      endTime: "11:00",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.entries).toHaveLength(2);
+      expect(result.entries.map((e) => e.dayOfWeek).sort()).toEqual(["mon", "wed"]);
+    }
+  });
+
+  it("is forbidden for roles without manage access, identically to single-day creation", async () => {
+    const { context, branchId, batchId } = await setupAcademy("finance_officer");
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "tue"],
+      startTime: "09:00",
+      endTime: "11:00",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+});
+
+describe("createWeeklyTimetableEntries — atomicity", () => {
+  async function countEntries(batchId: string): Promise<number> {
+    const rows = await db.select().from(timetables).where(eq(timetables.batchId, batchId));
+    return rows.length;
+  }
+
+  it("creates nothing when the FIRST selected day conflicts", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "tue", "wed"],
+      startTime: "10:00",
+      endTime: "12:00",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("conflict");
+    expect(await countEntries(batchId)).toBe(1); // only the pre-existing Monday row
+  });
+
+  it("creates nothing when the MIDDLE selected day conflicts", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "wed", startTime: "09:00", endTime: "11:00" });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "wed", "fri"],
+      startTime: "10:00",
+      endTime: "12:00",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("conflict");
+    expect(await countEntries(batchId)).toBe(1); // only the pre-existing Wednesday row — Monday never got created
+  });
+
+  it("creates nothing when the LAST selected day conflicts", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "fri", startTime: "09:00", endTime: "11:00" });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "tue", "wed", "thu", "fri"],
+      startTime: "10:00",
+      endTime: "12:00",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("conflict");
+    expect(await countEntries(batchId)).toBe(1); // Mon/Tue/Wed/Thu never got created
+  });
+
+  it("the conflict message names the day, the conflicting resource, and the existing time range", async () => {
+    const { academyId, context, branchId, batchId } = await setupAcademy("academy_owner");
+    const otherBatchId = await insertBatchDirect(academyId, branchId, await insertProgramAndCourse(academyId));
+    await createTimetableEntry(context, { branchId, batchId: otherBatchId, dayOfWeek: "wed", startTime: "10:00", endTime: "12:00", room: "Room A" });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "wed"],
+      startTime: "09:00",
+      endTime: "11:00",
+      room: "Room A",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("Wednesday");
+      expect(result.error.message).toContain("Room A");
+      expect(result.error.message).toContain("10:00");
+      expect(result.error.message).toContain("12:00");
+    }
+  });
+
+  it("leaves pre-existing rows completely untouched after a failed weekly creation", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const existing = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "tue", startTime: "09:00", endTime: "11:00", room: "Original Room" });
+    expect(existing.ok).toBe(true);
+    if (!existing.ok) return;
+
+    await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "tue"],
+      startTime: "10:00",
+      endTime: "12:00",
+    });
+
+    const [row] = await db.select().from(timetables).where(eq(timetables.id, existing.entry.id));
+    expect(row.room).toBe("Original Room");
+    expect(row.startTime).toBe("09:00:00");
+  });
+});
+
+describe("createWeeklyTimetableEntries — conflict rules exercised through the weekly path", () => {
+  it("same batch overlap on one of the selected days rejects the whole operation", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "thu", startTime: "09:00", endTime: "11:00" });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "thu"],
+      startTime: "10:00",
+      endTime: "12:00",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("same instructor overlap, across a different batch, on one of the selected days rejects the whole operation", async () => {
+    const { academyId, context, branchId, courseId, batchId } = await setupAcademy("academy_owner");
+    const instructorUserId = await createUser();
+    const trainerStaffProfileId = await insertStaffProfile(academyId, instructorUserId);
+    const otherBatchId = await insertBatchDirect(academyId, branchId, courseId);
+    await createTimetableEntry(context, { branchId, batchId: otherBatchId, dayOfWeek: "fri", startTime: "09:00", endTime: "11:00", trainerStaffProfileId });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "fri"],
+      startTime: "10:00",
+      endTime: "12:00",
+      trainerStaffProfileId,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("same room overlap, same branch, on one of the selected days rejects the whole operation", async () => {
+    const { academyId, context, branchId, courseId, batchId } = await setupAcademy("academy_owner");
+    const otherBatchId = await insertBatchDirect(academyId, branchId, courseId);
+    await createTimetableEntry(context, { branchId, batchId: otherBatchId, dayOfWeek: "sat", startTime: "09:00", endTime: "11:00", room: "  Room B " });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "sat"],
+      startTime: "10:00",
+      endTime: "12:00",
+      room: "room b",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("same room in a DIFFERENT branch does not conflict (room conflicts remain branch-scoped)", async () => {
+    const { academyId, context, branchId, courseId, batchId } = await setupAcademy("academy_owner");
+    const otherBranchId = await insertBranchDirect(academyId);
+    const otherBranchBatchId = await insertBatchDirect(academyId, otherBranchId, courseId);
+    await createTimetableEntry(context, { branchId: otherBranchId, batchId: otherBranchBatchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00", room: "Room A" });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon"],
+      startTime: "09:00",
+      endTime: "11:00",
+      room: "Room A",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("the same time on different days succeeds (never cross-day compared)", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon", "tue", "wed", "thu", "fri"],
+      startTime: "09:00",
+      endTime: "11:00",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.entries).toHaveLength(5);
+  });
+
+  it("non-overlapping times on the same day succeed", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon"],
+      startTime: "13:00",
+      endTime: "15:00",
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("tenant isolation — an identical weekly slot in a different academy never conflicts", async () => {
+    const { context: contextA, branchId: branchA, batchId: batchA } = await setupAcademy("academy_owner");
+    const { context: contextB, branchId: branchB, batchId: batchB } = await setupAcademy("academy_owner");
+
+    const first = await createWeeklyTimetableEntries(contextA, { branchId: branchA, batchId: batchA, daysOfWeek: ["mon", "tue"], startTime: "09:00", endTime: "11:00", room: "Room A" });
+    expect(first.ok).toBe(true);
+
+    const second = await createWeeklyTimetableEntries(contextB, { branchId: branchB, batchId: batchB, daysOfWeek: ["mon", "tue"], startTime: "09:00", endTime: "11:00", room: "Room A" });
+    expect(second.ok).toBe(true);
+  });
+});
+
+describe("createWeeklyTimetableEntries — instructor tenant scoping", () => {
+  it("rejects a cross-academy instructor id (previously only validated as 'a UUID', never that it belongs to this academy)", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const other = await setupAcademy("academy_owner");
+    const foreignInstructorUserId = await createUser();
+    const foreignTrainerStaffProfileId = await insertStaffProfile(other.academyId, foreignInstructorUserId);
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon"],
+      startTime: "09:00",
+      endTime: "11:00",
+      trainerStaffProfileId: foreignTrainerStaffProfileId,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+
+    const rows = await db.select().from(timetables).where(eq(timetables.batchId, batchId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("accepts an instructor that genuinely belongs to this academy", async () => {
+    const { academyId, context, branchId, batchId } = await setupAcademy("academy_owner");
+    const instructorUserId = await createUser();
+    const trainerStaffProfileId = await insertStaffProfile(academyId, instructorUserId);
+
+    const result = await createWeeklyTimetableEntries(context, {
+      branchId,
+      batchId,
+      daysOfWeek: ["mon"],
+      startTime: "09:00",
+      endTime: "11:00",
+      trainerStaffProfileId,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("updateTimetableEntry also rejects a cross-academy instructor id", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const other = await setupAcademy("academy_owner");
+    const foreignInstructorUserId = await createUser();
+    const foreignTrainerStaffProfileId = await insertStaffProfile(other.academyId, foreignInstructorUserId);
+
+    const created = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00" });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const result = await updateTimetableEntry(context, created.entry.id, { trainerStaffProfileId: foreignTrainerStaffProfileId });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+});
+
+describe("createTimetableEntry — still works as the single-day entry point (wrapper regression check)", () => {
+  it("single-day creation still works exactly as before", async () => {
+    const { context, branchId, batchId } = await setupAcademy("academy_owner");
+    const result = await createTimetableEntry(context, { branchId, batchId, dayOfWeek: "mon", startTime: "09:00", endTime: "11:00", room: "Room A" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.entry.dayOfWeek).toBe("mon");
+      expect(result.entry.room).toBe("Room A");
+    }
   });
 });

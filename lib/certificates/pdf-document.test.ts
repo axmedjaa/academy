@@ -31,7 +31,7 @@ function buildData(overrides: Partial<CertificatePrintData> = {}): CertificatePr
     },
     academy: {
       name: "Example Academy",
-      logoRef: null,
+      logoUrl: null,
       address: "123 Main St",
       phone: "+1 555-0100",
       email: "info@example-academy.test",
@@ -72,7 +72,7 @@ describe("CertificatePdfDocument", () => {
         grade: null,
         academy: {
           name: "Bare Academy",
-          logoRef: null,
+          logoUrl: null,
           address: null,
           phone: null,
           email: null,

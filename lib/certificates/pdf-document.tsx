@@ -92,9 +92,9 @@ export function CertificatePdfDocument({ data }: { data: CertificatePrintData })
             {isCancelled && <Text style={styles.cancelledBanner}>Cancelled</Text>}
 
             <View style={{ alignItems: "center" }}>
-              {academy.logoRef && (
+              {academy.logoUrl && (
                 // eslint-disable-next-line jsx-a11y/alt-text -- @react-pdf/renderer's own PDF `Image` primitive, not an HTML <img>; it has no alt prop.
-                <Image src={academy.logoRef} style={styles.logo} />
+                <Image src={academy.logoUrl} style={styles.logo} />
               )}
               <Text style={styles.academyName}>{academy.name}</Text>
               <Text style={styles.title}>Certificate of Completion</Text>

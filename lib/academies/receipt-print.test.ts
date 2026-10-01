@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { eq, or } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
   academies,
@@ -29,6 +29,23 @@ import { createStudentCharge, issueReceipt, recordStudentPayment } from "./stude
 import { generateFeePeriodsForEnrollment, recordFeePeriodPayment, setEnrollmentFeeSchedule } from "./fee-periods";
 import { reverseStudentPayment } from "./finance-reversals";
 import { getReceiptPrintData } from "./receipt-print";
+
+// None of this file's other dependencies (student-payments.ts, fee-periods.ts,
+// finance-reversals.ts) touch storage — safe to mock module-wide here,
+// unlike lib/academies/certificates.test.ts's much larger shared file (see
+// certificate-print.test.ts's own comment on why that fix got its own file).
+vi.mock("@/lib/storage/client", () => ({
+  getUploadUrl: vi.fn(),
+  deleteObject: vi.fn(),
+  getDownloadUrl: vi.fn(),
+  headObject: vi.fn(),
+}));
+import { getDownloadUrl } from "@/lib/storage/client";
+const getDownloadUrlMock = vi.mocked(getDownloadUrl);
+
+beforeEach(() => {
+  getDownloadUrlMock.mockReset();
+});
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -364,5 +381,43 @@ describe("getReceiptPrintData — fee-period-linked payment", () => {
     expect(result.data.description).toContain("Web Development");
     expect(result.data.description).toContain("Batch 03");
     expect(result.data.description).toContain(period.periodStart);
+  });
+});
+
+describe("getReceiptPrintData — academy logo resolution", () => {
+  it("resolves academy.logoUrl to a real signed URL, never the raw R2 key, when a logo is set", async () => {
+    const { academyId, studentId, context } = await setupAcademy("manager");
+    const fakeKey = `academies/${academyId}/logos/${randomUUID()}.png`;
+    await db.update(academies).set({ logoRef: fakeKey }).where(eq(academies.id, academyId));
+    getDownloadUrlMock.mockResolvedValue({ ok: true, downloadUrl: "https://r2.example.test/signed-logo-url?sig=abc" });
+
+    const chargeResult = await createStudentCharge(context, { studentId, description: "Fee", amountCents: 500 });
+    if (!chargeResult.ok) throw new Error("expected ok");
+    const paymentResult = await recordStudentPayment(context, { studentId, chargeId: chargeResult.charge.id, amountCents: 500, method: "cash", receivedAt: new Date().toISOString() });
+    if (!paymentResult.ok) throw new Error("expected ok");
+    const receiptResult = await issueReceipt(context, paymentResult.payment.id);
+    if (!receiptResult.ok) throw new Error("expected ok");
+
+    const result = await getReceiptPrintData(context, receiptResult.receipt.id);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.data.academy.logoUrl).toBe("https://r2.example.test/signed-logo-url?sig=abc");
+    expect(result.data.academy.logoUrl).not.toBe(fakeKey);
+  });
+
+  it("academy.logoUrl is null when no logo is configured", async () => {
+    const { studentId, context } = await setupAcademy("manager");
+    const chargeResult = await createStudentCharge(context, { studentId, description: "Fee", amountCents: 500 });
+    if (!chargeResult.ok) throw new Error("expected ok");
+    const paymentResult = await recordStudentPayment(context, { studentId, chargeId: chargeResult.charge.id, amountCents: 500, method: "cash", receivedAt: new Date().toISOString() });
+    if (!paymentResult.ok) throw new Error("expected ok");
+    const receiptResult = await issueReceipt(context, paymentResult.payment.id);
+    if (!receiptResult.ok) throw new Error("expected ok");
+
+    const result = await getReceiptPrintData(context, receiptResult.receipt.id);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.academy.logoUrl).toBeNull();
+    expect(getDownloadUrlMock).not.toHaveBeenCalled();
   });
 });

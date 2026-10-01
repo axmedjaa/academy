@@ -86,9 +86,9 @@ export function CertificatePrintView({ certificateId, data, autoPrint }: Props) 
 
           <div className={styles.content}>
             <div className={styles.header}>
-              {academy.logoRef && (
-                // eslint-disable-next-line @next/next/no-img-element -- externally-hosted URL, same convention as every other logoRef/photoFileRef render in this codebase.
-                <img src={academy.logoRef} alt={academy.name} className={styles.logo} />
+              {academy.logoUrl && (
+                // eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL, same convention as book-sale-receipt-view.tsx.
+                <img src={academy.logoUrl} alt={academy.name} className={styles.logo} />
               )}
               <div className={styles.academyName}>{academy.name}</div>
               <div className={styles.title}>Certificate of Completion</div>

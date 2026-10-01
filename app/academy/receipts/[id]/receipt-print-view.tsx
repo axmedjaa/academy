@@ -73,9 +73,9 @@ export function ReceiptPrintView({ data, autoPrint }: Props) {
       <div className={styles.sheet}>
         <div className={styles.header}>
           <div>
-            {academy.logoRef && (
-              // eslint-disable-next-line @next/next/no-img-element -- externally-hosted URL, same convention as certificate-print-view.tsx.
-              <img src={academy.logoRef} alt={academy.name} className={styles.logo} />
+            {academy.logoUrl && (
+              // eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL, same convention as certificate-print-view.tsx.
+              <img src={academy.logoUrl} alt={academy.name} className={styles.logo} />
             )}
             <div className={styles.academyName}>{academy.name}</div>
             <p className={styles.academyMeta}>

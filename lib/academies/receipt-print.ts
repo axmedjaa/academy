@@ -4,6 +4,7 @@ import { academies, studentCharges, studentPayments, students } from "@/lib/db/s
 import { getReceipt, type StudentPaymentsActionError } from "@/lib/academies/student-payments";
 import { listFeePeriodPaymentHistory } from "@/lib/academies/fee-periods";
 import { resolveStaffLabels } from "@/lib/academies/staff-labels";
+import { getAcademyLogoUrl } from "@/lib/academies/academy-logo";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -39,7 +40,12 @@ export interface ReceiptPrintData {
   receipt: { id: string; receiptNumber: string; issuedAt: Date };
   academy: {
     name: string;
-    logoRef: string | null;
+    /** A short-lived signed R2 GET URL (resolved via `getAcademyLogoUrl`),
+     * never the raw `academies.logoRef` object key — see
+     * certificate-print.ts's identical fix for why rendering the raw key
+     * directly as an `<img src>` fails (it resolves as a relative path
+     * against the app's own origin and 404s). */
+    logoUrl: string | null;
     address: string | null;
     phone: string | null;
     email: string | null;
@@ -135,7 +141,7 @@ export async function getReceiptPrintData(
       receipt: { id: receipt.id, receiptNumber: receipt.receiptNumber, issuedAt: receipt.issuedAt },
       academy: {
         name: academyRow?.name ?? "Academy",
-        logoRef: academyRow?.logoRef ?? null,
+        logoUrl: academyRow?.logoRef ? await getAcademyLogoUrl(academyRow.logoRef) : null,
         address: academyRow?.address ?? null,
         phone: academyRow?.phone ?? null,
         email: academyRow?.email ?? null,

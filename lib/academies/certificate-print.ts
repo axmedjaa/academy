@@ -5,6 +5,7 @@ import { academies, batches, courses, examResults, gradeBands, programs, student
 import { env } from "@/lib/env";
 import { evaluateGradeBand } from "@/lib/academies/results";
 import { getCertificate, type CertificateActionError, type CertificateRecord } from "@/lib/academies/certificates";
+import { getAcademyLogoUrl } from "@/lib/academies/academy-logo";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -42,7 +43,12 @@ export interface CertificatePrintData {
   certificate: CertificateRecord;
   academy: {
     name: string;
-    logoRef: string | null;
+    /** A short-lived signed R2 GET URL (resolved via `getAcademyLogoUrl`),
+     * never the raw `academies.logoRef` object key — an R2 key rendered
+     * directly as an `<img src>` resolves as a relative path against the
+     * app's own origin and 404s, which is why the certificate logo was
+     * previously missing (see this field's own history). */
+    logoUrl: string | null;
     address: string | null;
     phone: string | null;
     email: string | null;
@@ -178,7 +184,7 @@ export async function getCertificatePrintData(
       certificate,
       academy: {
         name: academyRow?.name ?? "Academy",
-        logoRef: academyRow?.logoRef ?? null,
+        logoUrl: academyRow?.logoRef ? await getAcademyLogoUrl(academyRow.logoRef) : null,
         address: academyRow?.address ?? null,
         phone: academyRow?.phone ?? null,
         email: academyRow?.email ?? null,
