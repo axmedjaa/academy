@@ -12,7 +12,8 @@ import {
   type GradeConfigLifecycleActionResult,
 } from "@/lib/academies/grade-configurations-actions";
 import type { GradeConfigurationRecord } from "@/lib/academies/grade-configurations";
-import { Badge, Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 
 const initialFormState: GradeConfigFormState = { ok: false };
 
@@ -57,6 +58,11 @@ export function GradeConfigurationsList({
 
   return (
     <section className="flex flex-col gap-6">
+      {configurations.length === 0 ? (
+        <Section>
+          <EmptyState message="No grade configurations yet." icon={<Icon name="fact_check" />} />
+        </Section>
+      ) : (
       <TableWrap>
         <thead>
           <tr>
@@ -66,14 +72,7 @@ export function GradeConfigurationsList({
           </tr>
         </thead>
         <tbody>
-          {configurations.length === 0 ? (
-            <tr>
-              <td colSpan={3} className={`${td} text-center text-muted`}>
-                No grade configurations yet.
-              </td>
-            </tr>
-          ) : (
-            configurations.map((config) => (
+            {configurations.map((config) => (
               <GradeConfigRow
                 key={config.id}
                 config={config}
@@ -81,10 +80,10 @@ export function GradeConfigurationsList({
                 canApprove={canApprove}
                 currentUserId={currentUserId}
               />
-            ))
-          )}
+            ))}
         </tbody>
       </TableWrap>
+      )}
 
       {canManage && (
         <Section>

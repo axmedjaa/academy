@@ -79,7 +79,11 @@ export const shadow = {
 // shape without pinning exact pixel widths).
 export const shell = {
   sidebarWidth: 260,
-  headerHeight: 64,
+  // Navigation-density pass: 64 -> 56. Used as a literal height for both
+  // the sidebar's own brand masthead and the main content's sticky top bar
+  // (grepped for every usage before changing — only those two places read
+  // this token), so both shrink together for a denser professional feel.
+  headerHeight: 56,
   // Phase 2 addition — was a bare inline "1400" literal in academy-shell.tsx;
   // pulled out here alongside its two siblings above rather than left as a
   // magic number, no value change.

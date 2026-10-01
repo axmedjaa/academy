@@ -1,6 +1,8 @@
 import { forwardRef, type AnchorHTMLAttributes, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { color, radius, shadow, spacing } from "@/lib/ui/theme";
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 
 /**
  * Small set of shared presentational primitives for `/academy/*` screens
@@ -54,18 +56,21 @@ export function StatCard({
   hint,
   icon,
   index = 0,
+  href,
 }: {
   label: string;
   value: string | number;
   hint?: string;
   icon?: ReactNode;
   index?: number;
+  /** When provided, the whole card becomes a link to the stat's own module
+   * (e.g. "Total Students" -> /academy/students) — optional and additive;
+   * every existing call site that omits it keeps rendering as a plain,
+   * non-interactive card exactly as before. */
+  href?: string;
 }) {
-  return (
-    <Card
-      className="motion-safe:animate-fade-in-up"
-      style={{ display: "flex", flexDirection: "column", gap: spacing.xs, animationDelay: `${index * 60}ms` }}
-    >
+  const content = (
+    <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: "0.8rem", color: color.textMuted, fontWeight: 500 }}>{label}</span>
         {icon && <span style={{ color: color.textMuted, display: "flex" }}>{icon}</span>}
@@ -82,6 +87,38 @@ export function StatCard({
         {value}
       </span>
       {hint && <span style={{ fontSize: "0.75rem", color: color.textMuted }}>{hint}</span>}
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="motion-safe:animate-fade-in-up motion-safe:active:scale-[0.98] transition-shadow hover:shadow-md"
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: spacing.xs,
+          animationDelay: `${index * 60}ms`,
+          backgroundColor: color.card,
+          border: `1px solid ${color.border}`,
+          borderRadius: radius.card,
+          boxShadow: shadow.card,
+          padding: spacing.lg,
+          textDecoration: "none",
+        }}
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return (
+    <Card
+      className="motion-safe:animate-fade-in-up"
+      style={{ display: "flex", flexDirection: "column", gap: spacing.xs, animationDelay: `${index * 60}ms` }}
+    >
+      {content}
     </Card>
   );
 }
@@ -255,6 +292,30 @@ export function SkeletonBlock({ height = "1rem", width = "100%" }: { height?: st
  */
 
 export const PAGE_WRAP = "mx-auto w-full max-w-6xl px-4 py-8 sm:px-6";
+
+/** A trail of ancestor links ending at the current page (no href on the
+ * last entry, rendered as plain text). Added for the one genuinely 3-deep
+ * route in the app (Book Sales -> Sale Receipt -> Payment Receipt) — most
+ * pages are 1-2 levels deep and use the existing "<- Back to X" link
+ * convention instead, which this does not replace. */
+export function Breadcrumbs({ items }: { items: { label: string; href?: string }[] }) {
+  return (
+    <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-sm text-muted">
+      {items.map((item, index) => (
+        <span key={index} className="flex items-center gap-1.5">
+          {index > 0 && <span aria-hidden="true">›</span>}
+          {item.href ? (
+            <Link href={item.href} className="hover:underline hover:text-ink">
+              {item.label}
+            </Link>
+          ) : (
+            <span className="text-ink font-medium">{item.label}</span>
+          )}
+        </span>
+      ))}
+    </nav>
+  );
+}
 
 /** Page title + optional description + right-aligned actions. Wraps to a
  * stacked layout on narrow screens instead of squeezing the action button. */
@@ -446,3 +507,138 @@ export function TableWrap({ children }: { children: ReactNode }) {
 export const th = "border-b border-border bg-app px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted";
 export const td = "border-b border-border px-4 py-3 text-ink";
 export const trHover = "hover:bg-app/60";
+
+/** DESIGN.md §3 "Usage/allowance bar": label + "used / limit" + a thin
+ * progress bar, green under 80%, amber 80-99%, red at/over 100% — reused
+ * wherever a page needs a compact capacity indicator for one resource.
+ * Settings' own full usage table (academy-usage-widget.tsx) renders a
+ * richer per-resource table with its own inline bar for a different,
+ * denser view — this is the compact, single-row version for a quick
+ * summary (e.g. a dashboard), not a replacement for that table. */
+export function UsageBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+  const ratio = limit > 0 ? Math.min(1, used / limit) : 0;
+  const barColorClass = ratio >= 1 ? "bg-danger" : ratio >= 0.8 ? "bg-warning" : "bg-success";
+  return (
+    <div>
+      <div className="flex justify-between text-xs text-muted">
+        <span>{label}</span>
+        <span className="tabular-nums">
+          {used} / {limit}
+        </span>
+      </div>
+      <div className="mt-1 h-1.5 rounded-full bg-app">
+        <div
+          className={`h-1.5 rounded-full transition-[width] duration-300 ${barColorClass}`}
+          style={{ width: `${ratio * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Shape-matched loading-skeleton building block — `animate-pulse` is
+ * Tailwind's built-in utility; `motion-reduce:animate-none` keeps it a
+ * static placeholder under `prefers-reduced-motion: reduce`. Previously
+ * duplicated locally in app/academy/dashboard/loading.tsx and
+ * app/academy/students/loading.tsx (each page's own shape differs enough
+ * to still hand-roll its own skeleton markup there); exported here so the
+ * simpler "header + plain table" pages below can share both this and
+ * `ListPageSkeleton` instead of re-declaring it a third+ time. */
+export function Pulse({ className = "" }: { className?: string }) {
+  return <div className={`animate-pulse motion-reduce:animate-none rounded-control bg-app ${className}`} />;
+}
+
+/**
+ * Shape-matched skeleton for the common "PageHeader + plain data table"
+ * page shape (Admissions, Staff, Branches, Programs, Courses, Batches, ...)
+ * — none of these had a `loading.tsx` before this pass, so the page
+ * visibly popped from blank to fully loaded. Not for Dashboard/Students,
+ * whose own composition (stat grid, merged filter+table surface) is
+ * different enough to keep their own hand-written skeletons.
+ * `columns` controls how many `<th>`/`<td>` skeletons render per row —
+ * callers pass the same count their real table renders so nothing
+ * reflows once data arrives; `firstColumnWide` widens just the first
+ * column's cell pulses, for tables whose first column is an identity
+ * cell (a name) rather than a short value. */
+export function ListPageSkeleton({
+  columns,
+  rows = 6,
+  firstColumnWide = true,
+}: {
+  columns: number;
+  rows?: number;
+  firstColumnWide?: boolean;
+}) {
+  return (
+    <div className={PAGE_WRAP}>
+      <div className="mb-6 flex flex-col gap-2">
+        <Pulse className="h-7 w-32" />
+        <Pulse className="h-4 w-72" />
+      </div>
+      <TableWrap>
+        <thead>
+          <tr>
+            {Array.from({ length: columns }).map((_, index) => (
+              <th key={index} className={th}>
+                <Pulse className="h-3 w-16" />
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: rows }).map((_, rowIndex) => (
+            <tr key={rowIndex}>
+              {Array.from({ length: columns }).map((_, colIndex) => (
+                <td key={colIndex} className={td}>
+                  <Pulse className={colIndex === 0 && firstColumnWide ? "h-3.5 w-32" : "h-3.5 w-16"} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </TableWrap>
+    </div>
+  );
+}
+
+/**
+ * Shared centered-dialog shell for "edit this record" forms that were
+ * previously rendered as a permanent inline section below a table
+ * (Branches, Courses). Wraps the existing `AlertDialog` primitives
+ * (components/ui/alert-dialog.tsx) rather than hand-rolling a new dialog —
+ * `AlertDialogContent` already centers itself, caps at `max-h-[85vh]` with
+ * internal scrolling, and animates in via the app's existing
+ * `animate-scale-in`/`animate-fade-in` keyframes, so this only needs to add
+ * the title and a slightly wider max-width suited to multi-field forms.
+ * Callers keep owning their own form markup/Cancel+Save buttons as
+ * `children`; closing on successful submit is the caller's
+ * responsibility (call `onOpenChange(false)` once the action state is ok). */
+export function FormDialog({
+  open,
+  onOpenChange,
+  title,
+  children,
+  className,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  children: ReactNode;
+  /** Overrides the default `max-w-lg` — e.g. `max-w-xl` for a form with
+   * several side-by-side field grids that feel cramped at the default
+   * width (see app/platform/plans/plans-manager.tsx's Edit Plan dialog).
+   * Merged via `cn`'s `twMerge`, so passing a `max-w-*` class here wins
+   * over the default rather than conflicting with it. */
+  className?: string;
+}) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent className={cn("max-w-lg", className)}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+        </AlertDialogHeader>
+        {children}
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}

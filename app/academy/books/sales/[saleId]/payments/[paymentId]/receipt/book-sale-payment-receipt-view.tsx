@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import type { BookSaleReceiptPayment, BookSaleReceiptPrintData } from "@/lib/academies/book-sale-receipt-print";
-import { Button, LinkButton } from "@/app/academy/_shell/ui";
+import { Breadcrumbs, Button, LinkButton } from "@/app/academy/_shell/ui";
 import sheetStyles from "@/app/academy/receipts/[id]/receipt-print.module.css";
 import styles from "../../../../book-sale-receipt.module.css";
 
@@ -45,6 +45,15 @@ export function BookSalePaymentReceiptView({ data, payment, autoPrint }: Props) 
 
   return (
     <div className={sheetStyles.page}>
+      <div className={sheetStyles.noPrint}>
+        <Breadcrumbs
+          items={[
+            { label: "Book Sales", href: "/academy/books/sales" },
+            { label: "Sale Receipt", href: `/academy/books/sales/${sale.id}/receipt` },
+            { label: "Payment Receipt" },
+          ]}
+        />
+      </div>
       <div className={`${sheetStyles.actions} ${sheetStyles.noPrint}`}>
         <LinkButton href={`/academy/books/sales/${sale.id}/receipt`} variant="secondary">
           ← Back to Sale Receipt

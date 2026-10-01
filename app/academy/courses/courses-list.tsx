@@ -14,8 +14,10 @@ import type { ProgramRecord } from "@/lib/academies/programs";
 import {
   Badge,
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
+  FormDialog,
   Section,
   TableWrap,
   inputClass,
@@ -23,7 +25,15 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
-import { ConfirmButton, EligibilityGatedDeleteButton } from "@/app/academy/_shell/confirm-dialog";
+import { Icon } from "@/app/academy/_shell/icons";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const initialState: CourseFormState = { ok: false };
 
@@ -52,8 +62,21 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
   const [createState, createFormAction, creating] = useActionState(createCourse, initialState);
   const [updateState, updateFormAction, updating] = useActionState(updateCourse, initialState);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Which row's Archive/Restore or Delete confirmation is open — the
+  // dropdown menu item opens it externally (ConfirmButton's controlled
+  // mode), same pattern as app/academy/students/students-list.tsx.
+  const [archiveRowId, setArchiveRowId] = useState<string | null>(null);
+  const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
 
   const editingCourse = courses.find((c) => c.id === editingId) ?? null;
+
+  // Auto-close the edit dialog once its own update succeeds — see
+  // branches-list.tsx's identical pattern/comment.
+  const [prevUpdateOk, setPrevUpdateOk] = useState(updateState.ok);
+  if (updateState.ok !== prevUpdateOk) {
+    setPrevUpdateOk(updateState.ok);
+    if (updateState.ok) setEditingId(null);
+  }
 
   function toggleCourseStatus(course: CourseWithInstructor) {
     return setCourseStatus(course.id, course.status === "active" ? "archived" : "active");
@@ -61,6 +84,11 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
 
   return (
     <section className="flex flex-col gap-6">
+      {courses.length === 0 ? (
+        <Section>
+          <EmptyState message="No courses to show yet." icon={<Icon name="menu_book" />} />
+        </Section>
+      ) : (
       <TableWrap>
         <thead>
           <tr>
@@ -74,14 +102,7 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
           </tr>
         </thead>
         <tbody>
-          {courses.length === 0 ? (
-            <tr>
-              <td colSpan={canManage ? 7 : 6} className={`${td} text-center text-muted`}>
-                No courses to show yet.
-              </td>
-            </tr>
-          ) : (
-            courses.map((course) => (
+            {courses.map((course) => (
               <tr key={course.id} className={trHover}>
                 <td className={td}>
                   {course.imageRef ? (
@@ -109,54 +130,86 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                 </td>
                 {canManage && (
                   <td className={td}>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Link href={`/academy/courses/${course.id}`} className="text-sm text-brand hover:underline">
-                        View
-                      </Link>
-                      <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEditingId(course.id)}>
-                        Edit
-                      </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={`Actions for ${course.name}`}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                        >
+                          <Icon name="more" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setEditingId(course.id)}>Edit</DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setArchiveRowId(course.id)}>
+                          {course.status === "active" ? "Archive" : "Restore"}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        {course.deletionEligibility.eligible ? (
+                          <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(course.id)}>
+                            Delete
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            disabled
+                            title={`This course cannot be permanently deleted because ${course.deletionEligibility.reasons.join("; ")}. Use Archive instead.`}
+                          >
+                            Delete
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    <ConfirmButton
+                      label={course.status === "active" ? "Archive" : "Restore"}
+                      variant={course.status === "active" ? "danger" : "secondary"}
+                      open={archiveRowId === course.id}
+                      onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? course.id : null)}
+                      title={course.status === "active" ? `Archive "${course.name}"?` : `Restore "${course.name}"?`}
+                      description={
+                        course.status === "active" ? (
+                          <>
+                            Archived courses are hidden from new batch creation and free up this
+                            academy&apos;s plan course allowance, but every batch and student history is
+                            kept and can be restored at any time.
+                          </>
+                        ) : (
+                          <>
+                            This course will be marked active again and count against this academy&apos;s
+                            plan course allowance.
+                          </>
+                        )
+                      }
+                      onConfirm={() => toggleCourseStatus(course)}
+                    />
+                    {course.deletionEligibility.eligible && (
                       <ConfirmButton
-                        label={course.status === "active" ? "Archive" : "Restore"}
-                        variant={course.status === "active" ? "danger" : "secondary"}
-                        className="px-2.5 py-1 text-xs"
-                        title={course.status === "active" ? `Archive "${course.name}"?` : `Restore "${course.name}"?`}
-                        description={
-                          course.status === "active" ? (
-                            <>
-                              Archived courses are hidden from new batch creation and free up this
-                              academy&apos;s plan course allowance, but every batch and student history is
-                              kept and can be restored at any time.
-                            </>
-                          ) : (
-                            <>
-                              This course will be marked active again and count against this academy&apos;s
-                              plan course allowance.
-                            </>
-                          )
-                        }
-                        onConfirm={() => toggleCourseStatus(course)}
-                      />
-                      <EligibilityGatedDeleteButton
-                        entityLabel="Course"
-                        entityName={course.name}
-                        eligible={course.deletionEligibility.eligible}
-                        reasons={course.deletionEligibility.reasons}
+                        label="Delete"
+                        variant="dangerSolid"
+                        open={deleteRowId === course.id}
+                        onOpenChange={(nextOpen) => setDeleteRowId(nextOpen ? course.id : null)}
+                        title={`Delete "${course.name}" permanently?`}
+                        description={<>This cannot be undone.</>}
+                        confirmInput={{ label: `Type "${course.name}" to confirm`, requiredValue: course.name }}
                         onConfirm={() => deleteCourse(course.id, course.name)}
                       />
-                    </div>
+                    )}
                   </td>
                 )}
               </tr>
-            ))
-          )}
+            ))}
         </tbody>
       </TableWrap>
+      )}
 
       {canManage && editingCourse && (
-        <Section>
-          <h2 className="text-base font-semibold text-ink">Edit course — {editingCourse.name}</h2>
-          <form action={updateFormAction} className="mt-4 flex max-w-lg flex-col gap-3">
+        <FormDialog
+          open={editingCourse !== null}
+          onOpenChange={(nextOpen) => !nextOpen && setEditingId(null)}
+          title={`Edit course — ${editingCourse.name}`}
+        >
+          <form action={updateFormAction} className="flex flex-col gap-3">
             <input type="hidden" name="courseId" value={editingCourse.id} />
             <Field label="Program">
               <select name="programId" required defaultValue={editingCourse.programId} className={inputClass}>
@@ -207,8 +260,7 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
               </Field>
             </div>
             {updateState.error && <ErrorMessage message={updateState.error.message} />}
-            {updateState.ok && <p className="text-sm font-medium text-success">Course updated.</p>}
-            <div className="flex gap-2">
+            <div className="mt-2 flex gap-2">
               <Button type="submit" disabled={updating}>
                 {updating ? "Saving..." : "Save changes"}
               </Button>
@@ -217,7 +269,7 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
               </Button>
             </div>
           </form>
-        </Section>
+        </FormDialog>
       )}
 
       {canManage && (

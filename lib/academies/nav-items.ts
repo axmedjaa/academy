@@ -60,6 +60,21 @@ export const ACADEMY_NAV_ITEMS: readonly AcademyNavItem[] = [
   },
   { key: "staff", label: "Staff", href: "/academy/staff", icon: "badge", requiredAction: ACADEMY_STAFF_ACTION },
   {
+    key: "branches",
+    label: "Branches",
+    href: "/academy/branches",
+    icon: "apartment",
+    // Navigation-audit Phase 1: promoted out of the "staff" sub-group to its
+    // own top-level item — a branch is a physical/organizational location,
+    // not a staff concept, and conflating the two made it hard to find.
+    // Same literal permission string as before (no named export exists for
+    // it in academy-permissions.ts — every other row there is a plain
+    // string key too, this one just has no `ACADEMY_*_ACTION` constant),
+    // unchanged: academy_owner/academy_admin "full", manager "manage",
+    // admissions_officer/trainer "view", finance_officer not granted at all.
+    requiredAction: "academy.branches",
+  },
+  {
     key: "academics",
     label: "Academics",
     href: "/academy/programs",
@@ -116,7 +131,11 @@ export const ACADEMY_NAV_ITEMS: readonly AcademyNavItem[] = [
     key: "audit-log",
     label: "Audit Log",
     href: "/academy/audit-logs",
-    icon: "receipt_long",
+    // Navigation-polish pass: "history" (clock + trail) reads more clearly
+    // as an audit/history trail than the prior "receipt_long" glyph, which
+    // looked like a payment receipt. Presentational-only — label, href,
+    // and requiredAction below are unchanged.
+    icon: "history",
     // DESIGN.md §4.2: "Audit Log appears only for Academy Owner/Admin
     // (Decision #18)" — ACADEMY_AUDIT_LOG_ACTION's table already grants
     // exactly Owner/Admin "full" and nobody else (see
@@ -169,7 +188,6 @@ export const ACADEMY_NAV_SUBITEMS: readonly AcademyNavSubItem[] = [
   { parentKey: "students", label: "Admissions", href: "/academy/admissions", requiredAction: ACADEMY_STUDENTS_ACTION },
 
   { parentKey: "staff", label: "Staff", href: "/academy/staff", requiredAction: ACADEMY_STAFF_ACTION },
-  { parentKey: "staff", label: "Branches", href: "/academy/branches", requiredAction: "academy.branches" },
 
   { parentKey: "academics", label: "Programs", href: "/academy/programs", requiredAction: ACADEMY_COURSES_BATCHES_ACTION },
   { parentKey: "academics", label: "Courses", href: "/academy/courses", requiredAction: ACADEMY_COURSES_BATCHES_ACTION },
@@ -189,20 +207,21 @@ export const ACADEMY_NAV_SUBITEMS: readonly AcademyNavSubItem[] = [
   },
   { parentKey: "exams", label: "Grade Bands", href: "/academy/grades", requiredAction: ACADEMY_GRADE_BANDS_ACTION },
 
-  { parentKey: "finance", label: "Finance", href: "/academy/finance", requiredAction: ACADEMY_INCOME_ACTION },
-  { parentKey: "finance", label: "Finance Reports", href: "/academy/finance-reports", requiredAction: ACADEMY_INCOME_ACTION },
+  // Navigation-audit Phase 1: the "Finance Reports" sub-item is gone — it
+  // pointed at /academy/finance-reports, which duplicated the exact same
+  // FinanceReportsView already rendered as this group's own Finance tab
+  // (/academy/reports?tab=finance, now canonical — see that route's own
+  // module comment and app/academy/finance-reports/page.tsx, now a
+  // compatibility redirect). Also dropped: a "Finance" sub-item pointing at
+  // this same group's own /academy/finance href — the parent link already
+  // goes there, so re-listing it as its own first child was pure
+  // redundancy, not a distinct destination (same reasoning applied to
+  // "books"/"certificates" below).
   { parentKey: "finance", label: "Fee Periods", href: "/academy/finance/fee-periods", requiredAction: ACADEMY_FEE_PERIODS_ACTION },
 
-  { parentKey: "books", label: "Books", href: "/academy/books", requiredAction: ACADEMY_BOOKS_ACTION },
   { parentKey: "books", label: "Stock", href: "/academy/books/stock", requiredAction: ACADEMY_BOOKS_ACTION },
   { parentKey: "books", label: "Book Sales", href: "/academy/books/sales", requiredAction: ACADEMY_BOOKS_ACTION },
 
-  {
-    parentKey: "certificates",
-    label: "Certificates",
-    href: "/academy/certificates",
-    requiredAction: ACADEMY_CERTIFICATES_ACTION,
-  },
   {
     parentKey: "certificates",
     label: "ID Cards",
@@ -229,4 +248,23 @@ export function getVisibleAcademyNavSubItems(role: AcademyRole, parentKey: strin
     if (getAcademyPermissionLevel(role, item.requiredAction) !== "none") return true;
     return item.alternateAction !== undefined && getAcademyPermissionLevel(role, item.alternateAction) !== "none";
   });
+}
+
+/**
+ * Navigation-density pass — a visible sub-items list that contains exactly
+ * one entry whose href duplicates its own parent's href ("staff"'s
+ * self-referencing sub-item is the one case in the current tree — a
+ * pre-existing quirk, not introduced here) carries no destination distinct
+ * from the parent row itself. Rendering an expand affordance for it would
+ * reveal nothing new, so the shell treats that case as "no children to
+ * expand" — same as a plain leaf item (Dashboard, Reports, ...).
+ *
+ * Presentation-only: never changes which hrefs exist, which `requiredAction`
+ * gates them, or which items/sub-items a role can see — only whether the
+ * shell draws a given parent as "has an expandable group."
+ */
+export function hasExpandableSubItems(item: AcademyNavItem, subItems: readonly AcademyNavSubItem[]): boolean {
+  if (subItems.length === 0) return false;
+  if (subItems.length === 1 && subItems[0].href === item.href) return false;
+  return true;
 }

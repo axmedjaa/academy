@@ -68,7 +68,7 @@ export default async function NewStudentPage() {
 
   return (
     <div className="mx-auto w-full max-w-xl px-4 py-8 sm:px-6">
-      <PageHeader title="Register student" />
+      <PageHeader title="Register student" description="Create a new student record for this academy." />
       {branches.length === 0 ? (
         <Section>
           <p className="text-sm text-muted">

@@ -13,7 +13,8 @@ import type {
   BatchEnrollmentRosterRow,
   BatchTrainerAssignmentRosterRow,
 } from "@/lib/academies/batch-assignments";
-import { Badge, Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 
 const initialState: BatchAssignmentFormState = { ok: false };
@@ -79,6 +80,11 @@ export function RosterPanel({
     <div className="flex flex-col gap-8">
       <section>
         <h2 className="mb-3 text-lg font-semibold text-ink">Trainers</h2>
+        {assignments.length === 0 ? (
+          <Section>
+            <EmptyState message="No trainers assigned yet." icon={<Icon name="badge" />} />
+          </Section>
+        ) : (
         <TableWrap>
           <thead>
             <tr>
@@ -89,14 +95,7 @@ export function RosterPanel({
             </tr>
           </thead>
           <tbody>
-            {assignments.length === 0 ? (
-              <tr>
-                <td colSpan={canManage ? 4 : 3} className={`${td} text-center text-muted`}>
-                  No trainers assigned yet.
-                </td>
-              </tr>
-            ) : (
-              assignments.map((assignment) => (
+              {assignments.map((assignment) => (
                 <tr key={assignment.id} className={trHover}>
                   <td className={`${td} font-medium`}>{assignment.staffFullName}</td>
                   <td className={td}>{new Date(assignment.assignedAt).toLocaleDateString()}</td>
@@ -117,10 +116,10 @@ export function RosterPanel({
                     </td>
                   )}
                 </tr>
-              ))
-            )}
+              ))}
           </tbody>
         </TableWrap>
+        )}
         {unassignState.error && (
           <div className="mt-2">
             <ErrorMessage message={unassignState.error.message} />
@@ -151,6 +150,11 @@ export function RosterPanel({
 
       <section>
         <h2 className="mb-3 text-lg font-semibold text-ink">Enrolled students</h2>
+        {enrollments.length === 0 ? (
+          <Section>
+            <EmptyState message="No students enrolled yet." icon={<Icon name="group" />} />
+          </Section>
+        ) : (
         <TableWrap>
           <thead>
             <tr>
@@ -161,14 +165,7 @@ export function RosterPanel({
             </tr>
           </thead>
           <tbody>
-            {enrollments.length === 0 ? (
-              <tr>
-                <td colSpan={canManage ? 4 : 3} className={`${td} text-center text-muted`}>
-                  No students enrolled yet.
-                </td>
-              </tr>
-            ) : (
-              enrollments.map((enrollment) => (
+              {enrollments.map((enrollment) => (
                 <tr key={enrollment.id} className={trHover}>
                   <td className={`${td} font-medium`}>
                     {enrollment.studentFullName} <span className="font-normal text-muted">({enrollment.studentNumber})</span>
@@ -212,10 +209,10 @@ export function RosterPanel({
                     </td>
                   )}
                 </tr>
-              ))
-            )}
+              ))}
           </tbody>
         </TableWrap>
+        )}
         {withdrawState.error && (
           <div className="mt-2">
             <ErrorMessage message={withdrawState.error.message} />

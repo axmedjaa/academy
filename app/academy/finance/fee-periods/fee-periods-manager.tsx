@@ -10,7 +10,8 @@ import {
   recordFeePeriodPaymentAction,
   setEnrollmentFeeScheduleAction,
 } from "@/lib/academies/fee-periods-actions";
-import { Badge, Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { centsToDollars, dollarsToCents } from "@/lib/ui/money";
@@ -176,6 +177,12 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
           <div className="mt-6">
             <h2 className="text-base font-semibold text-ink">Fee periods</h2>
             <NextOutstandingBanner periods={periods} currency={schedule?.currency ?? "USD"} today={today} />
+            {periods.length === 0 ? (
+              <EmptyState
+                message={schedule ? "No fee periods yet." : "Set a fee schedule to generate periods."}
+                icon={<Icon name="payments" />}
+              />
+            ) : (
             <TableWrap>
               <thead>
                 <tr>
@@ -189,14 +196,7 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
                 </tr>
               </thead>
               <tbody>
-                {periods.length === 0 ? (
-                  <tr>
-                    <td colSpan={canManage ? 7 : 6} className={`${td} text-center text-muted`}>
-                      {schedule ? "No fee periods yet." : "Set a fee schedule to generate periods."}
-                    </td>
-                  </tr>
-                ) : (
-                  periods.map((period) => (
+                  {periods.map((period) => (
                     <PeriodRow
                       key={period.id}
                       period={period}
@@ -205,10 +205,10 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
                       canManage={canManage}
                       onRecorded={reloadPeriods}
                     />
-                  ))
-                )}
+                  ))}
               </tbody>
             </TableWrap>
+            )}
           </div>
 
           {canManage && periods.some((period) => period.remainingCents > 0) && (

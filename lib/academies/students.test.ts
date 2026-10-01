@@ -524,6 +524,27 @@ describe("updateStudent — permission matrix", () => {
     expect(audit?.academyId).toBe(academyId);
   });
 
+  it("preserves the student's current status when the input omits it entirely — the invariant the Edit form's removed Status field relied on not existing for", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId);
+
+    const archived = await updateStudent(context, student.id, { fullName: student.fullName, status: "archived" });
+    expect(archived.ok).toBe(true);
+    if (!archived.ok) return;
+    expect(archived.student.status).toBe("archived");
+
+    // Edits an unrelated field only — no `status` key at all in the input,
+    // exactly what the Edit Student form now submits (its own dedicated
+    // Status field was removed in favor of the single Archive/Restore
+    // action). Archived status must survive untouched.
+    const edited = await updateStudent(context, student.id, { fullName: "Renamed While Archived" });
+    expect(edited.ok).toBe(true);
+    if (!edited.ok) return;
+    expect(edited.student.fullName).toBe("Renamed While Archived");
+    expect(edited.student.status).toBe("archived");
+  });
+
   it("rejects an empty full name with code 'validation'", async () => {
     const { academyId, userId, context } = await setupAcademy("academy_owner");
     const branchId = await insertBranchDirect(academyId);

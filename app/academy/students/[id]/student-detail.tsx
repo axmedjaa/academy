@@ -182,13 +182,34 @@ export function StudentDetail({
   );
 }
 
+/** First + last initial — same avatar-style identity cue as
+ * app/academy/students/students-list.tsx's row identity cell, so this
+ * page's own "header card" (DESIGN.md §6 Pattern B) reads as the same
+ * person the list just linked here from, not a different visual language. */
+function getInitials(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (first + last).toUpperCase();
+}
+
 function StudentInfoCard({ student }: { student: StudentRecord }) {
   return (
     <Section>
-      <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-3">
-        <InfoField label="Status">
-          <Badge label={student.status} tone={student.status === "active" ? "green" : "gray"} />
-        </InfoField>
+      <div className="flex items-center gap-4">
+        <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-brand-tint text-lg font-semibold text-brand">
+          {getInitials(student.fullName)}
+        </span>
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold text-ink">{student.fullName}</h2>
+            <Badge label={student.status} tone={student.status === "active" ? "green" : "gray"} />
+          </div>
+          <p className="text-sm text-muted">Student # {student.studentNumber}</p>
+        </div>
+      </div>
+      <div className="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 border-t border-border pt-5 sm:grid-cols-3">
         <InfoField label="Phone">{student.phone ?? "—"}</InfoField>
         <InfoField label="Email">{student.email ?? "—"}</InfoField>
         <InfoField label="Date of birth">{student.dateOfBirth ?? "—"}</InfoField>

@@ -1,8 +1,9 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAdmissionsView } from "@/lib/academies/students";
+import { listBranches } from "@/lib/academies/branches";
 import { AdmissionsList } from "./admissions-list";
-import { Button, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
+import { Button, LinkButton, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
 
 /**
@@ -60,8 +61,16 @@ export default async function AcademyAdmissionsPage({
   // view reads from getAdmissionsView, which shares students.ts's
   // resolveScope — Admissions Officer sees the whole academy, Trainer sees
   // only students enrolled in courses/batches they teach. `branchLimited`
-  // is left as-is for the (unrelated) Branch ID filter field below.
+  // is left as-is for the (unrelated) Branch filter field below.
   const isTrainer = membershipRole === "trainer";
+
+  // Branch options for the filter select below — same already-established
+  // convention as app/academy/batches/page.tsx's own branch dropdown.
+  // listBranches applies its own scoping, but the filter row only renders
+  // for !branchLimited roles anyway, so this is always the full academy
+  // list in practice here.
+  const branchesResult = !branchLimited ? await listBranches(context) : null;
+  const branchOptions = branchesResult?.ok ? branchesResult.branches : [];
 
   return (
     <div className={PAGE_WRAP}>
@@ -77,13 +86,27 @@ export default async function AcademyAdmissionsPage({
       {!branchLimited && (
         <form method="get">
           <Toolbar>
-            <label className="min-w-[160px]">
-              <span className="mb-1 block text-xs font-medium text-muted">Branch ID</span>
-              <input type="text" name="branchId" defaultValue={branchId} className={inputClass} />
+            <label className="min-w-[200px]">
+              <span className="mb-1 block text-xs font-medium text-muted">Branch</span>
+              <select name="branchId" defaultValue={branchId} className={inputClass}>
+                <option value="">All branches</option>
+                {branchOptions.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </option>
+                ))}
+              </select>
             </label>
-            <Button type="submit" variant="secondary">
-              Filter
-            </Button>
+            <div className="flex gap-2">
+              <Button type="submit" variant="secondary">
+                Filter
+              </Button>
+              {branchId && (
+                <LinkButton href="/academy/admissions" variant="ghost">
+                  Clear
+                </LinkButton>
+              )}
+            </div>
           </Toolbar>
         </form>
       )}

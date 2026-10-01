@@ -126,10 +126,7 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title={student.fullName}
-        description={`Student # ${student.studentNumber} — ${student.status === "active" ? "Active" : "Archived"}`}
-      />
+      <PageHeader title={student.fullName} description={`Student # ${student.studentNumber}`} />
       <StudentDetail
         student={student}
         enrollments={enrollments}

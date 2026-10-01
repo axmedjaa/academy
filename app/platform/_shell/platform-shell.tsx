@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
@@ -44,34 +44,75 @@ export function PlatformShell({
 
   const currentItem = navItems.find((item) => isActive(item.href));
 
+  // Mobile drawer behavior, mirroring app/academy/_shell/academy-shell.tsx:
+  // lock background scroll while open, close on Escape, move focus into the
+  // drawer on open and back to the hamburger button on close (every close
+  // path flips `drawerOpen` to false, so this one effect's cleanup covers
+  // all of them uniformly).
+  const hamburgerButtonRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const hamburgerButton = hamburgerButtonRef.current;
+    document.body.style.overflow = "hidden";
+    closeButtonRef.current?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setDrawerOpen(false);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+      hamburgerButton?.focus();
+    };
+  }, [drawerOpen]);
+
   return (
     <div style={{ minHeight: "100vh", backgroundColor: color.bg }}>
-      {drawerOpen && (
-        <div
-          onClick={() => setDrawerOpen(false)}
-          aria-hidden="true"
-          className="platform-shell-scrim"
-          style={{ position: "fixed", inset: 0, backgroundColor: "rgba(15, 23, 42, 0.5)", zIndex: 40 }}
-        />
-      )}
+      {/* Always mounted (not conditionally rendered) so its opacity can
+       * transition smoothly instead of popping in/out instantly; mirrors
+       * app/academy/_shell/academy-shell.tsx's own scrim. */}
+      <div
+        onClick={() => setDrawerOpen(false)}
+        aria-hidden="true"
+        className="platform-shell-scrim"
+        style={{
+          position: "fixed",
+          inset: 0,
+          backgroundColor: "rgba(15, 23, 42, 0.5)",
+          zIndex: 40,
+          opacity: drawerOpen ? 1 : 0,
+          pointerEvents: drawerOpen ? "auto" : "none",
+        }}
+      />
 
       <aside
+        id="platform-shell-sidebar"
         className="platform-shell-sidebar"
         style={{
           position: "fixed",
           top: 0,
-          left: drawerOpen ? 0 : undefined,
+          left: 0,
           bottom: 0,
           width: shell.sidebarWidth,
+          // `transform` instead of the old `left` — see the matching
+          // comment in app/academy/_shell/academy-shell.tsx for why.
+          transform: drawerOpen ? "translateX(0)" : undefined,
           backgroundColor: color.primaryNavy,
           display: "flex",
           flexDirection: "column",
           zIndex: 50,
-          overflowY: "auto",
+          // The brand header and account footer below are fixed chrome —
+          // only the <nav> between them (flex: 1 1 auto + its own
+          // overflowY) is the scroll container, matching the Academy
+          // shell's own fixed-header/scrolling-nav/fixed-footer structure.
+          overflow: "hidden",
         }}
       >
         <div
           style={{
+            flexShrink: 0,
             height: shell.headerHeight,
             display: "flex",
             alignItems: "center",
@@ -85,33 +126,38 @@ export function PlatformShell({
             <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.55)" }}>Platform Console</span>
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             onClick={() => setDrawerOpen(false)}
             aria-label="Close menu"
-            className="platform-shell-close-btn"
+            className="platform-shell-close-btn platform-shell-icon-btn rounded-control p-3 motion-safe:active:scale-[0.98]"
             style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.7)" }}
           >
             <Icon name="close" />
           </button>
         </div>
 
-        <nav style={{ padding: spacing.sm, display: "flex", flexDirection: "column", gap: "2px" }}>
+        <nav
+          aria-label="Platform navigation"
+          className="platform-shell-nav gap-1 min-[1025px]:gap-0.5"
+          style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", padding: spacing.sm, display: "flex", flexDirection: "column" }}
+        >
           {navItems.map((item) => {
             const active = isActive(item.href);
             return (
+              // Row padding is taller at and below the drawer breakpoint
+              // (py-3, ~44px touch target) and compact above it
+              // (min-[1025px]:py-2) — matched exactly to this shell's own
+              // `min-width: 1025px` desktop rule below, not Tailwind's
+              // default `lg:` (1024px), which would otherwise disagree with
+              // this shell's breakpoint by one pixel.
               <Link
                 key={item.key}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 onClick={() => setDrawerOpen(false)}
-                className={active ? "" : "platform-shell-navlink"}
+                className={`flex items-center gap-3 rounded-[10px] py-3 px-3 no-underline motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${active ? "" : "platform-shell-navlink"}`}
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: spacing.sm,
-                  padding: "0.55rem 0.75rem",
-                  borderRadius: 10,
-                  textDecoration: "none",
                   color: active ? "#fff" : "rgba(255,255,255,0.75)",
                   backgroundColor: active ? color.primaryBlue : "transparent",
                   fontSize: "0.9rem",
@@ -131,18 +177,12 @@ export function PlatformShell({
           )}
         </nav>
 
-        <div style={{ marginTop: "auto", padding: spacing.sm, borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", flexDirection: "column", gap: "2px" }}>
+        <div style={{ flexShrink: 0, padding: spacing.sm, borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", flexDirection: "column", gap: "2px" }}>
           <Link
             href="/account/security"
             onClick={() => setDrawerOpen(false)}
-            className="platform-shell-navlink"
+            className="platform-shell-navlink flex items-center gap-3 rounded-[10px] py-3 px-3 no-underline motion-safe:active:scale-[0.98] min-[1025px]:py-2"
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: spacing.sm,
-              padding: "0.55rem 0.75rem",
-              borderRadius: 10,
-              textDecoration: "none",
               color: "rgba(255,255,255,0.75)",
               fontSize: "0.9rem",
               fontWeight: 500,
@@ -154,24 +194,17 @@ export function PlatformShell({
           <form action={signOut}>
             <button
               type="submit"
-              className="platform-shell-navlink"
+              className="platform-shell-navlink flex w-full items-center gap-3 rounded-[10px] py-3 px-3 text-left motion-safe:active:scale-[0.98] min-[1025px]:py-2"
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: spacing.sm,
-                width: "100%",
-                padding: "0.55rem 0.75rem",
-                borderRadius: 10,
                 background: "none",
                 border: "none",
                 cursor: "pointer",
                 color: "rgba(255,255,255,0.75)",
                 fontSize: "0.9rem",
                 fontWeight: 500,
-                textAlign: "left",
               }}
             >
-              <Icon name="close" />
+              <Icon name="logout" />
               <span>Sign out</span>
             </button>
           </form>
@@ -196,10 +229,13 @@ export function PlatformShell({
         >
           <div style={{ display: "flex", alignItems: "center", gap: spacing.sm, minWidth: 0 }}>
             <button
+              ref={hamburgerButtonRef}
               type="button"
               onClick={() => setDrawerOpen(true)}
               aria-label="Open menu"
-              className="platform-shell-menu-btn"
+              aria-expanded={drawerOpen}
+              aria-controls="platform-shell-sidebar"
+              className="platform-shell-menu-btn rounded-control p-3 transition-colors duration-150 hover:bg-app motion-safe:active:scale-[0.98]"
               style={{ background: "none", border: "none", cursor: "pointer", color: color.text, display: "none" }}
             >
               <Icon name="menu" />
@@ -239,13 +275,80 @@ export function PlatformShell({
           background-color: rgba(255,255,255,0.08);
           color: #fff;
         }
+        /* Nav scrollbar: invisible at rest, a thin 6px thumb appears only
+           on hover/keyboard-focus of the nav region — mirrors the Academy
+           shell's own treatment (app/academy/_shell/academy-shell.tsx),
+           using this shell's own white-alpha convention instead of a
+           light-mode gray so it doesn't clash with the dark navy rail.
+           Track stays transparent and width never changes between states,
+           so this never shifts nav content or layout width — purely a
+           resting vs. interacting color swap, same scroll behavior either
+           way. */
+        .platform-shell-nav {
+          scrollbar-width: none;
+          scrollbar-color: transparent transparent;
+        }
+        .platform-shell-nav:hover,
+        .platform-shell-nav:focus-within {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+        }
+        .platform-shell-nav::-webkit-scrollbar {
+          width: 6px;
+        }
+        .platform-shell-nav::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .platform-shell-nav::-webkit-scrollbar-thumb {
+          background-color: transparent;
+          border-radius: 999px;
+          transition: background-color 0.2s ease;
+          /* Same thumb-length inset as the Academy shell's own nav
+             scrollbar (see that file's matching rule for the full
+             rationale): an invisible top/bottom border, left/right at 0 so
+             the 6px width is untouched, with background-clip: padding-box
+             to paint the color shorter without touching the native hit
+             area or scroll math. */
+          border-top: 3px solid transparent;
+          border-bottom: 3px solid transparent;
+          background-clip: padding-box;
+        }
+        .platform-shell-nav:hover::-webkit-scrollbar-thumb,
+        .platform-shell-nav:focus-within::-webkit-scrollbar-thumb {
+          background-color: rgba(255, 255, 255, 0.25);
+        }
+        .platform-shell-icon-btn:hover {
+          background-color: rgba(255,255,255,0.08);
+        }
         .platform-shell-account-link:hover {
           background-color: #dbe6fd;
         }
+        .platform-shell-scrim {
+          transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1);
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .platform-shell-sidebar,
+          .platform-shell-scrim {
+            transition: none !important;
+          }
+        }
+        @media (prefers-reduced-motion: no-preference) {
+          .platform-shell-account-link:active {
+            transform: scale(0.98);
+          }
+        }
         @media (max-width: 1024px) {
           .platform-shell-sidebar {
-            left: -${shell.sidebarWidth}px;
-            transition: left 0.2s ease;
+            transform: translateX(-100%);
+            /* A percentage transform (not a hardcoded -260px) slides by the
+               sidebar's own width regardless of shell.sidebarWidth, and
+               transform/opacity are the only properties a browser can
+               animate purely on the compositor — the old "left" transition
+               forced a layout pass on every frame. A custom ease-out curve
+               (entering/exiting content) replaces the built-in "ease",
+               which reads as noticeably weaker/less intentional at the
+               same duration — mirrors the Academy shell's own drawer. */
+            transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
             box-shadow: 2px 0 12px rgba(15, 23, 42, 0.25);
           }
           .platform-shell-content {

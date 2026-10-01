@@ -2393,6 +2393,50 @@ export const notifications = pgTable(
   ],
 );
 
+// Post-59 fix — per-user read-tracking for the SHARED (null `user_id`)
+// notifications `listNotificationsForUser`'s module comment already
+// documents (see lib/notifications/list-notifications.ts): an
+// `academy_id`-only row, addressed to every current member of that
+// academy rather than one specific user (e.g. `*.approval_requested`),
+// has no single `notifications.read_at` that could mean "read" without
+// hiding it for every other member who can also see it. This table gives
+// each such row its own per-viewer read marker instead, so "Mark as read"
+// can actually work on a shared row the same way it works on an owned
+// one — `markNotificationRead`/`markNotificationsRead` upsert into this
+// table for a shared row instead of touching `notifications.read_at`.
+// Owned (non-null `user_id`) rows are untouched by this table entirely;
+// they keep using `notifications.read_at` exactly as before.
+export const notificationReads = pgTable(
+  "notification_reads",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    notificationId: uuid("notification_id")
+      .notNull()
+      .references(() => notifications.id),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    readAt: timestamp("read_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // One read marker per (notification, viewer) — also the upsert's own
+    // `ON CONFLICT` target, so a second mark-as-read call on an already-
+    // read shared row is a true no-op (same "preserve the first read
+    // time" intent as notifications.read_at's own `coalesce` update).
+    uniqueIndex("notification_reads_notification_id_user_id_unique").on(
+      table.notificationId,
+      table.userId,
+    ),
+    // Read path for `listNotificationsForUser`'s per-row LEFT JOIN
+    // (matched on notification_id + user_id together, already covered by
+    // the unique index above) and for a future "how many shared
+    // notifications has this user read" query, if ever needed.
+    index("notification_reads_user_id_idx").on(table.userId),
+  ],
+);
+
 // Phase 5, Item 59 — gap #2 identified during planning: no preference-
 // storage table exists anywhere in the schema, yet DESIGN.md §9.8/§9.11
 // require *functioning* preference toggles ("optional event types get a

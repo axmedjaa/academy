@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { academyMemberships, notifications } from "@/lib/db/schema";
+import { academyMemberships, notificationReads, notifications } from "@/lib/db/schema";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -51,15 +51,21 @@ import type { AuthContext } from "@/lib/auth/auth-context";
  * in — i.e. "addressed to me personally" OR "addressed to any current
  * member of an academy I belong to."
  *
- * Known follow-up, not solved here: such a row is a SINGLE shared row, not
- * one per recipient, so `read_at` is shared state across every member who
- * can see it — `markNotificationRead`/`markNotificationsRead` deliberately
- * do NOT allow marking a null-`user_id` row read (their `WHERE user_id =
- * actorContext.userId` ownership check excludes them), so these rows always
- * render as unread rather than one viewer's "read" silently hiding it for
- * everyone else. Real per-user read-tracking for a shared academy-scoped
- * notification needs its own per-recipient row or a join table — flagged as
- * a later-wave gap, not addressed in this fix.
+ * ---------------------------------------------------------------------
+ * Per-user read-tracking for shared (null user_id) rows
+ * ---------------------------------------------------------------------
+ * Such a row is a SINGLE shared row, not one per recipient, so
+ * `notifications.read_at` can't mean "read" for it without hiding it for
+ * every other member who can also see it — this is why
+ * `markNotificationRead`/`markNotificationsRead` never touch that column
+ * for a null-`user_id` row. Instead, this file's own `notificationReads`
+ * table (lib/db/schema.ts) gives each (notification, viewer) pair its own
+ * read marker: `listNotificationsForUser` LEFT JOINs it (filtered to the
+ * caller's own user_id) to compute each shared row's *effective*
+ * `readAt` from this caller's point of view, and the mark-read functions
+ * upsert into it (instead of updating `notifications.read_at`) for a
+ * shared row. An owned (non-null user_id) row is untouched by any of
+ * this — it keeps using `notifications.read_at` exactly as before.
  *
  * Only `channel = "in_app"` rows are ever returned — per this item's own
  * brief, email/sms rows on this same table are delivery-attempt records,
@@ -78,20 +84,13 @@ export interface NotificationListItem {
   eventType: string;
   templateId: string;
   status: "pending" | "sent" | "failed";
+  /** For an owned row, `notifications.read_at` itself. For a shared
+   * (null-`user_id`) row, this caller's own `notificationReads` marker
+   * instead (null if they haven't read it) — see this file's module
+   * comment. Either way, this is "has *this caller* read it", which is
+   * all the UI (and `unreadOnly`) ever needs. */
   readAt: Date | null;
   createdAt: Date;
-}
-
-function toListItem(row: typeof notifications.$inferSelect): NotificationListItem {
-  return {
-    id: row.id,
-    academyId: row.academyId,
-    eventType: row.eventType,
-    templateId: row.templateId,
-    status: row.status,
-    readAt: row.readAt,
-    createdAt: row.createdAt,
-  };
 }
 
 export interface ListNotificationsFilters {
@@ -122,16 +121,37 @@ export async function listNotificationsForUser(
     ),
   ];
   if (filters.unreadOnly) {
-    conditions.push(isNull(notifications.readAt));
+    conditions.push(
+      or(
+        and(eq(notifications.userId, actorContext.userId), isNull(notifications.readAt)),
+        // `notificationReads` is LEFT JOINed below, already filtered to
+        // this caller's own user_id in its ON clause — a non-matching
+        // shared row therefore reads as NULL here, which is exactly "this
+        // caller hasn't read it yet" (an anti-join expressed via WHERE).
+        and(isNull(notifications.userId), isNull(notificationReads.readAt)),
+      ),
+    );
   }
 
   const rows = await db
-    .select()
+    .select({ notification: notifications, sharedReadAt: notificationReads.readAt })
     .from(notifications)
+    .leftJoin(
+      notificationReads,
+      and(eq(notificationReads.notificationId, notifications.id), eq(notificationReads.userId, actorContext.userId)),
+    )
     .where(and(...conditions))
     .orderBy(desc(notifications.createdAt));
 
-  return rows.map(toListItem);
+  return rows.map(({ notification, sharedReadAt }) => ({
+    id: notification.id,
+    academyId: notification.academyId,
+    eventType: notification.eventType,
+    templateId: notification.templateId,
+    status: notification.status,
+    readAt: notification.userId === actorContext.userId ? notification.readAt : sharedReadAt,
+    createdAt: notification.createdAt,
+  }));
 }
 
 export interface NotificationActionError {
@@ -151,13 +171,13 @@ const NOTIFICATION_NOT_FOUND: NotificationActionError = {
 export type MarkNotificationReadResult = { ok: true } | { ok: false; error: NotificationActionError };
 
 /**
- * Sets `read_at` for exactly one notification the caller owns. Uses
- * `COALESCE(read_at, now())` rather than an unconditional overwrite so a
- * second mark-as-read call on an already-read row is a true no-op (the
- * original read timestamp is preserved) rather than silently advancing it
- * — DESIGN.md doesn't discuss re-marking an already-read row, but keeping
- * the first read time is the least-surprising behavior for a "mark as
- * read" action.
+ * Marks exactly one notification read for the caller. For an owned row,
+ * sets `notifications.read_at` via `COALESCE(read_at, now())` — same as
+ * before — so a second call on an already-read row is a true no-op (the
+ * original read timestamp is preserved) rather than silently advancing it.
+ * For a shared (null-`user_id`) row the caller can see (academy-scoped to
+ * one of their active memberships), upserts this caller's own marker into
+ * `notificationReads` instead — see this file's module comment.
  */
 export async function markNotificationRead(
   actorContext: AuthContext,
@@ -168,15 +188,41 @@ export async function markNotificationRead(
     return { ok: false, error: NOTIFICATION_NOT_FOUND };
   }
 
-  const [row] = await db
+  const [ownedRow] = await db
     .update(notifications)
     .set({ readAt: sql`coalesce(${notifications.readAt}, now())` })
     .where(and(eq(notifications.id, parsedId.data), eq(notifications.userId, actorContext.userId)))
     .returning({ id: notifications.id });
 
-  if (!row) {
+  if (ownedRow) {
+    return { ok: true };
+  }
+
+  const memberAcademyIds = db
+    .select({ academyId: academyMemberships.academyId })
+    .from(academyMemberships)
+    .where(and(eq(academyMemberships.userId, actorContext.userId), eq(academyMemberships.status, "active")));
+
+  const [sharedRow] = await db
+    .select({ id: notifications.id })
+    .from(notifications)
+    .where(
+      and(
+        eq(notifications.id, parsedId.data),
+        isNull(notifications.userId),
+        inArray(notifications.academyId, memberAcademyIds),
+      ),
+    );
+
+  if (!sharedRow) {
     return { ok: false, error: NOTIFICATION_NOT_FOUND };
   }
+
+  await db
+    .insert(notificationReads)
+    .values({ notificationId: parsedId.data, userId: actorContext.userId })
+    .onConflictDoNothing({ target: [notificationReads.notificationId, notificationReads.userId] });
+
   return { ok: true };
 }
 
@@ -192,14 +238,14 @@ export type MarkNotificationsReadResult =
   | { ok: false; error: NotificationActionError };
 
 /**
- * Bulk variant of `markNotificationRead`. Ownership-checked the same way:
- * the `WHERE ... AND user_id = actorContext.userId` clause means an id that
- * doesn't belong to the caller (or doesn't exist at all) simply isn't
- * touched — it is never surfaced as a distinct error, since a bulk call
- * mixing the caller's own ids with a guessed/foreign id must not let the
- * caller learn anything about the foreign id's existence (same IDOR
- * posture as the single-id variant, generalized to a set). `markedCount`
- * only ever counts rows that genuinely belonged to the caller.
+ * Bulk variant of `markNotificationRead`. Ownership/visibility-checked the
+ * same way, generalized to a set: an id that's neither owned by the caller
+ * nor a shared row they can see (or doesn't exist at all) simply isn't
+ * touched — never surfaced as a distinct error, since a bulk call mixing
+ * the caller's own ids with a guessed/foreign id must not let the caller
+ * learn anything about the foreign id's existence (same IDOR posture as
+ * the single-id variant). `markedCount` counts both owned rows updated and
+ * shared rows newly/already marked via `notificationReads`.
  */
 export async function markNotificationsRead(
   actorContext: AuthContext,
@@ -213,11 +259,34 @@ export async function markNotificationsRead(
     };
   }
 
-  const rows = await db
+  const ownedRows = await db
     .update(notifications)
     .set({ readAt: sql`coalesce(${notifications.readAt}, now())` })
     .where(and(inArray(notifications.id, parsed.data), eq(notifications.userId, actorContext.userId)))
     .returning({ id: notifications.id });
 
-  return { ok: true, markedCount: rows.length };
+  const memberAcademyIds = db
+    .select({ academyId: academyMemberships.academyId })
+    .from(academyMemberships)
+    .where(and(eq(academyMemberships.userId, actorContext.userId), eq(academyMemberships.status, "active")));
+
+  const sharedRows = await db
+    .select({ id: notifications.id })
+    .from(notifications)
+    .where(
+      and(
+        inArray(notifications.id, parsed.data),
+        isNull(notifications.userId),
+        inArray(notifications.academyId, memberAcademyIds),
+      ),
+    );
+
+  if (sharedRows.length > 0) {
+    await db
+      .insert(notificationReads)
+      .values(sharedRows.map((row) => ({ notificationId: row.id, userId: actorContext.userId })))
+      .onConflictDoNothing({ target: [notificationReads.notificationId, notificationReads.userId] });
+  }
+
+  return { ok: true, markedCount: ownedRows.length + sharedRows.length };
 }

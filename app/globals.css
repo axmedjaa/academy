@@ -168,6 +168,13 @@ a {
 html {
   scrollbar-width: thin;
   scrollbar-color: var(--color-border-strong) transparent;
+  /* Navigation-density pass: the mobile nav drawer locks body scrolling
+     while open (app/academy/_shell/academy-shell.tsx, app/platform/_shell/
+     platform-shell.tsx). Reserving the scrollbar's own gutter always —
+     instead of only once a scrollbar happens to be present — means that
+     lock never removes/restores a scrollbar's width and shifts the page by
+     it; the gutter is always there, used or not. */
+  scrollbar-gutter: stable;
 }
 *::-webkit-scrollbar {
   width: 8px;

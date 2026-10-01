@@ -13,6 +13,7 @@ import {
   Button,
   ErrorMessage,
   Field,
+  FormDialog,
   Section,
   TableWrap,
   inputClass,
@@ -20,6 +21,13 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { centsToDollars } from "@/lib/ui/money";
 
 const initialState: PlanFormState = { ok: false };
@@ -69,16 +77,7 @@ export function PlansManager({ plans }: Props) {
             </thead>
             <tbody>
               {plans.map((plan) => (
-                <PlanRow
-                  key={plan.id}
-                  plan={plan}
-                  isSelected={plan.id === selectedPlanId}
-                  onToggleEdit={() =>
-                    setSelectedPlanId((current) =>
-                      current === plan.id ? "" : plan.id,
-                    )
-                  }
-                />
+                <PlanRow key={plan.id} plan={plan} onEdit={() => setSelectedPlanId(plan.id)} />
               ))}
             </tbody>
           </TableWrap>
@@ -86,15 +85,23 @@ export function PlansManager({ plans }: Props) {
       </div>
 
       {selectedPlan && (
-        <Section>
-          <h2 className="text-base font-semibold text-ink">Edit plan: {selectedPlan.name}</h2>
-          <div className="mt-4">
-            {/* key forces a remount (fresh useActionState) when switching
-                which plan is being edited, rather than reusing stale state
-                from a previously selected plan's submission. */}
-            <PlanForm mode="edit" plan={selectedPlan} key={selectedPlan.id} />
-          </div>
-        </Section>
+        <FormDialog
+          open={selectedPlan !== null}
+          onOpenChange={(nextOpen) => !nextOpen && setSelectedPlanId("")}
+          title={`Edit plan: ${selectedPlan.name}`}
+          className="max-w-xl"
+        >
+          {/* key forces a remount (fresh useActionState) when switching
+              which plan is being edited, rather than reusing stale state
+              from a previously selected plan's submission. */}
+          <PlanForm
+            mode="edit"
+            plan={selectedPlan}
+            key={selectedPlan.id}
+            onSuccess={() => setSelectedPlanId("")}
+            onCancel={() => setSelectedPlanId("")}
+          />
+        </FormDialog>
       )}
     </div>
   );
@@ -102,12 +109,10 @@ export function PlansManager({ plans }: Props) {
 
 function PlanRow({
   plan,
-  isSelected,
-  onToggleEdit,
+  onEdit,
 }: {
   plan: SubscriptionPlanRecord;
-  isSelected: boolean;
-  onToggleEdit: () => void;
+  onEdit: () => void;
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -135,20 +140,23 @@ function PlanRow({
           <Badge label={plan.isActive ? "Active" : "Retired"} tone={plan.isActive ? "green" : "gray"} />
         </td>
         <td className={td}>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" onClick={onToggleEdit}>
-              {isSelected ? "Close" : "Edit"}
-            </Button>
-            <Button
-              type="button"
-              variant={plan.isActive ? "danger" : "secondary"}
-              className="px-2.5 py-1 text-xs"
-              disabled={isPending}
-              onClick={toggleActive}
-            >
-              {plan.isActive ? "Retire" : "Restore"}
-            </Button>
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Actions for ${plan.name}`}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+              >
+                <Icon name="more" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
+              <DropdownMenuItem disabled={isPending} onClick={toggleActive}>
+                {plan.isActive ? "Retire" : "Restore"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </td>
       </tr>
       {error && (
@@ -165,12 +173,28 @@ function PlanRow({
 function PlanForm({
   mode,
   plan,
+  onSuccess,
+  onCancel,
 }: {
   mode: "create" | "edit";
   plan?: SubscriptionPlanRecord;
+  /** Edit mode only — auto-closes the FormDialog once the save succeeds,
+   * the functional equivalent of "redirect back to the list" (see
+   * app/academy/branches/branches-list.tsx's identical pattern). Create
+   * mode has no dialog to close, so it's never passed there. */
+  onSuccess?: () => void;
+  /** Edit mode only — closes the dialog without saving, same as every
+   * other FormDialog-wrapped edit form's own Cancel button. */
+  onCancel?: () => void;
 }) {
   const action = mode === "create" ? createSubscriptionPlan : updateSubscriptionPlan;
   const [state, formAction, pending] = useActionState(action, initialState);
+
+  const [prevOk, setPrevOk] = useState(state.ok);
+  if (state.ok !== prevOk) {
+    setPrevOk(state.ok);
+    if (state.ok) onSuccess?.();
+  }
 
   return (
     <form action={formAction} className="flex max-w-xl flex-col gap-3">
@@ -308,9 +332,16 @@ function PlanForm({
       {state.error && <ErrorMessage message={state.error.message} />}
       {state.ok && <p className="text-sm font-medium text-success">Saved.</p>}
 
-      <Button type="submit" disabled={pending} className="self-start">
-        {pending ? "Saving..." : mode === "create" ? "Create plan" : "Save changes"}
-      </Button>
+      <div className="flex gap-2">
+        <Button type="submit" disabled={pending}>
+          {pending ? "Saving..." : mode === "create" ? "Create plan" : "Save changes"}
+        </Button>
+        {mode === "edit" && (
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+      </div>
     </form>
   );
 }

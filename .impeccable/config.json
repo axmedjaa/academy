@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "app/academy/courses/courses-list.tsx"
+        ],
+        "createdAt": "2026-10-01T17:08:02.002Z",
+        "reason": "Pre-existing conditional render (course.imageRef truthy check with a text fallback) — not placeholder/broken markup, hook can't see the runtime-real URL; not modified by this task's edit (only the import line above changed)"
+      }
+    ]
+  }
+}

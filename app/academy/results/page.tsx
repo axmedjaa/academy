@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listResults } from "@/lib/academies/results";
+import { listExams } from "@/lib/academies/exams";
 import { ResultsList } from "./results-list";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
@@ -31,6 +32,17 @@ export default async function AcademyResultsPage() {
     );
   }
 
+  // Display-only exam-name resolution — `listExams` is the exact same
+  // already-gated, already-scoped read app/academy/exams/page.tsx itself
+  // calls; every examId being resolved here already came from `listResults`
+  // (itself tenant/scope-checked), so this is a label lookup on
+  // already-authorized ids, not a fresh authorization decision (same
+  // reasoning as lib/academies/id-cards-actions.ts's own resolveStudentName
+  // comment). Previously the page had no name at all here — the "Exam
+  // {examId}" section heading below showed the raw database id.
+  const examsResult = await listExams(context);
+  const examNames = Object.fromEntries((examsResult.ok ? examsResult.exams : []).map((exam) => [exam.id, exam.name]));
+
   return (
     <div className={PAGE_WRAP}>
       <PageHeader
@@ -43,7 +55,12 @@ export default async function AcademyResultsPage() {
               : "You can view results in your scope."
         }
       />
-      <ResultsList results={result.results} canSubmit={result.canSubmit} canApprove={result.canApprove} />
+      <ResultsList
+        results={result.results}
+        examNames={examNames}
+        canSubmit={result.canSubmit}
+        canApprove={result.canApprove}
+      />
     </div>
   );
 }

@@ -15,12 +15,29 @@ import {
 } from "@/lib/academies/result-corrections-actions";
 import type { ResultRosterRow } from "@/lib/academies/results";
 import type { ResultCorrectionRecord } from "@/lib/academies/result-corrections";
-import { Badge, Button, ErrorMessage, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, ErrorMessage, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 
 interface Props {
   results: ResultRosterRow[];
+  /** examId -> exam name, resolved in page.tsx via the same `listExams`
+   * read app/academy/exams/page.tsx itself uses — display-only, so the
+   * "Exam {id}" section headings below show a real name instead of the
+   * raw database id. */
+  examNames: Record<string, string>;
   canSubmit: boolean;
   canApprove: boolean;
+}
+
+/** Same avatar-style identity cue as students-list.tsx/staff-table.tsx's
+ * own identical local copies, for a consistent "people list" visual
+ * language across the app. */
+function getInitials(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (first + last).toUpperCase();
 }
 
 function statusTone(status: string): "green" | "amber" | "gray" | "blue" | "red" {
@@ -38,7 +55,7 @@ function statusTone(status: string): "green" | "amber" | "gray" | "blue" | "red"
  * eligible result in that exam forward at once. `approveResult`/
  * `rejectResult` are per-result decisions, so they get one button per row.
  */
-export function ResultsList({ results, canSubmit, canApprove }: Props) {
+export function ResultsList({ results, examNames, canSubmit, canApprove }: Props) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
@@ -54,6 +71,16 @@ export function ResultsList({ results, canSubmit, canApprove }: Props) {
     byExam.set(row.examId, list);
   }
 
+  // Display-only lookup for CorrectionsPanel below — a correction's
+  // `originalResultId` is a raw id with nothing human-readable of its own;
+  // every result it can reference is already in `results` (corrections are
+  // only ever requested against a `published` result, which `listResults`
+  // still returns), so this is a free label resolution on data already on
+  // the page, not a new query.
+  const resultLabelById = new Map(
+    results.map((row) => [row.id, `${row.studentFullName} (${row.studentNumber}) — ${examNames[row.examId] ?? "Unknown exam"}`]),
+  );
+
   function run(action: () => Promise<{ ok: true } | { ok: false; error: { message: string } }>) {
     setError(null);
     startTransition(async () => {
@@ -67,7 +94,7 @@ export function ResultsList({ results, canSubmit, canApprove }: Props) {
       {error && <ErrorMessage message={error} />}
       {results.length === 0 && (
         <Section>
-          <p className="text-sm text-muted">No results yet.</p>
+          <EmptyState message="No results yet." icon={<Icon name="fact_check" />} />
         </Section>
       )}
       {[...byExam.entries()].map(([examId, rows]) => {
@@ -76,7 +103,7 @@ export function ResultsList({ results, canSubmit, canApprove }: Props) {
         return (
           <Section key={examId}>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-semibold text-ink">Exam {examId}</h2>
+              <h2 className="text-base font-semibold text-ink">{examNames[examId] ?? "Exam"}</h2>
               <div className="flex flex-wrap gap-2">
                 {canSubmit && hasMarksEntered && (
                   <Button type="button" variant="secondary" disabled={isPending} onClick={() => run(() => submitResults(examId))}>
@@ -104,8 +131,16 @@ export function ResultsList({ results, canSubmit, canApprove }: Props) {
                 <tbody>
                   {rows.map((row) => (
                     <tr key={row.id} className={trHover}>
-                      <td className={`${td} font-medium`}>
-                        {row.studentFullName} <span className="font-normal text-muted">({row.studentNumber})</span>
+                      <td className={td}>
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-tint text-xs font-semibold text-brand">
+                            {getInitials(row.studentFullName)}
+                          </span>
+                          <div className="min-w-0">
+                            <span className="block truncate font-medium text-ink">{row.studentFullName}</span>
+                            <span className="block text-xs text-muted">{row.studentNumber}</span>
+                          </div>
+                        </div>
                       </td>
                       <td className={td}>{row.marksObtained ?? "—"}</td>
                       <td className={td}>
@@ -229,7 +264,7 @@ export function ResultsList({ results, canSubmit, canApprove }: Props) {
           </Section>
         );
       })}
-      {canApprove && <CorrectionsPanel />}
+      {canApprove && <CorrectionsPanel resultLabelById={resultLabelById} />}
     </div>
   );
 }
@@ -242,7 +277,7 @@ export function ResultsList({ results, canSubmit, canApprove }: Props) {
  * component, matching lib/academies/exams-actions.ts's
  * `getExamResultsRoster` "Server Action even for a read" convention.
  */
-function CorrectionsPanel() {
+function CorrectionsPanel({ resultLabelById }: { resultLabelById: Map<string, string> }) {
   const [isPending, startTransition] = useTransition();
   const [corrections, setCorrections] = useState<ResultCorrectionRecord[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -291,7 +326,7 @@ function CorrectionsPanel() {
           <TableWrap>
             <thead>
               <tr>
-                <th className={th}>Result</th>
+                <th className={th}>Student / Exam</th>
                 <th className={th}>Proposed marks</th>
                 <th className={th}>Reason</th>
                 <th className={th}>Status</th>
@@ -301,7 +336,9 @@ function CorrectionsPanel() {
             <tbody>
               {corrections.map((correction) => (
                 <tr key={correction.id} className={trHover}>
-                  <td className={td}>{correction.originalResultId}</td>
+                  <td className={`${td} font-medium`}>
+                    {resultLabelById.get(correction.originalResultId) ?? correction.originalResultId}
+                  </td>
                   <td className={td}>{correction.proposedMarksObtained ?? "—"}</td>
                   <td className={td}>{correction.reason}</td>
                   <td className={td}>

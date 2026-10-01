@@ -71,7 +71,15 @@ function AlertDialogContent({
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-[100] flex max-h-[85vh] w-full max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-0 overflow-y-auto rounded-card border border-border bg-surface p-5 shadow-card outline-none motion-safe:animate-scale-in",
+          // `w-[calc(100%-2rem)]` instead of `w-full` — this is `fixed`
+          // with no constraining parent, so `w-full` resolves against the
+          // viewport itself (100vw) and would touch both edges with zero
+          // gutter on a narrow phone (390px) before `max-w-md` ever gets a
+          // chance to matter. The calc() keeps a 16px gutter on each side
+          // at any width, every existing caller included (ConfirmButton,
+          // RecordPaymentDialog, FormDialog), with no visual change at
+          // tablet/desktop widths where max-w-md already governs.
+          "fixed top-1/2 left-1/2 z-[100] flex max-h-[85vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-0 overflow-y-auto rounded-card border border-border bg-surface p-5 shadow-card outline-none motion-safe:animate-scale-in",
           className
         )}
         {...props}

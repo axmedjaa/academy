@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
-import { academies, academyMemberships, notifications, users } from "@/lib/db/schema";
+import { academies, academyMemberships, notificationReads, notifications, users } from "@/lib/db/schema";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
   listNotificationsForUser,
@@ -82,6 +82,9 @@ async function insertNotification(
 }
 
 afterAll(async () => {
+  for (const userId of createdUserIds) {
+    await db.delete(notificationReads).where(eq(notificationReads.userId, userId));
+  }
   for (const academyId of createdAcademyIds) {
     await db.delete(notifications).where(eq(notifications.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
@@ -181,6 +184,33 @@ describe("listNotificationsForUser", () => {
     expect(all).toHaveLength(2);
     expect(unreadOnly.map((n) => n.id)).toEqual([unreadId]);
   });
+
+  it("tracks read state for a shared (null-userId) row per viewer, independently", async () => {
+    const readerUserId = await createUser();
+    const otherMemberUserId = await createUser();
+    const academyId = await createAcademy(readerUserId);
+    await addMembership(readerUserId, academyId);
+    await addMembership(otherMemberUserId, academyId);
+
+    const sharedId = await insertNotification(null, {
+      academyId,
+      eventType: "expense.approval_requested",
+      templateId: "finance.approval_requested",
+    });
+
+    await markNotificationRead(contextFor(readerUserId), sharedId);
+
+    const readerResult = await listNotificationsForUser(contextFor(readerUserId));
+    const otherResult = await listNotificationsForUser(contextFor(otherMemberUserId));
+
+    expect(readerResult.find((n) => n.id === sharedId)?.readAt).not.toBeNull();
+    expect(otherResult.find((n) => n.id === sharedId)?.readAt).toBeNull();
+
+    const readerUnreadOnly = await listNotificationsForUser(contextFor(readerUserId), { unreadOnly: true });
+    const otherUnreadOnly = await listNotificationsForUser(contextFor(otherMemberUserId), { unreadOnly: true });
+    expect(readerUnreadOnly.map((n) => n.id)).not.toContain(sharedId);
+    expect(otherUnreadOnly.map((n) => n.id)).toContain(sharedId);
+  });
 });
 
 describe("markNotificationRead", () => {
@@ -239,6 +269,61 @@ describe("markNotificationRead", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
+
+  it("marks a shared (null-userId) row read via notificationReads, for a caller who belongs to its academy", async () => {
+    const userId = await createUser();
+    const academyId = await createAcademy(userId);
+    await addMembership(userId, academyId);
+    const sharedId = await insertNotification(null, {
+      academyId,
+      eventType: "expense.approval_requested",
+      templateId: "finance.approval_requested",
+    });
+
+    const result = await markNotificationRead(contextFor(userId), sharedId);
+
+    expect(result.ok).toBe(true);
+    // The shared row's own read_at column is untouched — it stays null so
+    // it still renders as unread for every other member who can see it.
+    const [row] = await db.select().from(notifications).where(eq(notifications.id, sharedId));
+    expect(row.readAt).toBeNull();
+    const [readRow] = await db
+      .select()
+      .from(notificationReads)
+      .where(and(eq(notificationReads.notificationId, sharedId), eq(notificationReads.userId, userId)));
+    expect(readRow).toBeDefined();
+  });
+
+  it("is idempotent for a shared row too: marking it read twice doesn't error or duplicate the marker", async () => {
+    const userId = await createUser();
+    const academyId = await createAcademy(userId);
+    await addMembership(userId, academyId);
+    const sharedId = await insertNotification(null, { academyId });
+
+    const first = await markNotificationRead(contextFor(userId), sharedId);
+    const second = await markNotificationRead(contextFor(userId), sharedId);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    const rows = await db
+      .select()
+      .from(notificationReads)
+      .where(and(eq(notificationReads.notificationId, sharedId), eq(notificationReads.userId, userId)));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("refuses to mark a shared row read for a caller who does NOT belong to its academy", async () => {
+    const outsiderUserId = await createUser();
+    const ownerUserId = await createUser();
+    const academyId = await createAcademy(ownerUserId);
+    await addMembership(ownerUserId, academyId);
+    const sharedId = await insertNotification(null, { academyId });
+
+    const result = await markNotificationRead(contextFor(outsiderUserId), sharedId);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
 });
 
 describe("markNotificationsRead (bulk)", () => {
@@ -268,5 +353,26 @@ describe("markNotificationsRead (bulk)", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("marks both an owned row and a shared row in the same call, counting both", async () => {
+    const userId = await createUser();
+    const academyId = await createAcademy(userId);
+    await addMembership(userId, academyId);
+    const ownId = await insertNotification(userId);
+    const sharedId = await insertNotification(null, { academyId });
+
+    const result = await markNotificationsRead(contextFor(userId), [ownId, sharedId]);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.markedCount).toBe(2);
+
+    const [ownRow] = await db.select().from(notifications).where(eq(notifications.id, ownId));
+    expect(ownRow.readAt).not.toBeNull();
+    const [readRow] = await db
+      .select()
+      .from(notificationReads)
+      .where(and(eq(notificationReads.notificationId, sharedId), eq(notificationReads.userId, userId)));
+    expect(readRow).toBeDefined();
   });
 });

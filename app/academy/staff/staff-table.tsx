@@ -158,7 +158,7 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
                         <button
                           type="button"
                           aria-label={`Actions for ${row.fullName}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                         >
                           <Icon name="more" />
                         </button>

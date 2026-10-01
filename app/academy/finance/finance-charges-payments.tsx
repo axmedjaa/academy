@@ -12,6 +12,7 @@ import { adjustStudentPaymentAction, reverseStudentPaymentAction } from "@/lib/a
 import {
   Badge,
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
   LinkButton,
@@ -22,6 +23,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
@@ -210,6 +212,9 @@ export function FinanceChargesPayments({
 
       {tab === "charges" && (
         <div key="charges" className="motion-safe:animate-fade-in">
+          {charges.length === 0 ? (
+            <EmptyState message="No charges to show yet." icon={<Icon name="receipt_long" />} />
+          ) : (
           <TableWrap>
             <thead>
               <tr>
@@ -221,14 +226,7 @@ export function FinanceChargesPayments({
               </tr>
             </thead>
             <tbody>
-              {charges.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className={`${td} text-center text-muted`}>
-                    No charges to show.
-                  </td>
-                </tr>
-              ) : (
-                charges.map((charge) => (
+                {charges.map((charge) => (
                   <tr key={charge.id} className={trHover}>
                     <td className={`${td} font-medium`}>{studentLabel(charge.studentId)}</td>
                     <td className={td}>{charge.description}</td>
@@ -238,10 +236,10 @@ export function FinanceChargesPayments({
                       <Badge label={charge.status.replace("_", " ")} tone={getStatusTone(charge.status)} />
                     </td>
                   </tr>
-                ))
-              )}
+                ))}
             </tbody>
           </TableWrap>
+          )}
 
           {canManage && (
             <div className="mt-6 border-t border-border pt-5">
@@ -281,6 +279,9 @@ export function FinanceChargesPayments({
 
       {tab === "payments" && (
         <div key="payments" className="motion-safe:animate-fade-in">
+          {payments.length === 0 ? (
+            <EmptyState message="No payments to show yet." icon={<Icon name="payments" />} />
+          ) : (
           <TableWrap>
             <thead>
               <tr>
@@ -294,17 +295,7 @@ export function FinanceChargesPayments({
               </tr>
             </thead>
             <tbody>
-              {payments.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={6 + (canReverse ? 1 : 0)}
-                    className={`${td} text-center text-muted`}
-                  >
-                    No payments to show.
-                  </td>
-                </tr>
-              ) : (
-                payments.map((payment) => {
+                {payments.map((payment) => {
                   const alreadyReversedThisSession = reversedIds.has(payment.id);
                   const isSelfRecorded = payment.recordedBy === currentUserId;
                   const canReverseThisRow =
@@ -420,10 +411,10 @@ export function FinanceChargesPayments({
                       )}
                     </tr>
                   );
-                })
-              )}
+                })}
             </tbody>
           </TableWrap>
+          )}
           {issueError && (
             <div className="mt-3">
               <ErrorMessage message={issueError} />

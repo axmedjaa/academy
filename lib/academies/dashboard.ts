@@ -33,10 +33,16 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 export interface DashboardAlert {
   message: string;
   tone: "amber" | "red";
+  /** Only set when exactly one destination unambiguously resolves the
+   * alert (e.g. outstanding charges -> Finance). The pending-approvals
+   * alert deliberately omits this — those approvals span both Grades and
+   * Finance, with no single correct page to send the user to. */
+  href?: string;
 }
 
 export interface RecentPaymentRow {
   id: string;
+  studentId: string;
   studentName: string;
   amountCents: number;
   currency: string;
@@ -120,6 +126,7 @@ export async function getAcademyDashboardData(
 
     recentPayments = top.map((payment) => ({
       id: payment.id,
+      studentId: payment.studentId,
       studentName: nameById.get(payment.studentId) ?? "Unknown student",
       amountCents: payment.amountCents,
       currency: payment.currency,
@@ -140,6 +147,7 @@ export async function getAcademyDashboardData(
     alerts.push({
       message: `${finance.outstandingCharges.count} outstanding charge${finance.outstandingCharges.count === 1 ? "" : "s"}.`,
       tone: "amber",
+      href: "/academy/finance",
     });
   }
   if (
@@ -148,7 +156,7 @@ export async function getAcademyDashboardData(
     usage.limits.maxStudents > 0 &&
     usage.metrics.activeStudentsCount / usage.limits.maxStudents >= 1
   ) {
-    alerts.push({ message: "This academy is at its student allowance limit.", tone: "red" });
+    alerts.push({ message: "This academy is at its student allowance limit.", tone: "red", href: "/academy/settings" });
   }
 
   return {

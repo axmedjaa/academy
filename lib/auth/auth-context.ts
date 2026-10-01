@@ -49,7 +49,7 @@ export async function getPlatformRole(
  */
 export async function getPostLoginRedirectPath(userId: string): Promise<string> {
   const platformRole = await getPlatformRole(userId);
-  return platformRole ? "/platform/academies" : "/academy/dashboard";
+  return platformRole ? "/platform/dashboard" : "/academy/dashboard";
 }
 
 /** Resolves the AuthContext for an already-authenticated user. Pure/testable. */

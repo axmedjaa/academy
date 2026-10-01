@@ -20,6 +20,7 @@ import {
 import {
   Badge,
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
   Section,
@@ -29,6 +30,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { getStatusTone } from "@/lib/ui/status";
 import { dollarsToCents } from "@/lib/ui/money";
 
@@ -311,6 +313,9 @@ export function FinanceIncomeExpenses({
 
       {tab === "income" && income !== null && (
         <div key="income" className="motion-safe:animate-fade-in">
+          {income.length === 0 ? (
+            <EmptyState message="No income records to show yet." icon={<Icon name="payments" />} />
+          ) : (
           <TableWrap>
             <thead>
               <tr>
@@ -322,14 +327,7 @@ export function FinanceIncomeExpenses({
               </tr>
             </thead>
             <tbody>
-              {income.length === 0 ? (
-                <tr>
-                  <td colSpan={incomeCanCreate ? 5 : 4} className={`${td} text-center text-muted`}>
-                    No income records to show.
-                  </td>
-                </tr>
-              ) : (
-                income.map((record) => {
+                {income.map((record) => {
                   const rowKey = `income:${record.id}`;
                   const alreadyReversed = reversedKeys.has(rowKey);
                   const canReverse = incomeCanCreate && record.status === "posted" && !alreadyReversed;
@@ -353,10 +351,10 @@ export function FinanceIncomeExpenses({
                       )}
                     </tr>
                   );
-                })
-              )}
+                })}
             </tbody>
           </TableWrap>
+          )}
 
           {incomeCanCreate && (
             <div className="mt-6 border-t border-border pt-5">
@@ -387,6 +385,9 @@ export function FinanceIncomeExpenses({
 
       {tab === "expenses" && expenses !== null && (
         <div key="expenses" className="motion-safe:animate-fade-in">
+          {expenses.length === 0 ? (
+            <EmptyState message="No expense records to show yet." icon={<Icon name="payments" />} />
+          ) : (
           <TableWrap>
             <thead>
               <tr>
@@ -398,21 +399,7 @@ export function FinanceIncomeExpenses({
               </tr>
             </thead>
             <tbody>
-              {expenses.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={
-                      3 +
-                      (expenseCanCreate || expenseCanApprove || expenseCanSelfApprove ? 1 : 0) +
-                      (expenseCanApprove ? 1 : 0)
-                    }
-                    className={`${td} text-center text-muted`}
-                  >
-                    No expense records to show.
-                  </td>
-                </tr>
-              ) : (
-                expenses.map((record) => {
+                {expenses.map((record) => {
                   const rowKey = `expense:${record.id}`;
                   const alreadyReversed = reversedKeys.has(rowKey);
                   const canReverse = expenseCanApprove && record.status === "approved" && !alreadyReversed;
@@ -492,10 +479,10 @@ export function FinanceIncomeExpenses({
                       )}
                     </tr>
                   );
-                })
-              )}
+                })}
             </tbody>
           </TableWrap>
+          )}
           {expenseActionError && (
             <div className="mt-3">
               <ErrorMessage message={expenseActionError} />

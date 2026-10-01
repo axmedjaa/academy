@@ -14,6 +14,7 @@ import type { BatchRecord } from "@/lib/academies/batches";
 import {
   Badge,
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
   Section,
@@ -23,9 +24,28 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const initialState: ExamFormState = { ok: false };
+
+/** Same avatar-style identity cue as students-list.tsx/staff-table.tsx's
+ * own identical local copies, for a consistent "people list" visual
+ * language across the app. */
+function getInitials(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
+  return (first + last).toUpperCase();
+}
 
 interface Props {
   exams: (ExamRecord & { hasResults: boolean })[];
@@ -44,6 +64,11 @@ function statusTone(status: string): "green" | "amber" | "gray" | "blue" {
 export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
   const [createState, createFormAction, createPending] = useActionState(createExam, initialState);
   const [openExamId, setOpenExamId] = useState<string | null>(null);
+  // Which row's Archive/Restore or Delete confirmation is open — the
+  // dropdown menu item opens it externally (ConfirmButton's controlled
+  // mode), same pattern as app/academy/students/students-list.tsx.
+  const [archiveRowId, setArchiveRowId] = useState<string | null>(null);
+  const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
   const showActions = canManage || canEnterMarks;
 
   function toggleExamStatus(exam: ExamRecord) {
@@ -58,6 +83,11 @@ export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
     <div className="flex flex-col gap-8">
       <section>
         <h2 className="mb-3 text-lg font-semibold text-ink">Exams</h2>
+        {exams.length === 0 ? (
+          <Section>
+            <EmptyState message="No exams yet." icon={<Icon name="fact_check" />} />
+          </Section>
+        ) : (
         <TableWrap>
           <thead>
             <tr>
@@ -69,13 +99,6 @@ export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
             </tr>
           </thead>
           <tbody>
-            {exams.length === 0 && (
-              <tr>
-                <td colSpan={showActions ? 5 : 4} className={`${td} text-center text-muted`}>
-                  No exams yet.
-                </td>
-              </tr>
-            )}
             {exams.map((exam) => (
               <tr key={exam.id} className={trHover}>
                 <td className={`${td} font-medium`}>{exam.name}</td>
@@ -86,7 +109,7 @@ export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
                 </td>
                 {showActions && (
                   <td className={td}>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       {canEnterMarks && (
                         <Button
                           type="button"
@@ -98,10 +121,42 @@ export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
                         </Button>
                       )}
                       {canManage && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={`Actions for ${exam.name}`}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                            >
+                              <Icon name="more" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setArchiveRowId(exam.id)}>
+                              {exam.status === "archived" ? "Restore" : "Archive"}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            {exam.hasResults ? (
+                              <DropdownMenuItem
+                                disabled
+                                title="This exam has student results attached to it, so it can't be permanently deleted. Use Archive instead."
+                              >
+                                Delete
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(exam.id)}>
+                                Delete
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                      {canManage && (
                         <ConfirmButton
                           label={exam.status === "archived" ? "Restore" : "Archive"}
                           variant={exam.status === "archived" ? "secondary" : "danger"}
-                          className="px-2.5 py-1 text-xs"
+                          open={archiveRowId === exam.id}
+                          onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? exam.id : null)}
                           title={exam.status === "archived" ? `Restore "${exam.name}"?` : `Archive "${exam.name}"?`}
                           description={
                             exam.status === "archived" ? (
@@ -116,30 +171,22 @@ export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
                           onConfirm={() => toggleExamStatus(exam)}
                         />
                       )}
-                      {canManage && (
-                        <span
-                          title={
-                            exam.hasResults
-                              ? "This exam has student results attached to it, so it can't be permanently deleted. Use Archive instead."
-                              : undefined
+                      {canManage && !exam.hasResults && (
+                        <ConfirmButton
+                          label="Delete"
+                          variant="dangerSolid"
+                          open={deleteRowId === exam.id}
+                          onOpenChange={(nextOpen) => setDeleteRowId(nextOpen ? exam.id : null)}
+                          title={`Permanently delete "${exam.name}"?`}
+                          description={
+                            <>
+                              This cannot be undone. The exam will be permanently removed from the
+                              database — this is only possible because it has no student results
+                              attached yet.
+                            </>
                           }
-                        >
-                          <ConfirmButton
-                            label="Delete"
-                            variant="dangerSolid"
-                            className="px-2.5 py-1 text-xs"
-                            disabled={exam.hasResults}
-                            title={`Permanently delete "${exam.name}"?`}
-                            description={
-                              <>
-                                This cannot be undone. The exam will be permanently removed from the
-                                database — this is only possible because it has no student results
-                                attached yet.
-                              </>
-                            }
-                            onConfirm={() => removeExam(exam.id)}
-                          />
-                        </span>
+                          onConfirm={() => removeExam(exam.id)}
+                        />
                       )}
                     </div>
                   </td>
@@ -148,6 +195,7 @@ export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
             ))}
           </tbody>
         </TableWrap>
+        )}
         {openExamId && <MarksEntryPanel examId={openExamId} />}
       </section>
 
@@ -260,7 +308,15 @@ function MarksEntryPanel({ examId }: { examId: string }) {
               {roster.map((row) => (
                 <tr key={row.id} className={trHover}>
                   <td className={td}>
-                    {row.studentFullName} <span className="text-muted">({row.studentNumber})</span>
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-tint text-xs font-semibold text-brand">
+                        {getInitials(row.studentFullName)}
+                      </span>
+                      <div className="min-w-0">
+                        <span className="block truncate font-medium text-ink">{row.studentFullName}</span>
+                        <span className="block text-xs text-muted">{row.studentNumber}</span>
+                      </div>
+                    </div>
                   </td>
                   <td className={td}>
                     <Badge label={row.status} tone={statusTone(row.status)} />

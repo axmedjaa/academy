@@ -8,6 +8,7 @@ import { ReportExportButton } from "./report-export-button";
 import { color } from "@/lib/ui/theme";
 import {
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
   PAGE_WRAP,
@@ -20,6 +21,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 
 /**
  * PLAN.md Phase 5, Item 61a — `/academy/reports` hub (DESIGN.md §9.9: "hub
@@ -40,21 +42,16 @@ import {
  *
 
  * ---------------------------------------------------------------------
- * Finance tab: reuse, not duplicate — and NOT a replacement for
- * `/academy/finance-reports`
+ * Finance tab — the canonical finance-reports destination
  * ---------------------------------------------------------------------
  * This tab imports and calls `getFinanceReports` directly (Item 55's own
  * aggregation, lib/academies/finance-reports.ts — untouched) and reuses
- * that item's own `FinanceReportsView` client component verbatim, exactly
- * as `app/academy/finance-reports/page.tsx` does. `/academy/finance-reports`
- * is left completely untouched by this item — this is a deliberate,
- * conservative choice for this wave: two routes now render the same
- * report, which is duplication at the *page* level only (zero duplicated
- * aggregation/query logic, which lives in exactly one place). Reconciling
- * that — e.g. turning `/academy/finance-reports` into a redirect to this
- * hub's `?tab=finance`, or vice versa — is a genuine follow-up worth doing
- * in a later wave, not resolved here, since collapsing the two routes is a
- * navigation/IA decision outside this item's scope and risk budget.
+ * that item's own `FinanceReportsView` client component verbatim.
+ * Navigation-audit Phase 1 made this (`?tab=finance`) the single canonical
+ * place finance reports live — `/academy/finance-reports` is now a
+ * compatibility redirect here (app/academy/finance-reports/page.tsx),
+ * kept only so old links/bookmarks don't 404. No aggregation/query logic
+ * or UI changed as part of that — only the second route pointing at it.
  *
  * ---------------------------------------------------------------------
  * Tabs, filters, pagination: plain GET-query-param navigation
@@ -143,7 +140,7 @@ function TabLink({ label, href, active }: { label: string; href: string; active:
   return (
     <a
       href={href}
-      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors motion-safe:active:scale-[0.98] ${
         active ? "bg-brand text-white" : "text-muted hover:bg-app hover:text-ink"
       }`}
     >
@@ -340,12 +337,7 @@ async function FinanceTab({
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted">
         Outstanding charges, payments received, income vs. expenses. Never
-        includes platform subscription billing (§9.6). This is the same
-        report as{" "}
-        <a href="/academy/finance-reports" className="text-brand hover:underline">
-          /academy/finance-reports
-        </a>{" "}
-        — both routes coexist for now (see this page&apos;s module comment).
+        includes platform subscription billing (§9.6).
       </p>
       <FinanceReportsView initialReport={result.report} />
     </div>
@@ -417,6 +409,10 @@ function SimpleTable({
   rows: string[][];
   emptyMessage: string;
 }) {
+  if (rows.length === 0) {
+    return <EmptyState message={emptyMessage} icon={<Icon name="bar_chart" />} />;
+  }
+
   return (
     <TableWrap>
       <thead>
@@ -429,23 +425,15 @@ function SimpleTable({
         </tr>
       </thead>
       <tbody>
-        {rows.length === 0 ? (
-          <tr>
-            <td colSpan={columns.length} className={`${td} text-center text-muted`}>
-              {emptyMessage}
-            </td>
+        {rows.map((row, i) => (
+          <tr key={i} className={trHover}>
+            {row.map((cell, j) => (
+              <td key={j} className={td}>
+                {cell}
+              </td>
+            ))}
           </tr>
-        ) : (
-          rows.map((row, i) => (
-            <tr key={i} className={trHover}>
-              {row.map((cell, j) => (
-                <td key={j} className={td}>
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))
-        )}
+        ))}
       </tbody>
     </TableWrap>
   );

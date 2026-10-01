@@ -12,7 +12,8 @@ import { buildTimetableGrid, filterTimetableEntries } from "@/lib/academies/time
 import type { BranchRecord } from "@/lib/academies/branches";
 import type { BatchRecord } from "@/lib/academies/batches";
 import type { CourseRecord } from "@/lib/academies/courses";
-import { Button, ErrorMessage, Field, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Button, EmptyState, ErrorMessage, Field, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { WeeklyGrid } from "./weekly-grid";
 
 const initialState: TimetableFormState = { ok: false };
@@ -365,6 +366,25 @@ export function TimetableList({ entries, branches, batches, courses, staffOption
 
       <section>
         <h2 className="mb-3 text-lg font-semibold text-ink">Manage entries</h2>
+        {sortedEntries.length === 0 ? (
+          <Section>
+            <EmptyState
+              message={
+                hasActiveFilters
+                  ? "No timetable entries match your current filters."
+                  : "No timetable entries yet."
+              }
+              icon={<Icon name="fact_check" />}
+              action={
+                hasActiveFilters ? (
+                  <Button type="button" variant="secondary" onClick={() => setFilters(EMPTY_FILTERS)}>
+                    Clear filters
+                  </Button>
+                ) : undefined
+              }
+            />
+          </Section>
+        ) : (
         <TableWrap>
           <thead>
             <tr>
@@ -379,13 +399,6 @@ export function TimetableList({ entries, branches, batches, courses, staffOption
             </tr>
           </thead>
           <tbody>
-            {sortedEntries.length === 0 && (
-              <tr>
-                <td colSpan={canManage ? 8 : 7} className={`${td} text-center text-muted`}>
-                  No timetable entries match this scope.
-                </td>
-              </tr>
-            )}
             {sortedEntries.map((entry) => (
               <tr key={entry.id} className={trHover}>
                 <td className={td}>{entry.branchName}</td>
@@ -414,6 +427,7 @@ export function TimetableList({ entries, branches, batches, courses, staffOption
             ))}
           </tbody>
         </TableWrap>
+        )}
         {deleteError && (
           <div className="mt-2">
             <ErrorMessage message={deleteError} />

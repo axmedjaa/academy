@@ -200,6 +200,30 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
       <path d="m15.5 8.5 3.5 3.5-3.5 3.5" />
     </Base>
   ),
+  // Navigation-polish pass — "Audit Log" previously reused "receipt_long"
+  // (a payment-receipt glyph), which reads as "receipt," not "history
+  // trail." A clock with a counter-clockwise sweep arrow is the standard
+  // "history/log" concept; same hand-rolled-SVG convention as every icon
+  // above, not a new icon library.
+  history: (props) => (
+    <Base {...props}>
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v4.5h4.5" />
+      <path d="M12 7.5V12l3.5 2" />
+    </Base>
+  ),
+  // Dashboard-polish pass — DESIGN.md §1's accessibility floor ("every
+  // status/state is color + icon + text label, never color alone") applied
+  // to the dashboard's alert banners, which previously had no icon at all.
+  // Same hand-rolled-SVG convention as every icon above, not a new icon
+  // library.
+  warning: (props) => (
+    <Base {...props}>
+      <path d="M12 3.5 2.5 20h19L12 3.5z" />
+      <path d="M12 10v4" />
+      <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
+    </Base>
+  ),
 };
 
 export function Icon({ name, ...props }: { name: string } & IconProps) {

@@ -25,17 +25,22 @@ export interface PlatformNavItem {
   label: string;
   href: string;
   icon: string;
-  requiredCapability: string;
+  /** `null` = always visible to any signed-in platform actor (Dashboard),
+   * mirroring lib/academies/nav-items.ts's `requiredAction: null`
+   * convention. Non-null = only visible when `hasPermission(context,
+   * requiredCapability)` resolves true. */
+  requiredCapability: string | null;
 }
 
 export const PLATFORM_NAV_ITEMS: readonly PlatformNavItem[] = [
+  { key: "dashboard", label: "Dashboard", href: "/platform/dashboard", icon: "dashboard", requiredCapability: null },
   { key: "academies", label: "Academies", href: "/platform/academies", icon: "apartment", requiredCapability: "approveAcademy" },
   { key: "subscriptions", label: "Subscriptions", href: "/platform/subscriptions", icon: "autorenew", requiredCapability: "renewSubscription" },
   { key: "payments", label: "Payments", href: "/platform/payments", icon: "payments", requiredCapability: "recordSubscriptionPayment" },
   { key: "plans", label: "Plans", href: "/platform/plans", icon: "inventory_2", requiredCapability: "plans.manage" },
   { key: "usage", label: "Usage", href: "/platform/usage", icon: "speed", requiredCapability: "getPlatformReports" },
   { key: "reports", label: "Reports", href: "/platform/reports", icon: "bar_chart", requiredCapability: "getPlatformReports" },
-  { key: "audit-logs", label: "Audit Log", href: "/platform/audit-logs", icon: "receipt_long", requiredCapability: "queryAuditLogs" },
+  { key: "audit-logs", label: "Audit Log", href: "/platform/audit-logs", icon: "history", requiredCapability: "queryAuditLogs" },
   { key: "staff", label: "Platform Staff", href: "/platform/staff", icon: "badge", requiredCapability: "platform.staff.manage" },
   { key: "settings", label: "Settings", href: "/platform/settings", icon: "settings", requiredCapability: "platform.settings.manage" },
 ] as const;
@@ -44,7 +49,9 @@ export async function getVisiblePlatformNavItems(
   context: AuthContext,
 ): Promise<PlatformNavItem[]> {
   const checks = await Promise.all(
-    PLATFORM_NAV_ITEMS.map((item) => hasPermission(context, item.requiredCapability)),
+    PLATFORM_NAV_ITEMS.map((item) =>
+      item.requiredCapability === null ? Promise.resolve(true) : hasPermission(context, item.requiredCapability),
+    ),
   );
   return PLATFORM_NAV_ITEMS.filter((_, index) => checks[index]);
 }
