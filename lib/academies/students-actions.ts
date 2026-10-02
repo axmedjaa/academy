@@ -3,10 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
+  confirmStudentPhotoUpload as confirmStudentPhotoUploadForActor,
   deleteStudent as deleteStudentForActor,
   getStudentDeletionEligibility as getStudentDeletionEligibilityForActor,
+  removeStudentPhoto as removeStudentPhotoForActor,
+  requestStudentPhotoUploadUrl as requestStudentPhotoUploadUrlForActor,
   updateStudent as updateStudentForActor,
+  type ConfirmStudentPhotoUploadResult,
   type GetStudentDeletionEligibilityResult,
+  type RemoveStudentPhotoResult,
+  type RequestStudentPhotoUploadUrlInput,
+  type RequestStudentPhotoUploadUrlResult,
   type StudentActionError,
   type UpdateStudentInput,
 } from "@/lib/academies/students";
@@ -141,4 +148,50 @@ export async function deleteStudent(
   revalidatePath("/academy/students");
   revalidatePath("/academy/admissions");
   return { ok: true };
+}
+
+/** Step 1 of the upload flow for an existing student's photo (the Edit
+ * Student dialog) — see students.ts's requestStudentPhotoUploadUrl. */
+export async function requestStudentPhotoUploadUrlAction(
+  studentId: string,
+  input: RequestStudentPhotoUploadUrlInput,
+): Promise<RequestStudentPhotoUploadUrlResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  return requestStudentPhotoUploadUrlForActor(context, studentId, input);
+}
+
+/** Step 2 — the only path that persists an existing student's uploaded
+ * photo. See students.ts's confirmStudentPhotoUpload. */
+export async function confirmStudentPhotoUploadAction(
+  studentId: string,
+  key: string,
+): Promise<ConfirmStudentPhotoUploadResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  const result = await confirmStudentPhotoUploadForActor(context, studentId, { key });
+  if (result.ok) {
+    revalidatePath("/academy/students");
+    revalidatePath("/academy/admissions");
+  }
+  return result;
+}
+
+/** Removes an existing student's photo (R2 object + database reference).
+ * See students.ts's removeStudentPhoto. */
+export async function removeStudentPhotoAction(studentId: string): Promise<RemoveStudentPhotoResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  const result = await removeStudentPhotoForActor(context, studentId);
+  if (result.ok) {
+    revalidatePath("/academy/students");
+    revalidatePath("/academy/admissions");
+  }
+  return result;
 }

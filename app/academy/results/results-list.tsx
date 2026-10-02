@@ -17,6 +17,7 @@ import type { ResultRosterRow } from "@/lib/academies/results";
 import type { ResultCorrectionRecord } from "@/lib/academies/result-corrections";
 import { Badge, Button, EmptyState, ErrorMessage, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
+import { StudentAvatar } from "@/app/academy/students/student-avatar";
 
 interface Props {
   results: ResultRosterRow[];
@@ -25,19 +26,12 @@ interface Props {
    * "Exam {id}" section headings below show a real name instead of the
    * raw database id. */
   examNames: Record<string, string>;
+  /** Each photo-having row's own short-lived signed R2 GET url,
+   * pre-resolved server-side (page.tsx, via students.ts's
+   * `getStudentPhotoUrlsByIds`) — see StudentAvatar's own doc comment. */
+  photoUrlByStudentId: Map<string, string>;
   canSubmit: boolean;
   canApprove: boolean;
-}
-
-/** Same avatar-style identity cue as students-list.tsx/staff-table.tsx's
- * own identical local copies, for a consistent "people list" visual
- * language across the app. */
-function getInitials(fullName: string): string {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  const first = parts[0]?.[0] ?? "";
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
-  return (first + last).toUpperCase();
 }
 
 function statusTone(status: string): "green" | "amber" | "gray" | "blue" | "red" {
@@ -55,7 +49,7 @@ function statusTone(status: string): "green" | "amber" | "gray" | "blue" | "red"
  * eligible result in that exam forward at once. `approveResult`/
  * `rejectResult` are per-result decisions, so they get one button per row.
  */
-export function ResultsList({ results, examNames, canSubmit, canApprove }: Props) {
+export function ResultsList({ results, examNames, photoUrlByStudentId, canSubmit, canApprove }: Props) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
@@ -133,9 +127,11 @@ export function ResultsList({ results, examNames, canSubmit, canApprove }: Props
                     <tr key={row.id} className={trHover}>
                       <td className={td}>
                         <div className="flex items-center gap-3">
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-tint text-xs font-semibold text-brand">
-                            {getInitials(row.studentFullName)}
-                          </span>
+                          <StudentAvatar
+                            fullName={row.studentFullName}
+                            photoUrl={photoUrlByStudentId.get(row.studentId) ?? null}
+                            sizeClassName="h-8 w-8"
+                          />
                           <div className="min-w-0">
                             <span className="block truncate font-medium text-ink">{row.studentFullName}</span>
                             <span className="block text-xs text-muted">{row.studentNumber}</span>

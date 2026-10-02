@@ -1058,6 +1058,24 @@ export const students = pgTable(
     email: text("email"),
     guardianName: text("guardian_name"),
     guardianPhone: text("guardian_phone"),
+    // Added for the Student List avatar column — a real R2 OBJECT KEY
+    // (e.g. "academies/<id>/student-photos/<uuid>.jpg"), never a URL —
+    // signed URLs expire, so the database must never contain one. Same
+    // "Ref holds a key" convention as academies.logo_ref/books.cover_ref
+    // (see lib/academies/academy-logo.ts's own module comment); managed
+    // exclusively by lib/academies/students.ts's
+    // confirmStudentPhotoUpload/removeStudentPhoto and
+    // lib/academies/register-student.ts's registerStudent — never settable
+    // via updateStudent's general field-resubmit path, since an
+    // unvalidated string here could otherwise be used to request a signed
+    // GET for an arbitrary R2 key. Deliberately its own column (not
+    // reusing student_id_cards.photo_file_ref) — that one is scoped to a
+    // specific issued card, gated by a separate permission
+    // (academy.student_id_cards), is a plain pasted URL rather than a
+    // verified upload, and a student can have zero, one, or many cards
+    // over time, so it has no single canonical "this student's photo"
+    // value the way this column does.
+    profileImageRef: text("profile_image_ref"),
     status: branchStatusEnum("status").notNull().default("active"),
     createdBy: uuid("created_by")
       .notNull()

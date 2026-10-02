@@ -23,6 +23,7 @@ import {
 } from "@/lib/academies/student-payments-actions";
 import { adjustStudentPaymentAction, reverseStudentPaymentAction } from "@/lib/academies/finance-reversals-actions";
 import { Badge, Button, ErrorMessage, Field, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { StudentAvatar } from "@/app/academy/students/student-avatar";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
 import { centsToDollars, dollarsToCents } from "@/lib/ui/money";
@@ -110,6 +111,10 @@ interface EnrollmentSummaryEntry {
 
 interface Props {
   student: StudentRecord;
+  /** This student's own short-lived signed R2 GET url, pre-resolved
+   * server-side (page.tsx, via students.ts's `getStudentPhotoUrl`) —
+   * null if they have no photo, or it couldn't be resolved. */
+  photoUrl: string | null;
   enrollments: StudentEnrollmentOption[];
   enrollmentSummaries: EnrollmentSummaryEntry[];
   charges: StudentChargeRecord[];
@@ -130,6 +135,7 @@ interface Props {
 
 export function StudentDetail({
   student,
+  photoUrl,
   enrollments,
   enrollmentSummaries,
   charges,
@@ -141,7 +147,7 @@ export function StudentDetail({
 }: Props) {
   return (
     <div className="flex flex-col gap-6">
-      <StudentInfoCard student={student} />
+      <StudentInfoCard student={student} photoUrl={photoUrl} />
 
       {enrollmentSummaries.length === 0 ? (
         <Section>
@@ -182,25 +188,16 @@ export function StudentDetail({
   );
 }
 
-/** First + last initial — same avatar-style identity cue as
- * app/academy/students/students-list.tsx's row identity cell, so this
- * page's own "header card" (DESIGN.md §6 Pattern B) reads as the same
- * person the list just linked here from, not a different visual language. */
-function getInitials(fullName: string): string {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  const first = parts[0]?.[0] ?? "";
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
-  return (first + last).toUpperCase();
-}
-
-function StudentInfoCard({ student }: { student: StudentRecord }) {
+function StudentInfoCard({ student, photoUrl }: { student: StudentRecord; photoUrl: string | null }) {
   return (
     <Section>
       <div className="flex items-center gap-4">
-        <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-brand-tint text-lg font-semibold text-brand">
-          {getInitials(student.fullName)}
-        </span>
+        <StudentAvatar
+          fullName={student.fullName}
+          photoUrl={photoUrl}
+          sizeClassName="h-14 w-14"
+          textClassName="text-lg"
+        />
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-lg font-semibold text-ink">{student.fullName}</h2>

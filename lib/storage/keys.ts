@@ -18,10 +18,11 @@ import { randomUUID } from "node:crypto";
 
 const ACADEMY_LOGO_SEGMENT = "logos";
 const BOOK_COVER_SEGMENT = "book-covers";
+const STUDENT_PHOTO_SEGMENT = "student-photos";
 
 // Future entities (NOT implemented in this task — see lib/academies/academy-logo.ts's
-// own module comment for the current task's scope): students, staff,
-// id-cards, payment-evidence would each get their own `academies/{academyId}/{segment}/...`
+// own module comment for the current task's scope): staff, id-cards,
+// payment-evidence would each get their own `academies/{academyId}/{segment}/...`
 // prefix here, following this exact same shape.
 
 export interface AcademyLogoKeyInput {
@@ -70,6 +71,37 @@ export function getBookCoverKey({ academyId, extension }: BookCoverKeyInput): st
 /** Same exact-shape gate as isAcademyLogoKey — see its own doc comment. */
 export function isBookCoverKey(key: string, academyId: string): boolean {
   const expectedPrefix = `academies/${academyId}/${BOOK_COVER_SEGMENT}/`;
+  if (!key.startsWith(expectedPrefix)) {
+    return false;
+  }
+  const rest = key.slice(expectedPrefix.length);
+  return UUID_FILENAME_PATTERN.test(rest);
+}
+
+export interface StudentPhotoKeyInput {
+  academyId: string;
+  /** Server-derived from an allowlisted content-type map — never the
+   * client's original filename/extension. Same convention as
+   * AcademyLogoKeyInput.extension. */
+  extension: string;
+}
+
+/**
+ * Academy-scoped only (never studentId-scoped) — same deliberate choice as
+ * `getBookCoverKey`: this lets a photo be generated and uploaded to BEFORE
+ * the student row exists yet (the registration form's "new student"
+ * flow), with the key then passed straight into `registerStudentSchema`'s
+ * `profileImageRef` for `registerStudent` to verify and persist in one
+ * step — see lib/academies/register-student.ts's own doc comment on that
+ * field.
+ */
+export function getStudentPhotoKey({ academyId, extension }: StudentPhotoKeyInput): string {
+  return `academies/${academyId}/${STUDENT_PHOTO_SEGMENT}/${randomUUID()}.${extension}`;
+}
+
+/** Same exact-shape gate as isAcademyLogoKey/isBookCoverKey — see their own doc comments. */
+export function isStudentPhotoKey(key: string, academyId: string): boolean {
+  const expectedPrefix = `academies/${academyId}/${STUDENT_PHOTO_SEGMENT}/`;
   if (!key.startsWith(expectedPrefix)) {
     return false;
   }

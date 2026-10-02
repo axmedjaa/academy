@@ -13,6 +13,8 @@ import {
 } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
+import { sumObjectSizesByPrefix } from "@/lib/storage/client";
+import { logger } from "@/lib/logger";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -146,16 +148,32 @@ async function countCourses(executor: DbClient, academyId: string): Promise<numb
   return row?.count ?? 0;
 }
 
-// Phase 2 (academy-owned file storage / upload tracking, not yet built —
-// PLAN.md's "Storage" allowance means academy-owned files only: student/
-// staff documents, ID photos, academy logo). See countActiveStudents.
+// Real counter: sums the actual server-reported size of every object
+// under this academy's `academies/<academyId>/` namespace (logo, book
+// covers, student photos, ...) — see lib/storage/client.ts's
+// `sumObjectSizesByPrefix`. `executor` is unused (R2 has no notion of a
+// Postgres transaction to participate in) but kept for signature parity
+// with every other counter in `metricCounters`. Returns 0 — rather than
+// throwing or blocking the caller — when R2 is unreachable/misconfigured,
+// logged as a warning: a usage recalculation or allowance check must not
+// hard-fail the whole academy just because storage accounting is
+// temporarily unavailable, same "fails safely, never silently faked
+// nonzero" posture this file's own module comment already established for
+// this counter when it was a stub.
 async function countStorageUsedBytes(
   executor: DbClient,
   academyId: string,
 ): Promise<number> {
   void executor;
-  void academyId;
-  return 0;
+  const result = await sumObjectSizesByPrefix(`academies/${academyId}/`);
+  if (!result.ok) {
+    logger.warn("countStorageUsedBytes: falling back to 0 — storage usage could not be calculated", {
+      academyId,
+      error: result.error,
+    });
+    return 0;
+  }
+  return result.totalBytes;
 }
 
 const metricCounters: Record<

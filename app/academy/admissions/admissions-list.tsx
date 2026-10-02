@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { AdmissionsRow } from "@/lib/academies/students";
 import { Badge, EmptyState, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
+import { StudentAvatar } from "@/app/academy/students/student-avatar";
 
 interface Props {
   admissions: AdmissionsRow[];
@@ -9,17 +10,10 @@ interface Props {
    * whether the "Review" link (into `/academy/students`'s edit form) is
    * shown. Read-only callers (Finance, Trainer) still see the board. */
   canManage: boolean;
-}
-
-/** Same avatar-style identity cue as students-list.tsx/staff-table.tsx's
- * own identical local copies, for a consistent "people list" visual
- * language across the app. */
-function getInitials(fullName: string): string {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  const first = parts[0]?.[0] ?? "";
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
-  return (first + last).toUpperCase();
+  /** Each photo-having row's own short-lived signed R2 GET url,
+   * pre-resolved server-side (page.tsx, via students.ts's
+   * `getStudentPhotoUrl`) — see StudentAvatar's own doc comment. */
+  photoUrlByStudentId: Map<string, string>;
 }
 
 /**
@@ -38,7 +32,7 @@ function stageBadge(row: AdmissionsRow): { label: string; tone: "amber" | "blue"
   return { label: "Recently applied", tone: "blue" };
 }
 
-export function AdmissionsList({ admissions, canManage }: Props) {
+export function AdmissionsList({ admissions, canManage, photoUrlByStudentId }: Props) {
   if (admissions.length === 0) {
     return (
       <Section>
@@ -67,9 +61,11 @@ export function AdmissionsList({ admissions, canManage }: Props) {
             <tr key={row.id} className={trHover}>
               <td className={td}>
                 <div className="flex items-center gap-3">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-tint text-xs font-semibold text-brand">
-                    {getInitials(row.fullName)}
-                  </span>
+                  <StudentAvatar
+                    fullName={row.fullName}
+                    photoUrl={photoUrlByStudentId.get(row.id) ?? null}
+                    sizeClassName="h-8 w-8"
+                  />
                   <div className="min-w-0">
                     <span className="block truncate font-medium text-ink">{row.fullName}</span>
                     <span className="block text-xs text-muted">{row.studentNumber}</span>

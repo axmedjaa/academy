@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { branches, staffBranchAssignments, staffProfiles, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { verifyStudentPhotoUpload } from "@/lib/academies/students";
 import {
   ACADEMY_STUDENTS_ACTION,
   getAcademyPermissionLevel,
@@ -122,6 +123,15 @@ export const registerStudentSchema = z.object({
   email: optionalEmail(),
   guardianName: optionalText(200),
   guardianPhone: optionalText(50),
+  // An already-uploaded, not-yet-verified R2 object key from
+  // requestNewStudentPhotoUploadUrl (lib/academies/students.ts) — lenient
+  // here at the schema level (same "just shape, not the real check"
+  // convention as createBookSchema's own coverRef) because the REAL
+  // verification is registerStudent's own verifyStudentPhotoUpload call
+  // below, which needs the resolved academyId this schema layer doesn't
+  // have. Optional, unlike a book's cover — not every student has (or
+  // needs) a photo at registration time.
+  profileImageRef: optionalText(500),
 });
 
 export type RegisterStudentInput = z.input<typeof registerStudentSchema>;
@@ -138,6 +148,7 @@ export interface StudentRecord {
   email: string | null;
   guardianName: string | null;
   guardianPhone: string | null;
+  profileImageRef: string | null;
   status: "active" | "archived";
   createdBy: string;
 }
@@ -155,6 +166,7 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
     email: row.email,
     guardianName: row.guardianName,
     guardianPhone: row.guardianPhone,
+    profileImageRef: row.profileImageRef,
     status: row.status,
     createdBy: row.createdBy,
   };
@@ -389,6 +401,31 @@ export async function registerStudent(
   }
   const data = parsed.data;
 
+  // Verified ONCE, outside the retry loop below (unlike the branch/
+  // allowance checks, which are cheap and idempotent to redo per attempt
+  // — this one can delete an invalid object from R2, so it must not run
+  // more than once per registerStudent call). No separate confirm step
+  // exists for a brand-new student's photo — this verification IS that
+  // step, same reasoning as createBook's own coverRef check.
+  if (data.profileImageRef) {
+    const verification = await verifyStudentPhotoUpload(data.profileImageRef, academyId);
+    if (!verification.ok) {
+      // verifyStudentPhotoUpload only ever returns "validation" or
+      // "not_found" in practice, but its declared StudentActionError type
+      // is wider than this file's own RegisterStudentActionError (which
+      // has no "ineligible" code) — narrowed explicitly rather than
+      // asserted, so a genuinely unexpected code still surfaces as a safe
+      // validation error instead of a type-unsafe cast.
+      return {
+        ok: false,
+        error: {
+          code: verification.error.code === "not_found" ? "not_found" : "validation",
+          message: verification.error.message,
+        },
+      };
+    }
+  }
+
   for (let attempt = 0; attempt < MAX_INSERT_ATTEMPTS; attempt += 1) {
     try {
       const row = await db.transaction(async (tx) => {
@@ -430,6 +467,7 @@ export async function registerStudent(
             email: data.email,
             guardianName: data.guardianName,
             guardianPhone: data.guardianPhone,
+            profileImageRef: data.profileImageRef,
             createdBy: actorContext.userId,
           })
           .returning();

@@ -2,6 +2,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -165,6 +166,58 @@ export async function deleteObject(key: string): Promise<DeleteObjectResult> {
   } catch (err) {
     logger.error("storage object deletion failed", { key, error: safeErrorMessage(err) });
     return { ok: false, error: "Failed to delete the file." };
+  }
+}
+
+export type SumPrefixSizeResult = { ok: true; totalBytes: number } | { ok: false; error: string };
+
+/**
+ * Sums the real, server-reported size of every object under `prefix` —
+ * the actual source of truth for "how much storage has this academy's
+ * namespace used," per lib/storage/keys.ts's convention of namespacing
+ * every entity's objects under `academies/<academyId>/...`. Used by
+ * lib/subscriptions/usage.ts's `countStorageUsedBytes`, which previously
+ * had no real implementation at all (a documented `0`-returning stub) —
+ * this covers every entity under that academy's prefix (logo, book
+ * covers, student photos, ...) in one pass, not just one caller's own
+ * entity type.
+ *
+ * `ListObjectsV2` caps each page at 1000 keys — paginated via
+ * `ContinuationToken` until `IsTruncated` is false, same loop shape as any
+ * other S3-compatible listing. Fine at this app's scale (per-academy file
+ * counts are small); a later-scale concern would move this to a
+ * maintained running total updated per upload/delete instead of a full
+ * listing each time, not addressed here.
+ */
+export async function sumObjectSizesByPrefix(prefix: string): Promise<SumPrefixSizeResult> {
+  const config = loadConfig();
+  if (!config) {
+    logNotConfigured("prefix size not summed", { prefix });
+    return { ok: false, error: "File storage is not configured." };
+  }
+
+  try {
+    const client = getClient(config);
+    let totalBytes = 0;
+    let continuationToken: string | undefined;
+    do {
+      const result = await client.send(
+        new ListObjectsV2Command({
+          Bucket: config.bucketName,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        }),
+      );
+      for (const object of result.Contents ?? []) {
+        totalBytes += object.Size ?? 0;
+      }
+      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (continuationToken);
+
+    return { ok: true, totalBytes };
+  } catch (err) {
+    logger.error("storage prefix size summation failed", { prefix, error: safeErrorMessage(err) });
+    return { ok: false, error: "Failed to calculate storage usage." };
   }
 }
 

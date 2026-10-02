@@ -22,6 +22,9 @@ import {
   type AcademyPermissionLevel,
 } from "@/lib/auth/academy-permissions";
 import { recordAudit } from "@/lib/audit";
+import { logger } from "@/lib/logger";
+import { deleteObject, getDownloadUrl, getUploadUrl, headObject, type StorageContentType } from "@/lib/storage/client";
+import { getStudentPhotoKey, isStudentPhotoKey } from "@/lib/storage/keys";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 
@@ -162,6 +165,14 @@ export const updateStudentSchema = z.object({
   email: optionalEmail(),
   guardianName: optionalText(200),
   guardianPhone: optionalText(50),
+  // No `profileImageRef` field here, deliberately — that column is a real
+  // R2 object key, exclusively managed by confirmStudentPhotoUpload/
+  // removeStudentPhoto below (each independently validating the key
+  // before writing it), same posture as academies.logoRef being removed
+  // from updateAcademySettings's general schema once it became R2-backed
+  // (see academy-logo.ts's own module comment). Letting this general,
+  // free-text-resubmit schema accept it would be a way to smuggle an
+  // unvalidated string into a column later used to request a signed GET.
   status: z.enum(["active", "archived"]).optional(),
 });
 
@@ -179,6 +190,10 @@ export interface StudentRecord {
   email: string | null;
   guardianName: string | null;
   guardianPhone: string | null;
+  /** A real R2 object key, never a URL — see this column's own
+   * schema.ts comment. Resolve to a short-lived signed GET URL via
+   * `getStudentPhotoUrl` before ever handing it to the browser. */
+  profileImageRef: string | null;
   status: "active" | "archived";
   createdBy: string;
   createdAt: Date;
@@ -198,6 +213,7 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
     email: row.email,
     guardianName: row.guardianName,
     guardianPhone: row.guardianPhone,
+    profileImageRef: row.profileImageRef,
     status: row.status,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
@@ -723,6 +739,392 @@ export async function updateStudent(
     return { ok: false, error: BRANCH_NOT_FOUND };
   }
   return { ok: true, student: toRecord(result.student) };
+}
+
+// ---------------------------------------------------------------------
+// Student profile photo (R2-backed) — lib/academies/academy-logo.ts's
+// exact presign -> verify -> confirm/remove shape, adapted for a
+// per-student column instead of a single academy-wide one. See
+// students.profileImageRef's own schema.ts comment for why this is a
+// dedicated column/flow rather than reusing student_id_cards.photo_file_ref.
+// ---------------------------------------------------------------------
+
+export const MAX_STUDENT_PHOTO_SIZE_BYTES = 5 * 1024 * 1024;
+
+const ALLOWED_PHOTO_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+type AllowedPhotoContentType = (typeof ALLOWED_PHOTO_CONTENT_TYPES)[number];
+
+const PHOTO_EXTENSION_BY_CONTENT_TYPE: Record<AllowedPhotoContentType, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+function isAllowedPhotoContentType(value: string): value is AllowedPhotoContentType {
+  return (ALLOWED_PHOTO_CONTENT_TYPES as readonly string[]).includes(value);
+}
+
+const INVALID_PHOTO_FORMAT: StudentActionError = {
+  code: "validation",
+  message: "Photo must be JPEG, PNG, or WebP.",
+};
+
+const PHOTO_TOO_LARGE: StudentActionError = {
+  code: "validation",
+  message: "Photo must be 5 MB or smaller.",
+};
+
+const PHOTO_VERIFICATION_FAILED: StudentActionError = {
+  code: "validation",
+  message: "The photo upload could not be verified.",
+};
+
+/**
+ * Resolves "this caller may manage this specific student" — the same
+ * academy-wide + per-student branch-scope resolution `updateStudent`
+ * performs, extracted here so the photo actions below don't each
+ * re-derive it. Not exported; those actions are its only callers.
+ */
+async function resolveStudentForPhoto(
+  actorContext: AuthContext,
+  studentId: string,
+): Promise<
+  | { ok: true; academyId: string; membershipRole: AcademyRole; branchId: string }
+  | { ok: false; error: StudentActionError }
+> {
+  const resolved = await resolveStudentAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManageStudents(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(studentId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const [existing] = await db
+    .select({ branchId: students.branchId })
+    .from(students)
+    .where(and(eq(students.id, studentId), eq(students.academyId, academyId)))
+    .limit(1);
+  if (!existing) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  if (isBranchLimited(membershipRole)) {
+    const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
+    if (!assignedIds.includes(existing.branchId)) {
+      return { ok: false, error: NOT_FOUND };
+    }
+  }
+
+  return { ok: true, academyId, membershipRole, branchId: existing.branchId };
+}
+
+export interface RequestStudentPhotoUploadUrlInput {
+  contentType: string;
+  fileSizeBytes: number;
+}
+
+export type RequestStudentPhotoUploadUrlResult =
+  | { ok: true; uploadUrl: string; key: string; expiresInSeconds: number }
+  | { ok: false; error: StudentActionError };
+
+async function requestPhotoUploadUrlFor(
+  academyId: string,
+  input: RequestStudentPhotoUploadUrlInput,
+): Promise<RequestStudentPhotoUploadUrlResult> {
+  if (!isAllowedPhotoContentType(input.contentType)) {
+    return { ok: false, error: INVALID_PHOTO_FORMAT };
+  }
+  if (
+    !Number.isFinite(input.fileSizeBytes) ||
+    input.fileSizeBytes <= 0 ||
+    input.fileSizeBytes > MAX_STUDENT_PHOTO_SIZE_BYTES
+  ) {
+    return { ok: false, error: PHOTO_TOO_LARGE };
+  }
+
+  const key = getStudentPhotoKey({
+    academyId,
+    extension: PHOTO_EXTENSION_BY_CONTENT_TYPE[input.contentType as AllowedPhotoContentType],
+  });
+  const result = await getUploadUrl({ key, contentType: input.contentType as StorageContentType });
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: { code: "validation", message: "The photo upload could not be started. Please try again." },
+    };
+  }
+  return { ok: true, uploadUrl: result.uploadUrl, key, expiresInSeconds: result.expiresInSeconds };
+}
+
+/**
+ * Step 1 for an EXISTING student's photo. `resolveStudentForPhoto` checks
+ * both the academy-wide `academy.students` permission AND (for a
+ * branch-limited caller) that this specific student is within their
+ * assigned branch — same two-layer check `updateStudent` itself performs
+ * — before ever handing out a presigned PUT.
+ */
+export async function requestStudentPhotoUploadUrl(
+  actorContext: AuthContext,
+  studentId: string,
+  input: RequestStudentPhotoUploadUrlInput,
+): Promise<RequestStudentPhotoUploadUrlResult> {
+  const resolved = await resolveStudentForPhoto(actorContext, studentId);
+  if (!resolved.ok) return resolved;
+  return requestPhotoUploadUrlFor(resolved.academyId, input);
+}
+
+/**
+ * Step 1 for a NEW student's photo (the registration form) — no student
+ * row exists yet, so this only checks the academy-wide permission (the
+ * same gate `registerStudent` itself uses), not a specific student. The
+ * key is academy-scoped, not student-scoped (lib/storage/keys.ts's
+ * `getStudentPhotoKey`), so it can be uploaded to before the row exists,
+ * then passed straight into lib/academies/register-student.ts's
+ * `registerStudentSchema.profileImageRef` for `registerStudent` to verify
+ * and persist in one step — same pattern as book covers'
+ * `requestNewBookCoverUploadUrl`.
+ */
+export async function requestNewStudentPhotoUploadUrl(
+  actorContext: AuthContext,
+  input: RequestStudentPhotoUploadUrlInput,
+): Promise<RequestStudentPhotoUploadUrlResult> {
+  const resolved = await resolveStudentAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  if (!canManageStudents(resolved.access.permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+  return requestPhotoUploadUrlFor(resolved.access.academyId, input);
+}
+
+/**
+ * Shared verification authority for a claimed student-photo key — the
+ * object must exist, match this academy's own key shape
+ * (`isStudentPhotoKey`), and its REAL (server-reported) content-type/size
+ * must be within the allowed set — never the client's claims from step 1.
+ * An object that fails this check is deleted from R2 immediately (never
+ * left as an orphaned invalid upload). Shared by `confirmStudentPhotoUpload`
+ * (existing student) and `registerStudent` (new student) — both need the
+ * identical check, the latter since it has no separate confirm step of its
+ * own (same reasoning as `createBook`'s own `coverRef` verification).
+ */
+export async function verifyStudentPhotoUpload(
+  key: string,
+  academyId: string,
+): Promise<{ ok: true } | { ok: false; error: StudentActionError }> {
+  if (!isStudentPhotoKey(key, academyId)) {
+    return { ok: false, error: { code: "validation", message: "Invalid upload reference." } };
+  }
+
+  const head = await headObject(key);
+  if (!head.ok) {
+    return { ok: false, error: PHOTO_VERIFICATION_FAILED };
+  }
+  if (!head.exists) {
+    return {
+      ok: false,
+      error: { code: "not_found", message: "The uploaded photo could not be found. Please try uploading again." },
+    };
+  }
+  if (!head.info.contentType || !isAllowedPhotoContentType(head.info.contentType)) {
+    await deleteObject(key);
+    return { ok: false, error: INVALID_PHOTO_FORMAT };
+  }
+  if (!head.info.contentLength || head.info.contentLength > MAX_STUDENT_PHOTO_SIZE_BYTES) {
+    await deleteObject(key);
+    return { ok: false, error: PHOTO_TOO_LARGE };
+  }
+  return { ok: true };
+}
+
+export type ConfirmStudentPhotoUploadResult =
+  | { ok: true; profileImageRef: string }
+  | { ok: false; error: StudentActionError };
+
+/**
+ * Step 2 for an EXISTING student — the only path that writes
+ * `students.profileImageRef` for an already-registered student. Same
+ * replacement ordering as `confirmAcademyLogoUpload`: the new key is
+ * committed to the database FIRST (inside the same transaction as the
+ * audit row); only once that succeeds is the OLD object deleted from R2,
+ * best-effort, outside the transaction — a cleanup failure never rolls
+ * back the already-authoritative new photo.
+ */
+export async function confirmStudentPhotoUpload(
+  actorContext: AuthContext,
+  studentId: string,
+  input: { key: string },
+): Promise<ConfirmStudentPhotoUploadResult> {
+  const resolved = await resolveStudentForPhoto(actorContext, studentId);
+  if (!resolved.ok) return resolved;
+
+  const verification = await verifyStudentPhotoUpload(input.key, resolved.academyId);
+  if (!verification.ok) return verification;
+
+  const result = await db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select({ profileImageRef: students.profileImageRef })
+      .from(students)
+      .where(eq(students.id, studentId))
+      .limit(1);
+    if (!existing) return null;
+
+    const previousKey = existing.profileImageRef;
+    await tx
+      .update(students)
+      .set({ profileImageRef: input.key, updatedAt: new Date() })
+      .where(eq(students.id, studentId));
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: resolved.membershipRole,
+        academyId: resolved.academyId,
+        action: previousKey ? "replaceStudentPhoto" : "uploadStudentPhoto",
+        entityType: "student",
+        entityId: studentId,
+        branchId: resolved.branchId,
+        before: { profileImageRef: previousKey },
+        after: { profileImageRef: input.key },
+      },
+      tx,
+    );
+
+    return { previousKey };
+  });
+
+  if (!result) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  if (result.previousKey && result.previousKey !== input.key) {
+    const deleted = await deleteObject(result.previousKey);
+    if (!deleted.ok) {
+      logger.warn("student photo replacement: old R2 object could not be deleted (orphaned)", { studentId });
+    }
+  }
+
+  return { ok: true, profileImageRef: input.key };
+}
+
+export type RemoveStudentPhotoResult = { ok: true } | { ok: false; error: StudentActionError };
+
+/**
+ * Removal ordering is the reverse of replacement's, same as
+ * `removeAcademyLogo`: deletes the R2 object FIRST, then clears the
+ * database reference. A no-op (still `ok: true`) when there is no photo
+ * to remove.
+ */
+export async function removeStudentPhoto(
+  actorContext: AuthContext,
+  studentId: string,
+): Promise<RemoveStudentPhotoResult> {
+  const resolved = await resolveStudentForPhoto(actorContext, studentId);
+  if (!resolved.ok) return resolved;
+
+  const [existing] = await db
+    .select({ profileImageRef: students.profileImageRef })
+    .from(students)
+    .where(eq(students.id, studentId))
+    .limit(1);
+  if (!existing) {
+    return { ok: false, error: NOT_FOUND };
+  }
+  if (!existing.profileImageRef) {
+    return { ok: true };
+  }
+
+  const previousKey = existing.profileImageRef;
+  const deleted = await deleteObject(previousKey);
+  if (!deleted.ok) {
+    logger.warn("student photo removal: R2 object could not be deleted (clearing database reference anyway)", {
+      studentId,
+    });
+  }
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(students)
+      .set({ profileImageRef: null, updatedAt: new Date() })
+      .where(eq(students.id, studentId));
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: resolved.membershipRole,
+        academyId: resolved.academyId,
+        action: "removeStudentPhoto",
+        entityType: "student",
+        entityId: studentId,
+        branchId: resolved.branchId,
+        before: { profileImageRef: previousKey },
+        after: { profileImageRef: null },
+      },
+      tx,
+    );
+  });
+
+  return { ok: true };
+}
+
+/**
+ * Display-only read helper, NOT a Server Action — same convention as
+ * `academy-logo.ts`'s `getAcademyLogoUrl`. Returns `null` (never throws)
+ * if there's no photo, or if R2 is unreachable/misconfigured — a missing
+ * photo is the correct degraded behavior (StudentAvatar's own initials
+ * fallback), not a page-breaking error.
+ */
+export async function getStudentPhotoUrl(profileImageRef: string | null): Promise<string | null> {
+  if (!profileImageRef) return null;
+  const result = await getDownloadUrl({ key: profileImageRef });
+  return result.ok ? result.downloadUrl : null;
+}
+
+/**
+ * Batch variant of `getStudentPhotoUrl`, for pages that only have a list
+ * of studentIds rather than full StudentRecord rows — e.g.
+ * app/academy/results/page.tsx's `ResultRosterRow`, which carries
+ * `studentId` but not `profileImageRef`. Every id passed in must have
+ * already come from an authorized, tenant/scope-checked read (the same
+ * "display-field fetch on already-authorized ids, not a fresh
+ * authorization decision" posture as lib/academies/staff-labels.ts's
+ * `resolveStaffLabels`) — this does not re-derive branch-scoping of its
+ * own, only a plain academy-tenant check, since it never exposes anything
+ * beyond a signed GET url for a photo the caller's own already-authorized
+ * read already proved they may see the owning row of.
+ *
+ * Returns an empty map (never throws) for an empty id list or a blocked
+ * caller — a page with no photos to show degrades to every row's
+ * initials fallback, same as a single `getStudentPhotoUrl(null)`.
+ */
+export async function getStudentPhotoUrlsByIds(
+  actorContext: AuthContext,
+  studentIds: string[],
+): Promise<Map<string, string>> {
+  const uniqueIds = [...new Set(studentIds)];
+  if (uniqueIds.length === 0) return new Map();
+
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level === "blocked") return new Map();
+
+  const rows = await db
+    .select({ id: students.id, profileImageRef: students.profileImageRef })
+    .from(students)
+    .where(and(eq(students.academyId, access.academyId), inArray(students.id, uniqueIds)));
+
+  const entries = await Promise.all(
+    rows
+      .filter((row) => row.profileImageRef)
+      .map(async (row) => {
+        const url = await getStudentPhotoUrl(row.profileImageRef);
+        return url ? ([row.id, url] as const) : null;
+      }),
+  );
+  return new Map(entries.filter((entry): entry is readonly [string, string] => entry !== null));
 }
 
 // ---------------------------------------------------------------------

@@ -7,10 +7,24 @@ import {
   type RegisterStudentActionError,
   type RegisterStudentInput,
 } from "@/lib/academies/register-student";
+import {
+  requestNewStudentPhotoUploadUrl as requestNewStudentPhotoUploadUrlForActor,
+  type RequestStudentPhotoUploadUrlInput,
+  type RequestStudentPhotoUploadUrlResult,
+  type StudentActionError,
+} from "@/lib/academies/students";
 import { enrollStudentInBatch } from "@/lib/academies/batch-assignments";
 import { dollarsToCents } from "@/lib/ui/money";
 
 const UNAUTHENTICATED: RegisterStudentActionError = {
+  code: "forbidden",
+  message: "You must be signed in.",
+};
+
+// Same message, but typed for students.ts's own StudentActionError union
+// (distinct from this file's RegisterStudentActionError) — the photo
+// upload-url action below delegates to students.ts, not register-student.ts.
+const PHOTO_UNAUTHENTICATED: StudentActionError = {
   code: "forbidden",
   message: "You must be signed in.",
 };
@@ -42,7 +56,20 @@ function parseRegisterStudentFormData(formData: FormData): RegisterStudentInput 
     email: String(formData.get("email") ?? ""),
     guardianName: String(formData.get("guardianName") ?? ""),
     guardianPhone: String(formData.get("guardianPhone") ?? ""),
+    profileImageRef: String(formData.get("profileImageRef") ?? ""),
   };
+}
+
+/** Step 1 of the upload flow for a brand-new student's photo (this form
+ * has no studentId yet) — see students.ts's requestNewStudentPhotoUploadUrl. */
+export async function requestNewStudentPhotoUploadUrlAction(
+  input: RequestStudentPhotoUploadUrlInput,
+): Promise<RequestStudentPhotoUploadUrlResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: PHOTO_UNAUTHENTICATED };
+  }
+  return requestNewStudentPhotoUploadUrlForActor(context, input);
 }
 
 /**

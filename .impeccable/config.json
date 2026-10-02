@@ -11,6 +11,15 @@
         ],
         "createdAt": "2026-10-01T17:08:02.002Z",
         "reason": "Pre-existing conditional render (course.imageRef truthy check with a text fallback) — not placeholder/broken markup, hook can't see the runtime-real URL; not modified by this task's edit (only the import line above changed)"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "app/academy/students/student-avatar.tsx"
+        ],
+        "createdAt": "2026-10-02T05:07:56.495Z",
+        "reason": "img only rendered inside the showImage branch, which guarantees photoUrl is a non-empty, truthy string — never an empty/missing src at runtime"
       }
     ]
   }

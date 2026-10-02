@@ -7,6 +7,7 @@ import {
 } from "@/lib/academies/register-student-actions";
 import { Button, ErrorMessage, Field, inputClass } from "@/app/academy/_shell/ui";
 import { showErrorToast, showInfoToast, showSuccessToast } from "@/lib/ui/toast";
+import { StudentPhotoField } from "@/app/academy/students/student-photo-field";
 
 const initialState: RegisterStudentFormState = { ok: false };
 
@@ -59,6 +60,27 @@ function FormGroup({ label, children }: { label: string; children: React.ReactNo
 export function StudentForm({ branches, courseOptions }: StudentFormProps) {
   const [state, formAction, pending] = useActionState(registerStudent, initialState);
   const [selectedBatchId, setSelectedBatchId] = useState("");
+  // Bumped on every successful registration — passed as StudentPhotoField's
+  // own `key` below so it fully remounts (clearing its uploaded-photo-key
+  // state) rather than silently resubmitting the SAME already-uploaded
+  // photo onto whatever student this form registers next. The rest of
+  // this form's plain inputs have the same "doesn't reset after success"
+  // characteristic already (a pre-existing gap, not introduced here) —
+  // only the photo field needed fixing, since reusing a stale value there
+  // would wrongly attach one photo to multiple students, not just leave
+  // stale text in a field.
+  //
+  // Bumped during render (react.dev's "adjust state when a prop changes"
+  // pattern — see students-list.tsx's identical prevEditingId/prevOpen
+  // uses), not inside the toast effect below: setState directly inside an
+  // effect body risks a cascading extra render, which this codebase
+  // avoids throughout.
+  const [formVersion, setFormVersion] = useState(0);
+  const [prevStateOk, setPrevStateOk] = useState(state.ok);
+  if (state.ok !== prevStateOk) {
+    setPrevStateOk(state.ok);
+    if (state.ok) setFormVersion((v) => v + 1);
+  }
 
   useEffect(() => {
     if (state.ok && state.enrollmentWarning) {
@@ -73,6 +95,7 @@ export function StudentForm({ branches, courseOptions }: StudentFormProps) {
   return (
     <form action={formAction} className="flex flex-col gap-6">
       <FormGroup label="Identity">
+        <StudentPhotoField key={formVersion} mode="new" hiddenFieldName="profileImageRef" />
         <Field label="Branch">
           <select name="branchId" required defaultValue="" className={inputClass}>
             <option value="" disabled>

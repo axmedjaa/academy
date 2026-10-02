@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
-import { getAdmissionsView } from "@/lib/academies/students";
+import { getAdmissionsView, getStudentPhotoUrl } from "@/lib/academies/students";
 import { listBranches } from "@/lib/academies/branches";
 import { AdmissionsList } from "./admissions-list";
 import { Button, LinkButton, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
@@ -72,6 +72,19 @@ export default async function AcademyAdmissionsPage({
   const branchesResult = !branchLimited ? await listBranches(context) : null;
   const branchOptions = branchesResult?.ok ? branchesResult.branches : [];
 
+  // Same server-side signed-URL resolution as app/academy/students/page.tsx
+  // — a student's real photo only ever reaches the browser as a
+  // short-lived signed GET, never the raw profileImageRef object key.
+  const photoEntries = await Promise.all(
+    data.rows
+      .filter((row) => row.profileImageRef)
+      .map(async (row) => {
+        const url = await getStudentPhotoUrl(row.profileImageRef);
+        return url ? ([row.id, url] as const) : null;
+      }),
+  );
+  const photoUrlByStudentId = new Map(photoEntries.filter((entry): entry is readonly [string, string] => entry !== null));
+
   return (
     <div className={PAGE_WRAP}>
       <PageHeader
@@ -111,7 +124,7 @@ export default async function AcademyAdmissionsPage({
         </form>
       )}
 
-      <AdmissionsList admissions={data.rows} canManage={canManage} />
+      <AdmissionsList admissions={data.rows} canManage={canManage} photoUrlByStudentId={photoUrlByStudentId} />
 
       <PaginationNav page={data.page} pageSize={data.pageSize} totalCount={data.totalCount} searchParams={params} />
     </div>

@@ -16,6 +16,8 @@ import type { StudentDeletionEligibilitySummary, StudentRecord } from "@/lib/aca
 import type { StudentActiveCourse } from "@/lib/academies/batch-assignments";
 import type { FeePeriodRecord, StudentPaymentSummaryRow } from "@/lib/academies/fee-periods";
 import { recordFeePeriodPaymentAction } from "@/lib/academies/fee-periods-actions";
+import { StudentPhotoField } from "./student-photo-field";
+import { StudentAvatar } from "./student-avatar";
 import {
   Badge,
   Button,
@@ -64,18 +66,6 @@ const INTERVAL_LABELS: Record<number, string> = {
 
 function formatMoney(amountCents: number, currency: string): string {
   return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
-
-/** First + last initial, e.g. "Jane Doe" -> "JD" — same avatar-style
- * identity cue as app/academy/staff/staff-table.tsx's row identity cell, for
- * a consistent "people list" visual language across the app. Purely
- * cosmetic; the actual identity is still `fullName`/`studentNumber`. */
-function getInitials(fullName: string): string {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  const first = parts[0]?.[0] ?? "";
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
-  return (first + last).toUpperCase();
 }
 
 const initialState: StudentFormState = { ok: false };
@@ -147,6 +137,12 @@ interface Props {
    * "change course" select — same shape as the registration form's course
    * picker (app/academy/students/new/student-form.tsx). */
   courseOptions: CourseOption[];
+  /** Each student-with-a-photo's own short-lived signed R2 GET url,
+   * pre-resolved server-side (page.tsx, via students.ts's
+   * `getStudentPhotoUrl`) — a student absent from this map either has no
+   * `profileImageRef` or R2 was unreachable when the page rendered;
+   * either way StudentAvatar's own initials fallback covers it. */
+  photoUrlByStudentId: Map<string, string>;
 }
 
 export function StudentsList({
@@ -158,6 +154,7 @@ export function StudentsList({
   canManagePayments,
   showBranchField,
   coursesByStudent,
+  photoUrlByStudentId,
   paymentSummaries,
   courseOptions,
 }: Props) {
@@ -176,8 +173,13 @@ export function StudentsList({
   // Which row's Record Payment dialog is open — same controlled-dialog-
   // outside-the-dropdown pattern as archive/delete above.
   const [paymentRowId, setPaymentRowId] = useState<string | null>(null);
+  // Which row's profile-photo preview is open — same pattern again; only
+  // ever set for a row that actually has a resolved photo URL (see
+  // StudentAvatar below, which is the only thing that calls this).
+  const [previewRowId, setPreviewRowId] = useState<string | null>(null);
 
   const editingStudent = students.find((student) => student.id === editingId) ?? null;
+  const previewStudent = students.find((student) => student.id === previewRowId) ?? null;
   const editingStudentCourses = editingStudent ? (coursesByStudent.get(editingStudent.id) ?? []) : [];
   const currentCourseBatchId = editingStudentCourses[0]?.batchId ?? "";
 
@@ -285,9 +287,11 @@ export function StudentsList({
                       <tr key={student.id} className={trHover}>
                         <td className={td}>
                           <div className="flex items-center gap-3">
-                            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-tint text-xs font-semibold text-brand">
-                              {getInitials(student.fullName)}
-                            </span>
+                            <StudentAvatar
+                              fullName={student.fullName}
+                              photoUrl={photoUrlByStudentId.get(student.id) ?? null}
+                              onPreview={() => setPreviewRowId(student.id)}
+                            />
                             <div className="min-w-0">
                               <Link
                                 href={`/academy/students/${student.id}`}
@@ -469,12 +473,40 @@ export function StudentsList({
         )}
       </div>
 
+      {previewStudent && photoUrlByStudentId.has(previewStudent.id) && (
+        <FormDialog
+          open={previewRowId !== null}
+          onOpenChange={(nextOpen) => !nextOpen && setPreviewRowId(null)}
+          title={`${previewStudent.fullName}'s photo`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- see StudentAvatar's own comment above */}
+          <img
+            src={photoUrlByStudentId.get(previewStudent.id)}
+            alt={`${previewStudent.fullName}'s profile photo`}
+            className="max-h-[70vh] w-full rounded-md object-contain"
+          />
+          <div className="mt-4 flex justify-end">
+            <Button type="button" variant="secondary" onClick={() => setPreviewRowId(null)}>
+              Close
+            </Button>
+          </div>
+        </FormDialog>
+      )}
+
       {canManage && editingStudent && (
         <FormDialog
           open={editingStudent !== null}
           onOpenChange={(nextOpen) => !nextOpen && setEditingId(null)}
           title={`Edit student — ${editingStudent.fullName}`}
         >
+          <div className="mb-4 border-b border-border pb-4">
+            <StudentPhotoField
+              mode="edit"
+              studentId={editingStudent.id}
+              currentPhotoUrl={photoUrlByStudentId.get(editingStudent.id) ?? null}
+              onChanged={() => router.refresh()}
+            />
+          </div>
           <form action={updateFormAction} className="flex flex-col gap-3">
             <input type="hidden" name="studentId" value={editingStudent.id} />
             {showBranchField && (

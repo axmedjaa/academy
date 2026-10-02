@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
-import { getStudent } from "@/lib/academies/students";
+import { getStudent, getStudentPhotoUrl } from "@/lib/academies/students";
 import {
   getEnrollmentFeeSchedule,
   getEnrollmentPaymentSummary,
@@ -48,6 +48,7 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
     );
   }
   const { student } = studentResult;
+  const photoUrl = await getStudentPhotoUrl(student.profileImageRef);
 
   const enrollmentsResult = await listEnrollmentsForStudent(context, studentId);
   const enrollments = enrollmentsResult.ok ? enrollmentsResult.enrollments : [];
@@ -129,6 +130,7 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
       <PageHeader title={student.fullName} description={`Student # ${student.studentNumber}`} />
       <StudentDetail
         student={student}
+        photoUrl={photoUrl}
         enrollments={enrollments}
         enrollmentSummaries={enrollmentSummaries}
         charges={charges}

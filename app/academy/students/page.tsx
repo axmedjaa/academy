@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { searchStudents } from "@/lib/academies/students";
+import { getStudentPhotoUrl, searchStudents } from "@/lib/academies/students";
 import { getActiveCoursesForStudents } from "@/lib/academies/batch-assignments";
 import { canManageFeePeriodPayments, getStudentPaymentSummaries } from "@/lib/academies/fee-periods";
 import { listBatches } from "@/lib/academies/batches";
@@ -143,6 +143,24 @@ export default async function AcademyStudentsPage({
       ])
     : [new Map(), new Map(), null, null];
 
+  // Resolves each photo-having student's `profileImageRef` (an R2 object
+  // key) into a short-lived signed GET url — must happen server-side
+  // (getStudentPhotoUrl needs R2 credentials the browser never sees).
+  // `getSignedUrl` is a local HMAC computation, not a network call, so
+  // resolving one per student here is cheap even at this page's page
+  // size. A student whose resolution fails (R2 unreachable) or who has no
+  // photo simply has no entry — StudentAvatar's own initials fallback
+  // covers that.
+  const photoEntries = await Promise.all(
+    data.rows
+      .filter((student) => student.profileImageRef)
+      .map(async (student) => {
+        const url = await getStudentPhotoUrl(student.profileImageRef);
+        return url ? ([student.id, url] as const) : null;
+      }),
+  );
+  const photoUrlByStudentId = new Map(photoEntries.filter((entry): entry is readonly [string, string] => entry !== null));
+
   const courseNameById = new Map((coursesResult?.ok ? coursesResult.courses : []).map((c) => [c.id, c.name]));
   const courseOptions = (batchesResult?.ok ? batchesResult.batches : [])
     .filter((batch) => batch.status !== "archived")
@@ -274,6 +292,7 @@ export default async function AcademyStudentsPage({
         canManagePayments={canManagePayments}
         showBranchField={!branchLimited}
         coursesByStudent={coursesByStudent}
+        photoUrlByStudentId={photoUrlByStudentId}
         paymentSummaries={paymentSummaries}
         courseOptions={courseOptions}
         filterBar={filterBar}
