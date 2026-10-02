@@ -1,6 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { eq, or } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+// Real Cloudflare R2 is never called from the test suite — same
+// single-boundary mock as lib/academies/student-photo.test.ts/
+// academy-logo.test.ts. Every other test in this file inserts students
+// with no profileImageRef, so getStudentPhotoUrl's own early `if
+// (!profileImageRef) return null` means this mock is never actually
+// exercised by them — only the "studentPhotoUrl" describe block below
+// sets a ref and asserts against it.
+vi.mock("@/lib/storage/client", () => ({
+  getUploadUrl: vi.fn(),
+  getDownloadUrl: vi.fn(),
+  deleteObject: vi.fn(),
+  headObject: vi.fn(),
+}));
+
+import { getDownloadUrl } from "@/lib/storage/client";
 import { db } from "@/lib/db";
 import {
   academies,
@@ -597,6 +613,53 @@ describe("cross-academy tenant isolation", () => {
     if (result.ok) {
       expect(result.exams.every((exam) => exam.academyId !== other.academyId)).toBe(true);
     }
+  });
+});
+
+describe("listExamResults — studentPhotoUrl", () => {
+  it("resolves null for a student with no profile photo, without calling getDownloadUrl", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    await enrollStudentDirect(academyId, batchId, studentId);
+    const created = await createExam(context, { batchId, name: "Midterm", maxMarks: 100 });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    vi.mocked(getDownloadUrl).mockClear();
+    const roster = await listExamResults(context, created.exam.id);
+
+    expect(roster.ok).toBe(true);
+    if (!roster.ok) return;
+    expect(roster.results).toHaveLength(1);
+    expect(roster.results[0].studentPhotoUrl).toBeNull();
+    expect(getDownloadUrl).not.toHaveBeenCalled();
+  });
+
+  it("resolves a signed url (via the same students join, not a second query) for a student with a photo", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const [studentRow] = await db
+      .insert(students)
+      .values({
+        academyId,
+        branchId,
+        studentNumber: `STD-${randomUUID().slice(0, 8)}`,
+        fullName: "Photo Student",
+        createdBy: creatorUserId,
+        profileImageRef: `academies/${academyId}/student-photos/${randomUUID()}.png`,
+      })
+      .returning({ id: students.id });
+    await enrollStudentDirect(academyId, batchId, studentRow.id);
+    const created = await createExam(context, { batchId, name: "Midterm", maxMarks: 100 });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    vi.mocked(getDownloadUrl).mockResolvedValue({ ok: true, downloadUrl: "https://r2.example/signed-get" });
+    const roster = await listExamResults(context, created.exam.id);
+
+    expect(roster.ok).toBe(true);
+    if (!roster.ok) return;
+    expect(roster.results).toHaveLength(1);
+    expect(roster.results[0].studentPhotoUrl).toBe("https://r2.example/signed-get");
   });
 });
 

@@ -372,14 +372,28 @@ export function AcademyShell({
              * silently defeats `truncate`'s ellipsis (the box can never
              * shrink enough to show "…") — without it, a long academy
              * name just gets hard-clipped mid-character on a narrow
-             * screen instead of cleanly truncating. `flex-1` lets this
-             * span claim the row's available space ahead of the branch
-             * chip, since the academy name is the more important label
-             * of the two. */}
+             * screen instead of cleanly truncating.
+             *
+             * `flex-1` alone is NOT enough to prioritize this span over
+             * the branch chip below, and was previously documented
+             * (wrongly) as if it did: Tailwind's `flex-1` is
+             * `flex: 1 1 0%` — a 0% *basis* — while the chip's default
+             * `flex: 0 1 auto` gives it its own full content width as
+             * its basis. In the flex distribution algorithm the chip's
+             * auto-basis is satisfied FIRST; this span only ever gets
+             * whatever's left over via flex-grow. On a narrow phone
+             * (e.g. a 390px screen with a longer role chip on the
+             * right), that leftover could shrink to a handful of
+             * pixels even for a short name like "Dardar" — the chip,
+             * not this span, was winning the width tug-of-war. Fixed
+             * below by hiding the purely decorative chip+divider under
+             * `sm` (640px) so this span gets the entire row on phones;
+             * tablet/desktop (where the chip still shows) are
+             * unchanged. */}
             <span className="min-w-0 flex-1 truncate font-semibold tracking-tight text-ink">{academyName}</span>
-            <span className="shrink-0" style={{ height: "1rem", width: 1, backgroundColor: color.border }} />
-            {/* DESIGN.md §2.2 Academy/Branch Context Chip — static label, see lib/academies/shell.ts's module comment for why this isn't a functional filter yet. */}
-            <span className="min-w-0 shrink truncate text-[0.8rem] text-muted">{branchChipLabel}</span>
+            <span className="hidden shrink-0 sm:block" style={{ height: "1rem", width: 1, backgroundColor: color.border }} />
+            {/* DESIGN.md §2.2 Academy/Branch Context Chip — static label, see lib/academies/shell.ts's module comment for why this isn't a functional filter yet. Hidden below `sm` (640px): decorative/non-functional, so on a phone it's the first thing to give up its space to the academy name above, not compete with it. */}
+            <span className="hidden min-w-0 shrink truncate text-[0.8rem] text-muted sm:block">{branchChipLabel}</span>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: spacing.md, flexShrink: 0 }}>

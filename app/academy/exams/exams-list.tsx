@@ -10,6 +10,7 @@ import {
   type ExamFormState,
 } from "@/lib/academies/exams-actions";
 import type { ExamRecord, ExamResultRosterRow } from "@/lib/academies/exams";
+import { StudentAvatar } from "@/app/academy/students/student-avatar";
 import type { BatchRecord } from "@/lib/academies/batches";
 import {
   Badge,
@@ -35,17 +36,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const initialState: ExamFormState = { ok: false };
-
-/** Same avatar-style identity cue as students-list.tsx/staff-table.tsx's
- * own identical local copies, for a consistent "people list" visual
- * language across the app. */
-function getInitials(fullName: string): string {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  const first = parts[0]?.[0] ?? "";
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
-  return (first + last).toUpperCase();
-}
 
 interface Props {
   exams: (ExamRecord & { hasResults: boolean })[];
@@ -309,9 +299,7 @@ function MarksEntryPanel({ examId }: { examId: string }) {
                 <tr key={row.id} className={trHover}>
                   <td className={td}>
                     <div className="flex items-center gap-3">
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-tint text-xs font-semibold text-brand">
-                        {getInitials(row.studentFullName)}
-                      </span>
+                      <StudentAvatar fullName={row.studentFullName} photoUrl={row.studentPhotoUrl} sizeClassName="h-8 w-8" />
                       <div className="min-w-0">
                         <span className="block truncate font-medium text-ink">{row.studentFullName}</span>
                         <span className="block text-xs text-muted">{row.studentNumber}</span>

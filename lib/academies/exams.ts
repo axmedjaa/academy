@@ -11,6 +11,7 @@ import {
 } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getAssignedBatchIds } from "@/lib/academies/batch-assignments";
+import { getStudentPhotoUrl } from "@/lib/academies/students";
 import {
   ACADEMY_EXAMS_ACTION,
   getAcademyPermissionLevel,
@@ -784,6 +785,15 @@ export async function getExam(actorContext: AuthContext, examId: string): Promis
 export interface ExamResultRosterRow extends ExamResultRecord {
   studentFullName: string;
   studentNumber: string;
+  /** A short-lived signed R2 GET url for the student's profile photo, or
+   * null if they have none (or it couldn't be resolved) — resolved
+   * server-side, in the same join as studentFullName/studentNumber below,
+   * never the raw `profileImageRef` object key (that never leaves the
+   * server — see students.ts's `getStudentPhotoUrl`). The client-side
+   * "Enter marks" panel (app/academy/exams/exams-list.tsx) renders this
+   * directly via the shared StudentAvatar component, same as
+   * Students/Admissions/Results/the Student detail page. */
+  studentPhotoUrl: string | null;
 }
 
 export type ListExamResultsResult =
@@ -821,19 +831,33 @@ export async function listExamResults(
       result: examResults,
       studentFullName: students.fullName,
       studentNumber: students.studentNumber,
+      profileImageRef: students.profileImageRef,
     })
     .from(examResults)
     .innerJoin(students, eq(students.id, examResults.studentId))
     .where(eq(examResults.examId, examId));
 
-  return {
-    ok: true,
-    exam: toExamRecord(examRow),
-    results: rows.map((row) => ({
+  // Same "resolve every row's signed url up front, server-side" posture
+  // as app/academy/results/page.tsx's own getStudentPhotoUrlsByIds — here
+  // folded directly into this roster's own already-existing `students`
+  // join (one row per student already, so there's no extra DB query to
+  // batch: the join above already fetched profileImageRef alongside
+  // fullName/studentNumber). `getStudentPhotoUrl` itself is a pure local
+  // HMAC computation (no network call), so resolving one per row is
+  // cheap even without deduping.
+  const results = await Promise.all(
+    rows.map(async (row) => ({
       ...toResultRecord(row.result),
       studentFullName: row.studentFullName,
       studentNumber: row.studentNumber,
+      studentPhotoUrl: await getStudentPhotoUrl(row.profileImageRef),
     })),
+  );
+
+  return {
+    ok: true,
+    exam: toExamRecord(examRow),
+    results,
     canEnterMarks: canEnterMarksLevel(permissionLevel),
   };
 }
