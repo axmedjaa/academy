@@ -7,6 +7,7 @@ import {
   createCourse as createCourseForActor,
   deleteCourse as deleteCourseForActor,
   getCourseDeletionEligibility as getCourseDeletionEligibilityForActor,
+  requestCourseImageUploadUrl as requestCourseImageUploadUrlForActor,
   restoreCourse as restoreCourseForActor,
   updateCourse as updateCourseForActor,
   type CourseActionError,
@@ -116,6 +117,33 @@ export async function setCourseStatus(
 
   revalidatePath("/academy/courses");
   return { ok: true };
+}
+
+export interface RequestCourseImageUploadUrlState {
+  ok: boolean;
+  error?: CourseActionError;
+  uploadUrl?: string;
+  key?: string;
+}
+
+/** Plain-callable, for the Add/Edit course forms' image upload control —
+ * same convention as books-actions.ts's requestNewBookCoverUploadUrlAction.
+ * Reusable for both a new course and an existing one's replacement image;
+ * see requestCourseImageUploadUrl's own doc comment for why. */
+export async function requestCourseImageUploadUrlAction(
+  input: { contentType: string; fileSizeBytes: number },
+): Promise<RequestCourseImageUploadUrlState> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await requestCourseImageUploadUrlForActor(context, input);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+
+  return { ok: true, uploadUrl: result.uploadUrl, key: result.key };
 }
 
 /** Read-only preview for the courses table's Delete button. */

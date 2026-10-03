@@ -10,6 +10,9 @@ import {
 } from "@/lib/auth/academy-permissions";
 import { checkAllowance, type UsageActionError } from "@/lib/subscriptions/usage";
 import { recordAudit } from "@/lib/audit";
+import { deleteObject, getDownloadUrl, getUploadUrl, headObject } from "@/lib/storage/client";
+import { getCourseImageKey, isCourseImageKey } from "@/lib/storage/keys";
+import { logger } from "@/lib/logger";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 
@@ -62,6 +65,67 @@ const INSTRUCTOR_NOT_FOUND: CourseActionError = {
   code: "not_found",
   message: "Instructor not found.",
 };
+
+// ===========================================================================
+// Course-image upload — same presigned-PUT/headObject-verify pattern as
+// lib/academies/books.ts's cover upload, reused unmodified for courses. The
+// field predates this feature as a plain externally-hosted-URL text input
+// (see createCourseSchema.imageRef's own comment below), so unlike a book's
+// `coverRef` this is NOT always one of our own R2 keys — `isCourseImageKey`
+// is the gate that tells an uploaded key apart from a legacy pasted URL, and
+// only an uploaded key is ever re-verified/resolved against R2.
+// ===========================================================================
+
+export const MAX_COURSE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_COURSE_IMAGE_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+type AllowedCourseImageContentType = (typeof ALLOWED_COURSE_IMAGE_CONTENT_TYPES)[number];
+const COURSE_IMAGE_EXTENSION_BY_CONTENT_TYPE: Record<AllowedCourseImageContentType, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+function isAllowedCourseImageContentType(value: string): value is AllowedCourseImageContentType {
+  return (ALLOWED_COURSE_IMAGE_CONTENT_TYPES as readonly string[]).includes(value);
+}
+
+const INVALID_IMAGE_FORMAT: CourseActionError = { code: "validation", message: "Course image must be JPEG, PNG, or WebP." };
+const IMAGE_TOO_LARGE: CourseActionError = { code: "validation", message: "Course image must be 5 MB or smaller." };
+const IMAGE_VERIFICATION_FAILED: CourseActionError = {
+  code: "validation",
+  message: "The image upload could not be verified.",
+};
+
+type VerifyCourseImageUploadResult = { ok: true } | { ok: false; error: CourseActionError };
+
+/**
+ * Re-verifies an already-PUT-to-R2 object actually matches this academy's
+ * key shape and the allowed format/size — the real authority, never the
+ * client's claims from the presigned-URL request step. An object that fails
+ * verification is deleted from R2 immediately (never left orphaned). Only
+ * called when `imageRef` is one of our own upload keys (`isCourseImageKey`)
+ * — see this section's own header comment for why a legacy pasted URL skips
+ * this entirely.
+ */
+async function verifyCourseImageUpload(key: string, academyId: string): Promise<VerifyCourseImageUploadResult> {
+  if (!isCourseImageKey(key, academyId)) {
+    return { ok: false, error: { code: "validation", message: "Invalid upload reference." } };
+  }
+  const head = await headObject(key);
+  if (!head.ok) return { ok: false, error: IMAGE_VERIFICATION_FAILED };
+  if (!head.exists) {
+    return { ok: false, error: { code: "not_found", message: "The uploaded file could not be found. Please try uploading again." } };
+  }
+  if (!head.info.contentType || !isAllowedCourseImageContentType(head.info.contentType)) {
+    await deleteObject(key);
+    return { ok: false, error: INVALID_IMAGE_FORMAT };
+  }
+  if (!head.info.contentLength || head.info.contentLength > MAX_COURSE_IMAGE_SIZE_BYTES) {
+    await deleteObject(key);
+    return { ok: false, error: IMAGE_TOO_LARGE };
+  }
+  return { ok: true };
+}
 
 function optionalText(maxLength = 2000) {
   return z
@@ -168,21 +232,52 @@ function toRecord(row: typeof courses.$inferSelect): CourseRecord {
  * "instructor" concept). `null` when a course has no instructorId set. */
 export interface CourseWithInstructor extends CourseRecord {
   instructorName: string | null;
+  /** Display-only resolution of `imageRef` — a signed, short-lived R2 GET
+   * URL when `imageRef` is one of our own upload keys, the raw `imageRef`
+   * unchanged when it's a legacy pasted URL (pre-upload-feature rows), or
+   * `null` when there's no image at all. Callers must render THIS, never
+   * `imageRef` directly — the bucket is private, so a raw upload key is not
+   * a fetchable URL on its own. See `getCourseImageUrl`'s own doc comment. */
+  imageUrl: string | null;
 }
 
 async function attachInstructorNames(rows: CourseRecord[]): Promise<CourseWithInstructor[]> {
   const instructorIds = [...new Set(rows.map((r) => r.instructorId).filter((id): id is string => id !== null))];
-  if (instructorIds.length === 0) {
-    return rows.map((r) => ({ ...r, instructorName: null }));
-  }
+  const nameById =
+    instructorIds.length === 0
+      ? new Map<string, string>()
+      : new Map(
+          (
+            await db
+              .select({ id: staffProfiles.id, fullName: staffProfiles.fullName })
+              .from(staffProfiles)
+              .where(inArray(staffProfiles.id, instructorIds))
+          ).map((s) => [s.id, s.fullName]),
+        );
 
-  const staffRows = await db
-    .select({ id: staffProfiles.id, fullName: staffProfiles.fullName })
-    .from(staffProfiles)
-    .where(inArray(staffProfiles.id, instructorIds));
-  const nameById = new Map(staffRows.map((s) => [s.id, s.fullName]));
+  return Promise.all(
+    rows.map(async (r) => ({
+      ...r,
+      instructorName: r.instructorId ? (nameById.get(r.instructorId) ?? null) : null,
+      imageUrl: await getCourseImageUrl(r.imageRef, r.academyId),
+    })),
+  );
+}
 
-  return rows.map((r) => ({ ...r, instructorName: r.instructorId ? (nameById.get(r.instructorId) ?? null) : null }));
+/**
+ * Display-field resolution for `imageRef` — same "display-field fetch on an
+ * already-authorized value" pattern as books.ts's `getBookCoverUrl`, except
+ * this field predates the upload feature as a plain externally-hosted-URL
+ * text input (see createCourseSchema.imageRef's own comment), so a value
+ * that ISN'T one of our own academy-scoped upload keys is assumed to
+ * already be a directly-renderable URL and is returned unchanged rather
+ * than run through R2 at all.
+ */
+export async function getCourseImageUrl(imageRef: string | null, academyId: string): Promise<string | null> {
+  if (!imageRef) return null;
+  if (!isCourseImageKey(imageRef, academyId)) return imageRef;
+  const result = await getDownloadUrl({ key: imageRef });
+  return result.ok ? result.downloadUrl : null;
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -393,6 +488,42 @@ export async function listCourseEnrollments(
   return { ok: true, enrollments: rows };
 }
 
+export type RequestCourseImageUploadUrlResult =
+  | { ok: true; uploadUrl: string; key: string; expiresInSeconds: number }
+  | { ok: false; error: CourseActionError };
+
+/**
+ * Issues a presigned PUT for a course image — reusable for both a brand-new
+ * course (no id yet, same as books.ts's `requestNewBookCoverUploadUrl`) and
+ * an existing one's replacement image, because unlike a book's cover a
+ * course image is never required: the real authorization/verification
+ * happens when `createCourse`/`updateCourse` is later called with the
+ * resulting key (both already gate on `canManageCourses`), not at this
+ * request-a-URL step, so there's no need for Books' separate "existing vs.
+ * new" pair of actions here.
+ */
+export async function requestCourseImageUploadUrl(
+  actorContext: AuthContext,
+  input: { contentType: string; fileSizeBytes: number },
+): Promise<RequestCourseImageUploadUrlResult> {
+  const resolved = await resolveCourseAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  if (!canManageCourses(membershipRole, permissionLevel)) return { ok: false, error: FORBIDDEN };
+
+  if (!isAllowedCourseImageContentType(input.contentType)) return { ok: false, error: INVALID_IMAGE_FORMAT };
+  if (!Number.isFinite(input.fileSizeBytes) || input.fileSizeBytes <= 0 || input.fileSizeBytes > MAX_COURSE_IMAGE_SIZE_BYTES) {
+    return { ok: false, error: IMAGE_TOO_LARGE };
+  }
+
+  const key = getCourseImageKey({ academyId, extension: COURSE_IMAGE_EXTENSION_BY_CONTENT_TYPE[input.contentType] });
+  const result = await getUploadUrl({ key, contentType: input.contentType });
+  if (!result.ok) {
+    return { ok: false, error: { code: "validation", message: "The image upload could not be started. Please try again." } };
+  }
+  return { ok: true, uploadUrl: result.uploadUrl, key, expiresInSeconds: result.expiresInSeconds };
+}
+
 class AllowanceLimitReached extends Error {
   constructor(
     public readonly current: number,
@@ -442,6 +573,15 @@ export async function createCourse(
     };
   }
   const data = parsed.data;
+
+  // Only re-verify against R2 when the submitted value is actually one of
+  // OUR OWN upload keys (freshly uploaded via requestCourseImageUploadUrl) —
+  // a legacy pasted URL is accepted at face value exactly as before this
+  // feature existed. See this file's course-image-upload section header.
+  if (data.imageRef && isCourseImageKey(data.imageRef, academyId)) {
+    const imageVerification = await verifyCourseImageUpload(data.imageRef, academyId);
+    if (!imageVerification.ok) return { ok: false, error: imageVerification.error };
+  }
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -554,6 +694,14 @@ export async function updateCourse(
   }
   const data = parsed.data;
 
+  // Same "only re-verify our own upload keys" gate as createCourse — see
+  // that call's own comment and this file's course-image-upload section
+  // header.
+  if (data.imageRef && isCourseImageKey(data.imageRef, academyId)) {
+    const imageVerification = await verifyCourseImageUpload(data.imageRef, academyId);
+    if (!imageVerification.ok) return { ok: false, error: imageVerification.error };
+  }
+
   try {
     const result = await db.transaction(async (tx) => {
       const [existing] = await tx
@@ -602,13 +750,25 @@ export async function updateCourse(
         tx,
       );
 
-      return updated;
+      return { updated, previousImageRef: existing.imageRef };
     });
 
     if (!result) {
       return { ok: false, error: NOT_FOUND };
     }
-    return { ok: true, course: toRecord(result) };
+
+    // Orphan cleanup — only ever deletes an object this feature itself
+    // uploaded (never a legacy pasted URL, which isCourseImageKey rules
+    // out), same convention as books.ts's confirmBookCoverUpload.
+    const { updated, previousImageRef } = result;
+    if (previousImageRef && previousImageRef !== updated.imageRef && isCourseImageKey(previousImageRef, academyId)) {
+      const deleted = await deleteObject(previousImageRef);
+      if (!deleted.ok) {
+        logger.warn("course image replacement: old R2 object could not be deleted (orphaned)", { courseId });
+      }
+    }
+
+    return { ok: true, course: toRecord(updated) };
   } catch (err) {
     if (err instanceof ProgramNotFoundSignal) {
       return { ok: false, error: PROGRAM_NOT_FOUND };

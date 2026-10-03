@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { BookRecord } from "@/lib/academies/books";
 import { getStockStatus, LOW_STOCK_THRESHOLD } from "@/lib/academies/book-stock";
-import { Badge, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, Field, FormDialog, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { getStatusTone } from "@/lib/ui/status";
 
 function formatMoney(amountCents: number, currency: string): string {
@@ -27,6 +27,10 @@ type StockFilter = "all" | "in_stock" | "low_stock" | "out_of_stock";
 export function StockManager({ books, coverUrls, recentSaleCounts }: Props) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StockFilter>("all");
+  // Full-view cover preview, same controlled pattern as the student photo
+  // preview in app/academy/students/students-list.tsx.
+  const [previewBookId, setPreviewBookId] = useState<string | null>(null);
+  const previewBook = books.find((book) => book.id === previewBookId) ?? null;
 
   const visibleBooks = books.filter((book) => {
     const q = search.trim().toLowerCase();
@@ -87,8 +91,15 @@ export function StockManager({ books, coverUrls, recentSaleCounts }: Props) {
                   <td className={td}>
                     <div className="flex h-12 w-10 items-center justify-center overflow-hidden rounded border border-border bg-surface">
                       {coverUrls[book.id] ? (
-                        // eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL.
-                        <img src={coverUrls[book.id]!} alt={`${book.name} cover`} className="h-full w-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setPreviewBookId(book.id)}
+                          aria-label={`View ${book.name}'s cover`}
+                          className="block h-full w-full overflow-hidden transition-opacity duration-150 hover:opacity-90 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL. */}
+                          <img src={coverUrls[book.id]!} alt={`${book.name} cover`} className="h-full w-full object-cover" />
+                        </button>
                       ) : (
                         <span className="text-[10px] text-muted">No cover</span>
                       )}
@@ -110,6 +121,26 @@ export function StockManager({ books, coverUrls, recentSaleCounts }: Props) {
           )}
         </tbody>
       </TableWrap>
+
+      {previewBook && coverUrls[previewBook.id] && (
+        <FormDialog
+          open={previewBookId !== null}
+          onOpenChange={(nextOpen) => !nextOpen && setPreviewBookId(null)}
+          title={`${previewBook.name}'s cover`}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL. */}
+          <img
+            src={coverUrls[previewBook.id]!}
+            alt={`${previewBook.name} cover`}
+            className="max-h-[70vh] w-full rounded-md object-contain"
+          />
+          <div className="mt-4 flex justify-end">
+            <Button type="button" variant="secondary" onClick={() => setPreviewBookId(null)}>
+              Close
+            </Button>
+          </div>
+        </FormDialog>
+      )}
     </Section>
   );
 }

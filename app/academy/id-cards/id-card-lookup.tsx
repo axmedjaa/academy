@@ -41,7 +41,13 @@ export function IdCardLookup({ academyName }: Props) {
     <Section>
       <form action={formAction} className="flex flex-wrap items-end gap-3">
         <input type="hidden" name="intent" value="lookup" />
-        <Field label="Student # or ID" className="min-w-[300px]">
+        {/* Mobile responsiveness fix: a fixed `min-w-[300px]` here could
+         * exceed the actual available width on a narrow phone (320px
+         * viewport minus PAGE_WRAP's and Section's own padding leaves
+         * under 300px), forcing horizontal overflow. Full-width below
+         * `sm:` (640px), reverting to the original comfortable fixed
+         * width once there's room to spare. */}
+        <Field label="Student # or ID" className="w-full sm:w-auto sm:min-w-[300px]">
           <input
             type="text"
             name="studentId"

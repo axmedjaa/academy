@@ -12,6 +12,7 @@ import {
   Button,
   ErrorMessage,
   Field,
+  FormDialog,
   LinkButton,
   Section,
   TableWrap,
@@ -73,6 +74,7 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
   const [issueStudentId, setIssueStudentId] = useState("");
   const [issueBatchId, setIssueBatchId] = useState("");
   const [issueSuccess, setIssueSuccess] = useState<string | null>(null);
+  const cancellingCert = certificates.find((cert) => cert.id === cancellingId) ?? null;
 
   function handleIssue() {
     setError(null);
@@ -166,48 +168,17 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
                 </td>
                 {canManage && (
                   <td className={td}>
-                    {cert.status === "issued" &&
-                      (cancellingId === cert.id ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <input
-                            type="text"
-                            placeholder="Cancellation reason"
-                            value={cancelReason}
-                            onChange={(e) => setCancelReason(e.target.value)}
-                            className={`${inputClass} w-48 py-1.5`}
-                          />
-                          <Button
-                            type="button"
-                            variant="danger"
-                            className="px-2.5 py-1 text-xs"
-                            disabled={isPending || cancelReason.trim() === ""}
-                            onClick={() => handleCancel(cert.id)}
-                          >
-                            Confirm cancel
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="px-2.5 py-1 text-xs"
-                            onClick={() => {
-                              setCancellingId(null);
-                              setCancelReason("");
-                            }}
-                          >
-                            Back
-                          </Button>
-                        </div>
-                      ) : (
-                        <Button
-                          type="button"
-                          variant="danger"
-                          className="px-2.5 py-1 text-xs"
-                          disabled={isPending}
-                          onClick={() => setCancellingId(cert.id)}
-                        >
-                          Cancel
-                        </Button>
-                      ))}
+                    {cert.status === "issued" && (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        className="px-2.5 py-1 text-xs"
+                        disabled={isPending}
+                        onClick={() => setCancellingId(cert.id)}
+                      >
+                        Cancel
+                      </Button>
+                    )}
                     {cert.status === "cancelled" && cert.cancellationReason && (
                       <span className="text-xs text-muted">Reason: {cert.cancellationReason}</span>
                     )}
@@ -219,6 +190,55 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
         </tbody>
       </TableWrap>
 
+      {/* Mobile responsiveness fix: this used to reveal inline inside the
+       * Actions table cell (a fixed-width input + two buttons), which
+       * either cramped the cell or widened the whole row inside
+       * TableWrap's already horizontally-scrolling (min-w-[640px]) table —
+       * same underlying problem as Books' old inline "Buy" row. A dialog
+       * escapes that scroll container entirely. */}
+      {cancellingCert && (
+        <FormDialog
+          open={cancellingId !== null}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) {
+              setCancellingId(null);
+              setCancelReason("");
+            }
+          }}
+          title={`Cancel certificate — ${cancellingCert.studentName}`}
+        >
+          <Field label="Cancellation reason">
+            <input
+              type="text"
+              placeholder="Why is this certificate being cancelled?"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              className={inputClass}
+            />
+          </Field>
+          <div className="mt-4 flex gap-2">
+            <Button
+              type="button"
+              variant="danger"
+              disabled={isPending || cancelReason.trim() === ""}
+              onClick={() => handleCancel(cancellingCert.id)}
+            >
+              {isPending ? "Cancelling..." : "Confirm cancel"}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setCancellingId(null);
+                setCancelReason("");
+              }}
+            >
+              Close
+            </Button>
+          </div>
+        </FormDialog>
+      )}
+
       {canManage && (
         <Section>
           <h2 className="text-base font-semibold text-ink">Issue certificate</h2>
@@ -227,8 +247,12 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
             and <Link href="/academy/batches" className="text-brand hover:underline">Batches</Link>). Issuing is blocked unless the
             student has a published, passing result in that batch.
           </p>
+          {/* Mobile responsiveness fix: a fixed min-width on both fields
+           * could together exceed a narrow phone's available width (e.g.
+           * 320px minus PAGE_WRAP's and Section's own padding) — full-
+           * width below `sm:`, same fix as id-card-lookup.tsx. */}
           <div className="mt-4 flex flex-wrap items-end gap-3">
-            <Field label="Student" className="min-w-[260px]">
+            <Field label="Student" className="w-full sm:w-auto sm:min-w-[260px]">
               <select value={issueStudentId} onChange={(e) => setIssueStudentId(e.target.value)} className={inputClass}>
                 <option value="" disabled>
                   {studentOptions.length === 0 ? "No active students yet" : "Select a student…"}
@@ -240,7 +264,7 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
                 ))}
               </select>
             </Field>
-            <Field label="Batch" className="min-w-[260px]">
+            <Field label="Batch" className="w-full sm:w-auto sm:min-w-[260px]">
               <select value={issueBatchId} onChange={(e) => setIssueBatchId(e.target.value)} className={inputClass}>
                 <option value="" disabled>
                   {batchOptions.length === 0 ? "No batches yet" : "Select a batch…"}
@@ -301,7 +325,7 @@ function InternalVerificationLookup() {
       <h2 className="text-base font-semibold text-ink">Verify a certificate</h2>
       <p className="mt-1 text-sm text-muted">Look up any certificate by its printed code — identical to the public verification page.</p>
       <div className="mt-4 flex flex-wrap items-end gap-3">
-        <Field label="Certificate code" className="min-w-[260px]">
+        <Field label="Certificate code" className="w-full sm:w-auto sm:min-w-[260px]">
           <input
             type="text"
             value={code}

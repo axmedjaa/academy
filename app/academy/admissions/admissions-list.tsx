@@ -1,6 +1,9 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
 import type { AdmissionsRow } from "@/lib/academies/students";
-import { Badge, EmptyState, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, FormDialog, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
 import { StudentAvatar } from "@/app/academy/students/student-avatar";
 
@@ -33,6 +36,13 @@ function stageBadge(row: AdmissionsRow): { label: string; tone: "amber" | "blue"
 }
 
 export function AdmissionsList({ admissions, canManage, photoUrlByStudentId }: Props) {
+  // Which row's photo preview is open — same controlled pattern as
+  // app/academy/students/students-list.tsx's own previewRowId, so clicking
+  // a student's photo here opens the same full-view dialog Students
+  // already has, rather than being a dead, non-interactive thumbnail.
+  const [previewRowId, setPreviewRowId] = useState<string | null>(null);
+  const previewRow = admissions.find((row) => row.id === previewRowId) ?? null;
+
   if (admissions.length === 0) {
     return (
       <Section>
@@ -45,6 +55,7 @@ export function AdmissionsList({ admissions, canManage, photoUrlByStudentId }: P
   }
 
   return (
+    <>
     <TableWrap>
       <thead>
         <tr>
@@ -65,6 +76,7 @@ export function AdmissionsList({ admissions, canManage, photoUrlByStudentId }: P
                     fullName={row.fullName}
                     photoUrl={photoUrlByStudentId.get(row.id) ?? null}
                     sizeClassName="h-8 w-8"
+                    onPreview={() => setPreviewRowId(row.id)}
                   />
                   <div className="min-w-0">
                     <span className="block truncate font-medium text-ink">{row.fullName}</span>
@@ -93,5 +105,26 @@ export function AdmissionsList({ admissions, canManage, photoUrlByStudentId }: P
         })}
       </tbody>
     </TableWrap>
+
+    {previewRow && photoUrlByStudentId.has(previewRow.id) && (
+      <FormDialog
+        open={previewRowId !== null}
+        onOpenChange={(nextOpen) => !nextOpen && setPreviewRowId(null)}
+        title={`${previewRow.fullName}'s photo`}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element -- see StudentAvatar's own comment. */}
+        <img
+          src={photoUrlByStudentId.get(previewRow.id)}
+          alt={`${previewRow.fullName}'s profile photo`}
+          className="max-h-[70vh] w-full rounded-md object-contain"
+        />
+        <div className="mt-4 flex justify-end">
+          <Button type="button" variant="secondary" onClick={() => setPreviewRowId(null)}>
+            Close
+          </Button>
+        </div>
+      </FormDialog>
+    )}
+    </>
   );
 }

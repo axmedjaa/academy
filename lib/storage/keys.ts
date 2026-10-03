@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 const ACADEMY_LOGO_SEGMENT = "logos";
 const BOOK_COVER_SEGMENT = "book-covers";
 const STUDENT_PHOTO_SEGMENT = "student-photos";
+const COURSE_IMAGE_SEGMENT = "course-images";
 
 // Future entities (NOT implemented in this task — see lib/academies/academy-logo.ts's
 // own module comment for the current task's scope): staff, id-cards,
@@ -102,6 +103,35 @@ export function getStudentPhotoKey({ academyId, extension }: StudentPhotoKeyInpu
 /** Same exact-shape gate as isAcademyLogoKey/isBookCoverKey — see their own doc comments. */
 export function isStudentPhotoKey(key: string, academyId: string): boolean {
   const expectedPrefix = `academies/${academyId}/${STUDENT_PHOTO_SEGMENT}/`;
+  if (!key.startsWith(expectedPrefix)) {
+    return false;
+  }
+  const rest = key.slice(expectedPrefix.length);
+  return UUID_FILENAME_PATTERN.test(rest);
+}
+
+export interface CourseImageKeyInput {
+  academyId: string;
+  /** Server-derived from an allowlisted content-type map — never the
+   * client's original filename/extension. Same convention as
+   * AcademyLogoKeyInput.extension. */
+  extension: string;
+}
+
+/**
+ * Academy-scoped only (never courseId-scoped) — same deliberate choice as
+ * `getBookCoverKey`: this lets an image be generated and uploaded to BEFORE
+ * the course row exists yet (the "Add course" form), with the key then
+ * passed straight into `createCourseSchema.imageRef` for `createCourse` to
+ * verify and persist in one step.
+ */
+export function getCourseImageKey({ academyId, extension }: CourseImageKeyInput): string {
+  return `academies/${academyId}/${COURSE_IMAGE_SEGMENT}/${randomUUID()}.${extension}`;
+}
+
+/** Same exact-shape gate as isAcademyLogoKey/isBookCoverKey — see their own doc comments. */
+export function isCourseImageKey(key: string, academyId: string): boolean {
+  const expectedPrefix = `academies/${academyId}/${COURSE_IMAGE_SEGMENT}/`;
   if (!key.startsWith(expectedPrefix)) {
     return false;
   }

@@ -70,7 +70,14 @@ export function NotificationPreferencesSection({ academyId, preferences }: Props
           return (
             <li
               key={preference.templateId}
-              className="flex items-center justify-between gap-4 rounded-control border border-border bg-app/40 px-3 py-2.5"
+              // Mobile responsiveness fix: a long humanized label (e.g.
+              // "Expense Approval Requested") next to the equally long
+              // "Required — cannot be turned off" mandatory caption had no
+              // way to wrap — on a narrow phone the two together easily
+              // exceeded the available width and overflowed horizontally.
+              // `flex-wrap` lets the toggle/caption drop to its own line
+              // instead.
+              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-control border border-border bg-app/40 px-3 py-2.5"
             >
               <span className="text-sm text-ink">{humanizeNotificationLabel(preference.templateId)}</span>
               {preference.mandatory ? (

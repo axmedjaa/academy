@@ -60,10 +60,10 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ i
       </Link>
 
       <Section className="flex flex-col gap-5 sm:flex-row sm:items-start">
-        {course.imageRef && (
+        {course.imageUrl && (
           // eslint-disable-next-line @next/next/no-img-element -- see app/academy/id-cards/id-card-visual.tsx precedent
           <img
-            src={course.imageRef}
+            src={course.imageUrl}
             alt={`${course.name} course cover`}
             className="h-32 w-full shrink-0 rounded-md object-cover sm:w-52"
           />

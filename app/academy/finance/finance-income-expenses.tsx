@@ -23,6 +23,7 @@ import {
   EmptyState,
   ErrorMessage,
   Field,
+  FormDialog,
   Section,
   TableWrap,
   inputClass,
@@ -118,6 +119,8 @@ export function FinanceIncomeExpenses({
   const [reversalReason, setReversalReason] = useState("");
   const [adjustAmount, setAdjustAmount] = useState("");
   const [reversedKeys, setReversedKeys] = useState<Set<string>>(new Set());
+  const reversingIncome = income?.find((record) => `income:${record.id}` === reversingKey) ?? null;
+  const reversingExpense = expenses?.find((record) => `expense:${record.id}` === reversingKey) ?? null;
 
   async function handleSubmitForApproval(expenseRecordId: string) {
     setBusyExpenseId(expenseRecordId);
@@ -202,58 +205,8 @@ export function FinanceIncomeExpenses({
     });
   }
 
-  function ReversalControls({
-    rowKey,
-    canReverse,
-    onConfirm,
-  }: {
-    rowKey: string;
-    canReverse: boolean;
-    onConfirm: (mode: "reverse" | "adjust") => void;
-  }) {
+  function ReversalControls({ rowKey, canReverse }: { rowKey: string; canReverse: boolean }) {
     if (!canReverse) return <span className="text-muted">—</span>;
-    if (reversingKey === rowKey) {
-      return (
-        <div className="flex min-w-[220px] flex-col gap-2">
-          {reversalMode === "adjust" && (
-            <input
-              type="number"
-              placeholder="Corrected amount (USD)"
-              min={0}
-              step="0.01"
-              value={adjustAmount}
-              onChange={(event) => setAdjustAmount(event.target.value)}
-              className={`${inputClass} py-1.5`}
-            />
-          )}
-          <input
-            type="text"
-            placeholder="Reason (required)"
-            value={reversalReason}
-            onChange={(event) => setReversalReason(event.target.value)}
-            className={`${inputClass} py-1.5`}
-          />
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant="danger"
-              className="px-2.5 py-1 text-xs"
-              disabled={
-                isReversalPending ||
-                reversalReason.trim() === "" ||
-                (reversalMode === "adjust" && adjustAmount.trim() === "")
-              }
-              onClick={() => onConfirm(reversalMode ?? "reverse")}
-            >
-              {isReversalPending ? "Working..." : reversalMode === "adjust" ? "Confirm adjustment" : "Confirm reversal"}
-            </Button>
-            <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" onClick={cancelReversal}>
-              Back
-            </Button>
-          </div>
-        </div>
-      );
-    }
     return (
       <div className="flex flex-wrap gap-2">
         <Button
@@ -311,6 +264,57 @@ export function FinanceIncomeExpenses({
         </div>
       )}
 
+      {(reversingIncome || reversingExpense) && (
+        <FormDialog
+          open={reversingKey !== null}
+          onOpenChange={(nextOpen) => !nextOpen && cancelReversal()}
+          title={`${reversalMode === "adjust" ? "Adjust" : "Reverse"} ${reversingIncome ? "income" : "expense"} — ${(reversingIncome ?? reversingExpense)!.category}`}
+        >
+          <div className="flex flex-col gap-3">
+            {reversalMode === "adjust" && (
+              <Field label="Corrected amount (USD)">
+                <input
+                  type="number"
+                  placeholder="0.00"
+                  min={0}
+                  step="0.01"
+                  value={adjustAmount}
+                  onChange={(event) => setAdjustAmount(event.target.value)}
+                  className={inputClass}
+                />
+              </Field>
+            )}
+            <Field label="Reason (required)">
+              <input
+                type="text"
+                value={reversalReason}
+                onChange={(event) => setReversalReason(event.target.value)}
+                className={inputClass}
+              />
+            </Field>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="danger"
+                disabled={
+                  isReversalPending ||
+                  reversalReason.trim() === "" ||
+                  (reversalMode === "adjust" && adjustAmount.trim() === "")
+                }
+                onClick={() =>
+                  reversingIncome ? confirmIncomeReversal(reversingIncome.id) : reversingExpense && confirmExpenseReversal(reversingExpense.id)
+                }
+              >
+                {isReversalPending ? "Working..." : reversalMode === "adjust" ? "Confirm adjustment" : "Confirm reversal"}
+              </Button>
+              <Button type="button" variant="secondary" onClick={cancelReversal}>
+                Back
+              </Button>
+            </div>
+          </div>
+        </FormDialog>
+      )}
+
       {tab === "income" && income !== null && (
         <div key="income" className="motion-safe:animate-fade-in">
           {income.length === 0 ? (
@@ -342,11 +346,7 @@ export function FinanceIncomeExpenses({
                       </td>
                       {incomeCanCreate && (
                         <td className={td}>
-                          <ReversalControls
-                            rowKey={rowKey}
-                            canReverse={canReverse}
-                            onConfirm={() => confirmIncomeReversal(record.id)}
-                          />
+                          <ReversalControls rowKey={rowKey} canReverse={canReverse} />
                         </td>
                       )}
                     </tr>
@@ -470,11 +470,7 @@ export function FinanceIncomeExpenses({
                       )}
                       {expenseCanApprove && (
                         <td className={td}>
-                          <ReversalControls
-                            rowKey={rowKey}
-                            canReverse={canReverse}
-                            onConfirm={() => confirmExpenseReversal(record.id)}
-                          />
+                          <ReversalControls rowKey={rowKey} canReverse={canReverse} />
                         </td>
                       )}
                     </tr>

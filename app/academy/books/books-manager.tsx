@@ -12,7 +12,7 @@ import {
 } from "@/lib/academies/books-actions";
 import { createBookSaleAction } from "@/lib/academies/book-sales-actions";
 import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
-import { Badge, Button, ErrorMessage, Field, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, ErrorMessage, Field, FormDialog, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
 import { dollarsToCents } from "@/lib/ui/money";
@@ -295,6 +295,11 @@ function BookRow({ book, coverUrl, canManage, studentOptions, isSelling, onToggl
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [togglingStatus, setTogglingStatus] = useState(false);
+  // Full-view preview, same pattern as the student photo preview in
+  // app/academy/students/students-list.tsx — only ever opened by clicking
+  // an actual cover thumbnail (see the button below), never for a "No
+  // cover" placeholder.
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   async function handleCoverChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -351,8 +356,15 @@ function BookRow({ book, coverUrl, canManage, studentOptions, isSelling, onToggl
         <td className={td}>
           <div className="flex h-12 w-10 items-center justify-center overflow-hidden rounded border border-border bg-surface">
             {coverUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL, same convention as academy-logo-upload.tsx.
-              <img src={coverUrl} alt={`${book.name} cover`} className="h-full w-full object-cover" />
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(true)}
+                aria-label={`View ${book.name}'s cover`}
+                className="block h-full w-full overflow-hidden transition-opacity duration-150 hover:opacity-90 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL, same convention as academy-logo-upload.tsx. */}
+                <img src={coverUrl} alt={`${book.name} cover`} className="h-full w-full object-cover" />
+              </button>
             ) : (
               <span className="text-[10px] text-muted">No cover</span>
             )}
@@ -386,12 +398,35 @@ function BookRow({ book, coverUrl, canManage, studentOptions, isSelling, onToggl
           </td>
         )}
       </tr>
-      {isSelling && (
-        <tr>
-          <td colSpan={canManage ? 6 : 5} className="border-b border-border bg-app px-4 py-4">
-            <SellForm book={book} studentOptions={studentOptions} onDone={onDone} />
-          </td>
-        </tr>
+      {/* Mobile responsiveness fix: this used to render as a second <tr>
+       * inside this table — but TableWrap's table has `min-w-[640px]` and
+       * `overflow-x-auto`, so a form embedded in one of its cells inherited
+       * that same horizontal scroll, forcing a phone user to scroll
+       * sideways just to see/use the Buy form's own fields. A dialog
+       * escapes the table's scroll container entirely (Radix portals its
+       * content to the document body), so it's centered and full-width-
+       * minus-margins on any screen size regardless of how wide the table
+       * itself is. */}
+      <FormDialog
+        open={isSelling}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) onToggleSell();
+        }}
+        title={`Buy — ${book.name}`}
+        className="max-w-xl"
+      >
+        <SellForm book={book} studentOptions={studentOptions} onDone={onDone} onCancel={onToggleSell} />
+      </FormDialog>
+      {coverUrl && (
+        <FormDialog open={previewOpen} onOpenChange={setPreviewOpen} title={`${book.name}'s cover`}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL, same convention as academy-logo-upload.tsx. */}
+          <img src={coverUrl} alt={`${book.name} cover`} className="max-h-[70vh] w-full rounded-md object-contain" />
+          <div className="mt-4 flex justify-end">
+            <Button type="button" variant="secondary" onClick={() => setPreviewOpen(false)}>
+              Close
+            </Button>
+          </div>
+        </FormDialog>
       )}
     </>
   );
@@ -404,7 +439,22 @@ function nowForDateTimeLocal(): string {
   return now.toISOString().slice(0, 16);
 }
 
-function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentOptions: StudentPickerOption[]; onDone: () => void }) {
+function SellForm({
+  book,
+  studentOptions,
+  onDone,
+  onCancel,
+}: {
+  book: BookRecord;
+  studentOptions: StudentPickerOption[];
+  onDone: () => void;
+  /** Closes the dialog without recording anything — the row's own toggle
+   * (now that this form lives in a dialog, it needs its own visible
+   * Cancel button rather than relying on the row's "Buy"/"Cancel" label
+   * alone, same Save/Cancel pair convention as every other FormDialog
+   * form in this app). */
+  onCancel: () => void;
+}) {
   const [buyerType, setBuyerType] = useState<"student" | "other_person">("student");
   const [studentId, setStudentId] = useState("");
   const [otherBuyerName, setOtherBuyerName] = useState("");
@@ -596,9 +646,12 @@ function SellForm({ book, studentOptions, onDone }: { book: BookRecord; studentO
           <ErrorMessage message={error} />
         </div>
       )}
-      <div className="sm:col-span-3">
+      <div className="flex gap-2 sm:col-span-3">
         <Button type="button" disabled={submitting} onClick={handleSubmit}>
           {submitting ? "Recording..." : "Buy"}
+        </Button>
+        <Button type="button" variant="secondary" disabled={submitting} onClick={onCancel}>
+          Cancel
         </Button>
       </div>
     </div>

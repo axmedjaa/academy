@@ -10,7 +10,7 @@ import {
   recordFeePeriodPaymentAction,
   setEnrollmentFeeScheduleAction,
 } from "@/lib/academies/fee-periods-actions";
-import { Badge, Button, EmptyState, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, ErrorMessage, Field, FormDialog, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
 import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
@@ -338,13 +338,8 @@ function PeriodRow({
         {canManage && (
           <td className={`${td} align-top`}>
             {period.remainingCents > 0 ? (
-              <Button
-                type="button"
-                variant={open ? "secondary" : "primary"}
-                className="px-2.5 py-1 text-xs"
-                onClick={() => setOpen((value) => !value)}
-              >
-                {open ? "Cancel" : "Record Payment"}
+              <Button type="button" className="px-2.5 py-1 text-xs" onClick={() => setOpen(true)}>
+                Record Payment
               </Button>
             ) : (
               <span className="text-xs text-muted">—</span>
@@ -352,21 +347,21 @@ function PeriodRow({
           </td>
         )}
       </tr>
-      {open && (
-        <tr>
-          <td colSpan={canManage ? 7 : 6} className={`${td} bg-app`}>
-            <PeriodPaymentForm
-              studentId={studentId}
-              period={period}
-              onDone={() => {
-                setOpen(false);
-                onRecorded();
-              }}
-              onCancel={() => setOpen(false)}
-            />
-          </td>
-        </tr>
-      )}
+      <FormDialog
+        open={open}
+        onOpenChange={setOpen}
+        title={`Record payment — ${period.periodStart} – ${period.periodEnd}`}
+      >
+        <PeriodPaymentForm
+          studentId={studentId}
+          period={period}
+          onDone={() => {
+            setOpen(false);
+            onRecorded();
+          }}
+          onCancel={() => setOpen(false)}
+        />
+      </FormDialog>
     </>
   );
 }

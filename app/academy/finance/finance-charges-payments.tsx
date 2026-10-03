@@ -15,6 +15,7 @@ import {
   EmptyState,
   ErrorMessage,
   Field,
+  FormDialog,
   LinkButton,
   Section,
   TableWrap,
@@ -115,6 +116,7 @@ export function FinanceChargesPayments({
   const [reversalReason, setReversalReason] = useState("");
   const [adjustAmount, setAdjustAmount] = useState("");
   const [reversedIds, setReversedIds] = useState<Set<string>>(new Set());
+  const reversingPayment = payments.find((payment) => payment.id === reversalRowId) ?? null;
 
   useEffect(() => {
     if (createChargeState.ok) {
@@ -337,54 +339,6 @@ export function FinanceChargesPayments({
                         <td className={td}>
                           {!canReverseThisRow ? (
                             <span className="text-muted">—</span>
-                          ) : reversalRowId === payment.id ? (
-                            <div className="flex min-w-[220px] flex-col gap-2">
-                              {reversalMode === "adjust" && (
-                                <input
-                                  type="number"
-                                  placeholder="Corrected amount (USD)"
-                                  min={0}
-                                  step="0.01"
-                                  value={adjustAmount}
-                                  onChange={(event) => setAdjustAmount(event.target.value)}
-                                  className={`${inputClass} py-1.5`}
-                                />
-                              )}
-                              <input
-                                type="text"
-                                placeholder="Reason (required)"
-                                value={reversalReason}
-                                onChange={(event) => setReversalReason(event.target.value)}
-                                className={`${inputClass} py-1.5`}
-                              />
-                              <div className="flex gap-2">
-                                <Button
-                                  type="button"
-                                  variant="danger"
-                                  className="px-2.5 py-1 text-xs"
-                                  disabled={
-                                    isReversalPending ||
-                                    reversalReason.trim() === "" ||
-                                    (reversalMode === "adjust" && adjustAmount.trim() === "")
-                                  }
-                                  onClick={() => confirmReversal(payment.id)}
-                                >
-                                  {isReversalPending
-                                    ? "Working..."
-                                    : reversalMode === "adjust"
-                                      ? "Confirm adjustment"
-                                      : "Confirm reversal"}
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  className="px-2.5 py-1 text-xs"
-                                  onClick={cancelReversal}
-                                >
-                                  Back
-                                </Button>
-                              </div>
-                            </div>
                           ) : (
                             <div className="flex flex-wrap gap-2" title={isSelfRecorded ? SELF_REVERSAL_TOOLTIP : undefined}>
                               <Button
@@ -424,6 +378,68 @@ export function FinanceChargesPayments({
             <div className="mt-3">
               <ErrorMessage message={reversalError} />
             </div>
+          )}
+
+          {/* Mobile responsiveness fix: this used to reveal inline inside
+           * the Reverse/Adjust table cell — a `min-w-[220px]` mini-form
+           * (two inputs + two buttons) that either cramped the cell or
+           * widened the whole row inside TableWrap's already
+           * horizontally-scrolling (min-w-[640px]) table, same underlying
+           * problem as Books' old inline "Buy" row and Certificates' old
+           * inline "Cancel" reveal. A dialog escapes that scroll container
+           * entirely. One dialog shared across every row (reversalRowId
+           * picks which payment it's acting on), not one per row. */}
+          {reversingPayment && (
+            <FormDialog
+              open={reversalRowId !== null}
+              onOpenChange={(nextOpen) => !nextOpen && cancelReversal()}
+              title={`${reversalMode === "adjust" ? "Adjust" : "Reverse"} payment — ${studentLabel(reversingPayment.studentId)}`}
+            >
+              <div className="flex flex-col gap-3">
+                {reversalMode === "adjust" && (
+                  <Field label="Corrected amount (USD)">
+                    <input
+                      type="number"
+                      placeholder="0.00"
+                      min={0}
+                      step="0.01"
+                      value={adjustAmount}
+                      onChange={(event) => setAdjustAmount(event.target.value)}
+                      className={inputClass}
+                    />
+                  </Field>
+                )}
+                <Field label="Reason (required)">
+                  <input
+                    type="text"
+                    value={reversalReason}
+                    onChange={(event) => setReversalReason(event.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="danger"
+                    disabled={
+                      isReversalPending ||
+                      reversalReason.trim() === "" ||
+                      (reversalMode === "adjust" && adjustAmount.trim() === "")
+                    }
+                    onClick={() => confirmReversal(reversingPayment.id)}
+                  >
+                    {isReversalPending
+                      ? "Working..."
+                      : reversalMode === "adjust"
+                        ? "Confirm adjustment"
+                        : "Confirm reversal"}
+                  </Button>
+                  <Button type="button" variant="secondary" onClick={cancelReversal}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </FormDialog>
           )}
 
           {canManage && (
