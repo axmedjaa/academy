@@ -13,8 +13,10 @@ import {
   branches,
   certificates,
   courses,
+  enrollmentFeeSchedules,
   examResults,
   exams,
+  feePeriods,
   gradeConfigurations,
   programs,
   staffBranchAssignments,
@@ -36,6 +38,7 @@ import {
   searchStudents,
   updateStudent,
 } from "./students";
+import { enrollStudentInBatch, type PaymentPlanInput } from "./batch-assignments";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -345,6 +348,14 @@ afterAll(async () => {
     await db.delete(gradeConfigurations).where(eq(gradeConfigurations.academyId, academyId));
     await db.delete(studentPayments).where(eq(studentPayments.academyId, academyId));
     await db.delete(studentCharges).where(eq(studentCharges.academyId, academyId));
+    // feePeriods/enrollmentFeeSchedules: added once this file's own
+    // Admissions tests started calling the REAL enrollStudentInBatch
+    // (not just the test-only enrollStudentDirect insert helper) — that
+    // function atomically creates both alongside batch_enrollments, so
+    // they must be deleted before it, same order as
+    // batch-assignments.test.ts's own identical cleanup block.
+    await db.delete(feePeriods).where(eq(feePeriods.academyId, academyId));
+    await db.delete(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.academyId, academyId));
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
     await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
@@ -1032,53 +1043,93 @@ describe("subscription-state gating", () => {
   });
 });
 
-describe("getAdmissionsView — recently-registered/pending-onboarding subset", () => {
-  it("includes a student with zero documents regardless of age, excludes a settled old student", async () => {
+describe("getAdmissionsView — applied (not-yet-enrolled) candidates", () => {
+  it("includes a registered student with no active enrollment, regardless of how long ago they registered", async () => {
     const { academyId, userId, context } = await setupAcademy("academy_owner");
     const branchId = await insertBranchDirect(academyId);
     const oldDate = new Date(Date.now() - 90 * DAY_MS);
 
-    const pendingDocs = await insertStudentDirect(academyId, branchId, userId, {
+    // Old registration date — proves the old recency-based inclusion
+    // window no longer gates this at all. Not enrolled anywhere.
+    const applied = await insertStudentDirect(academyId, branchId, userId, {
       createdAt: oldDate,
-    });
-    const settled = await insertStudentDirect(academyId, branchId, userId, {
-      createdAt: oldDate,
-    });
-    await db.insert(studentDocuments).values({
-      academyId,
-      studentId: settled.id,
-      documentType: "id_copy",
-      fileRef: "ref-1",
-      uploadedBy: userId,
     });
 
     const result = await getAdmissionsView(context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const ids = result.data.rows.map((r) => r.id);
-    expect(ids).toContain(pendingDocs.id);
-    expect(ids).not.toContain(settled.id);
+    const row = result.data.rows.find((r) => r.id === applied.id);
+    expect(row).toBeDefined();
+    expect(row?.isEnrolled).toBe(false);
+    expect(row?.daysSinceRegistered).toBeGreaterThanOrEqual(90);
   });
 
-  it("includes a recently-registered student even if fully documented", async () => {
+  it("excludes a student with an active batch enrollment — the actual fix: enrollment, not documents, now ends admissions candidacy", async () => {
     const { academyId, userId, context } = await setupAcademy("academy_owner");
     const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
 
-    const recent = await insertStudentDirect(academyId, branchId, userId);
-    await db.insert(studentDocuments).values({
-      academyId,
-      studentId: recent.id,
-      documentType: "id_copy",
-      fileRef: "ref-1",
-      uploadedBy: userId,
-    });
+    const enrolled = await insertStudentDirect(academyId, branchId, userId);
+    await enrollStudentDirect(academyId, batchId, enrolled.id);
 
     const result = await getAdmissionsView(context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.rows.map((r) => r.id)).toContain(recent.id);
-    const row = result.data.rows.find((r) => r.id === recent.id);
-    expect(row?.hasDocuments).toBe(true);
+    expect(result.data.rows.map((r) => r.id)).not.toContain(enrolled.id);
+  });
+
+  it("a student is excluded from admissions once enrolled, with zero student_documents rows — enrollment never depended on documents, and never will under this model", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+
+    const student = await insertStudentDirect(academyId, branchId, userId);
+    await enrollStudentDirect(academyId, batchId, student.id);
+
+    const documentRows = await db
+      .select()
+      .from(studentDocuments)
+      .where(eq(studentDocuments.studentId, student.id));
+    expect(documentRows).toHaveLength(0);
+
+    const result = await getAdmissionsView(context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.rows.map((r) => r.id)).not.toContain(student.id);
+  });
+
+  it("an Admissions candidate can be enrolled via the real enrollStudentInBatch (the same function the UI's Enroll dialog calls), and immediately disappears from Admissions as a direct result", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const courseId = await insertProgramAndCourse(academyId);
+    const batchId = await insertBatchDirect(academyId, branchId, courseId);
+
+    const student = await insertStudentDirect(academyId, branchId, userId);
+
+    // Step 1: appears in Admissions before any enrollment.
+    const before = await getAdmissionsView(context);
+    expect(before.ok).toBe(true);
+    if (!before.ok) return;
+    expect(before.data.rows.map((r) => r.id)).toContain(student.id);
+
+    // Step 2: enroll via the real production function — requires a
+    // payment plan (rejected without one, per the existing, unchanged
+    // "no enrollment without a payment plan" architecture decision), the
+    // same end-to-end path app/academy/admissions/admissions-list.tsx's
+    // Enroll dialog -> updateStudentEnrollment -> enrollStudentInBatch
+    // walks.
+    const paymentPlan: PaymentPlanInput = { intervalMonths: 1, amountCents: 10_000 };
+    const enrollResult = await enrollStudentInBatch(context, { batchId, studentId: student.id, paymentPlan });
+    expect(enrollResult.ok).toBe(true);
+
+    // Step 3: gone from Admissions — no separate "mark as enrolled" step,
+    // this is purely a consequence of getAdmissionsView's own query.
+    const after = await getAdmissionsView(context);
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.data.rows.map((r) => r.id)).not.toContain(student.id);
   });
 
   it("excludes archived students", async () => {
@@ -1108,7 +1159,7 @@ describe("getAdmissionsView — recently-registered/pending-onboarding subset", 
     expect(result.data.rows.map((r) => r.id).sort()).toEqual([candidateA.id, candidateB.id].sort());
   });
 
-  it("Trainer only sees admissions candidates enrolled in a batch they teach, via the same shared resolveScope", async () => {
+  it("Trainer sees a withdrawn (no longer actively enrolled) former student as an admissions candidate again, but not a currently-enrolled one", async () => {
     const { academyId, userId, context } = await setupAcademy("trainer");
     const branchId = await insertBranchDirect(academyId);
     const courseId = await insertProgramAndCourse(academyId);
@@ -1116,16 +1167,38 @@ describe("getAdmissionsView — recently-registered/pending-onboarding subset", 
     await assignTrainerToBatchDirect(academyId, userId, batchId);
 
     const creatorId = await createUser();
-    const taught = await insertStudentDirect(academyId, branchId, creatorId);
-    await enrollStudentDirect(academyId, batchId, taught.id);
-    // Same branch, admissions-eligible, but not enrolled in anything this
-    // Trainer teaches.
+
+    // Currently enrolled in a batch this Trainer teaches — still
+    // Trainer-visible (getTrainerVisibleStudentIds has no status filter on
+    // batch_enrollments), but no longer an admissions candidate: they have
+    // an ACTIVE enrollment. This is the case the old test here got wrong —
+    // it asserted this student SHOULD appear in Admissions, which was only
+    // true because the old model never actually consulted enrollment at
+    // all, not because an enrolled student is a genuine admissions
+    // candidate.
+    const currentlyEnrolled = await insertStudentDirect(academyId, branchId, creatorId);
+    await enrollStudentDirect(academyId, batchId, currentlyEnrolled.id);
+
+    // Previously enrolled in the same batch, then withdrawn — still
+    // Trainer-visible for the same reason, and genuinely a candidate again
+    // under the new model: no ACTIVE enrollment anywhere.
+    const withdrawn = await insertStudentDirect(academyId, branchId, creatorId);
+    await db.insert(batchEnrollments).values({
+      academyId,
+      batchId,
+      studentId: withdrawn.id,
+      status: "withdrawn",
+    });
+
+    // Same branch, but never enrolled in anything this Trainer teaches —
+    // not Trainer-visible at all (resolveScope's Trainer branch excludes
+    // them before getAdmissionsView's own enrollment check ever runs).
     await insertStudentDirect(academyId, branchId, creatorId);
 
     const result = await getAdmissionsView(context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.rows.map((r) => r.id)).toEqual([taught.id]);
+    expect(result.data.rows.map((r) => r.id)).toEqual([withdrawn.id]);
   });
 });
 

@@ -76,7 +76,7 @@ const INSTRUCTOR_NOT_FOUND: CourseActionError = {
 // only an uploaded key is ever re-verified/resolved against R2.
 // ===========================================================================
 
-export const MAX_COURSE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+export const MAX_COURSE_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_COURSE_IMAGE_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 type AllowedCourseImageContentType = (typeof ALLOWED_COURSE_IMAGE_CONTENT_TYPES)[number];
 const COURSE_IMAGE_EXTENSION_BY_CONTENT_TYPE: Record<AllowedCourseImageContentType, string> = {
@@ -90,7 +90,7 @@ function isAllowedCourseImageContentType(value: string): value is AllowedCourseI
 }
 
 const INVALID_IMAGE_FORMAT: CourseActionError = { code: "validation", message: "Course image must be JPEG, PNG, or WebP." };
-const IMAGE_TOO_LARGE: CourseActionError = { code: "validation", message: "Course image must be 5 MB or smaller." };
+const IMAGE_TOO_LARGE: CourseActionError = { code: "validation", message: "Course image must be 10 MB or smaller." };
 const IMAGE_VERIFICATION_FAILED: CourseActionError = {
   code: "validation",
   message: "The image upload could not be verified.",

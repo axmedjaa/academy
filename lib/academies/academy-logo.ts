@@ -26,7 +26,7 @@ import type { AuthContext } from "@/lib/auth/auth-context";
  * below.
  */
 
-export const MAX_LOGO_SIZE_BYTES = 5 * 1024 * 1024;
+export const MAX_LOGO_SIZE_BYTES = 10 * 1024 * 1024;
 
 const ALLOWED_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 type AllowedLogoContentType = (typeof ALLOWED_CONTENT_TYPES)[number];
@@ -66,7 +66,7 @@ const INVALID_FORMAT: AcademyLogoActionError = {
 
 const TOO_LARGE: AcademyLogoActionError = {
   code: "validation",
-  message: "Logo must be 5 MB or smaller.",
+  message: "Logo must be 10 MB or smaller.",
 };
 
 const VERIFICATION_FAILED: AcademyLogoActionError = {

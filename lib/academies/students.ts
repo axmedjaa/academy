@@ -749,7 +749,7 @@ export async function updateStudent(
 // dedicated column/flow rather than reusing student_id_cards.photo_file_ref.
 // ---------------------------------------------------------------------
 
-export const MAX_STUDENT_PHOTO_SIZE_BYTES = 5 * 1024 * 1024;
+export const MAX_STUDENT_PHOTO_SIZE_BYTES = 10 * 1024 * 1024;
 
 const ALLOWED_PHOTO_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 type AllowedPhotoContentType = (typeof ALLOWED_PHOTO_CONTENT_TYPES)[number];
@@ -771,7 +771,7 @@ const INVALID_PHOTO_FORMAT: StudentActionError = {
 
 const PHOTO_TOO_LARGE: StudentActionError = {
   code: "validation",
-  message: "Photo must be 5 MB or smaller.",
+  message: "Photo must be 10 MB or smaller.",
 };
 
 const PHOTO_VERIFICATION_FAILED: StudentActionError = {
@@ -1133,48 +1133,59 @@ export async function getStudentPhotoUrlsByIds(
 //
 // DESIGN.md §9.2 describes `/academy/admissions` as "A (board/pipeline
 // variant) | Applied -> Documents Pending -> Enrolled stages, quick advance
-// action per row" — but the `students` table this item must read from
-// (Item 37's schema, out of this item's write scope) has no pipeline-stage
-// column at all: just `status enum(active, archived)`, no
-// applied/documents_pending/enrolled values anywhere in the schema or in
-// PLAN.md's Phase 2 §2 column list. Adding such a column is schema work
-// squarely outside this item's authorized file list
-// (lib/db/schema.ts is explicitly DO-NOT-TOUCH), so building the literal
-// 3-stage board DESIGN.md sketches isn't possible without another item's
-// migration.
+// action per row." The `students` table has no pipeline-stage column at
+// all (just `status enum(active, archived)`), so the literal 3-stage board
+// isn't buildable without a schema migration — out of scope here, same as
+// before.
 //
-// Judgment call (per this item's own brief, which explicitly allows this):
-// the admissions view here is a reasonable admissions-focused subset of
-// the same `students` rows, distinct from the plain `/academy/students`
-// list by:
+// Revised model (post-audit — see this session's admissions-workflow
+// audit): this used to also treat "zero `student_documents` rows" as a
+// "Documents Pending" stand-in, OR'd with recent registration, so a
+// student would supposedly fall off this list once "fully documented."
+// That never actually happened: nothing in this codebase ever creates a
+// `student_documents` row (no upload action or UI exists for it anywhere —
+// confirmed by grep), so `documentCount` was permanently zero for every
+// real student, which made the OR condition always true — every active
+// student stayed on this screen forever, including ones enrolled and
+// paying fees for years, since enrollment was never consulted at all.
+//
+// This now uses the one stage distinction that actually has real,
+// transactionally-guaranteed data behind it: enrollment.
+// `enrollStudentInBatch` (batch-assignments.ts) never creates a
+// `batch_enrollments` row without also creating that enrollment's payment
+// plan in the same transaction — so "has an active batch_enrollments row"
+// is a solid, already-enforced signal, unlike document presence.
 //   1. Scope: only `status = 'active'` students (an archived student was
-//      never an active admissions concern).
-//   2. Recency/pending-onboarding filter: a student is surfaced here only
-//      if EITHER (a) they were registered within the last
-//      `ADMISSIONS_RECENT_WINDOW_DAYS` days ("Applied" stand-in — someone
-//      just walked in), OR (b) they have zero `student_documents` rows at
-//      all yet ("Documents Pending" stand-in — registered but paperwork
-//      incomplete, regardless of age). A student who is neither recent nor
-//      missing documents reads as fully settled ("Enrolled" stand-in) and
-//      is left off this view — they still show up on the plain
-//      `/academy/students` list.
+//      never an active admissions concern) — unchanged.
+//   2. Inclusion: a student is surfaced here if they have NO active
+//      `batch_enrollments` row — i.e. registered but not yet enrolled in
+//      anything ("Applied"). The moment they're enrolled in a batch, they
+//      drop off this view — they still show up on the plain
+//      `/academy/students` list. This is the only inclusion rule now; the
+//      old recent-registration window (`ADMISSIONS_RECENT_WINDOW_DAYS`)
+//      no longer gates inclusion, since enrollment alone is the real
+//      signal — `daysSinceRegistered` is kept on the row as display-only
+//      info (how long an applicant has been waiting), computed directly
+//      from `now`/`createdAt`, no window constant needed.
 //   3. Ordering: newest registrations first (most actionable for an
-//      admissions worker), same as the plain list.
-//   4. Each row additionally reports `hasDocuments` and `daysSinceRegistered`
-//      so the UI can render a "Documents Pending" vs. "Recently applied"
-//      badge per row — the "quick advance action per row" DESIGN.md asks
-//      for has no real transition to perform without a stage column, so
-//      the closest honest equivalent this item offers is a quick link into
-//      the student's edit form (already `updateStudent`-backed) rather than
-//      a fabricated stage-advance action that would silently do nothing
-//      meaningful against the schema.
+//      admissions worker) — unchanged.
+//   4. Deliberately NOT changed: document gating is not implemented here
+//      (no upload UI/action exists, and none is added by this change —
+//      that's a separate, future feature, tracked as its own decision).
+//      `enrollStudentInBatch`, its payment-plan requirement, and every
+//      permission/branch/role scoping rule are untouched.
 // Same permission gating as searchStudents (Master Permission Matrix has no
 // separate row for "admissions" vs. "students" — one row covers both).
-export const ADMISSIONS_RECENT_WINDOW_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface AdmissionsRow extends StudentRecord {
-  hasDocuments: boolean;
+  /** Always `false` for every row this view returns — an enrolled student
+   * is excluded, not flagged (see this section's own module comment).
+   * Still exposed on the type (rather than omitted) so the shape stays
+   * self-documenting about what the stage signal actually is now. */
+  isEnrolled: boolean;
+  /** Display-only ("how long has this applicant been waiting") — no
+   * longer part of the inclusion decision, unlike the old model. */
   daysSinceRegistered: number;
 }
 
@@ -1224,42 +1235,45 @@ export async function getAdmissionsView(
     };
   }
 
-  const recentCutoff = new Date(now.getTime() - ADMISSIONS_RECENT_WINDOW_DAYS * DAY_MS);
-
   const where = and(...scope.conditions, eq(students.status, "active"));
 
-  // Left join + per-student document count, grouped, so "zero documents"
-  // is computable in one query rather than N+1 lookups. The recency/
-  // pending-onboarding decision itself (§ comment above) is then applied
-  // in JS rather than SQL, and pagination is applied after that filter —
-  // a deliberate simplicity tradeoff (documented, not an oversight): this
-  // view's candidate set is already narrowed to one academy's (or one
-  // branch's, for branch-limited roles) *active* students, which never
-  // approaches a scale where an in-memory filter/paginate is a real
-  // performance concern, and it avoids expressing "created_at >= X OR
-  // document_count = 0" as a HAVING clause mixed with a plain WHERE
-  // academy/branch/status scope.
+  // Left join + per-student ACTIVE-enrollment count, grouped, so "has an
+  // active enrollment" is computable in one tenant-scoped query rather
+  // than N+1 lookups — same shape as the old document-count query this
+  // replaces, just joined against the real enrollment signal instead.
+  // `and(studentId, academyId, status)` on the join condition (not a
+  // separate WHERE) is what makes this a LEFT join rather than silently
+  // becoming an INNER join: a student with zero enrollments at all must
+  // still appear with `activeEnrollmentCount = 0`, not disappear entirely.
+  // The exclusion itself is applied in JS after grouping, same "deliberate
+  // simplicity tradeoff" as before (this view's candidate set is already
+  // narrowed to one academy's — or one branch's, for branch-limited roles
+  // — *active* students, nowhere near a scale where an in-memory filter/
+  // paginate is a real performance concern).
   const rows = await db
     .select({
       student: students,
-      documentCount: count(studentDocuments.id),
+      activeEnrollmentCount: count(batchEnrollments.id),
     })
     .from(students)
-    .leftJoin(studentDocuments, eq(studentDocuments.studentId, students.id))
+    .leftJoin(
+      batchEnrollments,
+      and(
+        eq(batchEnrollments.studentId, students.id),
+        eq(batchEnrollments.academyId, students.academyId),
+        eq(batchEnrollments.status, "active"),
+      ),
+    )
     .where(where)
     .groupBy(students.id)
     .orderBy(desc(students.createdAt));
 
-  const filtered = rows.filter((row) => {
-    const recentlyRegistered = row.student.createdAt >= recentCutoff;
-    const hasDocuments = row.documentCount > 0;
-    return recentlyRegistered || !hasDocuments;
-  });
+  const filtered = rows.filter((row) => row.activeEnrollmentCount === 0);
 
   const totalCount = filtered.length;
   const pageRows = filtered.slice(offset, offset + pageSize).map((row) => ({
     ...toRecord(row.student),
-    hasDocuments: row.documentCount > 0,
+    isEnrolled: false,
     daysSinceRegistered: Math.floor(
       (now.getTime() - row.student.createdAt.getTime()) / DAY_MS,
     ),

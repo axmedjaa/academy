@@ -24,10 +24,45 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 
 /**
- * Student Fee Periods — recurring enrollment payments, student-centered.
- * See lib/db/schema.ts's module comment above `enrollmentFeeSchedules` for
- * the schema rationale (why fee periods are their own tables, and why paid/
- * remaining/status are computed at read time instead of stored).
+ * Student Fee Periods — a bounded, one-time course fee paid off in equal
+ * MONTHLY installments, student-centered. See lib/db/schema.ts's module
+ * comment above `enrollmentFeeSchedules` for the schema rationale (why fee
+ * periods are their own tables, and why paid/remaining/status are computed
+ * at read time instead of stored).
+ *
+ * ---------------------------------------------------------------------
+ * Payment schedule model — read this before touching any of the
+ * calculation/generation code below
+ * ---------------------------------------------------------------------
+ * `enrollment_fee_schedules.intervalMonths` (1/2/3/4/6/12) is the NUMBER OF
+ * EQUAL MONTHLY INSTALLMENTS the schedule's `amountCents` — the schedule's
+ * own TOTAL fee, for whichever phase of the enrollment's payment history is
+ * currently active (see `setEnrollmentFeeSchedule`'s own doc comment on how
+ * that total is derived across a schedule change) — is split into. "A
+ * 6-month schedule" means SIX separate monthly charges summing to the
+ * total (e.g. $36 over 6 months = $6/month × 6), never one lump
+ * charge covering a 6-month-long period. This is a deliberate correction:
+ * an earlier revision of this file treated `intervalMonths` as the LENGTH
+ * of a single period (so "6 months" generated one $36, 6-calendar-month-
+ * long `fee_periods` row) — that is exactly backwards from how an
+ * installment plan actually works and is no longer how this file behaves.
+ * Every `fee_periods` row this file ever generates spans EXACTLY one
+ * calendar month, full stop, regardless of `intervalMonths`; see
+ * `splitIntoMonthlyInstallments` (the one centralized, integer-cents
+ * installment calculation every caller must go through — never divide
+ * `amountCents` by `intervalMonths` inline anywhere else) and
+ * `generateFeePeriodsForEnrollment`'s own doc comment for the full model,
+ * including why a schedule is BOUNDED (exactly `intervalMonths`
+ * installments, never more) rather than an open-ended recurring charge.
+ *
+ * Four distinct concepts, never conflated:
+ *   - Schedule duration / installment count: `intervalMonths` (1..12).
+ *   - Payment frequency: always monthly — there is no other frequency.
+ *   - Monthly installment: `amountCents / intervalMonths`, rounded per
+ *     `splitIntoMonthlyInstallments` — what the student actually owes per
+ *     `fee_periods` row (`fee_periods.expectedAmountCents`).
+ *   - Total fee: `enrollment_fee_schedules.amountCents` — the schedule's
+ *     own total, never a per-period amount.
  *
  * ---------------------------------------------------------------------
  * Why fee-period payments reuse student_payments verbatim
@@ -177,6 +212,35 @@ function todayDateOnly(): string {
   return formatDateOnly({ y: now.getUTCFullYear(), m: now.getUTCMonth() + 1, d: now.getUTCDate() });
 }
 
+const SOMALIA_UTC_OFFSET_HOURS = 3;
+
+/**
+ * "Today," as a calendar date in this product's one supported market's own
+ * local time (Somalia, a fixed UTC+3 with no daylight-saving transitions —
+ * so a flat +3-hour shift of the current instant, then reading its
+ * calendar date in UTC terms, is a correct, deterministic way to compute
+ * "today, Somalia time" regardless of what timezone the SERVER process
+ * itself happens to run in (very likely UTC, not UTC+3, in most
+ * deployments). This is deliberately a SEPARATE function from
+ * `todayDateOnly()` above (plain UTC) rather than a replacement for it:
+ * `todayDateOnly()`'s existing call sites (overdue-status reads, payment
+ * summaries) are payment-calculation logic this task was explicitly told
+ * not to change, and plain UTC vs. Somalia-local only disagree for a
+ * 3-hour window once a day (21:00-24:00 UTC) — not worth the risk of
+ * touching that unrelated logic to fix a bug this task didn't report there.
+ *
+ * Exported specifically for `enrollStudentInBatch`'s (batch-assignments.ts)
+ * anchor-date default — see that call site's own comment for why
+ * enrollment specifically needs the real Somalia calendar day: an
+ * enrollment recorded late at night UTC could otherwise anchor to
+ * "yesterday" by Somalia's own clock, one full calendar day off from the
+ * staff member's and student's actual local "today."
+ */
+export function todayDateOnlyInAcademyTimezone(): string {
+  const shifted = new Date(Date.now() + SOMALIA_UTC_OFFSET_HOURS * 60 * 60 * 1000);
+  return formatDateOnly({ y: shifted.getUTCFullYear(), m: shifted.getUTCMonth() + 1, d: shifted.getUTCDate() });
+}
+
 // ===========================================================================
 // Enrollment fee schedule
 // ===========================================================================
@@ -194,7 +258,18 @@ const intervalMonthsSchema = z.union(
 
 export const setEnrollmentFeeScheduleSchema = z.object({
   enrollmentId: z.string().uuid("Invalid enrollment id"),
+  // The number of equal MONTHLY installments — see this file's own module
+  // comment ("Payment schedule model"). Once the enrollment already has any
+  // started installment, `amountCents`/`anchorDate` below are overridden
+  // server-side regardless of what's submitted (see
+  // `setEnrollmentFeeSchedule`'s own doc comment) — only `intervalMonths`
+  // is ever actually taken from the caller in that case.
   intervalMonths: intervalMonthsSchema,
+  // The schedule's TOTAL fee (never a per-installment amount) — see this
+  // file's module comment. Honored as-is only when there is no existing
+  // schedule, or the existing one has no started installments yet;
+  // otherwise server-computed (remaining balance) — see
+  // `setEnrollmentFeeSchedule`.
   amountCents: z.number().int("Amount must be a whole number of cents").positive("Amount must be greater than zero"),
   currency: z
     .string()
@@ -211,10 +286,20 @@ export interface EnrollmentFeeScheduleRecord {
   id: string;
   academyId: string;
   enrollmentId: string;
+  /** Number of equal monthly installments — see this file's module
+   * comment ("Payment schedule model"). NOT a period length. */
   intervalMonths: number;
+  /** The schedule's TOTAL fee — NOT a per-installment amount. Use
+   * `monthlyInstallmentCents` for the per-month figure. */
   amountCents: number;
   currency: string;
   anchorDate: string;
+  /** Derived, never stored: `amountCents` split evenly across
+   * `intervalMonths` installments (last one absorbs the remainder) — see
+   * `splitIntoMonthlyInstallments`. This is "the monthly payment" the UI
+   * should show (e.g. "$6.00/month"), distinct from `amountCents` (the
+   * total). */
+  monthlyInstallmentCents: number;
 }
 
 function toScheduleRecord(row: typeof enrollmentFeeSchedules.$inferSelect): EnrollmentFeeScheduleRecord {
@@ -226,6 +311,7 @@ function toScheduleRecord(row: typeof enrollmentFeeSchedules.$inferSelect): Enro
     amountCents: row.amountCents,
     currency: row.currency,
     anchorDate: row.anchorDate,
+    monthlyInstallmentCents: splitIntoMonthlyInstallments(row.amountCents, row.intervalMonths)[0],
   };
 }
 
@@ -263,8 +349,76 @@ export type SetEnrollmentFeeScheduleResult =
   | { ok: true; schedule: EnrollmentFeeScheduleRecord }
   | { ok: false; error: FeePeriodActionError };
 
-/** Creates or updates the one fee schedule an enrollment may have. Manager/
- * Finance Officer only (`canManage`). */
+/**
+ * Creates or updates the one fee schedule an enrollment may have. Manager/
+ * Finance Officer only (`canManage`).
+ *
+ * ---------------------------------------------------------------------
+ * Changing an existing schedule: effective-date rule + auto-carried
+ * remaining balance (approved product decision)
+ * ---------------------------------------------------------------------
+ * A period that has already STARTED (`periodStart <= today`) is never
+ * touched by a schedule change, whether it's paid, partially paid, or
+ * still unpaid/overdue — it stays exactly as generated under the OLD
+ * schedule, full stop. That is the entire "protect financial history"
+ * story; there is no separate carve-out needed for "paid" specifically,
+ * because a period that has started but is still unpaid (the exact case
+ * this product's own task spec calls out as "do not silently overwrite
+ * the current unpaid period") is equally protected by the same
+ * `periodStart <= today` test.
+ *
+ * When any such started period already exists, the caller's own
+ * `amountCents`/`anchorDate` are NEVER used directly — both are
+ * server-computed, authoritatively, so an admin changing the schedule
+ * never needs to do (or risk getting wrong) the "how much is actually
+ * left, and when does the new plan actually start" arithmetic themselves:
+ *   - `amountCents` becomes `previousTotal - paidSoFar` (the CURRENT
+ *     schedule's own total fee, minus whatever has actually been
+ *     approved-paid against its own already-started installments) — but
+ *     only while that remainder is still positive. This is the
+ *     "auto-carry the remaining balance" rule: restructuring a payment
+ *     plan never changes the total a student ultimately owes for the
+ *     course, only how the UNPAID remainder gets split going forward. If
+ *     the current schedule is already fully paid off, there is nothing
+ *     left to carry (and a computed $0 total would violate the schema's
+ *     own "amount must be positive" check besides) — the caller's own
+ *     submitted `amountCents` is used instead, exactly as a genuine
+ *     first-time setup would.
+ *   - `anchorDate` becomes the day after the latest already-started
+ *     period's own end date — "the new plan begins at the start of the
+ *     next not-yet-started period," never today, never wherever the form
+ *     happened to submit — regardless of whether the remaining-balance
+ *     case above applies, since this is what prevents a new period from
+ *     ever overlapping an already-started one.
+ * Only `intervalMonths` (the new installment count) is ever actually
+ * taken from the caller in that case. On a genuine first-time "Set fee
+ * schedule" (no existing schedule at all), or when editing a schedule
+ * that has no started installments yet (nothing paid, nothing to
+ * protect), the caller's `amountCents`/`anchorDate` are used exactly as
+ * submitted — there is no "remaining balance" to carry when nothing has
+ * started.
+ *
+ * Separately: any NOT-YET-STARTED period (`periodStart > today`) — e.g.
+ * the later installments of a 6-month plan that were generated eagerly
+ * when it was first set up, before the admin shortens or restructures it
+ * — is deleted and replaced under the new schedule, but ONLY if no
+ * payment was ever allocated to it (nothing stops staff from recording an
+ * advance payment against a not-yet-due period via its own per-row
+ * "Record Payment" action, so this is a real possibility, not a
+ * theoretical one). Any such period with so much as one
+ * `payment_allocations` row is left exactly alone, matching the DB's own
+ * FK (`payment_allocations.fee_period_id` has no ON DELETE clause —
+ * Postgres would refuse the delete outright if this check were ever
+ * skipped; this check exists so that refusal never happens as an
+ * unhandled error).
+ *
+ * Once stale not-yet-started periods are gone and `anchorDate` has been
+ * moved to the correct resume point, the existing, unmodified
+ * `generateFeePeriodsForEnrollment` does the rest for free — this is what
+ * makes "the new plan begins at the start of the next not-yet-started
+ * period" fall out of already-existing, already-tested generation logic
+ * rather than a second, parallel period-generation implementation.
+ */
 export async function setEnrollmentFeeSchedule(
   actorContext: AuthContext,
   input: SetEnrollmentFeeScheduleInput,
@@ -286,14 +440,94 @@ export async function setEnrollmentFeeSchedule(
 
     const currency = await resolveCurrency(tx, academyId, data.currency);
 
-    // For the audit log's "before" value only — never branched on for the
-    // write itself (see the onConflictDoUpdate below), so a stale read here
-    // can at worst mislabel one audit entry, never corrupt data or race.
+    // For the audit log's "before" value, AND (below) to decide whether
+    // this is a genuine change to an already-active schedule versus a
+    // first-time setup.
     const [existingForAudit] = await tx
       .select()
       .from(enrollmentFeeSchedules)
       .where(eq(enrollmentFeeSchedules.enrollmentId, data.enrollmentId))
       .limit(1);
+
+    const today = todayDateOnlyInAcademyTimezone();
+    const existingPeriods = existingForAudit
+      ? await tx
+          .select({ id: feePeriods.id, periodStart: feePeriods.periodStart, periodEnd: feePeriods.periodEnd })
+          .from(feePeriods)
+          .where(eq(feePeriods.enrollmentId, data.enrollmentId))
+      : [];
+    const startedPeriods = existingPeriods.filter((period) => period.periodStart <= today);
+
+    // A period must be protected from the "fresh start" branch below not
+    // only once it has STARTED, but also the moment ANY payment has been
+    // allocated to it — nothing stops staff from recording an advance
+    // payment against a not-yet-due period via its own per-row Record
+    // Payment action, including the very first (and, for a 1-installment
+    // schedule, only) period an enrollment ever has. Bug this fixes: if
+    // that one period is paid before anything has "started" yet, and the
+    // schedule is then edited (e.g. correcting a wrong anchor date), the
+    // old `startedPeriods`-only check saw zero protected periods and let
+    // the submitted anchor create a brand-new, disconnected period —
+    // orphaning the paid one (still in the DB, still correctly referenced
+    // by Payment History, but no longer "current") while the schedule
+    // silently doubled its real installment count. See fee-periods.test.ts
+    // regression for the exact reported shape.
+    const notYetStartedPeriods = existingPeriods.filter((period) => period.periodStart > today);
+    const notYetStartedAllocatedIds =
+      notYetStartedPeriods.length > 0
+        ? new Set(
+            (
+              await tx
+                .select({ feePeriodId: paymentAllocations.feePeriodId })
+                .from(paymentAllocations)
+                .where(inArray(paymentAllocations.feePeriodId, notYetStartedPeriods.map((period) => period.id)))
+            ).map((row) => row.feePeriodId),
+          )
+        : new Set<string>();
+    const protectedPeriods = [
+      ...startedPeriods,
+      ...notYetStartedPeriods.filter((period) => notYetStartedAllocatedIds.has(period.id)),
+    ];
+
+    let effectiveAmountCents = data.amountCents;
+    let effectiveAnchorDate = data.anchorDate;
+
+    if (existingForAudit && protectedPeriods.length > 0) {
+      // The resume point moves past every protected installment —
+      // started, paid, or both — regardless of the remaining-balance case
+      // below. This is what keeps a schedule change from ever overlapping
+      // a historical OR an advance-paid period.
+      const latestProtectedPeriodEnd = protectedPeriods.reduce(
+        (latest, period) => (compareDateOnly(period.periodEnd, latest) > 0 ? period.periodEnd : latest),
+        protectedPeriods[0].periodEnd,
+      );
+      effectiveAnchorDate = formatDateOnly(addDays(parseDateOnly(latestProtectedPeriodEnd), 1));
+
+      const protectedIds = protectedPeriods.map((period) => period.id);
+      const paidRows = await tx
+        .select({
+          feePeriodId: paymentAllocations.feePeriodId,
+          paid: sql<string>`coalesce(sum(${paymentAllocations.amountCents}), 0)`,
+        })
+        .from(paymentAllocations)
+        .innerJoin(studentPayments, eq(paymentAllocations.studentPaymentId, studentPayments.id))
+        .where(and(inArray(paymentAllocations.feePeriodId, protectedIds), eq(studentPayments.status, "approved")))
+        .groupBy(paymentAllocations.feePeriodId);
+      const paidSoFarCents = paidRows.reduce((sum, row) => sum + Number(row.paid), 0);
+      const remainingCents = existingForAudit.amountCents - paidSoFarCents;
+
+      // Only auto-carry when there IS a genuine positive remaining balance
+      // to protect — once the current schedule's own total is already
+      // fully paid off, there is nothing left to carry forward (and a
+      // computed $0 total would violate the schema's own "amount must be
+      // positive" invariant besides), so a schedule change at that point
+      // is effectively a fresh start: the caller's own submitted
+      // `amountCents` is used as-is, same as a genuine first-time setup —
+      // only `anchorDate` (moved above) still protects against overlap.
+      if (remainingCents > 0) {
+        effectiveAmountCents = remainingCents;
+      }
+    }
 
     // Atomic upsert targeting the table's own unique(enrollment_id) index —
     // replaces the previous unsafe "select, then insert-or-update" pattern,
@@ -306,18 +540,18 @@ export async function setEnrollmentFeeSchedule(
         academyId,
         enrollmentId: data.enrollmentId,
         intervalMonths: data.intervalMonths,
-        amountCents: data.amountCents,
+        amountCents: effectiveAmountCents,
         currency,
-        anchorDate: data.anchorDate,
+        anchorDate: effectiveAnchorDate,
         createdBy: actorContext.userId,
       })
       .onConflictDoUpdate({
         target: enrollmentFeeSchedules.enrollmentId,
         set: {
           intervalMonths: data.intervalMonths,
-          amountCents: data.amountCents,
+          amountCents: effectiveAmountCents,
           currency,
-          anchorDate: data.anchorDate,
+          anchorDate: effectiveAnchorDate,
           updatedAt: new Date(),
         },
       })
@@ -336,6 +570,24 @@ export async function setEnrollmentFeeSchedule(
       },
       tx,
     );
+
+    if (existingPeriods.length > 0) {
+      const candidateIds = existingPeriods.filter((period) => period.periodStart > today).map((period) => period.id);
+
+      if (candidateIds.length > 0) {
+        const allocatedIds = await tx
+          .select({ feePeriodId: paymentAllocations.feePeriodId })
+          .from(paymentAllocations)
+          .where(inArray(paymentAllocations.feePeriodId, candidateIds));
+        const protectedIds = new Set(allocatedIds.map((allocation) => allocation.feePeriodId));
+        const deletableIds = candidateIds.filter((id) => !protectedIds.has(id));
+        if (deletableIds.length > 0) {
+          await tx.delete(feePeriods).where(inArray(feePeriods.id, deletableIds));
+        }
+      }
+
+      await generateFeePeriodsForEnrollment(tx, data.enrollmentId, academyId);
+    }
 
     return { kind: "ok" as const, row };
   });
@@ -384,51 +636,76 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 /**
- * Generates any fee periods due to exist for this enrollment, from the
- * schedule's `anchorDate` (or the day after the latest existing period,
- * whichever is later — see "Resume point" below) up through `throughDate`
- * plus one extra period ahead (so the next not-yet-due period is always
- * already selectable when recording a payment that covers upcoming periods
- * too — see spec §19). A no-op when the enrollment has no fee schedule.
- * Safe to call repeatedly — already-existing periods are left untouched.
+ * The ONE authoritative calculation for "how much is each monthly
+ * installment" — see this file's own module comment ("Payment schedule
+ * model") for why every caller must go through this rather than dividing
+ * `amountCents` by `intervalMonths` inline. Integer-cents only, no
+ * floating-point money math (same rule as lib/ui/money.ts): `totalCents`
+ * divides evenly into `count` installments of `Math.floor(totalCents /
+ * count)` each, with the LAST installment absorbing whatever remainder is
+ * left over (e.g. $100 over 3 months -> $33.33, $33.33, $33.34) — so the
+ * installments always sum to EXACTLY `totalCents`, never a cent more or
+ * less, regardless of how unevenly it divides.
+ */
+export function splitIntoMonthlyInstallments(totalCents: number, count: number): number[] {
+  const base = Math.floor(totalCents / count);
+  const installments = new Array<number>(count).fill(base);
+  installments[count - 1] = totalCents - base * (count - 1);
+  return installments;
+}
+
+/**
+ * Generates every monthly installment still owed for this enrollment's
+ * CURRENT fee schedule — see this file's own module comment ("Payment
+ * schedule model") for the full model this implements. A no-op when the
+ * enrollment has no fee schedule. Safe to call repeatedly —
+ * already-existing periods are left untouched, and once all
+ * `schedule.intervalMonths` installments exist, calling this again does
+ * nothing more: a fee schedule is a bounded, one-time total, never an
+ * open-ended recurring charge that keeps generating as time passes.
+ *
+ * Every period this function ever creates spans EXACTLY one calendar
+ * month (`periodEnd` is the day before the same day-of-month one month
+ * later, clamped the same way `addMonths` always has), with
+ * `expectedAmountCents` set from `splitIntoMonthlyInstallments`.
+ * `fee_periods.intervalMonths` still records the SCHEDULE's own
+ * installment count the period was generated under (never "1") — a
+ * historical/display label, decoupled from the period's own always-1-
+ * month length (see that column's own schema comment).
  *
  * ---------------------------------------------------------------------
- * Resume point — bug fix: a schedule change could previously generate a
- * period that overlaps an already-existing (possibly already-paid) one
+ * Resume point / overlap safety (unchanged reasoning from the original
+ * fix, now also used to count how many of the CURRENT schedule's own
+ * installments already exist)
  * ---------------------------------------------------------------------
  * `enrollment_fee_schedules` holds exactly ONE row per enrollment
- * (`setEnrollmentFeeSchedule` upserts onto it) — changing the interval/
- * amount does not move `anchorDate` unless the caller explicitly supplies
- * a new one (and the "Edit fee schedule" form pre-fills it from the
- * existing schedule, so in practice it usually doesn't move). Before this
- * fix, this function always restarted its walk at `schedule.anchorDate`
- * using the CURRENT interval on every call — so changing e.g. Monthly ->
- * Every 6 Months on an enrollment that already had paid monthly periods
- * would, on the next read, generate a brand-new 6-month period starting on
- * that same old anchor date. The `(enrollment_id, period_start,
- * period_end)` unique index does NOT catch this: a 6-month period sharing
- * a start date with an existing 1-month period has a different `period_end`,
- * so it's a genuinely new row, not a duplicate — it just overlaps the
- * existing one's date range and expected/paid figures got double-counted.
- *
- * Fix: before walking, find the latest `period_end` already generated for
- * this enrollment (across ALL periods regardless of which schedule shape
- * produced them) and start the walk the day after it — never earlier,
- * regardless of `intervalMonths`/`amountCents` changes. Falls back to
- * `schedule.anchorDate` when no periods exist yet (unchanged from before),
- * and never regresses BEFORE `schedule.anchorDate` either, so a genuinely
- * intentional forward anchor-date change (skipping ahead) still works.
- * Since every subsequent period in the loop is strictly later than the one
- * before it, resuming after the latest existing period makes a new
- * overlap structurally impossible — no separate overlap scan is needed.
- * This never touches, rewrites, or deletes an existing `fee_periods` row —
- * historical periods (paid or not) are exactly as untouched as before.
+ * (`setEnrollmentFeeSchedule` upserts onto it, and — see its own doc
+ * comment — moves `anchorDate` itself forward past any already-started
+ * periods whenever a schedule change needs to). Walking from
+ * `schedule.anchorDate` and counting CONTIGUOUS existing periods (one per
+ * calendar month, starting exactly at `anchorDate`) tells this function
+ * both (a) where to resume — the first calendar month after the last
+ * contiguous one — and (b) how many of the schedule's `intervalMonths`
+ * installments already exist, without needing any extra persisted state.
+ * A period is only ever counted as "already generated" for the CURRENT
+ * schedule if it sits exactly in that contiguous run from `anchorDate`;
+ * `setEnrollmentFeeSchedule` is responsible for making sure nothing from
+ * a PRIOR schedule phase can be mistaken for one of these by moving
+ * `anchorDate` past it first. This never touches, rewrites, or deletes an
+ * existing `fee_periods` row — historical periods (paid or not) are
+ * exactly as untouched as before, and a genuinely unusual survivor (e.g.
+ * an advance-paid not-yet-started period that outlived a schedule change
+ * — see `setEnrollmentFeeSchedule`'s own doc comment) simply breaks the
+ * contiguous run at that point: this function then safely fills in
+ * whatever calendar months are actually missing before it (never
+ * overlapping it, since `onConflictDoNothing` on the exact
+ * `(enrollment_id, period_start, period_end)` unique index silently skips
+ * any month that collides with it), rather than skipping past it.
  */
 export async function generateFeePeriodsForEnrollment(
   executor: DbClient,
   enrollmentId: string,
   academyId: string,
-  throughDate: string = todayDateOnly(),
 ): Promise<void> {
   const [schedule] = await executor
     .select()
@@ -437,43 +714,24 @@ export async function generateFeePeriodsForEnrollment(
     .limit(1);
   if (!schedule) return;
 
-  // Never generate through less than the schedule's own anchor date — a
-  // schedule anchored in the future (e.g. a batch that hasn't started yet)
-  // would otherwise generate ZERO periods when `throughDate` defaults to
-  // today, leaving a freshly-enrolled student with no first period at all
-  // and violating the "Expected > 0 immediately after enrollment" contract
-  // (see enrollStudentInBatch, which calls this synchronously at enrollment
-  // time with no explicit throughDate).
-  const effectiveThroughDate =
-    compareDateOnly(throughDate, schedule.anchorDate) > 0 ? throughDate : schedule.anchorDate;
-
-  const months = schedule.intervalMonths;
-  const stopAt = formatDateOnly(addMonths(parseDateOnly(effectiveThroughDate), months)); // one extra period ahead
-
-  let cursor = parseDateOnly(schedule.anchorDate);
-
   const existingPeriods = await executor
-    .select({ periodEnd: feePeriods.periodEnd })
+    .select({ periodStart: feePeriods.periodStart })
     .from(feePeriods)
     .where(eq(feePeriods.enrollmentId, enrollmentId));
-  if (existingPeriods.length > 0) {
-    const latestPeriodEnd = existingPeriods.reduce(
-      (latest, row) => (compareDateOnly(row.periodEnd, latest) > 0 ? row.periodEnd : latest),
-      existingPeriods[0].periodEnd,
-    );
-    const dayAfterLatest = addDays(parseDateOnly(latestPeriodEnd), 1);
-    if (compareDateOnly(formatDateOnly(dayAfterLatest), formatDateOnly(cursor)) > 0) {
-      cursor = dayAfterLatest;
-    }
+  const existingStartDates = new Set(existingPeriods.map((row) => row.periodStart));
+
+  let cursor = parseDateOnly(schedule.anchorDate);
+  let installmentsAlreadyGenerated = 0;
+  while (installmentsAlreadyGenerated < schedule.intervalMonths && existingStartDates.has(formatDateOnly(cursor))) {
+    installmentsAlreadyGenerated += 1;
+    cursor = addMonths(cursor, 1);
   }
 
-  const MAX_PERIODS_PER_CALL = 500; // generous safety ceiling against a runaway loop
-  for (let i = 0; i < MAX_PERIODS_PER_CALL; i += 1) {
-    const periodStart = formatDateOnly(cursor);
-    if (compareDateOnly(periodStart, stopAt) > 0) break;
+  const installments = splitIntoMonthlyInstallments(schedule.amountCents, schedule.intervalMonths);
 
-    const periodEndParts = addDays(addMonths(cursor, months), -1);
-    const periodEnd = formatDateOnly(periodEndParts);
+  for (let installmentIndex = installmentsAlreadyGenerated; installmentIndex < schedule.intervalMonths; installmentIndex += 1) {
+    const periodStart = formatDateOnly(cursor);
+    const periodEnd = formatDateOnly(addDays(addMonths(cursor, 1), -1));
 
     try {
       await executor
@@ -485,7 +743,7 @@ export async function generateFeePeriodsForEnrollment(
           periodStart,
           periodEnd,
           dueDate: periodStart,
-          expectedAmountCents: schedule.amountCents,
+          expectedAmountCents: installments[installmentIndex],
           currency: schedule.currency,
         })
         .onConflictDoNothing();
@@ -493,7 +751,7 @@ export async function generateFeePeriodsForEnrollment(
       if (!isUniqueViolation(err)) throw err;
     }
 
-    cursor = addMonths(cursor, months);
+    cursor = addMonths(cursor, 1);
   }
 }
 
@@ -1274,8 +1532,20 @@ export async function getEnrollmentPaymentSummary(
 
 export interface StudentPaymentSummaryRow {
   enrollmentId: string;
+  /** Number of equal monthly installments — see fee-periods.ts's own
+   * module comment ("Payment schedule model"). NOT a period length. */
   intervalMonths: number;
+  /** The schedule's TOTAL fee — NOT a per-installment amount. Use
+   * `monthlyInstallmentCents` for the per-month figure (e.g. in a compact
+   * list column, where "$6.00/mo" reads far more clearly than "$36.00"
+   * next to a "6 months" label — see this file's module comment on why
+   * displaying a schedule's total next to its duration, unlabeled, reads
+   * as one lump payment). */
   scheduleAmountCents: number;
+  /** Derived, never stored: `scheduleAmountCents` split evenly across
+   * `intervalMonths` installments (last one absorbs the remainder) — see
+   * `splitIntoMonthlyInstallments`. */
+  monthlyInstallmentCents: number;
   currency: string;
   expectedCents: number;
   paidCents: number;
@@ -1371,6 +1641,7 @@ export async function getStudentPaymentSummaries(
       enrollmentId,
       intervalMonths: schedule.intervalMonths,
       scheduleAmountCents: schedule.amountCents,
+      monthlyInstallmentCents: splitIntoMonthlyInstallments(schedule.amountCents, schedule.intervalMonths)[0],
       currency: schedule.currency,
       expectedCents,
       paidCents,

@@ -4,6 +4,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAcademyDashboardData } from "@/lib/academies/dashboard";
 import { getStatusTone } from "@/lib/ui/status";
 import { Icon } from "@/app/academy/_shell/icons";
+import { TrendAreaChart } from "@/app/academy/_shell/charts";
 import {
   Badge,
   EmptyState,
@@ -33,6 +34,15 @@ function getInitials(fullName: string): string {
   const first = parts[0]?.[0] ?? "";
   const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "";
   return (first + last).toUpperCase();
+}
+
+/** Same helper, same "YYYY-MM" source format, as app/academy/reports/page.tsx's
+ * identical copy — see that file's own comment. */
+function formatMonthPeriod(period: string): string {
+  const [year, month] = period.split("-");
+  const parsed = new Date(Number(year), Number(month) - 1, 1);
+  if (Number.isNaN(parsed.getTime())) return period;
+  return parsed.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
 }
 
 /**
@@ -71,6 +81,12 @@ function getInitials(fullName: string): string {
  * `UsageBar` moved to `@/app/academy/_shell/ui` as a small reusable
  * component (same markup, no visual change) rather than a one-off. No
  * data-fetching, permission, or route logic changed anywhere in this pass.
+ *
+ * Chart addition (later wave): an "Enrollment trend" section using the
+ * shared `TrendAreaChart` (app/academy/_shell/charts.tsx), fed by
+ * `enrollmentTrend` — the exact same `getStudentReports` call this page
+ * already made for `totalStudents`, now also threaded through
+ * `AcademyDashboardData` instead of a second query.
  */
 export default async function AcademyDashboardPage() {
   const context = await getAuthContext();
@@ -105,7 +121,7 @@ export default async function AcademyDashboardPage() {
                   key={index}
                   href={alert.href}
                   role="status"
-                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm no-underline transition-colors duration-150 motion-safe:active:scale-[0.99] hover:brightness-95 ${toneClass}`}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm no-underline transition-[background-color,color,filter,transform] duration-150 ease-out motion-safe:active:scale-[0.99] hover:brightness-95 ${toneClass}`}
                 >
                   {content}
                 </Link>
@@ -214,6 +230,20 @@ export default async function AcademyDashboardPage() {
             </div>
           )}
         </Section>
+
+        {data.enrollmentTrend && (
+          <Section>
+            <h2 className="text-base font-semibold text-ink">Enrollment trend</h2>
+            <div className="mt-4">
+              <TrendAreaChart
+                id="dashboard-enrollment-trend"
+                points={data.enrollmentTrend.map((p) => ({ label: formatMonthPeriod(p.period), value: p.count }))}
+                ariaLabel="New enrollments per month"
+                emptyMessage="No enrollments yet."
+              />
+            </div>
+          </Section>
+        )}
 
         {data.usage && (
           <Section>

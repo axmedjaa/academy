@@ -77,7 +77,7 @@ async function resolveCurrency(executor: DbClient, academyId: string, provided: 
 // the client's claims — defined once here so neither can drift.
 // ===========================================================================
 
-export const MAX_COVER_SIZE_BYTES = 5 * 1024 * 1024;
+export const MAX_COVER_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_COVER_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
 type AllowedCoverContentType = (typeof ALLOWED_COVER_CONTENT_TYPES)[number];
 const EXTENSION_BY_CONTENT_TYPE: Record<AllowedCoverContentType, string> = {
@@ -91,7 +91,7 @@ function isAllowedContentType(value: string): value is AllowedCoverContentType {
 }
 
 const INVALID_FORMAT: BookActionError = { code: "validation", message: "Cover image must be JPEG, PNG, or WebP." };
-const TOO_LARGE: BookActionError = { code: "validation", message: "Cover image must be 5 MB or smaller." };
+const TOO_LARGE: BookActionError = { code: "validation", message: "Cover image must be 10 MB or smaller." };
 const VERIFICATION_FAILED: BookActionError = { code: "verification_failed", message: "The cover upload could not be verified." };
 
 type VerifyCoverUploadResult = { ok: true } | { ok: false; error: BookActionError };

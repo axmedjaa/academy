@@ -174,7 +174,7 @@ export function StudentForm({ branches, courseOptions }: StudentFormProps) {
                 ))}
               </select>
             </Field>
-            <Field label="Amount per period (USD)">
+            <Field label="Total Fee (USD)">
               <input type="number" name="paymentPlanAmountDollars" min={0.01} step="0.01" placeholder="0.00" required className={inputClass} />
             </Field>
           </div>

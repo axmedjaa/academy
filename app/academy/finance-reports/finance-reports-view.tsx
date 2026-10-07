@@ -9,6 +9,8 @@ import type {
 import { exportFinanceReportAction } from "@/lib/export/export-data-actions";
 import { downloadExportContent } from "@/lib/export/download-file";
 import { Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
+import { BarChart, type ChartPoint, type ChartSeries } from "@/app/academy/_shell/charts";
+import { color } from "@/lib/ui/theme";
 
 interface Props {
   initialReport: FinanceReportsData;
@@ -110,14 +112,19 @@ export function FinanceReportsView({ initialReport }: Props) {
   return (
     <div className="flex flex-col gap-6">
       <Section>
-        <fieldset disabled={isPending} className="flex flex-wrap items-end gap-3">
-          <Field label="From" className="min-w-[150px]">
+        {/* Mobile-first: fields stack full-width on a narrow phone (a
+         * 150-180px min-width field left a wide blank gap to its right at
+         * that size), reverting to the original fixed widths in a row once
+         * there's room at `sm:`. Actions do the same — one full-width
+         * button per row on mobile, inline on `sm:` and up. */}
+        <fieldset disabled={isPending} className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <Field label="From" className="w-full sm:w-auto sm:min-w-[150px]">
             <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className={inputClass} />
           </Field>
-          <Field label="To" className="min-w-[150px]">
+          <Field label="To" className="w-full sm:w-auto sm:min-w-[150px]">
             <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className={inputClass} />
           </Field>
-          <Field label="Branch id" className="min-w-[180px]">
+          <Field label="Branch id" className="w-full sm:w-auto sm:min-w-[180px]">
             <input
               type="text"
               value={branchId}
@@ -126,7 +133,7 @@ export function FinanceReportsView({ initialReport }: Props) {
               className={inputClass}
             />
           </Field>
-          <Field label="Status" className="min-w-[160px]">
+          <Field label="Status" className="w-full sm:w-auto sm:min-w-[160px]">
             <input
               type="text"
               value={status}
@@ -135,7 +142,7 @@ export function FinanceReportsView({ initialReport }: Props) {
               className={inputClass}
             />
           </Field>
-          <Field label="Method" className="min-w-[160px]">
+          <Field label="Method" className="w-full sm:w-auto sm:min-w-[160px]">
             <select value={method} onChange={(e) => setMethod(e.target.value)} className={inputClass}>
               <option value="">(any)</option>
               <option value="cash">Cash</option>
@@ -143,14 +150,14 @@ export function FinanceReportsView({ initialReport }: Props) {
               <option value="bank_transfer">Bank transfer</option>
             </select>
           </Field>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="secondary" onClick={applyFilters}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={applyFilters}>
               Apply filters
             </Button>
-            <Button type="button" variant="secondary" onClick={resetFilters}>
+            <Button type="button" variant="secondary" className="w-full sm:w-auto" onClick={resetFilters}>
               Reset
             </Button>
-            <Button type="button" onClick={handleExport} disabled={isExporting}>
+            <Button type="button" className="w-full sm:w-auto" onClick={handleExport} disabled={isExporting}>
               {isExporting ? "Exporting..." : "Export CSV"}
             </Button>
           </div>
@@ -182,7 +189,74 @@ export function FinanceReportsView({ initialReport }: Props) {
           </>
         )}
       </div>
+
+      {(report.income.visible || report.expenses.visible) && (
+        <IncomeExpenseChart
+          income={report.income.visible ? report.income : null}
+          expenses={report.expenses.visible ? report.expenses : null}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * DESIGN.md §9.6's "income vs. expenses... simple chart" — genuinely
+ * aggregate data already computed by `getFinanceReports` (per-currency
+ * totals), never a second query. Renders a single series when the caller's
+ * role can only see one side (e.g. Finance Officer has no Income access at
+ * all — §5) rather than silently treating the missing side as zero income
+ * or zero expenses, which would misrepresent a role-visibility gap as a
+ * real financial fact.
+ */
+function IncomeExpenseChart({
+  income,
+  expenses,
+}: {
+  income: { count: number; totalsByCurrency: AmountByCurrency[] } | null;
+  expenses: { count: number; totalsByCurrency: AmountByCurrency[] } | null;
+}) {
+  const currencies = [
+    ...new Set([
+      ...(income?.totalsByCurrency.map((row) => row.currency) ?? []),
+      ...(expenses?.totalsByCurrency.map((row) => row.currency) ?? []),
+    ]),
+  ];
+
+  const series: ChartSeries[] = [
+    ...(income ? [{ name: "Income", color: color.primaryBlue }] : []),
+    ...(expenses ? [{ name: "Expenses", color: color.primaryNavy }] : []),
+  ];
+
+  const groups = currencies.map((currency) => {
+    const incomeAmount = income?.totalsByCurrency.find((row) => row.currency === currency)?.amountCents ?? 0;
+    const expenseAmount = expenses?.totalsByCurrency.find((row) => row.currency === currency)?.amountCents ?? 0;
+    const values: ChartPoint[] = [
+      ...(income ? [{ label: "Income", value: incomeAmount, display: formatMoney(incomeAmount, currency) }] : []),
+      ...(expenses
+        ? [{ label: "Expenses", value: expenseAmount, display: formatMoney(expenseAmount, currency) }]
+        : []),
+    ];
+    return { label: currency, values };
+  });
+
+  return (
+    <Section>
+      <h3 className="mb-3 text-sm font-semibold text-ink">{income && expenses ? "Income vs. expenses" : income ? "Income" : "Expenses"}</h3>
+      <BarChart
+        id="income-vs-expenses"
+        series={series}
+        groups={groups}
+        ariaLabel="Income versus expenses by currency"
+        emptyMessage="No amounts in the selected period."
+        // `value` above is in CENTS (so bars for different amounts scale
+        // correctly against each other) — the axis-scale label must convert
+        // back to real money, or it shows a confusing bare four-digit cents
+        // figure (e.g. "2000" for $20.00). Formatted against the first
+        // currency present, since the axis is shared across every group.
+        formatAxisValue={(value) => formatMoney(value, currencies[0] ?? "USD")}
+      />
+    </Section>
   );
 }
 

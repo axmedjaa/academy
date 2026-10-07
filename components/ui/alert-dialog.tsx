@@ -53,7 +53,7 @@ function AlertDialogOverlay({
     <AlertDialogPrimitive.Overlay
       data-slot="alert-dialog-overlay"
       className={cn(
-        "fixed inset-0 z-[100] bg-navy/40 motion-safe:animate-fade-in",
+        "fixed inset-0 z-[100] bg-navy/40 motion-safe:data-[state=open]:animate-fade-in motion-safe:data-[state=closed]:animate-fade-out",
         className
       )}
       {...props}
@@ -79,7 +79,7 @@ function AlertDialogContent({
           // at any width, every existing caller included (ConfirmButton,
           // RecordPaymentDialog, FormDialog), with no visual change at
           // tablet/desktop widths where max-w-md already governs.
-          "fixed top-1/2 left-1/2 z-[100] flex max-h-[85vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-0 overflow-y-auto rounded-card border border-border bg-surface p-5 shadow-card outline-none motion-safe:animate-scale-in",
+          "fixed top-1/2 left-1/2 z-[100] flex max-h-[85vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-0 overflow-y-auto rounded-card border border-border bg-surface p-5 shadow-card outline-none motion-safe:data-[state=open]:animate-scale-in motion-safe:data-[state=closed]:animate-scale-out",
           className
         )}
         {...props}
@@ -134,8 +134,15 @@ function AlertDialogDescription({
   )
 }
 
+// `transition-[color,background-color,border-color,transform]` instead of
+// `transition-colors` — Tailwind's `transition-colors` utility sets
+// `transition-property` to color-related properties ONLY, so the
+// `active:scale-[0.98]` press feedback below had no transition applied to
+// it at all (it snapped instantly instead of easing). Listing `transform`
+// alongside the color properties in one arbitrary-value utility is what
+// actually makes both animate together.
 const ALERT_DIALOG_BUTTON_BASE =
-  "inline-flex items-center justify-center gap-1.5 rounded-control px-4 py-2 text-sm font-semibold transition-colors duration-150 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100";
+  "inline-flex items-center justify-center gap-1.5 rounded-control px-4 py-2 text-sm font-semibold transition-[color,background-color,border-color,transform] duration-150 ease-out motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100";
 
 /** Sensible standalone default (primary-button look) for a caller that
  * doesn't pass `asChild` — most callers in this app (see

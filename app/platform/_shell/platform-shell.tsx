@@ -162,7 +162,7 @@ export function PlatformShell({
                   backgroundColor: active ? color.primaryBlue : "transparent",
                   fontSize: "0.9rem",
                   fontWeight: active ? 600 : 500,
-                  transition: "background-color 0.15s ease, color 0.15s ease",
+                  transition: "background-color 0.15s ease, color 0.15s ease, transform 0.15s var(--ease-out)",
                 }}
               >
                 <Icon name={item.icon} />
@@ -235,7 +235,7 @@ export function PlatformShell({
               aria-label="Open menu"
               aria-expanded={drawerOpen}
               aria-controls="platform-shell-sidebar"
-              className="platform-shell-menu-btn rounded-control p-3 transition-colors duration-150 hover:bg-app motion-safe:active:scale-[0.98]"
+              className="platform-shell-menu-btn rounded-control p-3 transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app motion-safe:active:scale-[0.98]"
               style={{ background: "none", border: "none", cursor: "pointer", color: color.text, display: "none" }}
             >
               <Icon name="menu" />
@@ -271,19 +271,26 @@ export function PlatformShell({
       </div>
 
       <style>{`
+        /* Base transition for BOTH directions (hover-in and hover-out) and
+           for the active:scale press feedback — previously only the
+           :hover state below was declared, so hover color and the press
+           scale both snapped instantly with no transition at all. */
+        .platform-shell-navlink {
+          transition: background-color 150ms ease, color 150ms ease, transform 150ms var(--ease-out);
+        }
         .platform-shell-navlink:hover {
           background-color: rgba(255,255,255,0.08);
           color: #fff;
         }
-        /* Nav scrollbar: invisible at rest, a thin 6px thumb appears only
-           on hover/keyboard-focus of the nav region — mirrors the Academy
-           shell's own treatment (app/academy/_shell/academy-shell.tsx),
-           using this shell's own white-alpha convention instead of a
-           light-mode gray so it doesn't clash with the dark navy rail.
-           Track stays transparent and width never changes between states,
-           so this never shifts nav content or layout width — purely a
-           resting vs. interacting color swap, same scroll behavior either
-           way. */
+        /* Nav scrollbar: invisible at rest, a thin 4px thumb appears only
+           on hover/keyboard-focus of the nav region — the plain native
+           scrollbar, proportional thumb length and all, using this
+           shell's own white-alpha convention instead of a light-mode gray
+           so it doesn't clash with the dark navy rail. An earlier pass
+           tried to style the native thumb into a short, fixed-size pill
+           (border-inset hack) and then replaced it with a custom
+           scroll-linked overlay; both were removed as more trouble than
+           they were worth — this is the simple, honest version. */
         .platform-shell-nav {
           scrollbar-width: none;
           scrollbar-color: transparent transparent;
@@ -294,7 +301,7 @@ export function PlatformShell({
           scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
         }
         .platform-shell-nav::-webkit-scrollbar {
-          width: 6px;
+          width: 4px;
         }
         .platform-shell-nav::-webkit-scrollbar-track {
           background: transparent;
@@ -302,20 +309,17 @@ export function PlatformShell({
         .platform-shell-nav::-webkit-scrollbar-thumb {
           background-color: transparent;
           border-radius: 999px;
-          transition: background-color 0.2s ease;
-          /* Same thumb-length inset as the Academy shell's own nav
-             scrollbar (see that file's matching rule for the full
-             rationale): an invisible top/bottom border, left/right at 0 so
-             the 6px width is untouched, with background-clip: padding-box
-             to paint the color shorter without touching the native hit
-             area or scroll math. */
-          border-top: 3px solid transparent;
-          border-bottom: 3px solid transparent;
-          background-clip: padding-box;
+          transition: background-color 150ms var(--ease-out);
         }
         .platform-shell-nav:hover::-webkit-scrollbar-thumb,
         .platform-shell-nav:focus-within::-webkit-scrollbar-thumb {
           background-color: rgba(255, 255, 255, 0.25);
+        }
+        .platform-shell-nav::-webkit-scrollbar-thumb:hover {
+          background-color: rgba(255, 255, 255, 0.4);
+        }
+        .platform-shell-icon-btn {
+          transition: background-color 150ms ease, transform 150ms var(--ease-out);
         }
         .platform-shell-icon-btn:hover {
           background-color: rgba(255,255,255,0.08);
@@ -324,7 +328,7 @@ export function PlatformShell({
           background-color: #dbe6fd;
         }
         .platform-shell-scrim {
-          transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1);
+          transition: opacity 200ms var(--ease-out);
         }
         @media (prefers-reduced-motion: reduce) {
           .platform-shell-sidebar,
@@ -348,7 +352,7 @@ export function PlatformShell({
                (entering/exiting content) replaces the built-in "ease",
                which reads as noticeably weaker/less intentional at the
                same duration — mirrors the Academy shell's own drawer. */
-            transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+            transition: transform 200ms var(--ease-out);
             box-shadow: 2px 0 12px rgba(15, 23, 42, 0.25);
           }
           .platform-shell-content {

@@ -1,8 +1,7 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getCourse, listCourseEnrollments } from "@/lib/academies/courses";
-import { Badge, PAGE_WRAP, PageMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
+import { BackLink, Badge, PAGE_WRAP, PageMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
 
 function formatDate(value: string | null): string {
   if (!value) return "—";
@@ -55,9 +54,7 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ i
 
   return (
     <div className={PAGE_WRAP}>
-      <Link href="/academy/courses" className="mb-4 inline-block text-sm text-brand hover:underline">
-        ← Back to courses
-      </Link>
+      <BackLink href="/academy/courses" label="Back to courses" />
 
       <Section className="flex flex-col gap-5 sm:flex-row sm:items-start">
         {course.imageUrl && (

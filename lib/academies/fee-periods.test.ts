@@ -33,10 +33,12 @@ import {
   getEnrollmentPaymentSummary,
   getStudentPaymentSummaries,
   listEnrollmentsForStudent,
+  listFeePeriodPaymentHistory,
   listFeePeriodsForEnrollment,
   recordEnrollmentPayment,
   recordFeePeriodPayment,
   setEnrollmentFeeSchedule,
+  todayDateOnlyInAcademyTimezone,
 } from "./fee-periods";
 
 const createdUserIds: string[] = [];
@@ -309,7 +311,7 @@ describe("fee period generation", () => {
     }
   });
 
-  it("generates quarterly periods spanning 3 months", async () => {
+  it("a 3-month SCHEDULE (3 monthly installments) generates THREE separate one-calendar-month periods, never one 3-month-long period", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 15000, anchorDate: "2026-01-01" });
@@ -317,13 +319,18 @@ describe("fee period generation", () => {
     const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const first = result.periods[0];
-    expect(first.periodStart).toBe("2026-01-01");
-    expect(first.periodEnd).toBe("2026-03-31");
-    expect(first.expectedAmountCents).toBe(15000);
+    expect(result.periods).toHaveLength(3);
+
+    expect(result.periods[0]).toMatchObject({ periodStart: "2026-01-01", periodEnd: "2026-01-31", dueDate: "2026-01-01", expectedAmountCents: 5000 });
+    expect(result.periods[1]).toMatchObject({ periodStart: "2026-02-01", periodEnd: "2026-02-28", dueDate: "2026-02-01", expectedAmountCents: 5000 });
+    expect(result.periods[2]).toMatchObject({ periodStart: "2026-03-01", periodEnd: "2026-03-31", dueDate: "2026-03-01", expectedAmountCents: 5000 });
+
+    // $150.00 total, split 3 ways = exactly $50.00/month, no remainder.
+    const total = result.periods.reduce((sum, period) => sum + period.expectedAmountCents, 0);
+    expect(total).toBe(15000);
   });
 
-  it("generates yearly periods spanning 12 months", async () => {
+  it("a 12-month SCHEDULE (12 monthly installments) generates TWELVE separate one-calendar-month periods, never one 12-month-long period", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 12, amountCents: 60000, anchorDate: "2026-01-01" });
@@ -331,18 +338,89 @@ describe("fee period generation", () => {
     const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const first = result.periods[0];
-    expect(first.periodStart).toBe("2026-01-01");
-    expect(first.periodEnd).toBe("2026-12-31");
-    expect(first.expectedAmountCents).toBe(60000);
+    expect(result.periods).toHaveLength(12);
+
+    expect(result.periods[0]).toMatchObject({ periodStart: "2026-01-01", periodEnd: "2026-01-31", expectedAmountCents: 5000 });
+    expect(result.periods[11]).toMatchObject({ periodStart: "2026-12-01", periodEnd: "2026-12-31", expectedAmountCents: 5000 });
+
+    // $600.00 total, split 12 ways = exactly $50.00/month, no remainder.
+    const total = result.periods.reduce((sum, period) => sum + period.expectedAmountCents, 0);
+    expect(total).toBe(60000);
+  });
+
+  it("the final acceptance example: $36 total over 6 months generates exactly the 6 monthly installments of $6 the task spec requires", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const scheduleResult = await setEnrollmentFeeSchedule(context, {
+      enrollmentId: fixture.enrollmentId,
+      intervalMonths: 6,
+      amountCents: 3600,
+      anchorDate: "2026-10-06",
+    });
+    expect(scheduleResult.ok).toBe(true);
+    // The schedule's own derived "monthly installment" figure — what the
+    // Fee Schedule UI shows as "$6.00/month", distinct from the $36.00
+    // total (see fee-periods.ts's own module comment, "Payment schedule
+    // model" — these must never be the same displayed number).
+    if (scheduleResult.ok) {
+      expect(scheduleResult.schedule.amountCents).toBe(3600);
+      expect(scheduleResult.schedule.monthlyInstallmentCents).toBe(600);
+    }
+
+    // The Students-list page's own batched summary derives the identical
+    // monthly figure, independent of the single-enrollment read above.
+    const summaries = await getStudentPaymentSummaries(fixture.academyId, [fixture.studentId]);
+    const row = summaries.get(fixture.studentId);
+    expect(row?.scheduleAmountCents).toBe(3600);
+    expect(row?.monthlyInstallmentCents).toBe(600);
+
+    const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.periods).toHaveLength(6);
+
+    const expected = [
+      { periodStart: "2026-10-06", periodEnd: "2026-11-05" },
+      { periodStart: "2026-11-06", periodEnd: "2026-12-05" },
+      { periodStart: "2026-12-06", periodEnd: "2027-01-05" },
+      { periodStart: "2027-01-06", periodEnd: "2027-02-05" },
+      { periodStart: "2027-02-06", periodEnd: "2027-03-05" },
+      { periodStart: "2027-03-06", periodEnd: "2027-04-05" },
+    ];
+    for (let i = 0; i < expected.length; i += 1) {
+      expect(result.periods[i]).toMatchObject({ ...expected[i], dueDate: expected[i].periodStart, expectedAmountCents: 600 });
+    }
+    expect(result.periods.reduce((sum, period) => sum + period.expectedAmountCents, 0)).toBe(3600);
+  });
+
+  it("an amount that does not divide evenly puts the remainder on the LAST installment only, so the total always matches exactly ($100 over 4 months -> $25 x4; $100 over 3 months -> $33.33, $33.33, $33.34)", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 4, amountCents: 10000, anchorDate: "2026-01-01" });
+    const evenResult = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
+    expect(evenResult.ok).toBe(true);
+    if (evenResult.ok) {
+      expect(evenResult.periods.map((p) => p.expectedAmountCents)).toEqual([2500, 2500, 2500, 2500]);
+    }
+
+    const fixture2 = await setupFixture();
+    const { context: context2 } = await addActingUser(fixture2.academyId, "manager");
+    await setEnrollmentFeeSchedule(context2, { enrollmentId: fixture2.enrollmentId, intervalMonths: 3, amountCents: 10000, anchorDate: "2026-01-01" });
+    const unevenResult = await listFeePeriodsForEnrollment(context2, fixture2.enrollmentId);
+    expect(unevenResult.ok).toBe(true);
+    if (unevenResult.ok) {
+      expect(unevenResult.periods.map((p) => p.expectedAmountCents)).toEqual([3333, 3333, 3334]);
+      expect(unevenResult.periods.reduce((sum, p) => sum + p.expectedAmountCents, 0)).toBe(10000);
+    }
   });
 
   it("never creates duplicate periods when generation runs twice", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5000, anchorDate: "2026-01-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2026-06-01");
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2026-06-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
     const rows = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
     const keys = rows.map((row) => `${row.periodStart}:${row.periodEnd}`);
@@ -353,7 +431,7 @@ describe("fee period generation", () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5000, anchorDate: "2026-01-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2026-01-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 9000, anchorDate: "2026-01-01" });
 
@@ -361,25 +439,28 @@ describe("fee period generation", () => {
     expect(januaryPeriod.expectedAmountCents).toBe(5000);
   });
 
-  it("regression: changing the interval WITHOUT moving anchorDate never generates a period overlapping an already-paid one", async () => {
+  it("regression: changing the interval WITHOUT moving anchorDate never generates a period overlapping an already-paid one (full coverage of this now lives in the 'effective-date rule' describe block below — this keeps the original real-world reported scenario as its own focused check)", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
 
-    // Monthly schedule, anchored 2026-09-28 — matches the real reported
-    // case exactly.
+    // A 2-month-installment schedule anchored 2026-09-28 — both
+    // installments have already started by any real "today" this suite
+    // runs on, matching the real reported case's shape (two already-
+    // generated monthly periods existing before the change).
     await setEnrollmentFeeSchedule(context, {
       enrollmentId: fixture.enrollmentId,
-      intervalMonths: 1,
-      amountCents: 100,
+      intervalMonths: 2,
+      amountCents: 200,
       anchorDate: "2026-09-28",
     });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2026-09-28");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
     const beforeChange = await db
       .select()
       .from(feePeriods)
-      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
-    expect(beforeChange).toHaveLength(2); // Sep and Oct monthly periods
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+      .orderBy(feePeriods.periodStart);
+    expect(beforeChange).toHaveLength(2); // Sep and Oct monthly installments
     const septemberPeriod = beforeChange.find((row) => row.periodStart === "2026-09-28")!;
     const octoberPeriod = beforeChange.find((row) => row.periodStart === "2026-10-28")!;
 
@@ -402,21 +483,17 @@ describe("fee period generation", () => {
     });
     expect(octoberPaid.ok).toBe(true);
 
-    // The schedule is changed to Every 6 Months — WITHOUT moving
-    // anchorDate forward (the exact "form pre-fills the old anchor date"
-    // real-world scenario).
+    // The schedule is changed to Every 6 Months — WITHOUT the caller
+    // moving anchorDate forward (the exact "form pre-fills the old anchor
+    // date" real-world scenario) — `setEnrollmentFeeSchedule` itself is
+    // responsible for moving it past the two paid installments.
     const changed = await setEnrollmentFeeSchedule(context, {
       enrollmentId: fixture.enrollmentId,
       intervalMonths: 6,
-      amountCents: 100,
+      amountCents: 999_999, // irrelevant — overridden by auto-carry, since both installments are already paid in full
       anchorDate: "2026-09-28",
     });
     expect(changed.ok).toBe(true);
-
-    // Viewing the periods again (any read path lazily regenerates) must
-    // NOT create a new period starting on/before 2026-09-28 — the bug's
-    // exact symptom.
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2026-10-28");
 
     const afterChange = await db
       .select()
@@ -445,16 +522,6 @@ describe("fee period generation", () => {
       expect(row.periodStart > octoberPeriod.periodEnd).toBe(true);
     }
 
-    // The student's derived payment summary reflects exactly $2.00 paid
-    // (September + October) — never inflated by a phantom overlapping
-    // period, and the schedule change never demanded a second payment for
-    // a period already paid.
-    const summary = await getEnrollmentPaymentSummary(context, fixture.enrollmentId);
-    expect(summary.ok).toBe(true);
-    if (summary.ok) {
-      expect(summary.summary.paidCents).toBeLessThanOrEqual(summary.summary.expectedCents);
-    }
-
     // The two original student_payments rows and their allocations are
     // completely intact.
     const allocationsForSeptember = await db
@@ -474,19 +541,20 @@ describe("recordFeePeriodPayment", () => {
   // Anchored far in the future so no generated period is ever "overdue" —
   // these tests are about paid/remaining/allocation math, not overdue
   // derivation (covered separately by the computeFeePeriodStatus suite).
-  async function withMonthlySchedule(amountCents = 5000) {
+  async function withMonthlySchedule(totalAmountCents = 5000, intervalMonths = 1) {
     const fixture = await setupFixture();
     const { context: managerContext } = await addActingUser(fixture.academyId, "manager");
     // A second manager is required for reversal tests — the recorder can
     // never reverse their own payment (self-reversal is blocked).
     const { context: approverContext } = await addActingUser(fixture.academyId, "manager");
-    await setEnrollmentFeeSchedule(managerContext, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents, anchorDate: "2030-01-01" });
-    // listFeePeriodsForEnrollment only auto-generates through "today plus one
-    // period" by default, which would generate zero periods for a schedule
-    // anchored in 2030 — pre-generate a wider window explicitly so these
-    // payment-math tests have several future (never-overdue) periods to
-    // work with, regardless of the real wall-clock date the suite runs on.
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-06-01");
+    // Anchored far in the future so no generated period is ever overdue,
+    // regardless of the real wall-clock date the suite runs on. All
+    // `intervalMonths` monthly installments are generated eagerly,
+    // up-front, by the schedule call itself (see this file's own module
+    // comment on the bounded, non-recurring model) — most callers only
+    // ever need `periods[0]`, so `intervalMonths` defaults to 1; a caller
+    // that genuinely needs several periods to exist passes a higher value.
+    await setEnrollmentFeeSchedule(managerContext, { enrollmentId: fixture.enrollmentId, intervalMonths, amountCents: totalAmountCents, anchorDate: "2030-01-01" });
     const listed = await listFeePeriodsForEnrollment(managerContext, fixture.enrollmentId);
     if (!listed.ok) throw new Error("failed to list periods");
     return { fixture, managerContext, approverContext, periods: listed.periods };
@@ -571,7 +639,7 @@ describe("recordFeePeriodPayment", () => {
   });
 
   it("supports one payment covering multiple periods via allocations, without creating fake separate payments", async () => {
-    const { fixture, managerContext, periods } = await withMonthlySchedule();
+    const { fixture, managerContext, periods } = await withMonthlySchedule(15000, 3);
     const threePeriods = periods.slice(0, 3);
     const recorded = await recordFeePeriodPayment(managerContext, {
       studentId: fixture.studentId,
@@ -731,7 +799,7 @@ describe("recordFeePeriodPayment", () => {
     });
 
     it("a larger payment auto-allocates across multiple outstanding periods, oldest first — no checkbox selection needed", async () => {
-      const { fixture, managerContext, periods } = await withMonthlySchedule(5000);
+      const { fixture, managerContext, periods } = await withMonthlySchedule(15000, 3);
       const result = await recordEnrollmentPayment(managerContext, {
         studentId: fixture.studentId,
         enrollmentId: fixture.enrollmentId,
@@ -843,45 +911,48 @@ describe("listEnrollmentsForStudent", () => {
   });
 });
 
-describe("fee period generation — 2/4/6-month intervals (not just 1/3/12)", () => {
-  it("generates a 2-month period spanning exactly 2 calendar months", async () => {
+describe("fee period generation — 2/4/6-month SCHEDULES (not just 1/3/12) — each generates that many separate monthly installments", () => {
+  it("a 2-month schedule generates 2 separate one-month periods, each totalCents/2", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 10000, anchorDate: "2026-01-01" });
     const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.periods[0].periodStart).toBe("2026-01-01");
-    expect(result.periods[0].periodEnd).toBe("2026-02-28");
+    expect(result.periods).toHaveLength(2);
+    expect(result.periods[0]).toMatchObject({ periodStart: "2026-01-01", periodEnd: "2026-01-31", expectedAmountCents: 5000 });
+    expect(result.periods[1]).toMatchObject({ periodStart: "2026-02-01", periodEnd: "2026-02-28", expectedAmountCents: 5000 });
   });
 
-  it("generates a 4-month period spanning exactly 4 calendar months", async () => {
+  it("a 4-month schedule generates 4 separate one-month periods, each totalCents/4", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 4, amountCents: 20000, anchorDate: "2026-01-01" });
     const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.periods[0].periodStart).toBe("2026-01-01");
-    expect(result.periods[0].periodEnd).toBe("2026-04-30");
+    expect(result.periods).toHaveLength(4);
+    expect(result.periods[0]).toMatchObject({ periodStart: "2026-01-01", periodEnd: "2026-01-31", expectedAmountCents: 5000 });
+    expect(result.periods[3]).toMatchObject({ periodStart: "2026-04-01", periodEnd: "2026-04-30", expectedAmountCents: 5000 });
   });
 
-  it("generates a 6-month period spanning exactly 6 calendar months", async () => {
+  it("a 6-month schedule generates 6 separate one-month periods, each totalCents/6", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 6, amountCents: 30000, anchorDate: "2026-01-01" });
     const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.periods[0].periodStart).toBe("2026-01-01");
-    expect(result.periods[0].periodEnd).toBe("2026-06-30");
+    expect(result.periods).toHaveLength(6);
+    expect(result.periods[0]).toMatchObject({ periodStart: "2026-01-01", periodEnd: "2026-01-31", expectedAmountCents: 5000 });
+    expect(result.periods[5]).toMatchObject({ periodStart: "2026-06-01", periodEnd: "2026-06-30", expectedAmountCents: 5000 });
   });
 
   it("correctly handles the January 31 -> February boundary for a leap year (2028) and a non-leap year (2026)", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5000, anchorDate: "2026-01-31" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2026-02-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const rows = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
     const january = rows.find((row) => row.periodStart === "2026-01-31");
     // Non-leap 2026: Jan 31 + 1 month clamps to Feb 28 (Feb's last day),
@@ -891,7 +962,7 @@ describe("fee period generation — 2/4/6-month intervals (not just 1/3/12)", ()
     const fixture2 = await setupFixture();
     const { context: context2 } = await addActingUser(fixture2.academyId, "manager");
     await setEnrollmentFeeSchedule(context2, { enrollmentId: fixture2.enrollmentId, intervalMonths: 1, amountCents: 5000, anchorDate: "2028-01-31" });
-    await generateFeePeriodsForEnrollment(db, fixture2.enrollmentId, fixture2.academyId, "2028-02-01");
+    await generateFeePeriodsForEnrollment(db, fixture2.enrollmentId, fixture2.academyId);
     const rows2 = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture2.enrollmentId));
     const january2028 = rows2.find((row) => row.periodStart === "2028-01-31");
     // Leap year 2028: Jan 31 + 1 month clamps to Feb 29 (Feb's last day,
@@ -988,65 +1059,72 @@ describe("getEnrollmentPaymentSummary", () => {
   });
 });
 
-describe("regression: changing the interval back DOWN (6-month -> monthly) without moving anchorDate never overlaps", () => {
-  it("6-month -> monthly, same anchor: no overlap, the paid 6-month period stays untouched", async () => {
+describe("regression: changing the schedule back DOWN (6-month -> monthly) without the caller moving anchorDate never overlaps", () => {
+  it("6-month -> monthly, same submitted anchor: no overlap, the paid first installment stays untouched, the remaining balance carries into the new single monthly installment", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
 
     await setEnrollmentFeeSchedule(context, {
       enrollmentId: fixture.enrollmentId,
       intervalMonths: 6,
-      amountCents: 100,
+      amountCents: 600, // $1.00/month x 6
       anchorDate: "2026-09-28",
     });
-    // generateFeePeriodsForEnrollment always generates one extra period
-    // ahead of throughDate (see its own module comment) — with a 6-month
-    // interval anchored exactly on throughDate, that means TWO six-month
-    // periods, not one: 2026-09-28..2027-03-27, then 2027-03-28..2027-09-27.
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2026-09-28");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
-    const beforeChange = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
-    expect(beforeChange).toHaveLength(2);
-    const sixMonthPeriod = beforeChange.find((row) => row.periodStart === "2026-09-28")!;
-    expect(sixMonthPeriod.periodEnd).toBe("2027-03-27");
+    const beforeChange = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+      .orderBy(feePeriods.periodStart);
+    expect(beforeChange).toHaveLength(6); // all 6 monthly installments generated upfront
+    const firstInstallment = beforeChange[0];
+    expect(firstInstallment.periodStart).toBe("2026-09-28");
+    expect(firstInstallment.periodEnd).toBe("2026-10-27");
+    expect(firstInstallment.expectedAmountCents).toBe(100);
 
     const paid = await recordFeePeriodPayment(context, {
       studentId: fixture.studentId,
       enrollmentId: fixture.enrollmentId,
-      allocations: [{ feePeriodId: sixMonthPeriod.id, amountCents: 100 }],
+      allocations: [{ feePeriodId: firstInstallment.id, amountCents: 100 }],
       method: "cash",
       receivedAt: new Date(),
     });
     expect(paid.ok).toBe(true);
 
-    // Switch back down to monthly — anchorDate left exactly as-is, the same
-    // "form pre-fills the old anchor date" real-world flow.
+    // Switch down to monthly — anchorDate left exactly as submitted (the
+    // same "form pre-fills the old anchor date" real-world flow);
+    // `setEnrollmentFeeSchedule` itself moves it past the paid first
+    // installment, and auto-carries the $5.00 remaining balance.
     const changed = await setEnrollmentFeeSchedule(context, {
       enrollmentId: fixture.enrollmentId,
       intervalMonths: 1,
-      amountCents: 100,
+      amountCents: 999_999, // irrelevant — overridden by auto-carry
       anchorDate: "2026-09-28",
     });
     expect(changed.ok).toBe(true);
+    expect(changed.ok && changed.schedule.amountCents).toBe(500);
 
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2026-10-01");
+    const afterChange = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
+    const firstAfter = afterChange.find((row) => row.id === firstInstallment.id)!;
+    expect(firstAfter).toEqual(firstInstallment); // byte-for-byte untouched, payment preserved
 
-    const afterChange = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
-    const sixMonthAfter = afterChange.find((row) => row.id === sixMonthPeriod.id)!;
-    expect(sixMonthAfter).toEqual(sixMonthPeriod); // byte-for-byte untouched, payment preserved
+    // The 5 remaining unpaid old-schedule installments are gone — replaced
+    // by exactly ONE new monthly installment of the carried-over $5.00.
+    expect(afterChange).toHaveLength(2);
+    const newInstallment = afterChange.find((row) => row.id !== firstInstallment.id)!;
+    expect(newInstallment.periodStart).toBe("2026-10-28");
+    expect(newInstallment.expectedAmountCents).toBe(500);
+    expect(newInstallment.periodStart > firstInstallment.periodEnd).toBe(true);
 
-    for (const row of afterChange) {
-      if (row.id === sixMonthPeriod.id) continue;
-      const overlaps = row.periodStart <= sixMonthPeriod.periodEnd && row.periodEnd >= sixMonthPeriod.periodStart;
-      expect(overlaps).toBe(false);
-      expect(row.periodStart > sixMonthPeriod.periodEnd).toBe(true);
-    }
-
-    const allocationsForSixMonth = await db
+    const allocationsForFirst = await db
       .select()
       .from(paymentAllocations)
-      .where(eq(paymentAllocations.feePeriodId, sixMonthPeriod.id));
-    expect(allocationsForSixMonth).toHaveLength(1);
+      .where(eq(paymentAllocations.feePeriodId, firstInstallment.id));
+    expect(allocationsForFirst).toHaveLength(1);
   });
 });
 
@@ -1061,17 +1139,17 @@ describe("step 5 — multiple payments in the same calendar month (no 'one payme
     // above). "September"/"October" below just names the two periods.
     await setEnrollmentFeeSchedule(context, {
       enrollmentId: fixture.enrollmentId,
-      intervalMonths: 1,
-      amountCents: 10_000, // $100/period
+      intervalMonths: 2,
+      amountCents: 20_000, // $100/month x 2
       anchorDate: "2030-09-01",
     });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-10-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db
       .select()
       .from(feePeriods)
       .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
       .orderBy(feePeriods.periodStart);
-    expect(periods.length).toBeGreaterThanOrEqual(2);
+    expect(periods).toHaveLength(2);
     const [september, october] = periods;
 
     // 1. Student has an unpaid period (September, $100 expected, $0 paid).
@@ -1145,7 +1223,7 @@ describe("step 5 — multiple payments in the same calendar month (no 'one payme
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate: "2030-01-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-02-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
     const first = await recordEnrollmentPayment(context, {
       studentId: fixture.studentId,
@@ -1177,8 +1255,8 @@ describe("one payment allocation cannot affect another period (explicit, literal
   it("allocating a payment to period A leaves period B's paid/remaining/status completely unchanged", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate: "2030-01-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-03-01");
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 10_000, anchorDate: "2030-01-01" });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db
       .select()
       .from(feePeriods)
@@ -1448,9 +1526,10 @@ describe("explicit spec scenarios — per-period Record Payment behavior", () =>
     const anchor = new Date();
     anchor.setUTCDate(anchor.getUTCDate() - 5); // started 5 days ago
     const anchorDate = anchor.toISOString().slice(0, 10);
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate });
-    // generateFeePeriodsForEnrollment's default throughDate is "today," plus
-    // one extra period ahead — so the second (future) period already exists.
+    // A 2-month schedule: both monthly installments are generated
+    // up-front by the schedule call itself, so the second (future) one
+    // already exists without any extra generation call.
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 10_000, anchorDate });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
     const periods = await db
@@ -1458,7 +1537,7 @@ describe("explicit spec scenarios — per-period Record Payment behavior", () =>
       .from(feePeriods)
       .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
       .orderBy(feePeriods.periodStart);
-    expect(periods.length).toBeGreaterThanOrEqual(2);
+    expect(periods).toHaveLength(2);
 
     const summary = await getEnrollmentPaymentSummary(context, fixture.enrollmentId);
     expect(summary.ok).toBe(true);
@@ -1475,7 +1554,7 @@ describe("explicit spec scenarios — per-period Record Payment behavior", () =>
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate: "2030-01-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-02-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId)).orderBy(feePeriods.periodStart);
     const target = periods[0];
 
@@ -1507,7 +1586,7 @@ describe("explicit spec scenarios — per-period Record Payment behavior", () =>
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 555, anchorDate: "2030-01-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-01-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const [period] = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
     expect(period.expectedAmountCents).toBe(555);
 
@@ -1590,7 +1669,7 @@ describe("explicit spec scenarios — per-period Record Payment behavior", () =>
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 555, anchorDate: "2030-09-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-09-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const [period] = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
 
     const payment1 = await recordFeePeriodPayment(context, {
@@ -1636,7 +1715,7 @@ describe("explicit spec scenarios — per-period Record Payment behavior", () =>
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate: "2030-01-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-01-01");
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const [period] = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
 
     const paid = await recordFeePeriodPayment(context, {
@@ -1675,8 +1754,8 @@ describe("explicit spec scenarios — per-period Record Payment behavior", () =>
   it("Test 8 — after the current period is paid, the next outstanding period (oldest-first) becomes the next target", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate: "2030-01-01" });
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, "2030-03-01");
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 10_000, anchorDate: "2030-01-01" });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db
       .select()
       .from(feePeriods)
@@ -1712,7 +1791,7 @@ describe("explicit spec scenarios — per-period Record Payment behavior", () =>
     const victim = await setupFixture();
     const { context: victimContext } = await addActingUser(victim.academyId, "manager");
     await setEnrollmentFeeSchedule(victimContext, { enrollmentId: victim.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate: "2030-01-01" });
-    await generateFeePeriodsForEnrollment(db, victim.enrollmentId, victim.academyId, "2030-01-01");
+    await generateFeePeriodsForEnrollment(db, victim.enrollmentId, victim.academyId);
     const [victimPeriod] = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, victim.enrollmentId));
 
     const attacker = await setupFixture();
@@ -1835,16 +1914,17 @@ describe("Students list — Record Payment targeting (getStudentPaymentSummaries
   it("Test E — future-only student: a real, generated future period must NOT surface as a current obligation", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate: todayIsoDate() });
-    // Generate through one full extra period ahead (default behavior) so a
-    // genuinely future, not-yet-started period exists alongside today's.
+    // A 2-month schedule: both monthly installments are generated
+    // up-front, so a genuinely future, not-yet-started one exists
+    // alongside today's current one without any extra generation call.
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 10_000, anchorDate: todayIsoDate() });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db
       .select()
       .from(feePeriods)
       .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
       .orderBy(feePeriods.periodStart);
-    expect(periods.length).toBeGreaterThanOrEqual(2);
+    expect(periods).toHaveLength(2);
     const [currentPeriod, futurePeriod] = periods;
 
     // Pay off the one already-started period in full.
@@ -1878,7 +1958,9 @@ describe("Students list — Record Payment targeting (getStudentPaymentSummaries
     const anchor = new Date();
     anchor.setUTCMonth(anchor.getUTCMonth() - 2);
     const anchorDate = anchor.toISOString().slice(0, 10);
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate });
+    // A 3-month schedule anchored 2 months back: the first two monthly
+    // installments have already started as of "today."
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 15_000, anchorDate });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db
       .select()
@@ -1989,14 +2071,16 @@ describe("Students list — Record Payment targeting (getStudentPaymentSummaries
     const anchor = new Date();
     anchor.setUTCMonth(anchor.getUTCMonth() - 1); // last month's period has already started
     const anchorDate = anchor.toISOString().slice(0, 10);
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 555, anchorDate });
+    // A 2-month schedule: both monthly installments are generated
+    // up-front by the schedule call itself.
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 1_110, anchorDate });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db
       .select()
       .from(feePeriods)
       .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
       .orderBy(feePeriods.periodStart);
-    expect(periods.length).toBeGreaterThanOrEqual(2);
+    expect(periods).toHaveLength(2);
     const [september, october] = periods;
 
     // Students list opens Record Payment — it must target September first.
@@ -2050,15 +2134,21 @@ describe("Students list — Record Payment targeting (getStudentPaymentSummaries
   it("never targets a future period while an older overdue period is still unpaid", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
-    // Anchored well in the past so the first period is genuinely overdue.
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 5_000, anchorDate: "2020-01-01" });
-    // Generate far enough ahead that a genuinely future period also exists.
-    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId, todayIsoDate());
+    // A 12-month (maximum) schedule anchored 10 months back: the first
+    // installment is genuinely overdue, while the schedule's own LAST
+    // installment (anchor + 11 months) is still genuinely in the future —
+    // both exist simultaneously within this one bounded schedule.
+    const anchor = new Date();
+    anchor.setUTCMonth(anchor.getUTCMonth() - 10);
+    const anchorDate = anchor.toISOString().slice(0, 10);
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 12, amountCents: 60_000, anchorDate });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db
       .select()
       .from(feePeriods)
       .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
       .orderBy(feePeriods.periodStart);
+    expect(periods).toHaveLength(12);
     const overduePeriod = periods[0];
     const futurePeriod = periods[periods.length - 1];
     expect(futurePeriod.periodStart > todayIsoDate()).toBe(true); // genuinely future
@@ -2165,10 +2255,10 @@ describe("bug investigation — period-2 status/summary transition as its own du
     // Anchored on today: period 1 = today..+1mo-1d (already started), period
     // 2 = next month (still future) — mirrors the ticket's Period1/Period2
     // shape with "today" sitting inside period 1, before period 2 starts.
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 555, anchorDate: isoMonthsAgo(0) });
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 1_110, anchorDate: isoMonthsAgo(0) });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId)).orderBy(feePeriods.periodStart);
-    expect(periods.length).toBeGreaterThanOrEqual(2);
+    expect(periods).toHaveLength(2);
     const [september, october] = periods;
 
     const paid = await recordFeePeriodPayment(context, {
@@ -2206,10 +2296,10 @@ describe("bug investigation — period-2 status/summary transition as its own du
     const { context } = await addActingUser(fixture.academyId, "manager");
     // Period 1 anchored a month ago, so period 2 (the following month)
     // starts exactly today.
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 555, anchorDate: isoMonthsAgo(1) });
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 1_110, anchorDate: isoMonthsAgo(1) });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const periods = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId)).orderBy(feePeriods.periodStart);
-    expect(periods.length).toBeGreaterThanOrEqual(2);
+    expect(periods).toHaveLength(2);
     const [september, october] = periods;
     expect(october.periodStart).toBe(todayIsoDate());
 
@@ -2249,7 +2339,7 @@ describe("bug investigation — period-2 status/summary transition as its own du
     // SAME default (real-today-relative) lazy generation every other test
     // and the real app itself uses; payAllStartedExceptLast below settles
     // every earlier started period first regardless of how many exist.
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 555, anchorDate: isoMonthsAgoPastDue(2) });
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 1_665, anchorDate: isoMonthsAgoPastDue(2) });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
     // Every already-started period EXCEPT the most recent one is fully
@@ -2277,7 +2367,7 @@ describe("bug investigation — period-2 status/summary transition as its own du
   it("Case 4 — next period also paid: student is fully PAID, remaining $0, no outstanding target", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 555, anchorDate: isoMonthsAgoPastDue(2) });
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 1_665, anchorDate: isoMonthsAgoPastDue(2) });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
     // Pay off every started period except the last one, then pay that last
@@ -2309,7 +2399,7 @@ describe("bug investigation — period-2 status/summary transition as its own du
   it("Case 5 — next period partially paid and overdue: remaining $3.55, still nextOutstandingPeriod", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 555, anchorDate: isoMonthsAgoPastDue(2) });
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 1_665, anchorDate: isoMonthsAgoPastDue(2) });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
     const october = await payAllStartedExceptLast(context, fixture.studentId, fixture.enrollmentId, 555);
@@ -2436,5 +2526,599 @@ describe("money-input-system fix — Student Payment flow entered in dollars", (
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
     const [period] = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
     expect(period.expectedAmountCents).toBe(1000); // $10.00, never 10 cents
+  });
+});
+
+// ===========================================================================
+// Task: "Fix Fee Period Display and Safely Handle Payment-Plan Changes" —
+// (1) the normal fee-period view hides a period until its own periodStart
+// arrives (never an "Upcoming period" banner), and (2) a payment-plan
+// change takes effect from the start of the next NOT-YET-STARTED period,
+// never touching a period that has already started (paid or not) nor one
+// that has any payment allocated to it, however far in the future.
+// ===========================================================================
+
+describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change", () => {
+  /** Plain date-only arithmetic, independent of production's own addDays —
+   * deliberately NOT importing it, so a bug in that helper can't hide
+   * itself from these assertions (same reasoning as other test files' own
+   * independent date-math helpers, e.g. batch-assignments.test.ts's
+   * expectedPeriodEnd). */
+  function addOneDayIso(dateIso: string): string {
+    const [y, m, d] = dateIso.split("-").map(Number);
+    const date = new Date(Date.UTC(y, m - 1, d));
+    date.setUTCDate(date.getUTCDate() + 1);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+  }
+
+  const INTERVAL_CHANGE_CASES: { from: number; to: number }[] = [
+    { from: 1, to: 6 },
+    { from: 6, to: 1 },
+    { from: 6, to: 12 },
+    { from: 12, to: 6 },
+    { from: 1, to: 12 },
+    { from: 12, to: 1 },
+  ];
+
+  for (const { from, to } of INTERVAL_CHANGE_CASES) {
+    it(`${from} month(s) -> ${to} month(s): the paid current period is untouched, its payment is untouched, no duplicate payment is created, the remaining balance auto-carries into the new plan, and the next period starts right after it`, async () => {
+      const fixture = await setupFixture();
+      const { context } = await addActingUser(fixture.academyId, "manager");
+      const today = todayDateOnlyInAcademyTimezone();
+      const TOTAL_OLD = 1200; // divides evenly by every supported interval (1/2/3/4/6/12)
+
+      // Anchored exactly on "today": the FIRST of the `from` installments
+      // has started (periodStart === today); every later one is still in
+      // the future — all `from` installments are generated up-front by
+      // this one call (see this file's module comment on the bounded,
+      // non-recurring model).
+      const first = await setEnrollmentFeeSchedule(context, {
+        enrollmentId: fixture.enrollmentId,
+        intervalMonths: from,
+        amountCents: TOTAL_OLD,
+        anchorDate: today,
+      });
+      expect(first.ok).toBe(true);
+      await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+
+      const periodsBefore = await db
+        .select()
+        .from(feePeriods)
+        .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+        .orderBy(feePeriods.periodStart);
+      expect(periodsBefore).toHaveLength(from);
+      const [currentPeriod, ...oldFuturePeriods] = periodsBefore;
+      expect(currentPeriod.periodStart).toBe(today);
+      for (const period of oldFuturePeriods) {
+        expect(period.periodStart > today).toBe(true);
+      }
+      const firstInstallmentCents = currentPeriod.expectedAmountCents;
+
+      // Pay the current period in full — the "historical/paid" period the
+      // task's own worked examples protect.
+      const payment = await recordFeePeriodPayment(context, {
+        studentId: fixture.studentId,
+        enrollmentId: fixture.enrollmentId,
+        allocations: [{ feePeriodId: currentPeriod.id, amountCents: firstInstallmentCents }],
+        method: "cash",
+        receivedAt: new Date(),
+      });
+      expect(payment.ok).toBe(true);
+      const allocationsBefore = await db
+        .select()
+        .from(paymentAllocations)
+        .where(eq(paymentAllocations.feePeriodId, currentPeriod.id));
+      expect(allocationsBefore).toHaveLength(1);
+
+      // The administrator changes the plan (anchor left exactly as the
+      // existing schedule's own — the "Edit fee schedule" form's own
+      // pre-fill behavior — and amount submitted as an arbitrary, IRRELEVANT
+      // value: both are server-overridden by the auto-carry/auto-resume
+      // rule below once any installment has started).
+      const changed = await setEnrollmentFeeSchedule(context, {
+        enrollmentId: fixture.enrollmentId,
+        intervalMonths: to,
+        amountCents: 999_999,
+        anchorDate: today,
+      });
+      expect(changed.ok).toBe(true);
+
+      // The remaining balance: the old total minus what was actually paid
+      // toward it — EXCEPT when that leaves nothing (a 1-installment old
+      // plan, fully paid off by the one payment above), in which case there
+      // is nothing to carry and the caller's own submitted amount applies,
+      // exactly as a fresh first-time schedule would.
+      const remainingOld = TOTAL_OLD - firstInstallmentCents;
+      const expectedNewTotal = remainingOld > 0 ? remainingOld : 999_999;
+      expect(changed.ok && changed.schedule.amountCents).toBe(expectedNewTotal);
+
+      // The paid current period: byte-for-byte untouched.
+      const [stillCurrent] = await db.select().from(feePeriods).where(eq(feePeriods.id, currentPeriod.id));
+      expect(stillCurrent).toEqual(currentPeriod);
+
+      // Its payment allocation: untouched.
+      const allocationsAfter = await db
+        .select()
+        .from(paymentAllocations)
+        .where(eq(paymentAllocations.feePeriodId, currentPeriod.id));
+      expect(allocationsAfter).toEqual(allocationsBefore);
+
+      // No duplicate payment was ever created for it.
+      const allPayments = await db.select().from(studentPayments).where(eq(studentPayments.studentId, fixture.studentId));
+      expect(allPayments).toHaveLength(1);
+
+      // Every OLD not-yet-started period (generated under the OLD plan,
+      // never paid) is gone — replaced, not left dangling.
+      for (const period of oldFuturePeriods) {
+        const [stillThere] = await db.select().from(feePeriods).where(eq(feePeriods.id, period.id));
+        expect(stillThere).toBeUndefined();
+      }
+
+      // The new schedule's own `to` installments exist, starting the day
+      // right after the protected current period ends — "the new plan
+      // begins at the start of the next not-yet-started period" — and use
+      // the carried-over remaining balance, split per the new count.
+      const periodsAfter = await db
+        .select()
+        .from(feePeriods)
+        .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+        .orderBy(feePeriods.periodStart);
+      expect(periodsAfter).toHaveLength(1 + to);
+      const newPeriods = periodsAfter.filter((period) => period.id !== currentPeriod.id);
+      expect(newPeriods).toHaveLength(to);
+      expect(newPeriods[0].periodStart).toBe(addOneDayIso(currentPeriod.periodEnd));
+      for (const period of newPeriods) {
+        expect(period.intervalMonths).toBe(to);
+      }
+      const newTotal = newPeriods.reduce((sum, period) => sum + period.expectedAmountCents, 0);
+      expect(newTotal).toBe(expectedNewTotal); // the installments sum to EXACTLY the carried-over total, no drift
+    });
+  }
+
+  it("protects the CURRENT period even while it is still UNPAID — a schedule change never silently overwrites money already owed", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 1000, anchorDate: today });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+    const [currentPeriod] = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+      .orderBy(feePeriods.periodStart)
+      .limit(1);
+    expect(currentPeriod.periodStart).toBe(today);
+
+    // Left entirely unpaid on purpose — this is the exact "current unpaid
+    // period" scenario the task's own spec calls out as something a
+    // schedule change must never silently overwrite.
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 6, amountCents: 6000, anchorDate: today });
+
+    const [stillCurrent] = await db.select().from(feePeriods).where(eq(feePeriods.id, currentPeriod.id));
+    expect(stillCurrent).toEqual(currentPeriod);
+    expect(stillCurrent.intervalMonths).toBe(1);
+    expect(stillCurrent.expectedAmountCents).toBe(1000);
+  });
+
+  it("a not-yet-started period that already has a payment allocated to it (an advance payment) is never deleted, even though it hasn't started yet", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 2000, anchorDate: today });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+    const periods = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+      .orderBy(feePeriods.periodStart);
+    expect(periods).toHaveLength(2);
+    const [currentPeriod, futurePeriod] = periods;
+    expect(futurePeriod.periodStart > today).toBe(true);
+
+    // Nothing today stops staff from recording an advance payment against a
+    // not-yet-due period via its own per-row Record Payment action.
+    const advancePayment = await recordFeePeriodPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      allocations: [{ feePeriodId: futurePeriod.id, amountCents: 1000 }],
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(advancePayment.ok).toBe(true);
+
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 6, amountCents: 6000, anchorDate: today });
+
+    // The advance-paid future period survives, completely unmodified —
+    // protecting the payment outranks the effective-date rule.
+    const [stillFuture] = await db.select().from(feePeriods).where(eq(feePeriods.id, futurePeriod.id));
+    expect(stillFuture).toEqual(futurePeriod);
+    const futureAllocations = await db
+      .select()
+      .from(paymentAllocations)
+      .where(eq(paymentAllocations.feePeriodId, futurePeriod.id));
+    expect(futureAllocations).toHaveLength(1);
+
+    // The new 6-month plan's first period resumes only after THIS period
+    // (not after the still-protected current one) — the latest existing
+    // period's own end date, whichever period that turns out to be.
+    const periodsAfter = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+      .orderBy(feePeriods.periodStart);
+    const newPeriod = periodsAfter.find((period) => period.id !== currentPeriod.id && period.id !== futurePeriod.id);
+    expect(newPeriod).toBeDefined();
+    if (!newPeriod) return;
+    expect(newPeriod.periodStart).toBe(addOneDayIso(futurePeriod.periodEnd));
+    expect(newPeriod.intervalMonths).toBe(6);
+  });
+
+  it("regression (caaxi cali / STD-000008): advance-paying a 1-installment schedule's only period BEFORE anything has started, then correcting the schedule's anchor, never leaves the payment silently orphaned/unreflected — the summary must never read 'unpaid' once the course has actually been paid for", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    // Reproduces the exact reported shape: a 1-month (single-installment)
+    // $10 schedule is first set up anchored on a WRONG, future date (the
+    // real incident's "2026-10-30" instead of the enrollment's own actual
+    // date) — mirroring the pre-anchor-date-fix bug from an earlier task.
+    const wrongFutureAnchor = (() => {
+      const [y, m, d] = today.split("-").map(Number);
+      const date = new Date(Date.UTC(y, m - 1, d));
+      date.setUTCDate(date.getUTCDate() + 24);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+    })();
+    await setEnrollmentFeeSchedule(context, {
+      enrollmentId: fixture.enrollmentId,
+      intervalMonths: 1,
+      amountCents: 1000,
+      anchorDate: wrongFutureAnchor,
+    });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+    const [wrongPeriod] = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
+    expect(wrongPeriod.periodStart).toBe(wrongFutureAnchor);
+
+    // The $10 is paid in full against that (not-yet-started) period —
+    // exactly the real incident's receipt RCT-000007, recorded same-day as
+    // the enrollment itself.
+    const payment = await recordFeePeriodPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      allocations: [{ feePeriodId: wrongPeriod.id, amountCents: 1000 }],
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(payment.ok).toBe(true);
+
+    // The admin then corrects the schedule — re-anchoring to the real,
+    // intended date (today). Before the fix, nothing had "started" yet
+    // (the only period's periodStart was still in the future), so the old
+    // startedPeriods-only check saw zero protected periods and let this
+    // create a brand-new, disconnected period at `today` — orphaning the
+    // $10 payment on the old one while the new one read UNPAID.
+    const corrected = await setEnrollmentFeeSchedule(context, {
+      enrollmentId: fixture.enrollmentId,
+      intervalMonths: 1,
+      amountCents: 1000,
+      anchorDate: today,
+    });
+    expect(corrected.ok).toBe(true);
+
+    // The original payment and its allocation are completely untouched —
+    // never deleted, never duplicated.
+    const allPayments = await db.select().from(studentPayments).where(eq(studentPayments.studentId, fixture.studentId));
+    expect(allPayments).toHaveLength(1);
+    expect(allPayments[0].id).toBe(payment.ok ? payment.payment.id : "");
+    const allocationsForWrongPeriod = await db
+      .select()
+      .from(paymentAllocations)
+      .where(eq(paymentAllocations.feePeriodId, wrongPeriod.id));
+    expect(allocationsForWrongPeriod).toHaveLength(1);
+
+    // The core financial-correctness invariant the real incident violated:
+    // the enrollment's own payment summary (what the Fee Schedule card and
+    // Students-list both read) must NEVER report "unpaid, $10 remaining"
+    // once $10 has genuinely already been paid toward this schedule's one
+    // and only installment — regardless of which fee_periods row ends up
+    // "current."
+    const summary = await getEnrollmentPaymentSummary(context, fixture.enrollmentId);
+    expect(summary.ok).toBe(true);
+    if (summary.ok) {
+      expect(summary.summary.paidCents).toBe(1000);
+      expect(summary.summary.remainingCents).toBe(0);
+      expect(summary.summary.status).toBe("paid");
+    }
+
+    // Payment History still references the SAME period the allocation was
+    // always on — the real incident's other symptom (Payment History
+    // pointing at an "obsolete" period) never happens here because the
+    // allocation itself is never silently repointed or left dangling.
+    const history = await listFeePeriodPaymentHistory(context, { enrollmentId: fixture.enrollmentId });
+    expect(history.ok).toBe(true);
+    if (history.ok) {
+      expect(history.rows).toHaveLength(1);
+      expect(history.rows[0].periods).toEqual([
+        { feePeriodId: wrongPeriod.id, periodStart: wrongPeriod.periodStart, periodEnd: wrongPeriod.periodEnd, amountCents: 1000 },
+      ]);
+    }
+
+    // No new period was ever created that OVERLAPS or PRECEDES the
+    // protected, paid period — the one structural guarantee
+    // generateFeePeriodsForEnrollment has always made, preserved here too.
+    const periodsAfter = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+      .orderBy(feePeriods.periodStart);
+    for (const period of periodsAfter) {
+      if (period.id === wrongPeriod.id) continue;
+      expect(period.periodStart > wrongPeriod.periodEnd).toBe(true);
+    }
+  });
+
+  it("setting a fee schedule for the FIRST time (no periods exist yet) stays exactly as lazy as before — periods are not eagerly generated by the schedule call itself", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+
+    const result = await setEnrollmentFeeSchedule(context, {
+      enrollmentId: fixture.enrollmentId,
+      intervalMonths: 1,
+      amountCents: 1000,
+      anchorDate: todayDateOnlyInAcademyTimezone(),
+    });
+    expect(result.ok).toBe(true);
+
+    const periods = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
+    expect(periods).toHaveLength(0);
+  });
+
+  it("month-end boundary: changing the plan after a period ending Feb 27 (Jan 31 + 1 month, non-leap year) resumes the new plan on Feb 28 with correct clamping", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+
+    // Set up the schedule, then directly seed exactly the one historical
+    // period that would have been generated for it (bypassing the eager
+    // "walk all the way to real today" generation, which would otherwise
+    // produce many more periods between this fixed 2026 date and whenever
+    // this test actually runs — see this describe block's other tests for
+    // why "anchor = today" is used everywhere a real eager walk matters).
+    await setEnrollmentFeeSchedule(context, {
+      enrollmentId: fixture.enrollmentId,
+      intervalMonths: 1,
+      amountCents: 1000,
+      anchorDate: "2026-01-31",
+    });
+    const [seeded] = await db
+      .insert(feePeriods)
+      .values({
+        academyId: fixture.academyId,
+        enrollmentId: fixture.enrollmentId,
+        intervalMonths: 1,
+        periodStart: "2026-01-31",
+        periodEnd: "2026-02-27", // Jan 31 + 1 month -> Feb 28 (2026, non-leap) -> end = Feb 27
+        dueDate: "2026-01-31",
+        expectedAmountCents: 1000,
+        currency: "USD",
+      })
+      .returning();
+    await recordFeePeriodPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      allocations: [{ feePeriodId: seeded.id, amountCents: 1000 }],
+      method: "cash",
+      receivedAt: new Date(),
+    });
+
+    await setEnrollmentFeeSchedule(context, {
+      enrollmentId: fixture.enrollmentId,
+      intervalMonths: 6,
+      amountCents: 6000,
+      anchorDate: "2026-01-31",
+    });
+
+    const [stillSeeded] = await db.select().from(feePeriods).where(eq(feePeriods.id, seeded.id));
+    expect(stillSeeded).toEqual(seeded);
+
+    const [nextPeriod] = await db
+      .select()
+      .from(feePeriods)
+      .where(and(eq(feePeriods.enrollmentId, fixture.enrollmentId), eq(feePeriods.periodStart, "2026-02-28")));
+    expect(nextPeriod).toBeDefined();
+    expect(nextPeriod.intervalMonths).toBe(6); // the schedule's own installment count, not this period's length
+    // The old 1-installment plan was fully paid off (remaining = 0), so
+    // the submitted $60.00 is used as-is (no remainder to carry), split
+    // into 6 monthly installments of $10.00 each — and every generated
+    // period is exactly ONE calendar month, never 6.
+    expect(nextPeriod.expectedAmountCents).toBe(1000);
+    expect(nextPeriod.periodEnd).toBe("2026-03-27"); // Feb 28 + 1 month -> Mar 28 -> end = Mar 27
+  });
+
+  it("leap-year boundary: changing the plan after a period ending Feb 28 (Jan 31 + 1 month, leap year 2028) resumes the new plan on Feb 29", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+
+    await setEnrollmentFeeSchedule(context, {
+      enrollmentId: fixture.enrollmentId,
+      intervalMonths: 1,
+      amountCents: 1000,
+      anchorDate: "2028-01-31",
+    });
+    const [seeded] = await db
+      .insert(feePeriods)
+      .values({
+        academyId: fixture.academyId,
+        enrollmentId: fixture.enrollmentId,
+        intervalMonths: 1,
+        periodStart: "2028-01-31",
+        periodEnd: "2028-02-28", // Jan 31 + 1 month -> Feb 29 (2028, leap) -> end = Feb 28
+        dueDate: "2028-01-31",
+        expectedAmountCents: 1000,
+        currency: "USD",
+      })
+      .returning();
+    await recordFeePeriodPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      allocations: [{ feePeriodId: seeded.id, amountCents: 1000 }],
+      method: "cash",
+      receivedAt: new Date(),
+    });
+
+    await setEnrollmentFeeSchedule(context, {
+      enrollmentId: fixture.enrollmentId,
+      intervalMonths: 6,
+      amountCents: 6000,
+      anchorDate: "2028-01-31",
+    });
+
+    const [nextPeriod] = await db
+      .select()
+      .from(feePeriods)
+      .where(and(eq(feePeriods.enrollmentId, fixture.enrollmentId), eq(feePeriods.periodStart, "2028-02-29")));
+    expect(nextPeriod).toBeDefined();
+    expect(nextPeriod.intervalMonths).toBe(6); // the schedule's own installment count, not this period's length
+    expect(nextPeriod.expectedAmountCents).toBe(1000); // $60.00 / 6 monthly installments
+    expect(nextPeriod.periodEnd).toBe("2028-03-28"); // Feb 29 + 1 month -> Mar 29 -> end = Mar 28
+  });
+});
+
+describe("fee-period visibility for the normal display view (student-detail.tsx / fee-periods-manager.tsx)", () => {
+  /**
+   * Both display components filter the already-fetched `periods` array to
+   * `period.periodStart <= today` before rendering, and no longer render
+   * an "Upcoming period (not yet due)" banner at all (removed entirely,
+   * not merely relabeled) — see those files' own inline comments at the
+   * filter site. This project has no component-rendering test setup (no
+   * jsdom/React Testing Library; vitest.config.ts only ever collects
+   * `*.test.ts`), so these tests pin down the DATA that one-line filter
+   * operates on instead of rendering the component — a wrong answer here
+   * would mean the UI's trivial filter has nothing correct to read from,
+   * which is the only way this behavior could actually break.
+   */
+  function isVisibleForDisplay(periodStart: string, today: string): boolean {
+    return periodStart <= today; // mirrors the UI's own filter, exactly
+  }
+
+  it("a brand-new enrollment's current period has periodStart === today (visible), and its schedule's later not-yet-started installment has periodStart > today (hidden)", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 2000, anchorDate: today });
+    const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.periods).toHaveLength(2);
+    const visible = result.periods.filter((period) => isVisibleForDisplay(period.periodStart, today));
+    const hidden = result.periods.filter((period) => !isVisibleForDisplay(period.periodStart, today));
+    expect(visible).toHaveLength(1);
+    expect(visible[0].periodStart).toBe(today);
+    expect(hidden).toHaveLength(1);
+    expect(hidden[0].periodStart > today).toBe(true);
+  });
+
+  it("a paid current period is still visible (paid-ness never hides a started period)", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 1000, anchorDate: today });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+    const [currentPeriod] = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
+      .orderBy(feePeriods.periodStart)
+      .limit(1);
+    await recordFeePeriodPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      allocations: [{ feePeriodId: currentPeriod.id, amountCents: 1000 }],
+      method: "cash",
+      receivedAt: new Date(),
+    });
+
+    const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const paidPeriod = result.periods.find((period) => period.id === currentPeriod.id);
+    expect(paidPeriod).toBeDefined();
+    expect(paidPeriod?.status).toBe("paid");
+    expect(isVisibleForDisplay(paidPeriod!.periodStart, today)).toBe(true);
+  });
+
+  it("a current unpaid/overdue period is still visible — only FUTURE periods are hidden, never a merely-unpaid one", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    // Anchored a month ago so the current period is overdue, not merely due.
+    const anchor = (() => {
+      const [y, m, d] = today.split("-").map(Number);
+      const date = new Date(Date.UTC(y, m - 1, d));
+      date.setUTCMonth(date.getUTCMonth() - 1);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+    })();
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 1000, anchorDate: anchor });
+    const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const overduePeriod = result.periods.find((period) => period.periodStart === anchor);
+    expect(overduePeriod).toBeDefined();
+    expect(overduePeriod?.status).toBe("overdue");
+    expect(isVisibleForDisplay(overduePeriod!.periodStart, today)).toBe(true);
+  });
+
+  it("multiple future periods (several lazy reads after the anchor was pushed forward) are all hidden", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+    const farFuture = (() => {
+      const [y, m, d] = today.split("-").map(Number);
+      const date = new Date(Date.UTC(y, m - 1, d));
+      date.setUTCMonth(date.getUTCMonth() + 3);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+    })();
+
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 1000, anchorDate: farFuture });
+    const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // Nothing has started yet — every generated period is hidden.
+    expect(result.periods.length).toBeGreaterThan(0);
+    for (const period of result.periods) {
+      expect(isVisibleForDisplay(period.periodStart, today)).toBe(false);
+    }
+  });
+
+  it("a period's visibility depends only on its OWN periodStart, never on the batch's start date or the original enrollment/anchor date", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    // The batch's own start_date (set by insertBatchDirect) is fixed at
+    // "2026-01-01" — deliberately different from both the schedule's
+    // anchor and the resulting period's own periodStart below, so a
+    // visibility check that accidentally used batch.startDate instead of
+    // the period's own periodStart would read differently here.
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 1000, anchorDate: today });
+    const result = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const currentPeriod = result.periods.find((period) => period.periodStart === today);
+    expect(currentPeriod).toBeDefined();
+    expect(isVisibleForDisplay(currentPeriod!.periodStart, today)).toBe(true);
   });
 });

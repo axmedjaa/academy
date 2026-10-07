@@ -39,7 +39,7 @@ import {
 const initialState: CourseFormState = { ok: false };
 
 const ALLOWED_COURSE_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_COURSE_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_COURSE_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
 
 interface InstructorOption {
   id: string;
@@ -133,7 +133,7 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
       return;
     }
     if (file.size > MAX_COURSE_IMAGE_SIZE_BYTES) {
-      setNewImageError("Image must be 5 MB or smaller.");
+      setNewImageError("Image must be 10 MB or smaller.");
       return;
     }
     setNewImageUploading(true);
@@ -374,7 +374,7 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                       onChange={handleNewImageChange}
                     />
                   </label>
-                  <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 5 MB.</p>
+                  <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 10 MB.</p>
                   {newImageError && <p className="mt-1 text-xs text-danger">{newImageError}</p>}
                 </div>
               </div>
@@ -452,7 +452,7 @@ function EditCourseForm({
       return;
     }
     if (file.size > MAX_COURSE_IMAGE_SIZE_BYTES) {
-      setImageError("Image must be 5 MB or smaller.");
+      setImageError("Image must be 10 MB or smaller.");
       return;
     }
     setImageUploading(true);
@@ -521,7 +521,7 @@ function EditCourseForm({
                 onChange={handleImageChange}
               />
             </label>
-            <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 5 MB.</p>
+            <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 10 MB.</p>
             {imageError && <p className="mt-1 text-xs text-danger">{imageError}</p>}
           </div>
         </div>

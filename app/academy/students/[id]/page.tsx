@@ -6,10 +6,11 @@ import {
   getEnrollmentPaymentSummary,
   listEnrollmentsForStudent,
   listFeePeriodPaymentHistory,
+  todayDateOnlyInAcademyTimezone,
 } from "@/lib/academies/fee-periods";
 import { listReceiptsForPayments, listStudentCharges, listStudentPayments } from "@/lib/academies/student-payments";
 import { resolveStaffLabels } from "@/lib/academies/staff-labels";
-import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { BackLink, PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { StudentDetail, type PaymentHistoryRow } from "./student-detail";
 
 /**
@@ -127,6 +128,7 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className={PAGE_WRAP}>
+      <BackLink href="/academy/students" label="Back to students" />
       <PageHeader title={student.fullName} description={`Student # ${student.studentNumber}`} />
       <StudentDetail
         student={student}
@@ -139,6 +141,7 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
         canManagePayments={canManagePayments}
         canReversePayments={canReversePayments}
         currentUserId={context.userId}
+        today={todayDateOnlyInAcademyTimezone()}
       />
     </div>
   );

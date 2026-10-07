@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAdmissionsView, getStudentPhotoUrl } from "@/lib/academies/students";
 import { listBranches } from "@/lib/academies/branches";
+import { listBatches } from "@/lib/academies/batches";
+import { listCourses } from "@/lib/academies/courses";
 import { AdmissionsList } from "./admissions-list";
 import { Button, LinkButton, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
@@ -12,14 +14,15 @@ import { PaginationNav } from "@/components/pagination-nav";
  *
  * DESIGN.md §9.2 sketches this as a board/pipeline view (Applied ->
  * Documents Pending -> Enrolled) that the current `students` schema (Item
- * 37, no pipeline-stage column) can't literally support — see
- * lib/academies/students.ts's `getAdmissionsView` doc comment for the full
- * judgment call. In short: this page shows only *active* students who are
- * either recently registered or still missing documents (the two
- * conditions this schema can actually express), newest first, each row
- * flagged with `hasDocuments`/`daysSinceRegistered` so the table can badge
- * "Documents pending" / "Recently applied" — a settled, fully-documented,
- * not-recent student is left off this view (they're still on the plain
+ * 37, no pipeline-stage column) can't literally support. Post-audit
+ * revision (see lib/academies/students.ts's `getAdmissionsView` doc
+ * comment for the full "why"): the Documents-Pending stand-in this used to
+ * use was never a real, reachable signal (nothing in this codebase ever
+ * creates a `student_documents` row), so it's been replaced with the one
+ * distinction that actually has real data behind it — enrollment. This
+ * page now shows only *active* students with NO active `batch_enrollments`
+ * row ("Applied"), newest first; the moment a student is enrolled in a
+ * batch, they drop off this view entirely (they're still on the plain
  * list). Same gating as `/academy/students` (one Master Permission Matrix
  * row covers both).
  */
@@ -85,14 +88,33 @@ export default async function AcademyAdmissionsPage({
   );
   const photoUrlByStudentId = new Map(photoEntries.filter((entry): entry is readonly [string, string] => entry !== null));
 
+  // Course/batch picker for the new "Enroll" action below — the exact same
+  // computation app/academy/students/page.tsx already does for its own
+  // "change course" dialog (listBatches already applies the caller's own
+  // scoping — branch-limited roles only ever see their own batches — so
+  // this never offers a batch the actor couldn't actually enroll into).
+  // `canEnroll` reuses listBatches' own `canManage` (ACADEMY_COURSES_
+  // BATCHES_ACTION's "full"/"manage" gate — the exact permission
+  // enrollStudentInBatch itself checks), rather than re-deriving a second
+  // copy of that permission decision here.
+  const [batchesResult, coursesResult] = await Promise.all([listBatches(context), listCourses(context)]);
+  const courseNameById = new Map((coursesResult.ok ? coursesResult.courses : []).map((c) => [c.id, c.name]));
+  const courseOptions = (batchesResult.ok ? batchesResult.batches : [])
+    .filter((batch) => batch.status !== "archived")
+    .map((batch) => ({
+      batchId: batch.id,
+      label: `${courseNameById.get(batch.courseId) ?? "Unknown course"} — ${batch.name}`,
+    }));
+  const canEnroll = batchesResult.ok && batchesResult.canManage;
+
   return (
     <div className={PAGE_WRAP}>
       <PageHeader
         title="Admissions"
         description={
           isTrainer
-            ? "Showing recently-registered or pending-documents students enrolled in the courses or batches you teach."
-            : "Recently-registered or pending-documents students across this academy."
+            ? "Applied students not yet enrolled in the courses or batches you teach."
+            : "Applied students across this academy who are not yet enrolled in a batch."
         }
       />
 
@@ -124,7 +146,13 @@ export default async function AcademyAdmissionsPage({
         </form>
       )}
 
-      <AdmissionsList admissions={data.rows} canManage={canManage} photoUrlByStudentId={photoUrlByStudentId} />
+      <AdmissionsList
+        admissions={data.rows}
+        canManage={canManage}
+        canEnroll={canEnroll}
+        courseOptions={courseOptions}
+        photoUrlByStudentId={photoUrlByStudentId}
+      />
 
       <PaginationNav page={data.page} pageSize={data.pageSize} totalCount={data.totalCount} searchParams={params} />
     </div>

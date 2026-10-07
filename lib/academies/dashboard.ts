@@ -2,7 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { getStudentReports } from "@/lib/academies/student-reports";
+import { getStudentReports, type EnrollmentTrendPoint } from "@/lib/academies/student-reports";
 import { listStaff } from "@/lib/academies/staff";
 import { listExams } from "@/lib/academies/exams";
 import { listPendingApprovalRequests } from "@/lib/academies/approval-requests";
@@ -61,6 +61,10 @@ export interface AcademyDashboardData {
   recentPayments: RecentPaymentRow[] | null;
   usage: { metrics: OwnAcademyUsageMetrics | null; limits: OwnAcademyUsageLimits | null } | null;
   finance: VisibleStudentPaymentsSection | null;
+  /** Same `getStudentReports` call already made for `totalStudents` above
+   * — threaded through here too rather than fetched a second time, so the
+   * dashboard's enrollment-trend chart costs this page nothing extra. */
+  enrollmentTrend: EnrollmentTrendPoint[] | null;
   alerts: DashboardAlert[];
 }
 
@@ -89,6 +93,7 @@ export async function getAcademyDashboardData(
     ]);
 
   const totalStudents = studentReportsResult.ok ? studentReportsResult.report.totalStudents : null;
+  const enrollmentTrend = studentReportsResult.ok ? studentReportsResult.report.enrollmentTrend : null;
   const activeStaffCount = staffResult.ok ? staffResult.staff.length : null;
 
   const now = new Date();
@@ -169,6 +174,7 @@ export async function getAcademyDashboardData(
       recentPayments,
       usage,
       finance,
+      enrollmentTrend,
       alerts,
     },
   };

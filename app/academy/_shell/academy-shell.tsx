@@ -206,7 +206,7 @@ export function AcademyShell({
             type="button"
             onClick={() => setDrawerOpen(false)}
             aria-label="Close menu"
-            className="academy-shell-close-btn rounded-control p-3 transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98]"
+            className="academy-shell-close-btn rounded-control p-3 transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98]"
             style={{ background: "none", border: "none", cursor: "pointer", color: color.textMuted }}
           >
             <Icon name="close" />
@@ -254,7 +254,7 @@ export function AcademyShell({
                     href={item.href}
                     aria-current={active ? "page" : undefined}
                     onClick={() => setDrawerOpen(false)}
-                    className={`flex flex-1 items-center gap-3 rounded-control border-l-[3px] px-3 py-3 text-sm no-underline transition-colors duration-150 motion-safe:active:scale-[0.98] min-[1025px]:py-1.5 ${
+                    className={`flex flex-1 items-center gap-3 rounded-control border-l-[3px] px-3 py-3 text-sm no-underline transition-[color,background-color,border-color,transform] duration-150 ease-out motion-safe:active:scale-[0.98] min-[1025px]:py-1.5 ${
                       active
                         ? "border-brand bg-brand-tint font-semibold text-brand"
                         : "border-transparent font-medium text-ink hover:bg-app"
@@ -270,7 +270,7 @@ export function AcademyShell({
                       aria-expanded={expanded}
                       aria-controls={subNavId}
                       aria-label={`${expanded ? "Collapse" : "Expand"} ${item.label}`}
-                      className="flex shrink-0 items-center justify-center rounded-control p-3 text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:hidden"
+                      className="flex shrink-0 items-center justify-center rounded-control p-3 text-muted transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:hidden"
                     >
                       <span
                         className={`flex motion-safe:transition-transform motion-safe:duration-150 ${expanded ? "rotate-180" : ""}`}
@@ -299,7 +299,7 @@ export function AcademyShell({
                             key={sub.href}
                             href={sub.href}
                             onClick={() => setDrawerOpen(false)}
-                            className={`rounded-control px-2.5 py-2.5 text-[0.82rem] no-underline transition-colors duration-150 motion-safe:active:scale-[0.98] min-[1025px]:py-1 ${
+                            className={`rounded-control px-2.5 py-2.5 text-[0.82rem] no-underline transition-[color,background-color,border-color,transform] duration-150 ease-out motion-safe:active:scale-[0.98] min-[1025px]:py-1 ${
                               subActive
                                 ? "bg-brand-tint font-semibold text-brand"
                                 : "font-normal text-muted hover:bg-app hover:text-ink"
@@ -321,7 +321,7 @@ export function AcademyShell({
           <Link
             href="/account/security"
             onClick={() => setDrawerOpen(false)}
-            className="flex items-center gap-3 rounded-control px-3 py-3 text-sm font-medium text-muted no-underline transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2"
+            className="flex items-center gap-3 rounded-control px-3 py-3 text-sm font-medium text-muted no-underline transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2"
           >
             <Icon name="settings" />
             <span>Account settings</span>
@@ -329,7 +329,7 @@ export function AcademyShell({
           <form action={signOut}>
             <button
               type="submit"
-              className="flex w-full items-center gap-3 rounded-control border-none bg-transparent px-3 py-3 text-left text-sm font-medium text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2"
+              className="flex w-full items-center gap-3 rounded-control border-none bg-transparent px-3 py-3 text-left text-sm font-medium text-muted transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2"
             >
               <Icon name="logout" />
               <span>Sign out</span>
@@ -362,7 +362,7 @@ export function AcademyShell({
               aria-label="Open menu"
               aria-expanded={drawerOpen}
               aria-controls="academy-shell-sidebar"
-              className="academy-shell-menu-btn rounded-control p-3 transition-colors duration-150 hover:bg-app motion-safe:active:scale-[0.98]"
+              className="academy-shell-menu-btn rounded-control p-3 transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app motion-safe:active:scale-[0.98]"
               style={{ background: "none", border: "none", cursor: "pointer", color: color.text, display: "none" }}
             >
               <Icon name="menu" />
@@ -400,7 +400,7 @@ export function AcademyShell({
             <Link
               href="/academy/notifications"
               aria-label={`Notifications${unreadNotificationsCount > 0 ? `, ${unreadNotificationsCount} unread` : ""}`}
-              className="flex rounded-control p-3 text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98]"
+              className="flex rounded-control p-3 text-muted transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98]"
             >
               {/* Badge anchors to this inner, icon-sized box rather than the
                * outer (now more generously padded) button, so it always
@@ -479,16 +479,13 @@ export function AcademyShell({
         .academy-shell-account-chip:hover {
           background-color: #dbe6fd;
         }
-        /* Nav scrollbar: invisible at rest, a thin 6px thumb appears only
-           on hover/keyboard-focus of the nav region — a scroll affordance
-           that doesn't visually compete with the active item, icons, or
-           accordion chevrons when the sidebar is just sitting there. Track
-           stays transparent and width never changes between states, so
-           this never shifts nav content or layout width — purely a resting
-           vs. interacting color swap, same scroll behavior either way.
-           Firefox (scrollbar-width/scrollbar-color) and WebKit
-           (::-webkit-scrollbar-*) need separate rules; both default to
-           invisible and reveal on the same :hover/:focus-within pair. */
+        /* Nav scrollbar: invisible at rest, a thin 4px gray thumb appears
+           only on hover/keyboard-focus of the nav region — the plain
+           native scrollbar, proportional thumb length and all. An earlier
+           pass tried to style the native thumb into a short, fixed-size
+           pill (border-inset hack) and then replaced it with a custom
+           scroll-linked overlay; both were removed as more trouble than
+           they were worth — this is the simple, honest version. */
         .academy-shell-nav {
           scrollbar-width: none;
           scrollbar-color: transparent transparent;
@@ -496,10 +493,10 @@ export function AcademyShell({
         .academy-shell-nav:hover,
         .academy-shell-nav:focus-within {
           scrollbar-width: thin;
-          scrollbar-color: rgba(15, 23, 42, 0.18) transparent;
+          scrollbar-color: var(--color-border-strong) transparent;
         }
         .academy-shell-nav::-webkit-scrollbar {
-          width: 6px;
+          width: 4px;
         }
         .academy-shell-nav::-webkit-scrollbar-track {
           background: transparent;
@@ -507,25 +504,17 @@ export function AcademyShell({
         .academy-shell-nav::-webkit-scrollbar-thumb {
           background-color: transparent;
           border-radius: 999px;
-          transition: background-color 0.2s ease;
-          /* WebKit computes the thumb's own length proportionally from the
-             scroll ratio and gives authors no height/max-height to override
-             that — this is the one real lever: an invisible top/bottom
-             border (left/right stay 0, so the 6px width is untouched) with
-             background-clip: padding-box paints the thumb's color inset
-             from both ends of that computed box, so the visible pill reads
-             shorter without changing the native hit area, drag behavior,
-             or scroll math. */
-          border-top: 3px solid transparent;
-          border-bottom: 3px solid transparent;
-          background-clip: padding-box;
+          transition: background-color 150ms var(--ease-out);
         }
         .academy-shell-nav:hover::-webkit-scrollbar-thumb,
         .academy-shell-nav:focus-within::-webkit-scrollbar-thumb {
-          background-color: rgba(15, 23, 42, 0.18);
+          background-color: var(--color-border-strong);
+        }
+        .academy-shell-nav::-webkit-scrollbar-thumb:hover {
+          background-color: var(--color-muted);
         }
         .academy-shell-scrim {
-          transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1);
+          transition: opacity 200ms var(--ease-out);
         }
         /* Accordion expand/collapse — animated instead of the old instant
            display:none/block snap. grid-template-rows: 0fr/1fr is the
@@ -542,7 +531,7 @@ export function AcademyShell({
           display: grid;
           grid-template-rows: 1fr;
           visibility: visible;
-          transition: grid-template-rows 200ms cubic-bezier(0.77, 0, 0.175, 1);
+          transition: grid-template-rows 200ms var(--ease-in-out);
         }
         .academy-shell-sidebar .academy-subnav-collapse > div {
           transition: opacity 200ms ease;
@@ -559,7 +548,7 @@ export function AcademyShell({
                (entering/exiting content) replaces the built-in "ease",
                which reads as noticeably weaker/less intentional at the
                same duration. */
-            transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+            transition: transform 200ms var(--ease-out);
             box-shadow: 2px 0 12px rgba(15, 23, 42, 0.15);
           }
           .academy-shell-content {
@@ -578,7 +567,7 @@ export function AcademyShell({
           .academy-shell-sidebar .academy-subnav-collapse[data-mobile-collapsed="true"] {
             grid-template-rows: 0fr;
             visibility: hidden;
-            transition: grid-template-rows 200ms cubic-bezier(0.77, 0, 0.175, 1), visibility 0s linear 200ms;
+            transition: grid-template-rows 200ms var(--ease-in-out), visibility 0s linear 200ms;
           }
           .academy-shell-sidebar .academy-subnav-collapse[data-mobile-collapsed="true"] > div {
             opacity: 0;

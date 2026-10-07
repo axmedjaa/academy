@@ -6,7 +6,7 @@ import { listBranches } from "@/lib/academies/branches";
 import { listBatches } from "@/lib/academies/batches";
 import { listCourses } from "@/lib/academies/courses";
 import { StudentForm } from "./student-form";
-import { PageHeader, PageMessage, Section } from "@/app/academy/_shell/ui";
+import { BackLink, PageHeader, PageMessage, Section } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 38 — `/academy/students/new`. Same gating shape as
@@ -68,6 +68,7 @@ export default async function NewStudentPage() {
 
   return (
     <div className="mx-auto w-full max-w-xl px-4 py-8 sm:px-6">
+      <BackLink href="/academy/students" label="Back to students" />
       <PageHeader title="Register student" description="Create a new student record for this academy." />
       {branches.length === 0 ? (
         <Section>

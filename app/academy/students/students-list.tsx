@@ -53,17 +53,6 @@ import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { centsToDollars, dollarsToCents } from "@/lib/ui/money";
 import Link from "next/link";
 
-/** Mirrors lib/academies/fee-periods.ts's INTERVAL_OPTIONS-shaped labels —
- * used to render the "Payment Plan" column ("Monthly — $50.00 / period"). */
-const INTERVAL_LABELS: Record<number, string> = {
-  1: "Monthly",
-  2: "Every 2 Months",
-  3: "Every 3 Months",
-  4: "Every 4 Months",
-  6: "Every 6 Months",
-  12: "Yearly",
-};
-
 function formatMoney(amountCents: number, currency: string): string {
   return `${currency} ${(amountCents / 100).toFixed(2)}`;
 }
@@ -312,8 +301,13 @@ export function StudentsList({
                             : "—"}
                         </td>
                         <td className={`${td} hidden xl:table-cell text-muted`}>
+                          {/* "6 months · $6.00/mo" — never the schedule's
+                              TOTAL fee next to its duration unlabeled (that
+                              reads as one lump payment, not an installment
+                              plan — see fee-periods.ts's own module comment,
+                              "Payment schedule model"). */}
                           {summary
-                            ? `${INTERVAL_LABELS[summary.intervalMonths] ?? `Every ${summary.intervalMonths} mo.`} — ${formatMoney(summary.scheduleAmountCents, summary.currency)}`
+                            ? `${summary.intervalMonths} mo${summary.intervalMonths === 1 ? "" : "s"} · ${formatMoney(summary.monthlyInstallmentCents, summary.currency)}/mo`
                             : "—"}
                         </td>
                         <td className={`${td} hidden lg:table-cell text-right tabular-nums text-muted`}>
@@ -598,7 +592,7 @@ export function StudentsList({
                       ))}
                     </select>
                   </Field>
-                  <Field label="Amount per period (USD)">
+                  <Field label="Total Fee (USD)">
                     <input type="number" name="paymentPlanAmountDollars" min={0.01} step="0.01" placeholder="0.00" required className={inputClass} />
                   </Field>
                 </>
@@ -745,8 +739,7 @@ function RecordPaymentDialog({
                 re-reading the enrollment's current schedule, so the figure
                 stays accurate even if the schedule was edited afterward. */}
             <p className="mt-1 text-xs text-muted">
-              Payment plan: {INTERVAL_LABELS[period.intervalMonths] ?? `Every ${period.intervalMonths} mo.`} —{" "}
-              {formatMoney(period.expectedAmountCents, period.currency)} / period
+              Payment plan: {period.intervalMonths}-month plan · {formatMoney(period.expectedAmountCents, period.currency)}/month
             </p>
             {period.status === "overdue" && (
               <p className="mt-1 text-xs text-danger">Overdue since {period.dueDate}.</p>

@@ -12,8 +12,8 @@ import { Button, ErrorMessage } from "@/app/academy/_shell/ui";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_SIZE_BYTES = 5 * 1024 * 1024;
-const MAX_SIZE_LABEL = "5 MB";
+const MAX_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_SIZE_LABEL = "10 MB";
 
 type Status = "idle" | "uploading" | "confirming" | "error";
 

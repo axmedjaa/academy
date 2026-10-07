@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { ACADEMY_FEE_PERIODS_ACTION, getAcademyPermissionLevel, hasAcademyPermission } from "@/lib/auth/academy-permissions";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
+import { todayDateOnlyInAcademyTimezone } from "@/lib/academies/fee-periods";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { FeePeriodsManager } from "./fee-periods-manager";
 
@@ -42,7 +43,7 @@ export default async function FeePeriodsPage() {
         title="Fee Periods"
         description="Monthly, quarterly, or yearly fee schedules per enrollment — what each period is expected, paid, and remaining."
       />
-      <FeePeriodsManager studentOptions={studentOptions} canManage={canManage} />
+      <FeePeriodsManager studentOptions={studentOptions} canManage={canManage} today={todayDateOnlyInAcademyTimezone()} />
     </div>
   );
 }

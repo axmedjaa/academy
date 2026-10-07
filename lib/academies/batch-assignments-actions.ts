@@ -32,10 +32,13 @@ function parseAssignTrainerFormData(formData: FormData): AssignTrainerInput {
   };
 }
 
-/** The "Amount per period" field is entered in dollars, not cents — see
- * lib/ui/money.ts's dollarsToCents. Shared by both enrollStudentInBatch
- * (roster-panel.tsx's enroll form) and updateStudentEnrollment
- * (students-list.tsx's "change course" form). */
+/** The "Total Fee" field is entered in dollars, not cents — see
+ * lib/ui/money.ts's dollarsToCents. This is the schedule's TOTAL fee, split
+ * into `intervalMonths` equal monthly installments server-side (see
+ * fee-periods.ts's own module comment, "Payment schedule model") — never a
+ * per-period amount. Shared by both enrollStudentInBatch (roster-panel.tsx's
+ * enroll form) and updateStudentEnrollment (students-list.tsx's "change
+ * course" form). */
 function parsePaymentPlanFormData(formData: FormData): EnrollStudentInput["paymentPlan"] {
   const currency = String(formData.get("paymentPlanCurrency") ?? "").trim();
   const anchorDate = String(formData.get("paymentPlanAnchorDate") ?? "").trim();
@@ -180,5 +183,10 @@ export async function updateStudentEnrollment(
   }
 
   revalidatePath("/academy/students");
+  // Also reused by app/academy/admissions/admissions-list.tsx's "Enroll"
+  // action (same function, no parallel enrollment implementation) — a
+  // newly-enrolled student must stop appearing there immediately, not
+  // just on the Students list.
+  revalidatePath("/academy/admissions");
   return { ok: true };
 }

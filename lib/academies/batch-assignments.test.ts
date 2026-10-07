@@ -31,7 +31,7 @@ import {
 } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
-import { getEnrollmentPaymentSummary, recordFeePeriodPayment } from "./fee-periods";
+import { getEnrollmentPaymentSummary, recordFeePeriodPayment, todayDateOnlyInAcademyTimezone } from "./fee-periods";
 import {
   assignTrainerToBatch,
   deleteBatchEnrollment,
@@ -145,7 +145,12 @@ async function insertProgramAndCourse(academyId: string): Promise<string> {
   return course.id;
 }
 
-async function insertBatchDirect(academyId: string, branchId: string, courseId: string): Promise<string> {
+async function insertBatchDirect(
+  academyId: string,
+  branchId: string,
+  courseId: string,
+  startDate: string = "2026-01-01",
+): Promise<string> {
   const [row] = await db
     .insert(batches)
     .values({
@@ -154,7 +159,7 @@ async function insertBatchDirect(academyId: string, branchId: string, courseId: 
       courseId,
       name: `Batch ${randomUUID()}`,
       code: `B-${randomUUID().slice(0, 8)}`,
-      startDate: "2026-01-01",
+      startDate,
     })
     .returning({ id: batches.id });
   return row.id;
@@ -659,7 +664,10 @@ describe("enrollStudentInBatch — atomic initial payment plan", () => {
 
     const periods = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, result.enrollment.id));
     expect(periods.length).toBeGreaterThan(0);
-    expect(periods[0].expectedAmountCents).toBe(15_000);
+    // $150.00 total over 3 monthly installments = $50.00/month — see
+    // fee-periods.ts's own module comment ("Payment schedule model"):
+    // intervalMonths is the installment COUNT, never a per-period amount.
+    expect(periods[0].expectedAmountCents).toBe(5_000);
 
     // Approved architecture: "Initial state: Expected > 0, Paid = 0, Status = UNPAID."
     const summary = await getEnrollmentPaymentSummary(context, result.enrollment.id);
@@ -676,9 +684,13 @@ describe("enrollStudentInBatch — atomic initial payment plan", () => {
     expect(payments).toHaveLength(0);
   });
 
-  it("defaults the anchor date to the batch's own start_date when none is given", async () => {
+  it("defaults the anchor date to TODAY (the enrollment moment), never the batch's own start_date", async () => {
     const { context, academyId, branchId, courseId, creatorUserId } = await setupAcademy("manager");
-    const specificBatchId = await insertBatchDirect(academyId, branchId, courseId); // startDate fixed at "2026-01-01" (insertBatchDirect's own default)
+    // insertBatchDirect's own default startDate is "2026-01-01" — fixed,
+    // and deliberately far from "today" in practice, so this test can't
+    // pass by accident if the old "anchors to batch.startDate" behavior
+    // ever crept back in.
+    const specificBatchId = await insertBatchDirect(academyId, branchId, courseId);
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
     const result = await enrollStudentInBatch(context, {
@@ -693,9 +705,181 @@ describe("enrollStudentInBatch — atomic initial payment plan", () => {
       .select()
       .from(enrollmentFeeSchedules)
       .where(eq(enrollmentFeeSchedules.enrollmentId, result.enrollment.id));
-    expect(schedule.anchorDate).toBe("2026-01-01");
+    expect(schedule.anchorDate).toBe(todayDateOnlyInAcademyTimezone());
+    expect(schedule.anchorDate).not.toBe("2026-01-01");
+
+    // The direct, user-visible consequence of the fix: the first fee
+    // period starts TODAY and is due TODAY — never "Upcoming," never
+    // anchored to a batch start date weeks or months away.
+    const periods = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, result.enrollment.id))
+      .orderBy(feePeriods.periodStart);
+    const firstPeriod = periods[0];
+    expect(firstPeriod.periodStart).toBe(todayDateOnlyInAcademyTimezone());
+    expect(firstPeriod.dueDate).toBe(todayDateOnlyInAcademyTimezone());
+  });
+
+  it("every supported payment-plan interval (1/2/3/4/6/12 months) generates that many monthly installments, each exactly ONE calendar month, splitting the total fee evenly", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    // Expected period-end for a ONE-calendar-month period is "the day
+    // before the same day-of-month next month, clamped to that month's
+    // own length" — computed independently here (plain JS Date math on
+    // the anchor's own parts) rather than by calling the production
+    // addMonths/addDays helpers this test is meant to verify, so a bug in
+    // those helpers can't hide itself from this assertion. The clamp
+    // matters even for this "every interval" test (not just the dedicated
+    // month-end-boundary test below) because `today` — whatever day this
+    // test happens to run — could itself be the 29th/30th/31st of its
+    // month on any given day. Every generated period is exactly one
+    // month long regardless of `intervalMonths` — see fee-periods.ts's
+    // own module comment ("Payment schedule model"): `intervalMonths` is
+    // the installment COUNT, never a period length.
+    function expectedPeriodEnd(startDate: string): string {
+      const [y, m, d] = startDate.split("-").map(Number);
+      const totalMonths = m - 1 + 1;
+      const y2 = y + Math.floor(totalMonths / 12);
+      const m2 = (totalMonths % 12) + 1;
+      const lastDayOfMonth = new Date(Date.UTC(y2, m2, 0)).getUTCDate();
+      const d2 = Math.min(d, lastDayOfMonth);
+      const end = new Date(Date.UTC(y2, m2 - 1, d2));
+      end.setUTCDate(end.getUTCDate() - 1);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return `${end.getUTCFullYear()}-${pad(end.getUTCMonth() + 1)}-${pad(end.getUTCDate())}`;
+    }
+
+    for (const intervalMonths of [1, 2, 3, 4, 6, 12] as const) {
+      const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+      const totalCents = 12_000; // divides evenly by every supported interval
+      const result = await enrollStudentInBatch(context, {
+        batchId,
+        studentId,
+        paymentPlan: { intervalMonths, amountCents: totalCents },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+
+      const periods = await db
+        .select()
+        .from(feePeriods)
+        .where(eq(feePeriods.enrollmentId, result.enrollment.id))
+        .orderBy(feePeriods.periodStart);
+      expect(periods).toHaveLength(intervalMonths);
+      const firstPeriod = periods[0];
+
+      expect(firstPeriod.periodStart).toBe(today);
+      expect(firstPeriod.dueDate).toBe(today);
+      expect(firstPeriod.periodEnd).toBe(expectedPeriodEnd(today));
+      expect(firstPeriod.expectedAmountCents).toBe(totalCents / intervalMonths);
+
+      // The installments sum to EXACTLY the total fee, no rounding drift.
+      const sum = periods.reduce((total, period) => total + period.expectedAmountCents, 0);
+      expect(sum).toBe(totalCents);
+    }
+  });
+
+  it("clamps correctly at month-end boundaries (e.g. enrolling Jan 29/30/31, or on Feb 29 in a leap year) — same day-clamping convention generateFeePeriodsForEnrollment already uses — every installment is exactly one month, regardless of the plan's own installment count", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("manager");
+
+    const cases: { anchorDate: string; intervalMonths: 1 | 2; expectedPeriodEnd: string }[] = [
+      // Jan 31 + 1 month -> Feb has no 31st in 2027 (not a leap year) ->
+      // clamps to Feb 28, so period end is one day before that: Feb 27.
+      { anchorDate: "2027-01-31", intervalMonths: 1, expectedPeriodEnd: "2027-02-27" },
+      // Jan 30 + 1 month -> Feb 28 (2027) -> period end Feb 27.
+      { anchorDate: "2027-01-30", intervalMonths: 1, expectedPeriodEnd: "2027-02-27" },
+      // Dec 31 + 1 month -> Jan 31 (2027) -> period end Jan 30. The plan's
+      // OWN installment count (2) never changes a period's own length —
+      // only how many separate monthly installments exist in total and
+      // what each one's own expectedAmountCents is.
+      { anchorDate: "2026-12-31", intervalMonths: 2, expectedPeriodEnd: "2027-01-30" },
+      // Jan 31, 2028 (a leap year) + 1 month -> Feb 29 -> period end Feb 28.
+      { anchorDate: "2028-01-31", intervalMonths: 1, expectedPeriodEnd: "2028-02-28" },
+    ];
+
+    for (const { anchorDate, intervalMonths, expectedPeriodEnd } of cases) {
+      const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+      const result = await enrollStudentInBatch(context, {
+        batchId,
+        studentId,
+        paymentPlan: { intervalMonths, amountCents: 5_000, anchorDate },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+
+      const [firstPeriod] = await db
+        .select()
+        .from(feePeriods)
+        .where(eq(feePeriods.enrollmentId, result.enrollment.id))
+        .orderBy(feePeriods.periodStart)
+        .limit(1);
+      expect(firstPeriod.periodStart).toBe(anchorDate);
+      expect(firstPeriod.periodEnd).toBe(expectedPeriodEnd);
+    }
+  });
+
+  it("regression: a batch whose start_date is in the FUTURE relative to the enrollment moment still anchors the first period to TODAY, not the batch's start_date", async () => {
+    const { context, academyId, branchId, courseId, creatorUserId } = await setupAcademy("manager");
+    const today = todayDateOnlyInAcademyTimezone();
+
+    // The exact shape of the reported bug: a batch starting weeks/months
+    // from now, enrolled into today. Picks a start date structurally
+    // guaranteed to be after "today" regardless of when this test runs.
+    const futureStartDate = formatFutureDate(today, 60);
+    const futureBatchId = await insertBatchDirect(academyId, branchId, courseId, futureStartDate);
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, {
+      batchId: futureBatchId,
+      studentId,
+      paymentPlan: { intervalMonths: 1, amountCents: 10_000 },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const [schedule] = await db
+      .select()
+      .from(enrollmentFeeSchedules)
+      .where(eq(enrollmentFeeSchedules.enrollmentId, result.enrollment.id));
+    expect(schedule.anchorDate).toBe(today);
+    expect(schedule.anchorDate).not.toBe(futureStartDate);
+
+    const [firstPeriod] = await db
+      .select()
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, result.enrollment.id))
+      .orderBy(feePeriods.periodStart)
+      .limit(1);
+    expect(firstPeriod.periodStart).toBe(today);
+    expect(firstPeriod.dueDate).toBe(today);
+    expect(firstPeriod.periodStart).not.toBe(futureStartDate);
+    expect(firstPeriod.dueDate).not.toBe(futureStartDate);
+
+    // The "Upcoming (not yet due)" UI wording (student-detail.tsx /
+    // fee-periods-manager.tsx) is driven by comparing `dueDate` against
+    // today, not by the batch's own start_date — so a due date of today
+    // must never be treated as in the future.
+    expect(compareDateOnlyForTest(firstPeriod.dueDate, today)).toBe(0);
   });
 });
+
+/** Adds `days` calendar days to a "YYYY-MM-DD" date-only string without any
+ * timezone-sensitive Date-object local-time drift (plain UTC arithmetic on
+ * the parsed parts only) — used solely to build a start date this test can
+ * guarantee is in the future relative to `today`, not production logic. */
+function formatFutureDate(today: string, days: number): string {
+  const [y, m, d] = today.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + days);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
+}
+
+function compareDateOnlyForTest(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 describe("enroll/withdraw student — unique-for-active-enrollment enforcement", () => {
   it("enrolling the same student in the same batch twice while active is a conflict", async () => {

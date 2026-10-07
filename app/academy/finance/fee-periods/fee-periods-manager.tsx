@@ -21,16 +21,6 @@ function formatMoney(amountCents: number, currency: string): string {
   return `${currency} ${(amountCents / 100).toFixed(2)}`;
 }
 
-/** Today as a plain "YYYY-MM-DD" string, compared lexically against
- * `periodStart`/`dueDate` — same string-compare convention
- * lib/academies/fee-periods.ts's own `compareDateOnly`/`todayDateOnly` use
- * server-side, so "is this period already due" reads identically on both
- * sides. Client-side only, purely presentational. */
-function todayDateOnly(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}
-
 /**
  * A period that hasn't started yet is "future," never "currently due" —
  * even though its derived `status` is plain `unpaid`, the same status a
@@ -79,10 +69,15 @@ function periodGuidance(period: FeePeriodRecord, currency: string, today: string
 interface Props {
   studentOptions: StudentPickerOption[];
   canManage: boolean;
+  /** "Today," server-computed in the academy's own Somalia-local calendar
+   * (see lib/academies/fee-periods.ts's `todayDateOnlyInAcademyTimezone`) —
+   * passed down rather than read from the browser's own clock/timezone, so
+   * which periods count as "started yet" never depends on where the staff
+   * member's browser happens to be. */
+  today: string;
 }
 
-export function FeePeriodsManager({ studentOptions, canManage }: Props) {
-  const today = todayDateOnly();
+export function FeePeriodsManager({ studentOptions, canManage, today }: Props) {
   const [studentId, setStudentId] = useState("");
   const [enrollments, setEnrollments] = useState<StudentEnrollmentOption[]>([]);
   const [enrollmentId, setEnrollmentId] = useState("");
@@ -146,6 +141,22 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadPeriods intentionally omitted: it closes over enrollmentId and would otherwise re-run every render.
   }, [enrollmentId]);
 
+  // The normal fee-periods view never shows a period before its own
+  // periodStart arrives — the database may already hold it (period
+  // generation always eagerly generates one period ahead; see
+  // generateFeePeriodsForEnrollment's own doc comment), but telling staff
+  // about a payment that isn't owed yet is exactly the "Upcoming period
+  // (not yet due)" banner this view no longer shows. Purely a display-time
+  // filter on each period's own `periodStart` (never the batch's start
+  // date or the enrollment date) — nothing about generation, status, or
+  // balances changes.
+  const visiblePeriods = periods.filter((period) => period.periodStart <= today);
+  // Summed across every generated period (not just the visible ones) so an
+  // advance payment on a not-yet-started installment — a real, if rare,
+  // possibility — still counts; see setEnrollmentFeeSchedule's own doc
+  // comment in fee-periods.ts.
+  const paidCents = periods.reduce((sum, period) => sum + period.paidCents, 0);
+
   return (
     <Section>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -172,14 +183,44 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
 
       {enrollmentId && !loading && (
         <div className="mt-6">
-          {canManage && <ScheduleForm enrollmentId={enrollmentId} schedule={schedule} onSaved={reloadPeriods} />}
+          {schedule && (
+            <div className="mb-4 rounded-card border border-border bg-app p-4">
+              {/* "6 months · $6.00/month · 6 monthly payments" — never "6
+                  months — $36" (that reads as one lump $36 payment). See
+                  fee-periods.ts's own module comment ("Payment schedule
+                  model"): intervalMonths is how many equal MONTHLY
+                  installments the total splits into. */}
+              <p className="text-sm font-medium text-ink">
+                {schedule.intervalMonths} month{schedule.intervalMonths === 1 ? "" : "s"} ·{" "}
+                {formatMoney(schedule.monthlyInstallmentCents, schedule.currency)}/month · {schedule.intervalMonths}{" "}
+                monthly payment{schedule.intervalMonths === 1 ? "" : "s"}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-4 text-sm">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted">Total Fee</p>
+                  <p className="font-medium text-ink">{formatMoney(schedule.amountCents, schedule.currency)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted">Paid</p>
+                  <p className="font-medium text-ink">{formatMoney(paidCents, schedule.currency)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted">Remaining</p>
+                  <p className="font-medium text-ink">
+                    {formatMoney(Math.max(0, schedule.amountCents - paidCents), schedule.currency)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {canManage && <ScheduleForm enrollmentId={enrollmentId} schedule={schedule} paidCents={paidCents} onSaved={reloadPeriods} />}
 
           <div className="mt-6">
             <h2 className="text-base font-semibold text-ink">Fee periods</h2>
-            <NextOutstandingBanner periods={periods} currency={schedule?.currency ?? "USD"} today={today} />
-            {periods.length === 0 ? (
+            {visiblePeriods.length === 0 ? (
               <EmptyState
-                message={schedule ? "No fee periods yet." : "Set a fee schedule to generate periods."}
+                message={schedule ? "No fee periods due yet." : "Set a fee schedule to generate periods."}
                 icon={<Icon name="payments" />}
               />
             ) : (
@@ -196,7 +237,7 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
                 </tr>
               </thead>
               <tbody>
-                  {periods.map((period) => (
+                  {visiblePeriods.map((period) => (
                     <PeriodRow
                       key={period.id}
                       period={period}
@@ -211,7 +252,7 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
             )}
           </div>
 
-          {canManage && periods.some((period) => period.remainingCents > 0) && (
+          {canManage && visiblePeriods.some((period) => period.remainingCents > 0) && (
             <div className="mt-6 border-t border-border pt-5">
               <h2 className="text-base font-semibold text-ink">Record a payment across outstanding periods</h2>
               <p className="mt-1 text-xs text-muted">
@@ -222,7 +263,7 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
               <RecordPaymentForm
                 studentId={studentId}
                 enrollmentId={enrollmentId}
-                remainingCents={periods.reduce((sum, period) => sum + period.remainingCents, 0)}
+                remainingCents={visiblePeriods.reduce((sum, period) => sum + period.remainingCents, 0)}
                 currency={schedule?.currency ?? "USD"}
                 onDone={reloadPeriods}
               />
@@ -231,60 +272,6 @@ export function FeePeriodsManager({ studentOptions, canManage }: Props) {
         </div>
       )}
     </Section>
-  );
-}
-
-/**
- * "If the current period is paid but another period is outstanding, the UI
- * should guide the staff member to that next period rather than making them
- * guess" — a plain-language banner naming the single next period staff
- * should collect payment for, computed client-side from the already-loaded
- * `periods` (oldest outstanding `periodStart` first — the exact same
- * ordering `recordEnrollmentPayment` itself auto-allocates into
- * server-side, so this banner never promises an outcome the backend
- * wouldn't actually produce).
- *
- * §7: this must never present a FUTURE (not-yet-started) period as though
- * it were currently owed. Because "oldest outstanding" is chronological,
- * a future period can only ever surface here once every already-started
- * period is settled — in that case the wording switches to "Upcoming"
- * rather than "Next period needing payment," so staff are never told money
- * is due before it actually is.
- */
-function NextOutstandingBanner({
-  periods,
-  currency,
-  today,
-}: {
-  periods: FeePeriodRecord[];
-  currency: string;
-  today: string;
-}) {
-  if (periods.length === 0) return null;
-
-  const nextOutstanding = [...periods]
-    .filter((period) => period.remainingCents > 0)
-    .sort((a, b) => (a.periodStart < b.periodStart ? -1 : a.periodStart > b.periodStart ? 1 : 0))[0];
-
-  if (!nextOutstanding) {
-    return (
-      <p className="mt-2 text-sm font-medium text-success">
-        All generated fee periods are fully paid — nothing outstanding right now.
-      </p>
-    );
-  }
-
-  const label = isFuturePeriod(nextOutstanding, today)
-    ? "Upcoming period (not yet due)"
-    : nextOutstanding.status === "overdue"
-      ? "Overdue period needing payment"
-      : "Next period needing payment";
-  return (
-    <p className="mt-2 text-sm text-ink">
-      <span className="font-medium">{label}:</span>{" "}
-      {nextOutstanding.periodStart} – {nextOutstanding.periodEnd} — {formatMoney(nextOutstanding.remainingCents, currency)}{" "}
-      due {nextOutstanding.dueDate}.
-    </p>
   );
 }
 
@@ -492,13 +479,39 @@ const INTERVAL_OPTIONS: { value: number; label: string }[] = [
   { value: 12, label: "Yearly" },
 ];
 
-function ScheduleForm({ enrollmentId, schedule, onSaved }: { enrollmentId: string; schedule: EnrollmentFeeScheduleRecord | null; onSaved: () => void }) {
+function ScheduleForm({
+  enrollmentId,
+  schedule,
+  paidCents,
+  onSaved,
+}: {
+  enrollmentId: string;
+  schedule: EnrollmentFeeScheduleRecord | null;
+  /** How much has actually been approved-paid toward the CURRENT schedule's
+   * already-started installments — see fee-periods.ts's own
+   * setEnrollmentFeeSchedule doc comment ("auto-carry the remaining
+   * balance"). Once this is > 0, the server authoritatively overrides
+   * whatever total fee is submitted here with the auto-computed remaining
+   * balance, so this field is locked to that same value rather than
+   * letting the admin type a number the server will silently replace. */
+  paidCents: number;
+  onSaved: () => void;
+}) {
   const [intervalMonths, setIntervalMonths] = useState<number>(schedule?.intervalMonths ?? 1);
+  // Once anything has been paid toward the current schedule, the Total Fee
+  // field always reflects the auto-carried remaining balance — the server
+  // computes and uses this same figure regardless of what's submitted (see
+  // setEnrollmentFeeSchedule's own doc comment), so showing anything else
+  // here would just be misleading.
+  const amountIsLocked = schedule !== null && paidCents > 0;
+  const remainingCents = schedule ? Math.max(0, schedule.amountCents - paidCents) : 0;
   // Entered/displayed in dollars (e.g. "5.55"), never raw cents — see
   // lib/ui/money.ts's dollarsToCents/centsToDollars. This is the exact
   // "Fee schedule" input the money-input-system fix specifically calls
-  // out: entering "10" here must mean $10.00/period, not 10 cents.
-  const [amountDollars, setAmountDollars] = useState(schedule ? centsToDollars(schedule.amountCents) : "");
+  // out: entering "10" here must mean $10.00 total, not 10 cents.
+  const [amountDollars, setAmountDollars] = useState(
+    schedule ? centsToDollars(amountIsLocked ? remainingCents : schedule.amountCents) : "",
+  );
   const [anchorDate, setAnchorDate] = useState(schedule?.anchorDate ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -510,7 +523,7 @@ function ScheduleForm({ enrollmentId, schedule, onSaved }: { enrollmentId: strin
   if (schedule !== prevSchedule) {
     setPrevSchedule(schedule);
     setIntervalMonths(schedule?.intervalMonths ?? 1);
-    setAmountDollars(schedule ? centsToDollars(schedule.amountCents) : "");
+    setAmountDollars(schedule ? centsToDollars(amountIsLocked ? remainingCents : schedule.amountCents) : "");
     setAnchorDate(schedule?.anchorDate ?? "");
   }
 
@@ -546,8 +559,23 @@ function ScheduleForm({ enrollmentId, schedule, onSaved }: { enrollmentId: strin
             ))}
           </select>
         </Field>
-        <Field label="Amount (USD)">
-          <input type="number" min={0.01} step="0.01" placeholder="0.00" className={inputClass} value={amountDollars} onChange={(e) => setAmountDollars(e.target.value)} />
+        <Field label={amountIsLocked ? "Remaining balance (auto-carried)" : "Total Fee (USD)"}>
+          <input
+            type="number"
+            min={0.01}
+            step="0.01"
+            placeholder="0.00"
+            className={inputClass}
+            value={amountDollars}
+            disabled={amountIsLocked}
+            onChange={(e) => setAmountDollars(e.target.value)}
+          />
+          {amountIsLocked && schedule && (
+            <p className="mt-1 text-xs text-muted">
+              {formatMoney(paidCents, schedule.currency)} already paid toward the current plan — the remaining
+              balance carries over automatically into the new one.
+            </p>
+          )}
         </Field>
         <Field label="First period start date">
           <input type="date" className={inputClass} value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} />

@@ -358,7 +358,7 @@ describe("getReceiptPrintData — fee-period-linked payment", () => {
       anchorDate: "2026-01-01",
     });
     expect(scheduleResult.ok).toBe(true);
-    await generateFeePeriodsForEnrollment(db, enrollment.id, academyId, "2026-01-01");
+    await generateFeePeriodsForEnrollment(db, enrollment.id, academyId);
     const [period] = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, enrollment.id));
 
     const recorded = await recordFeePeriodPayment(context, {

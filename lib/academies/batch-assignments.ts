@@ -27,6 +27,7 @@ import {
   createInitialEnrollmentFeeSchedule,
   generateFeePeriodsForEnrollment,
   resolveCurrency,
+  todayDateOnlyInAcademyTimezone,
 } from "@/lib/academies/fee-periods";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
@@ -624,10 +625,15 @@ const enrollmentIntervalMonthsSchema = z.union(
  * A payment plan is a REQUIRED part of enrollment (approved architecture
  * decision: "There must never be a successful enrollment without its
  * required initial payment plan") — `amountCents`/`intervalMonths` are not
- * optional. `anchorDate` IS optional: it defaults to the batch's own
- * `start_date` (see `enrollStudentInBatch` below) rather than "today",
- * since a student enrolling mid-term into an already-running batch should
- * anchor to when the batch itself started, not the enrollment moment.
+ * optional. `anchorDate` IS optional: it defaults to the enrollment
+ * moment's own calendar date (see `enrollStudentInBatch` below) — the
+ * first payment period always starts the day the student is actually
+ * enrolled and is immediately due, regardless of when the batch itself
+ * started. (An earlier revision defaulted this to the batch's own
+ * `start_date` instead; that produced a first period dated weeks or months
+ * in the future — "Upcoming, not yet due" — for a batch that hadn't
+ * started yet, which is the exact bug this default now fixes. A caller may
+ * still pass an explicit `anchorDate` to anchor elsewhere on purpose.)
  */
 const paymentPlanSchema = z.object({
   intervalMonths: enrollmentIntervalMonthsSchema,
@@ -778,10 +784,13 @@ export async function enrollStudentInBatch(
         intervalMonths: data.paymentPlan.intervalMonths,
         amountCents: data.paymentPlan.amountCents,
         currency,
-        // Defaults to the batch's own start date — a student enrolling
-        // mid-term into an already-running batch anchors to when the batch
-        // started, not the enrollment moment.
-        anchorDate: data.paymentPlan.anchorDate ?? batch.startDate,
+        // Defaults to today — Somalia-local calendar date, not the
+        // server's own (likely UTC) timezone, so this never lands on the
+        // wrong day for a few hours around each Somalia midnight — see
+        // todayDateOnlyInAcademyTimezone's own doc comment. The first fee
+        // period is generated from this anchor immediately below, so it
+        // always starts on the enrollment date and is due right away.
+        anchorDate: data.paymentPlan.anchorDate ?? todayDateOnlyInAcademyTimezone(),
         createdBy: actorContext.userId,
       });
 

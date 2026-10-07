@@ -15,7 +15,7 @@ import { ApproveAcademyButton } from "./approve-academy-button";
 import { OnboardingChecklist } from "./onboarding-checklist";
 import { LifecycleActions } from "./lifecycle-actions";
 import { DeleteAcademySection } from "./delete-academy-section";
-import { Badge, PAGE_WRAP, PageMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
+import { BackLink, Badge, PAGE_WRAP, PageMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
 
 // Same gating as app/platform/academies/page.tsx — see that file's comment
 // for why "approveAcademy" (ungrantable, platform_owner-only) is the
@@ -142,9 +142,7 @@ export default async function AcademyDetailPage({
 
   return (
     <div className={PAGE_WRAP}>
-      <Link href="/platform/academies" className="mb-4 inline-block text-sm text-brand hover:underline">
-        ← Back to academies
-      </Link>
+      <BackLink href="/platform/academies" label="Back to academies" />
 
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-bold text-ink sm:text-2xl">{academy.name}</h1>

@@ -5,6 +5,7 @@ import { getAcademicReports, type AcademicReportsData } from "@/lib/academies/ac
 import { getFinanceReports } from "@/lib/academies/finance-reports";
 import { FinanceReportsView } from "@/app/academy/finance-reports/finance-reports-view";
 import { ReportExportButton } from "./report-export-button";
+import { BarChart, TrendAreaChart } from "@/app/academy/_shell/charts";
 import { color } from "@/lib/ui/theme";
 import {
   Button,
@@ -22,6 +23,17 @@ import {
   trHover,
 } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
+
+/** `enrollmentTrend`'s period is stored as a plain "YYYY-MM" string (see
+ * student-reports.ts) — fine for a table cell, but a raw "2025-03" reads
+ * worse as a chart axis label than a short month name. Display-only; the
+ * table above keeps the raw string unchanged. */
+function formatMonthPeriod(period: string): string {
+  const [year, month] = period.split("-");
+  const parsed = new Date(Number(year), Number(month) - 1, 1);
+  if (Number.isNaN(parsed.getTime())) return period;
+  return parsed.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+}
 
 /**
  * PLAN.md Phase 5, Item 61a — `/academy/reports` hub (DESIGN.md §9.9: "hub
@@ -67,15 +79,15 @@ import { Icon } from "@/app/academy/_shell/icons";
  * don't duplicate" instruction for that tab specifically.
  *
  * ---------------------------------------------------------------------
- * Charts: plain inline SVG, no new dependency
+ * Charts: shared primitives, no new dependency
  * ---------------------------------------------------------------------
- * No existing page in this codebase renders a chart of any kind (grepped
- * for a charting library import — none exists in package.json either), so
- * there's no established approach to mirror. Per the task brief, this adds
- * no charting library: `EnrollmentTrendChart`/`PassRateChart` below are
- * small inline-SVG bar charts, server-rendered like the rest of this page.
- * Both sit next to (never instead of) the full data table for their
- * section, per DESIGN.md's "chart never replaces the table" rule.
+ * `TrendAreaChart`/`BarChart` (app/academy/_shell/charts.tsx) are plain
+ * inline-SVG, server-rendered like the rest of this page — no charting
+ * library (none exists in package.json). Enrollment trend (a genuine time
+ * series) uses the smooth gradient-area line chart; pass rate by batch
+ * (categorical) uses the bar chart. Both sit next to (never instead of) the
+ * full data table for their section, per DESIGN.md's "chart never replaces
+ * the table" rule.
  */
 export default async function AcademyReportsPage({
   searchParams,
@@ -140,7 +152,7 @@ function TabLink({ label, href, active }: { label: string; href: string; active:
   return (
     <a
       href={href}
-      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors motion-safe:active:scale-[0.98] ${
+      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-[color,background-color,transform] duration-150 ease-out motion-safe:active:scale-[0.98] ${
         active ? "bg-brand text-white" : "text-muted hover:bg-app hover:text-ink"
       }`}
     >
@@ -191,8 +203,13 @@ async function StudentTab({
         <h3 className="mb-2 text-base font-semibold text-ink">Enrollment trend</h3>
         {/* Genuinely aggregate/trend data — chart alongside the table, never instead of it. */}
         <Section className="mb-3">
-          <BarChart
-            points={report.enrollmentTrend.map((p) => ({ label: p.period, value: p.count }))}
+          <TrendAreaChart
+            id="enrollment-trend"
+            points={report.enrollmentTrend.map((p) => ({
+              label: formatMonthPeriod(p.period),
+              value: p.count,
+            }))}
+            ariaLabel="New enrollments per month"
             emptyMessage="No enrollments in the selected period."
           />
         </Section>
@@ -272,12 +289,21 @@ async function AcademicTab({
         {/* Genuinely aggregate/trend data (pass/fail rate) — chart alongside the table. */}
         <Section className="mb-3">
           <BarChart
-            points={report.passFailByBatch.map((row) => ({
+            id="pass-rate-by-batch"
+            series={[{ name: "Pass rate", color: color.primaryBlue }]}
+            groups={report.passFailByBatch.map((row) => ({
               label: row.batchName,
-              value: row.passRate === null ? 0 : Math.round(row.passRate * 100),
+              values: [
+                {
+                  label: row.batchName,
+                  value: row.passRate === null ? 0 : Math.round(row.passRate * 100),
+                  display: row.passRate === null ? "—" : `${Math.round(row.passRate * 100)}%`,
+                },
+              ],
             }))}
-            valueSuffix="%"
+            ariaLabel="Pass rate by batch"
             emptyMessage="No published results in the selected batches."
+            formatAxisValue={(value) => `${value}%`}
           />
         </Section>
         <SimpleTable
@@ -366,35 +392,41 @@ function FilterForm({
 }) {
   return (
     <Section>
-      <form method="get" className="flex flex-wrap items-end gap-3">
+      {/* Mobile-first: each field is full-width and stacks on a narrow
+       * phone (a 140-160px min-width field left a wide blank gap to its
+       * right at that size) — reverting to the original fixed widths,
+       * laid out in a row, once there's room to spare at `sm:`. */}
+      <form method="get" className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-end">
         <input type="hidden" name="tab" value={tab} />
-        <Field label="From" className="min-w-[140px]">
+        <Field label="From" className="w-full sm:w-auto sm:min-w-[140px]">
           <input type="date" name="dateFrom" defaultValue={dateFrom} className={inputClass} />
         </Field>
-        <Field label="To" className="min-w-[140px]">
+        <Field label="To" className="w-full sm:w-auto sm:min-w-[140px]">
           <input type="date" name="dateTo" defaultValue={dateTo} className={inputClass} />
         </Field>
         {tab === "student" && (
-          <Field label="Branch ID" className="min-w-[160px]">
+          <Field label="Branch ID" className="w-full sm:w-auto sm:min-w-[160px]">
             <input type="text" name="branchId" defaultValue={branchId} placeholder="(optional)" className={inputClass} />
           </Field>
         )}
         {tab === "academic" && (
           <>
-            <Field label="Batch ID" className="min-w-[160px]">
+            <Field label="Batch ID" className="w-full sm:w-auto sm:min-w-[160px]">
               <input type="text" name="batchId" defaultValue={batchId} placeholder="(optional)" className={inputClass} />
             </Field>
-            <Field label="Course ID" className="min-w-[160px]">
+            <Field label="Course ID" className="w-full sm:w-auto sm:min-w-[160px]">
               <input type="text" name="courseId" defaultValue={courseId} placeholder="(optional)" className={inputClass} />
             </Field>
           </>
         )}
-        <Button type="submit" variant="secondary">
-          Filter
-        </Button>
-        <a href={`?tab=${tab}`} className="text-sm text-brand hover:underline">
-          Reset
-        </a>
+        <div className="flex items-center gap-4 sm:gap-3">
+          <Button type="submit" variant="secondary" className="w-full sm:w-auto">
+            Filter
+          </Button>
+          <a href={`?tab=${tab}`} className="shrink-0 text-sm text-brand hover:underline">
+            Reset
+          </a>
+        </div>
       </form>
     </Section>
   );
@@ -439,57 +471,3 @@ function SimpleTable({
   );
 }
 
-/**
- * Minimal inline-SVG bar chart — no charting library dependency (none
- * exists in this codebase's package.json). Purely presentational, next to
- * (never instead of) the data table for the same section, per DESIGN.md's
- * "chart never replaces the table" rule. Colors come from lib/ui/theme.ts
- * (the same brand/muted tokens used everywhere else), not new hex values.
- */
-function BarChart({
-  points,
-  emptyMessage,
-  valueSuffix = "",
-}: {
-  points: { label: string; value: number }[];
-  emptyMessage: string;
-  valueSuffix?: string;
-}) {
-  if (points.length === 0) {
-    return <p className="text-sm text-muted">{emptyMessage}</p>;
-  }
-
-  const width = 640;
-  const height = 160;
-  const barGap = 8;
-  const barWidth = Math.max(8, width / points.length - barGap);
-  const maxValue = Math.max(1, ...points.map((p) => p.value));
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height + 24}`}
-      role="img"
-      aria-label="Chart"
-      className="block h-auto w-full"
-      style={{ maxWidth: width }}
-    >
-      {points.map((point, i) => {
-        const barHeight = (point.value / maxValue) * height;
-        const x = i * (barWidth + barGap);
-        const y = height - barHeight;
-        return (
-          <g key={point.label}>
-            <rect x={x} y={y} width={barWidth} height={barHeight} fill={color.primaryBlue} rx={2} />
-            <text x={x + barWidth / 2} y={height + 14} fontSize="9" textAnchor="middle" fill={color.textMuted}>
-              {point.label.length > 8 ? `${point.label.slice(0, 7)}…` : point.label}
-            </text>
-            <text x={x + barWidth / 2} y={y - 4} fontSize="9" textAnchor="middle" fill={color.text}>
-              {point.value}
-              {valueSuffix}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}

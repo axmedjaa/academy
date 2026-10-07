@@ -94,7 +94,7 @@ export function StatCard({
     return (
       <Link
         href={href}
-        className="motion-safe:animate-fade-in-up motion-safe:active:scale-[0.98] transition-shadow hover:shadow-md"
+        className="motion-safe:animate-fade-in-up motion-safe:active:scale-[0.98] transition-[box-shadow,transform] duration-150 ease-out hover:shadow-md"
         style={{
           display: "flex",
           flexDirection: "column",
@@ -339,6 +339,26 @@ export function PageHeader({
   );
 }
 
+/**
+ * The "← Back to X" link every detail page (course, academy, student, ...)
+ * puts above its own `PageHeader` — previously hand-written per page as
+ * identical, copy-pasted markup with no hover motion at all on the arrow.
+ * The arrow nudging left on hover is a standard, purposeful "this goes
+ * backward" affordance (not decoration-for-its-own-sake) — cheap because
+ * it's a single `transform` on one glyph, and it only plays on an
+ * occasional navigation click, never a hot path.
+ */
+export function BackLink({ href, label }: { href: string; label: string }) {
+  return (
+    <Link href={href} className="group mb-4 inline-flex items-center gap-1 text-sm text-brand hover:underline">
+      <span aria-hidden="true" className="inline-block transition-transform duration-150 ease-out group-hover:-translate-x-0.5">
+        ←
+      </span>
+      {label}
+    </Link>
+  );
+}
+
 /** Replaces the repeated raw `<main><h1>Access denied</h1><p>...</p></main>`
  * blocks scattered across `/academy/*` pages with a readable, bordered
  * message card instead of unstyled black-on-white text. */
@@ -424,8 +444,16 @@ export function Field({
   );
 }
 
+// `transition-[color,background-color,border-color,transform]` instead of
+// `transition-colors` — Tailwind's `transition-colors` utility sets
+// `transition-property` to color-related properties ONLY, so the
+// `active:scale-[0.98]` press feedback below had no transition applied to
+// it (it snapped instantly instead of easing in/out). Listing `transform`
+// alongside the color properties in one arbitrary-value utility is what
+// actually animates both together. Same fix applied to
+// components/ui/alert-dialog.tsx's identical button base.
 const BUTTON_BASE =
-  "inline-flex items-center justify-center gap-1.5 rounded-control px-4 py-2 text-sm font-semibold transition-colors duration-150 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100";
+  "inline-flex items-center justify-center gap-1.5 rounded-control px-4 py-2 text-sm font-semibold transition-[color,background-color,border-color,transform] duration-150 ease-out motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:active:scale-100";
 const BUTTON_VARIANTS = {
   primary: `${BUTTON_BASE} bg-brand text-white hover:bg-brand-hover`,
   secondary: `${BUTTON_BASE} border border-border bg-surface text-ink hover:bg-app`,
@@ -506,7 +534,11 @@ export function TableWrap({ children }: { children: ReactNode }) {
 
 export const th = "border-b border-border bg-app px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted";
 export const td = "border-b border-border px-4 py-3 text-ink";
-export const trHover = "hover:bg-app/60";
+// `transition-colors` added here (design-engineering pass) — every table
+// row across the whole app shares this one constant, and the hover
+// background previously had no transition at all, so it snapped on/off
+// instantly rather than easing. One fix here reaches every data table.
+export const trHover = "transition-colors duration-150 hover:bg-app/60";
 
 /** DESIGN.md §3 "Usage/allowance bar": label + "used / limit" + a thin
  * progress bar, green under 80%, amber 80-99%, red at/over 100% — reused

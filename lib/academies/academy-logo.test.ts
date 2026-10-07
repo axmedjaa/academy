@@ -195,7 +195,7 @@ describe("requestAcademyLogoUploadUrl — file validation", () => {
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
-  it("rejects a declared size over the 5 MB limit", async () => {
+  it("rejects a declared size over the 10 MB limit", async () => {
     const { context } = await setupAcademy("academy_owner");
     const result = await requestAcademyLogoUploadUrl(context, {
       contentType: "image/png",

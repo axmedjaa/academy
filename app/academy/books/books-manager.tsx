@@ -18,7 +18,7 @@ import { getStatusTone } from "@/lib/ui/status";
 import { dollarsToCents } from "@/lib/ui/money";
 
 const ALLOWED_COVER_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_COVER_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_COVER_SIZE_BYTES = 10 * 1024 * 1024;
 
 function formatMoney(amountCents: number, currency: string): string {
   return `${currency} ${(amountCents / 100).toFixed(2)}`;
@@ -95,7 +95,7 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
       return;
     }
     if (file.size > MAX_COVER_SIZE_BYTES) {
-      setCoverError("Cover must be 5 MB or smaller.");
+      setCoverError("Cover must be 10 MB or smaller.");
       return;
     }
     setCoverUploading(true);
@@ -195,7 +195,7 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
                       onChange={handleCoverFileChange}
                     />
                   </label>
-                  <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 5 MB. Every new book needs a cover.</p>
+                  <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 10 MB. Every new book needs a cover.</p>
                   {coverError && <p className="mt-1 text-xs text-danger">{coverError}</p>}
                 </div>
               </div>
@@ -309,7 +309,7 @@ function BookRow({ book, coverUrl, canManage, studentOptions, isSelling, onToggl
       return;
     }
     if (file.size > MAX_COVER_SIZE_BYTES) {
-      showErrorToast("Cover must be 5 MB or smaller.");
+      showErrorToast("Cover must be 10 MB or smaller.");
       return;
     }
     setUploading(true);

@@ -52,7 +52,14 @@ function DropdownMenuContent({
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         className={cn(
-          "z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[10rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-control border border-border bg-surface p-1 text-ink shadow-card motion-safe:data-[state=closed]:animate-out motion-safe:data-[state=closed]:fade-out-0 motion-safe:data-[state=closed]:zoom-out-95 motion-safe:data-[state=open]:animate-in motion-safe:data-[state=open]:fade-in-0 motion-safe:data-[state=open]:zoom-in-95",
+          // `animate-in`/`fade-in-0`/`zoom-in-95` (and their `-out`
+          // siblings) are `tailwindcss-animate` plugin classes — that
+          // plugin isn't installed in this project, so these were always
+          // inert and every dropdown menu in the app opened/closed with NO
+          // animation at all. Swapped for this app's own real, registered
+          // scale-in/scale-out keyframes (app/globals.css), which already
+          // combine fade + scale in one animation.
+          "z-50 max-h-(--radix-dropdown-menu-content-available-height) min-w-[10rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-control border border-border bg-surface p-1 text-ink shadow-card motion-safe:data-[state=open]:animate-scale-in motion-safe:data-[state=closed]:animate-scale-out",
           className
         )}
         {...props}
@@ -237,7 +244,8 @@ function DropdownMenuSubContent({
     <DropdownMenuPrimitive.SubContent
       data-slot="dropdown-menu-sub-content"
       className={cn(
-        "z-50 min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-control border border-border bg-surface p-1 text-ink shadow-card motion-safe:data-[state=closed]:animate-out motion-safe:data-[state=closed]:fade-out-0 motion-safe:data-[state=closed]:zoom-out-95 motion-safe:data-[state=open]:animate-in motion-safe:data-[state=open]:fade-in-0 motion-safe:data-[state=open]:zoom-in-95",
+        // Same dead-plugin-class fix as DropdownMenuContent above.
+        "z-50 min-w-[8rem] origin-(--radix-dropdown-menu-content-transform-origin) overflow-hidden rounded-control border border-border bg-surface p-1 text-ink shadow-card motion-safe:data-[state=open]:animate-scale-in motion-safe:data-[state=closed]:animate-scale-out",
         className
       )}
       {...props}
