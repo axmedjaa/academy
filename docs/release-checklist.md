@@ -51,11 +51,11 @@ assumption. None are part of Item 67's own scope.
 |---|---|
 | Student-payment reversal does not recalculate the linked charge's status | `lib/academies/student-payments.ts` (~line 925) |
 | Subscription-expiry-reminder BullMQ job is built but has no live consumer wired at process startup | `lib/subscriptions/expiry-reminder-job.ts` |
-| Rate limiting (login, MFA, certificate verification) trusts the first `X-Forwarded-For` header value; production deployment must terminate behind a trusted reverse proxy that sets it | `lib/auth/actions.ts`, `lib/auth/mfa-actions.ts`, `lib/academies/certificate-verify-rate-limit.ts`, `app/verify/[certificateCode]/page.tsx` |
+| Rate limiting (login, MFA, certificate verification) derives the client IP via `lib/http/client-ip.ts`'s `TRUSTED_PROXY_HOP_COUNT`-aware extraction (defaults to 0 = trust nothing, shared bucket); still requires the actual production deployment to terminate behind a verified trusted reverse proxy/CDN, with `TRUSTED_PROXY_HOP_COUNT` set to match it, once a hosting provider is chosen (still deferred, see above) | `lib/http/client-ip.ts`, `lib/auth/actions.ts`, `lib/auth/mfa-actions.ts`, `lib/academies/certificate-verify-rate-limit.ts`, `app/verify/[certificateCode]/page.tsx` |
 | Notification preferences are stored but not yet consulted by `enqueueNotification` — every event currently sends regardless of a user's toggle | `lib/notifications/preferences.ts` |
 | A notification addressed to "any current member of an academy" (null `user_id`) is a single shared row — one viewer marking it read does not, and cannot yet, hide it individually for others | `lib/notifications/list-notifications.ts` |
 | `/academy/finance-reports` and `/academy/reports`'s Finance tab both exist and both work, rendering the same component — not yet consolidated into one route | `app/academy/reports/page.tsx` |
-| `npm audit` reports 4 moderate-severity vulnerabilities, entirely from `drizzle-kit`'s transitive `esbuild` dependency (dev-tooling only, never reaches production); the only available fix is a breaking downgrade, intentionally not applied | `docs/npm-audit-findings.md` |
+| `npm audit` reports 9 vulnerabilities (4 moderate, 5 high), entirely from two dev-tooling-only chains (`drizzle-kit`'s transitive `esbuild`; `eslint-config-next`'s transitive `braces`/`micromatch`/`fast-glob`), neither reaching production; the only available fix for either is a breaking downgrade, intentionally not applied. The critical Next.js RCE and the `sharp`/`source-map-js` findings previously listed here have been fixed. | `docs/npm-audit-findings.md` |
 
 ## Documentation inaccuracy in PLAN.md
 

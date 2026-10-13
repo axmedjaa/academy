@@ -10,6 +10,7 @@ import {
 import {
   Badge,
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
   FormDialog,
@@ -21,6 +22,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 export interface CertificateRow {
@@ -112,6 +114,9 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
     <div className="flex flex-col gap-6">
       {error && <ErrorMessage message={error} />}
 
+      {certificates.length === 0 ? (
+        <EmptyState message="No certificates issued yet." icon={<Icon name="workspace_premium" />} />
+      ) : (
       <TableWrap>
         <thead>
           <tr>
@@ -126,14 +131,7 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
           </tr>
         </thead>
         <tbody>
-          {certificates.length === 0 ? (
-            <tr>
-              <td colSpan={canManage ? 8 : 7} className={`${td} text-center text-muted`}>
-                No certificates issued yet.
-              </td>
-            </tr>
-          ) : (
-            certificates.map((cert) => (
+          {certificates.map((cert) => (
               <tr key={cert.id} className={trHover}>
                 <td className={`${td} font-medium`}>{cert.studentName}</td>
                 <td className={td}>{cert.programName}</td>
@@ -185,10 +183,10 @@ export function CertificatesList({ certificates, canManage, studentOptions, batc
                   </td>
                 )}
               </tr>
-            ))
-          )}
+          ))}
         </tbody>
       </TableWrap>
+      )}
 
       {/* Mobile responsiveness fix: this used to reveal inline inside the
        * Actions table cell (a fixed-width input + two buttons), which

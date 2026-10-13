@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useTransition } from "react";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import {
   approveResult,
   publishResults,
@@ -88,11 +89,16 @@ export function ResultsList({ results, examNames, photoUrlByStudentId, canSubmit
     results.map((row) => [row.id, `${row.studentFullName} (${row.studentNumber}) — ${examNames[row.examId] ?? "Unknown exam"}`]),
   );
 
-  function run(action: () => Promise<{ ok: true } | { ok: false; error: { message: string } }>) {
+  function run(action: () => Promise<{ ok: true } | { ok: false; error: { message: string } }>, successMessage: string) {
     setError(null);
     startTransition(async () => {
       const result = await action();
-      if (!result.ok) setError(result.error.message);
+      if (!result.ok) {
+        setError(result.error.message);
+        showErrorToast(result.error.message);
+        return;
+      }
+      showSuccessToast(successMessage);
     });
   }
 
@@ -136,7 +142,7 @@ export function ResultsList({ results, examNames, photoUrlByStudentId, canSubmit
                     });
                     if (result.ok) cancelCorrection();
                     return result;
-                  })
+                  }, "Correction requested.")
                 }
               >
                 Submit correction request
@@ -174,7 +180,7 @@ export function ResultsList({ results, examNames, photoUrlByStudentId, canSubmit
                     const result = await rejectResult(rejectingRow.id, rejectReason);
                     if (result.ok) cancelReject();
                     return result;
-                  })
+                  }, "Result rejected.")
                 }
               >
                 Confirm reject
@@ -201,12 +207,12 @@ export function ResultsList({ results, examNames, photoUrlByStudentId, canSubmit
               <h2 className="text-base font-semibold text-ink">{examNames[examId] ?? "Exam"}</h2>
               <div className="flex flex-wrap gap-2">
                 {canSubmit && hasMarksEntered && (
-                  <Button type="button" variant="secondary" disabled={isPending} onClick={() => run(() => submitResults(examId))}>
+                  <Button type="button" variant="secondary" disabled={isPending} onClick={() => run(() => submitResults(examId), "Results submitted for review.")}>
                     Submit marks for review
                   </Button>
                 )}
                 {canApprove && hasApproved && (
-                  <Button type="button" disabled={isPending} onClick={() => run(() => publishResults(examId))}>
+                  <Button type="button" disabled={isPending} onClick={() => run(() => publishResults(examId), "Results published.")}>
                     Publish approved results
                   </Button>
                 )}
@@ -265,7 +271,7 @@ export function ResultsList({ results, examNames, photoUrlByStudentId, canSubmit
                                 type="button"
                                 className="px-2.5 py-1 text-xs"
                                 disabled={isPending}
-                                onClick={() => run(() => approveResult(row.id))}
+                                onClick={() => run(() => approveResult(row.id), "Result approved.")}
                               >
                                 Approve
                               </Button>
@@ -331,14 +337,16 @@ function CorrectionsPanel({ resultLabelById }: { resultLabelById: Map<string, st
     refresh();
   }, []);
 
-  function run(action: () => Promise<{ ok: true } | { ok: false; error: { message: string } }>) {
+  function run(action: () => Promise<{ ok: true } | { ok: false; error: { message: string } }>, successMessage: string) {
     setError(null);
     startTransition(async () => {
       const result = await action();
       if (!result.ok) {
         setError(result.error.message);
+        showErrorToast(result.error.message);
         return;
       }
+      showSuccessToast(successMessage);
       refresh();
     });
   }
@@ -376,7 +384,7 @@ function CorrectionsPanel({ resultLabelById }: { resultLabelById: Map<string, st
                     const result = await rejectResultCorrection(rejectingCorrection.id, rejectReason);
                     if (result.ok) cancelReject();
                     return result;
-                  })
+                  }, "Correction rejected.")
                 }
               >
                 Confirm reject
@@ -421,7 +429,7 @@ function CorrectionsPanel({ resultLabelById }: { resultLabelById: Map<string, st
                           type="button"
                           className="px-2.5 py-1 text-xs"
                           disabled={isPending}
-                          onClick={() => run(() => approveResultCorrection(correction.id))}
+                          onClick={() => run(() => approveResultCorrection(correction.id), "Correction approved.")}
                         >
                           Approve
                         </Button>

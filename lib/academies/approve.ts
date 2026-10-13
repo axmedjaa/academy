@@ -244,38 +244,35 @@ const NO_SUBSCRIPTION_SUMMARY: SubscriptionSummaryInfo = {
  * listPlatformStaff()'s convention in lib/platform-staff/staff.ts — this
  * helper does not re-check).
  */
-export async function listAcademies(): Promise<AcademySummary[]> {
-  const rows = await db
-    .select({
-      academy: academies,
-      createdByEmail: users.email,
-    })
-    .from(academies)
-    .innerJoin(users, eq(users.id, academies.createdBy))
-    .orderBy(desc(academies.createdAt));
-
-  // approvedBy is nullable, so it can't share the innerJoin above — a
-  // second lookup keyed by id is simpler than a conditional join clause.
+/**
+ * Shared enrichment for both `listAcademies()` and `listAcademiesPage()`:
+ * approver emails + current-subscription summary + active-branch count for
+ * exactly the given rows. Perf investigation (Afoogy slow-dashboard task):
+ * previously inlined once, always run over *every* academy platform-wide
+ * even when the caller (the paginated `/platform/academies` page) only
+ * ever renders 15 of them — pulled out here so the paginated path can call
+ * it with just its own page's rows instead of duplicating this logic.
+ */
+async function enrichAcademyRows(
+  rows: { academy: AcademyRow; createdByEmail: string | null }[],
+): Promise<AcademySummary[]> {
+  // approvedBy is nullable, so it can't share the main query's innerJoin —
+  // a second lookup keyed by id is simpler than a conditional join clause.
   const approvedByIds = rows
     .map((row) => row.academy.approvedBy)
     .filter((id): id is string => id !== null);
 
-  const approverEmailById = new Map<string, string>();
-  if (approvedByIds.length > 0) {
-    const approverRows = await db
-      .select({ id: users.id, email: users.email })
-      .from(users)
-      .where(inArray(users.id, approvedByIds));
-    for (const approver of approverRows) {
-      approverEmailById.set(approver.id, approver.email);
-    }
-  }
-
   const academyIds = rows.map((row) => row.academy.id);
-  const [subscriptionByAcademy, branchCountByAcademy] = await Promise.all([
+
+  const [approverRows, subscriptionByAcademy, branchCountByAcademy] = await Promise.all([
+    approvedByIds.length > 0
+      ? db.select({ id: users.id, email: users.email }).from(users).where(inArray(users.id, approvedByIds))
+      : Promise.resolve([]),
     getLatestSubscriptionSummaries(academyIds),
     getBranchCounts(academyIds),
   ]);
+
+  const approverEmailById = new Map(approverRows.map((approver) => [approver.id, approver.email]));
 
   return rows.map(({ academy, createdByEmail }) =>
     toSummary(academy, {
@@ -287,6 +284,139 @@ export async function listAcademies(): Promise<AcademySummary[]> {
       branchCount: branchCountByAcademy.get(academy.id) ?? 0,
     }),
   );
+}
+
+export async function listAcademies(): Promise<AcademySummary[]> {
+  const rows = await db
+    .select({
+      academy: academies,
+      createdByEmail: users.email,
+    })
+    .from(academies)
+    .innerJoin(users, eq(users.id, academies.createdBy))
+    .orderBy(desc(academies.createdAt));
+
+  return enrichAcademyRows(rows);
+}
+
+export interface ListAcademiesPageResult {
+  academies: AcademySummary[];
+  totalCount: number;
+}
+
+/**
+ * Paginated sibling of `listAcademies()` for `/platform/academies`
+ * specifically — same rows, same ordering, same enrichment, but the
+ * DB does the LIMIT/OFFSET and every batch lookup below is scoped to just
+ * this page's academy ids, instead of fetching and enriching every academy
+ * on the platform only to slice 15 of them out in JS afterward.
+ *
+ * `listAcademies()` itself is unchanged and still used where it must keep
+ * returning every row (e.g. lib/academies/onboarding-checklist.ts) — this
+ * is an additional, narrower entry point, not a replacement.
+ */
+export async function listAcademiesPage({
+  page,
+  pageSize,
+}: {
+  page: number;
+  pageSize: number;
+}): Promise<ListAcademiesPageResult> {
+  const offset = (page - 1) * pageSize;
+
+  const [rows, totalCountRows] = await Promise.all([
+    db
+      .select({
+        academy: academies,
+        createdByEmail: users.email,
+      })
+      .from(academies)
+      .innerJoin(users, eq(users.id, academies.createdBy))
+      .orderBy(desc(academies.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ value: sql<number>`count(*)::int` }).from(academies),
+  ]);
+
+  const academiesResult = await enrichAcademyRows(rows);
+  return { academies: academiesResult, totalCount: totalCountRows[0]?.value ?? 0 };
+}
+
+export interface AcademyStatusCounts {
+  total: number;
+  byStatus: Record<string, number>;
+}
+
+/**
+ * The platform dashboard's "Total Academies" KPI + per-status breakdown
+ * previously called `listAcademies()` (every academy, plus a per-academy
+ * subscription-summary and branch-count join neither of those numbers
+ * needs) just to `.length`/`.reduce()` over the result in JS. This gives
+ * the same numbers directly from Postgres, with none of the unused joins.
+ *
+ * `academies` has no stored `status` column — status is always *derived*
+ * from `approved_at`/`closed_at` (see `deriveAcademyStatus` above, which
+ * every other reader of this value goes through). The CASE expression
+ * below is that exact same three-way rule expressed in SQL, grouped at the
+ * database level instead of recomputed per-row in JS.
+ */
+export async function getAcademyStatusCounts(): Promise<AcademyStatusCounts> {
+  const statusExpr = sql<string>`case
+    when ${academies.closedAt} is not null then 'closed'
+    when ${academies.approvedAt} is not null then 'approved'
+    else 'pending_approval'
+  end`;
+
+  const rows = await db
+    .select({ status: statusExpr, count: sql<number>`count(*)::int` })
+    .from(academies)
+    .groupBy(statusExpr);
+
+  const byStatus: Record<string, number> = {};
+  let total = 0;
+  for (const row of rows) {
+    byStatus[row.status] = row.count;
+    total += row.count;
+  }
+  return { total, byStatus };
+}
+
+export interface PendingApprovalSummary {
+  id: string;
+  name: string;
+  createdAt: Date;
+  createdByEmail: string | null;
+}
+
+/**
+ * The platform dashboard's "Pending approvals" panel previously called
+ * `listAcademies()` (every academy platform-wide, with the same unused
+ * subscription/branch joins as above) just to filter to `pending_approval`
+ * rows in JS afterward. This pushes that filter down to Postgres and skips
+ * the joins entirely — the panel only ever displays name/submitted-by/
+ * submitted-at, never subscription or branch data.
+ *
+ * `limit`, when passed, caps the result to the N most-recently-submitted
+ * rows (already the list's own sort order) — for the platform dashboard's
+ * own preview panel, which links to `/platform/academies` for the full
+ * list rather than rendering every pending academy inline. Omit it (the
+ * default) for a caller that genuinely wants the complete set. */
+export async function listPendingApprovalAcademies(limit?: number): Promise<PendingApprovalSummary[]> {
+  const query = db
+    .select({
+      id: academies.id,
+      name: academies.name,
+      createdAt: academies.createdAt,
+      createdByEmail: users.email,
+    })
+    .from(academies)
+    .innerJoin(users, eq(users.id, academies.createdBy))
+    // "pending_approval" per deriveAcademyStatus's own rule: neither
+    // approved nor closed yet.
+    .where(and(isNull(academies.approvedAt), isNull(academies.closedAt)))
+    .orderBy(desc(academies.createdAt));
+
+  return limit ? await query.limit(limit) : await query;
 }
 
 /**

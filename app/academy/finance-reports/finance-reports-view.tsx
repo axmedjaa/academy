@@ -11,13 +11,10 @@ import { downloadExportContent } from "@/lib/export/download-file";
 import { Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
 import { BarChart, type ChartPoint, type ChartSeries } from "@/app/academy/_shell/charts";
 import { color } from "@/lib/ui/theme";
+import { formatMoney } from "@/lib/ui/money";
 
 interface Props {
   initialReport: FinanceReportsData;
-}
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
 }
 
 /**

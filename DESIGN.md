@@ -251,17 +251,17 @@ The result lifecycle is the most workflow-critical part of the product — every
 
 ### 9.6 Finance
 
-*(Charges, manual payments, receipts, income/expenses, approvals — not a general ledger. No online payment entry point exists anywhere in this section — Decision #23; every payment is manually recorded after the fact.)*
+*(Charges, manual payments, receipts, income/expenses — not a general ledger. No online payment entry point exists anywhere in this section — Decision #23; every payment is manually recorded after the fact. Recurring enrollment payments are recorded from the student's own page (`/academy/students/[id]`), not here — this screen covers one-off charges, unlinked/manual payment recording, receipts, and income/expenses.)*
 
 | Screen | Pattern | Notes |
 |---|---|---|
-| `/academy/finance` (dashboard tab) | Custom | Summary cards (outstanding charges, payments this period, income vs. expenses, pending approvals) + simple chart. |
+| `/academy/finance` (dashboard tab) | Custom | Summary cards (outstanding charges, payments this period, income vs. expenses, pending expense approvals) + simple chart. |
 | Charges tab | A + C | Create-charge form (student, description, amount, due date). |
-| Payments tab | A + C | Record-payment form (student, charge, amount, method [cash/mobile money/bank transfer], date, notes). |
-| `/academy/finance/approvals` | Approval queue (§3) | **Self-approval is visually disabled, not hidden**: if the current user recorded the transaction, their own Approve button is disabled with the tooltip *"You can't approve a transaction you recorded"* (§11.7) — this is the one place a role sees a control they can't use, because omitting it would be confusing on their own submission. |
+| Payments tab | A + C | Record-payment form (student, charge, amount, method [cash/mobile money/bank transfer], date, notes). **No approval step**: a payment writes `status: "approved"` directly at record time, with the recording user as `approvedBy` (later architecture decision, superseding an earlier `/academy/finance/approvals` queue that has been removed entirely) — Manager, Finance Officer, and Academy Administrator may all record payments immediately under their own `manage` authority, with no separate decision step above it. The only post-hoc correction path is Reversal/Adjustment below. |
 | Receipts | Document-style card, not a table row | Academy name/logo, student, amount, method, date, receipt number — printable/downloadable layout. |
-| Income/Expenses tabs | A + C | Same approve/reject pattern as Payments; Expense "Submit for Approval." |
-| Reversal/Adjustment | Confirmation modal (reason required) | Never a delete. Produces a new linked row shown as *"Reversal of #1234"*; the original stays visible, marked "Reversed," never removed (§11.7). |
+| Income tab | A + C | Create-income-record form. **No approval step** — posts directly (`status: "posted"`), same no-approval convention as Payments above. |
+| Expenses tab | A + C | Create-expense form, "Submit for Approval." **Approval queue retained** (unlike Payments/Income above) — Approve/Reject renders inline on each pending row, not on a separate `/approvals` screen. General approve authority (Admin/Manager) may decide any pending expense; Owner, Academy Administrator, Manager, and Finance Officer may *additionally* self-approve/self-reject an expense they themselves submitted — self-approval is allowed here, not blocked (later architecture decision; see §11.4). |
+| Reversal/Adjustment | Confirmation modal (reason required) | Never a delete. Produces a new linked row shown as *"Reversal of #1234"*; the original stays visible, marked "Reversed," never removed (§11.7). Applies to Payments, Income, and Expenses alike. |
 | Finance Reports | Custom + export | Date/branch/status/method filters. **Never shows a subscription-payment row** — this view is exclusively student/academy-side money; platform SaaS billing has no presence here at all. |
 
 ### 9.7 Certificates and IDs
@@ -346,9 +346,14 @@ A widget on `/platform/academies/[id]` listing preconditions (profile complete, 
 
 ### 11.4 Approval / Self-Approval Rule
 
-Wherever an approval queue exists (results, grade configs, student payments, expenses), the submitter's own item shows their Approve control **disabled** with a tooltip, never hidden — because on their own submission, an absent button would look like a bug rather than a rule:
+Self-approval policy is decided per entity, not by one universal block — see each entity's own row (§8, §9.3, §9.5, §9.6) for its current rule. For **Finance**:
 
-> *"You can't approve a transaction you recorded."*
+- **Student Payments**: no approval queue exists at all (later architecture decision — see §9.6) — payments post directly with the recorder as `approvedBy`, so there is no "pending" state and no self-approval concept to gate.
+- **Expenses**: self-approval is **allowed**. Owner, Academy Administrator, Manager, and Finance Officer may approve/reject an expense they themselves submitted, immediately (later architecture decision — no longer blocked waiting for a different approver). Admin/Manager's general approve authority additionally covers every other role's submissions.
+
+> *"You can't approve a transaction you recorded."* — retained as UI copy only for an approval queue that still blocks self-decision for a given role (§11.7). Confirm against the entity's own current rule above before reusing it; as of this revision, no Finance screen blocks self-approval.
+
+*(This section previously described Results and Grade Configurations as blocking self-approval too, identically to Expenses and Student Payments. A documentation pass found evidence — `results.ts`, `grade-configurations.ts`, and `result-corrections.ts`'s own test suites — that self-approval has also been deliberately allowed there for Owner/Academy Administrator/Manager, under a similar "never blocked waiting for approval" architecture decision. Not yet independently verified/updated in this document — treat §9.3's and §9.5's approval-queue descriptions as potentially stale until confirmed.)*
 
 ### 11.5 Renewal UX
 

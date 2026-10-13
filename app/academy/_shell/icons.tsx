@@ -224,9 +224,76 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
       <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
     </Base>
   ),
+  // Badge-icon pass — DESIGN.md §1's accessibility floor ("every status/
+  // state is color + icon + text label, never color alone") applied to the
+  // shared Badge/StatusBadge component, which previously paired color with
+  // text only. One glyph per status tone (app/academy/_shell/ui.tsx's
+  // BADGE_TONES/BADGE_TONE_CLASS), same hand-rolled-SVG convention as every
+  // icon above — rendered small (12px) inside a badge, so each shape is kept
+  // simple enough to read at that size.
+  check_circle: (props) => (
+    <Base {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8 12.5 2.5 2.5L16 9.5" />
+    </Base>
+  ),
+  pending: (props) => (
+    <Base {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7.5V12l3 2" />
+    </Base>
+  ),
+  cancel: (props) => (
+    <Base {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m9.3 9.3 5.4 5.4M14.7 9.3l-5.4 5.4" />
+    </Base>
+  ),
+  info: (props) => (
+    <Base {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" />
+      <circle cx="12" cy="8" r="1" fill="currentColor" stroke="none" />
+    </Base>
+  ),
+  archive: (props) => (
+    <Base {...props}>
+      <rect x="3.5" y="4.5" width="17" height="4.5" rx="1" />
+      <path d="M5 9v9a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 18V9" />
+      <path d="M10 13h4" />
+    </Base>
+  ),
+  circle: (props) => (
+    <Base {...props}>
+      <circle cx="12" cy="12" r="5" fill="currentColor" stroke="none" />
+    </Base>
+  ),
 };
 
 export function Icon({ name, ...props }: { name: string } & IconProps) {
   const Render = ICONS[name] ?? ICONS.dashboard;
   return <Render {...props} />;
+}
+
+/** The rounded-square monogram half of lib/ui/auth-components.tsx's
+ * `AuthLogo` (same rect/paths/circle, same coordinates) — without its
+ * wordmark, for the one other place the brand mark needs to stand alone: a
+ * collapsed desktop sidebar rail, where there's no room for the "Afoogy"
+ * text. Reuses the existing brand asset rather than inventing a second
+ * logo mark. `fill` lets the two shells pass their own blue
+ * (AcademyShell's `color.primaryBlue` vs PlatformShell's white-on-navy). */
+export function BrandMark({ size = 36, fill }: { size?: number; fill: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 52 52" fill="none" role="img" aria-label="Afoogy">
+      <rect x="6" y="10" width="40" height="40" rx="10" fill={fill} />
+      <path
+        d="M26 18L37 26V38L26 42L15 38V26L26 18Z"
+        stroke="#FFFFFF"
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+      />
+      <path d="M26 27V42M26 27L37 26M26 27L15 26" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="26" cy="18" r="2.5" fill="#93C5FD" />
+    </svg>
+  );
 }

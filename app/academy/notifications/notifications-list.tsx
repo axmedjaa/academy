@@ -8,7 +8,8 @@ import {
 import { getNotificationIconCategory, type NotificationIconCategory } from "@/lib/notifications/notification-icon";
 import { humanizeNotificationLabel } from "@/lib/notifications/humanize-template-id";
 import type { NotificationListItem } from "@/lib/notifications/list-notifications";
-import { Button, ErrorMessage, Section } from "@/app/academy/_shell/ui";
+import { Button, EmptyState, ErrorMessage } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 
 interface Props {
   notifications: NotificationListItem[];
@@ -93,9 +94,7 @@ export function NotificationsList({ notifications }: Props) {
       </div>
 
       {notifications.length === 0 ? (
-        <Section>
-          <p className="text-sm text-muted">No notifications match this filter.</p>
-        </Section>
+        <EmptyState message="No notifications match this filter." icon={<Icon name="notifications" />} />
       ) : (
         <ul className="flex flex-col gap-2">
           {notifications.map((notification) => {

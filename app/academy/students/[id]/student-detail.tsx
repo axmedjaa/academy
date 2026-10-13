@@ -26,7 +26,7 @@ import { Badge, Button, ErrorMessage, Field, LinkButton, Section, TableWrap, inp
 import { StudentAvatar } from "@/app/academy/students/student-avatar";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
-import { centsToDollars, dollarsToCents } from "@/lib/ui/money";
+import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
 
 const initialState: StudentPaymentsFormState = { ok: false };
 
@@ -40,10 +40,6 @@ const INTERVAL_OPTIONS: { value: number; label: string }[] = [
   { value: 6, label: "Every 6 Months" },
   { value: 12, label: "Yearly" },
 ];
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
 
 /** A period that hasn't started yet is "future," never "currently due" —
  * same helper/rationale as fee-periods-manager.tsx's identical copy (no new

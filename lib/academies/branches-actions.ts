@@ -7,6 +7,7 @@ import {
   createBranch as createBranchForActor,
   deleteBranch as deleteBranchForActor,
   getBranchDeletionEligibility as getBranchDeletionEligibilityForActor,
+  restoreBranch as restoreBranchForActor,
   updateBranch as updateBranchForActor,
   type BranchActionError,
   type CreateBranchInput,
@@ -97,6 +98,25 @@ export async function archiveBranch(
   const result = await archiveBranchForActor(context, branchId);
   if (!result.ok) {
     return { ok: false, error: result.error };
+  }
+
+  revalidatePath("/academy/branches");
+  return { ok: true };
+}
+
+/** The inverse of `archiveBranch` — plain-callable (not useActionState),
+ * same shape as `deleteBranch` below, for use behind a ConfirmButton. */
+export async function restoreBranch(
+  branchId: string,
+): Promise<{ ok: true } | { ok: false; error: BranchActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await restoreBranchForActor(context, branchId);
+  if (!result.ok) {
+    return result;
   }
 
   revalidatePath("/academy/branches");

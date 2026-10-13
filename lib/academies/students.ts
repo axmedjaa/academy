@@ -23,8 +23,10 @@ import {
 } from "@/lib/auth/academy-permissions";
 import { recordAudit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
-import { deleteObject, getDownloadUrl, getUploadUrl, headObject, type StorageContentType } from "@/lib/storage/client";
+import { deleteObject, getDownloadUrl, getUploadUrl } from "@/lib/storage/client";
 import { getStudentPhotoKey, isStudentPhotoKey } from "@/lib/storage/keys";
+import { RASTER_IMAGE_POLICY, isRasterImageContentType } from "@/lib/storage/upload-policy";
+import { verifyUploadedObject } from "@/lib/storage/verify-upload";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 
@@ -749,29 +751,25 @@ export async function updateStudent(
 // dedicated column/flow rather than reusing student_id_cards.photo_file_ref.
 // ---------------------------------------------------------------------
 
-export const MAX_STUDENT_PHOTO_SIZE_BYTES = 10 * 1024 * 1024;
-
-const ALLOWED_PHOTO_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-type AllowedPhotoContentType = (typeof ALLOWED_PHOTO_CONTENT_TYPES)[number];
-
-const PHOTO_EXTENSION_BY_CONTENT_TYPE: Record<AllowedPhotoContentType, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-};
-
-function isAllowedPhotoContentType(value: string): value is AllowedPhotoContentType {
-  return (ALLOWED_PHOTO_CONTENT_TYPES as readonly string[]).includes(value);
-}
+// Format/size policy (security audit follow-up — file-upload format
+// coverage): shared with academy logos/book covers/course images via
+// RASTER_IMAGE_POLICY (lib/storage/upload-policy.ts) — see that module's
+// own comment for exactly which formats are accepted and why.
+export const MAX_STUDENT_PHOTO_SIZE_BYTES = RASTER_IMAGE_POLICY.maxSizeBytes;
 
 const INVALID_PHOTO_FORMAT: StudentActionError = {
   code: "validation",
-  message: "Photo must be JPEG, PNG, or WebP.",
+  message: "Photo must be JPEG, PNG, WebP, or AVIF.",
 };
 
 const PHOTO_TOO_LARGE: StudentActionError = {
   code: "validation",
   message: "Photo must be 10 MB or smaller.",
+};
+
+const EMPTY_PHOTO: StudentActionError = {
+  code: "validation",
+  message: "That file is empty.",
 };
 
 const PHOTO_VERIFICATION_FAILED: StudentActionError = {
@@ -837,7 +835,7 @@ async function requestPhotoUploadUrlFor(
   academyId: string,
   input: RequestStudentPhotoUploadUrlInput,
 ): Promise<RequestStudentPhotoUploadUrlResult> {
-  if (!isAllowedPhotoContentType(input.contentType)) {
+  if (!isRasterImageContentType(input.contentType)) {
     return { ok: false, error: INVALID_PHOTO_FORMAT };
   }
   if (
@@ -850,9 +848,9 @@ async function requestPhotoUploadUrlFor(
 
   const key = getStudentPhotoKey({
     academyId,
-    extension: PHOTO_EXTENSION_BY_CONTENT_TYPE[input.contentType as AllowedPhotoContentType],
+    extension: RASTER_IMAGE_POLICY.extensionByContentType[input.contentType],
   });
-  const result = await getUploadUrl({ key, contentType: input.contentType as StorageContentType });
+  const result = await getUploadUrl({ key, contentType: input.contentType });
   if (!result.ok) {
     return {
       ok: false,
@@ -921,23 +919,31 @@ export async function verifyStudentPhotoUpload(
     return { ok: false, error: { code: "validation", message: "Invalid upload reference." } };
   }
 
-  const head = await headObject(key);
-  if (!head.ok) {
+  // Real post-upload verification (security audit follow-up — file-upload
+  // format coverage): content-type/size against RASTER_IMAGE_POLICY, not
+  // empty, and the object's actual leading bytes match its declared
+  // content-type's magic-byte signature — see lib/storage/verify-upload.ts.
+  const verified = await verifyUploadedObject(key, RASTER_IMAGE_POLICY);
+  if (!verified.ok) {
+    if (verified.error.code === "invalid_format") {
+      await deleteObject(key);
+      return { ok: false, error: INVALID_PHOTO_FORMAT };
+    }
+    if (verified.error.code === "empty") {
+      await deleteObject(key);
+      return { ok: false, error: EMPTY_PHOTO };
+    }
+    if (verified.error.code === "too_large") {
+      await deleteObject(key);
+      return { ok: false, error: PHOTO_TOO_LARGE };
+    }
+    if (verified.error.code === "not_found") {
+      return {
+        ok: false,
+        error: { code: "not_found", message: "The uploaded photo could not be found. Please try uploading again." },
+      };
+    }
     return { ok: false, error: PHOTO_VERIFICATION_FAILED };
-  }
-  if (!head.exists) {
-    return {
-      ok: false,
-      error: { code: "not_found", message: "The uploaded photo could not be found. Please try uploading again." },
-    };
-  }
-  if (!head.info.contentType || !isAllowedPhotoContentType(head.info.contentType)) {
-    await deleteObject(key);
-    return { ok: false, error: INVALID_PHOTO_FORMAT };
-  }
-  if (!head.info.contentLength || head.info.contentLength > MAX_STUDENT_PHOTO_SIZE_BYTES) {
-    await deleteObject(key);
-    return { ok: false, error: PHOTO_TOO_LARGE };
   }
   return { ok: true };
 }

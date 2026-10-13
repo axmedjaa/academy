@@ -20,6 +20,15 @@
         ],
         "createdAt": "2026-10-02T05:07:56.495Z",
         "reason": "img only rendered inside the showImage branch, which guarantees photoUrl is a non-empty, truthy string — never an empty/missing src at runtime"
+      },
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "files": [
+          "app/academy/receipts/[id]/receipt-print.module.css"
+        ],
+        "createdAt": "2026-10-09T16:15:49.051Z",
+        "reason": "Design critique (Assessment B, this session): print.module.css stylesheets deliberately use Arial as a universal print-safe font for physical/PDF documents, intentionally decoupled from the app's on-screen brand font (Alexandria) per the file's own module comment. Confirmed false positive."
       }
     ]
   }

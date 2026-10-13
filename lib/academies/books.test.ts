@@ -24,19 +24,24 @@ vi.mock("@/lib/storage/client", () => ({
   deleteObject: vi.fn(),
   getDownloadUrl: vi.fn(),
   headObject: vi.fn(),
+  getObjectPrefix: vi.fn(),
 }));
-import { deleteObject, getUploadUrl, headObject } from "@/lib/storage/client";
+import { deleteObject, getObjectPrefix, getUploadUrl, headObject } from "@/lib/storage/client";
+import { VALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
 const headObjectMock = vi.mocked(headObject);
 const getUploadUrlMock = vi.mocked(getUploadUrl);
 const deleteObjectMock = vi.mocked(deleteObject);
+const getObjectPrefixMock = vi.mocked(getObjectPrefix);
 
 beforeEach(() => {
   headObjectMock.mockReset();
   getUploadUrlMock.mockReset();
   deleteObjectMock.mockReset();
+  getObjectPrefixMock.mockReset();
   headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 1000 } });
   getUploadUrlMock.mockResolvedValue({ ok: true, uploadUrl: "https://example.test/upload", expiresInSeconds: 300 });
   deleteObjectMock.mockResolvedValue({ ok: true });
+  getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: VALID_SIGNATURE_BYTES["image/png"] });
 });
 
 /** A cover key shaped exactly like `getBookCoverKey` produces for this
@@ -130,7 +135,7 @@ afterAll(async () => {
   for (const userId of createdUserIds) {
     await db.delete(users).where(eq(users.id, userId));
   }
-});
+}, 90_000);
 
 describe("createBook", () => {
   it("Manager/Finance Officer can create a book", async () => {
@@ -199,6 +204,25 @@ describe("createBook", () => {
   it("rejects creation when the uploaded object is an invalid format, and deletes the orphaned object", async () => {
     const { academyId, context } = await setupAcademy("manager");
     headObjectMock.mockResolvedValueOnce({ ok: true, exists: true, info: { contentType: "application/pdf", contentLength: 1000 } });
+    const result = await createTestBook(context, academyId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(deleteObjectMock).toHaveBeenCalled();
+  });
+
+  it("rejects creation when the real bytes don't match the declared content-type (spoofed MIME), and deletes the orphaned object", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const { INVALID_SIGNATURE_BYTES } = await import("@/lib/storage/test-signature-fixtures");
+    getObjectPrefixMock.mockResolvedValueOnce({ ok: true, exists: true, bytes: INVALID_SIGNATURE_BYTES });
+    const result = await createTestBook(context, academyId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(deleteObjectMock).toHaveBeenCalled();
+  });
+
+  it("rejects creation when the uploaded object is empty (0 bytes), and deletes the orphaned object", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    headObjectMock.mockResolvedValueOnce({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 0 } });
     const result = await createTestBook(context, academyId);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
@@ -313,6 +337,26 @@ describe("book cover upload — permission and validation gate", () => {
     const created = await createTestBook(context, academyId, { priceCents: 500 });
     if (!created.ok) throw new Error("expected ok");
     const result = await requestBookCoverUploadUrl(context, created.book.id, { contentType: "image/png", fileSizeBytes: 50 * 1024 * 1024 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it.each(["image/jpeg", "image/png", "image/webp", "image/avif"])("accepts %s", async (contentType) => {
+    const { context } = await setupAcademy("manager");
+    const result = await requestNewBookCoverUploadUrl(context, { contentType, fileSizeBytes: 1000 });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects image/gif (no animation use case for a book cover)", async () => {
+    const { context } = await setupAcademy("manager");
+    const result = await requestNewBookCoverUploadUrl(context, { contentType: "image/gif", fileSizeBytes: 1000 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("rejects image/svg+xml (no sanitization pipeline)", async () => {
+    const { context } = await setupAcademy("manager");
+    const result = await requestNewBookCoverUploadUrl(context, { contentType: "image/svg+xml", fileSizeBytes: 1000 });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
   });

@@ -72,7 +72,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { logger } from "@/lib/logger";
-import { deleteObject, getDownloadUrl, getUploadUrl, headObject } from "./client";
+import { deleteObject, getDownloadUrl, getObjectPrefix, getUploadUrl, headObject } from "./client";
 
 const ORIGINAL_ENV = { ...process.env };
 const CONFIGURED_ENV = {
@@ -215,6 +215,60 @@ describe("headObject", () => {
     sendMock.mockRejectedValue(new Error("AccessDenied"));
 
     const result = await headObject("academies/abc/logos/1.png");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("Failed to verify the uploaded file.");
+      expect(result.error).not.toContain("AccessDenied");
+    }
+  });
+});
+
+describe("getObjectPrefix", () => {
+  it("fails clearly when R2 is not configured", async () => {
+    const result = await getObjectPrefix("academies/abc/logos/1.png", 32);
+    expect(result.ok).toBe(false);
+  });
+
+  it("requests a ranged GET for exactly the requested byte count and returns the real bytes", async () => {
+    configureEnv();
+    const realBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    sendMock.mockResolvedValue({ Body: { transformToByteArray: async () => realBytes } });
+
+    const result = await getObjectPrefix("academies/abc/logos/1.png", 32);
+    expect(result.ok).toBe(true);
+    if (result.ok && result.exists) {
+      expect(Buffer.from(result.bytes)).toEqual(Buffer.from(realBytes));
+    }
+    expect(getCtorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ Bucket: "test-bucket", Key: "academies/abc/logos/1.png", Range: "bytes=0-31" }),
+    );
+  });
+
+  it("reports exists:false for a NoSuchKey error, without surfacing it as a failure", async () => {
+    configureEnv();
+    const noSuchKey = new Error("no such key");
+    noSuchKey.name = "NoSuchKey";
+    sendMock.mockRejectedValue(noSuchKey);
+
+    const result = await getObjectPrefix("academies/abc/logos/missing.png", 32);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.exists).toBe(false);
+  });
+
+  it("reports exists:false when the response has no body", async () => {
+    configureEnv();
+    sendMock.mockResolvedValue({});
+
+    const result = await getObjectPrefix("academies/abc/logos/1.png", 32);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.exists).toBe(false);
+  });
+
+  it("returns a generic client-facing error for a non-NoSuchKey provider error", async () => {
+    configureEnv();
+    sendMock.mockRejectedValue(new Error("AccessDenied"));
+
+    const result = await getObjectPrefix("academies/abc/logos/1.png", 32);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBe("Failed to verify the uploaded file.");

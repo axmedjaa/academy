@@ -11,6 +11,7 @@ import {
 import { getOnboardingChecklistStatus } from "@/lib/academies/onboarding-checklist";
 import { getAcademyDeletionEligibility } from "@/lib/academies/delete-academy";
 import type { SubscriptionStatus } from "@/lib/subscriptions/state-machine";
+import { formatMoney } from "@/lib/ui/money";
 import { ApproveAcademyButton } from "./approve-academy-button";
 import { OnboardingChecklist } from "./onboarding-checklist";
 import { LifecycleActions } from "./lifecycle-actions";
@@ -29,10 +30,6 @@ function Field({ label, value }: { label: string; value: string | null }) {
       <dd className="text-sm text-ink">{value ?? "—"}</dd>
     </div>
   );
-}
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${(amountCents / 100).toFixed(2)} ${currency}`;
 }
 
 // Matches lib/subscriptions/usage.ts's maxStorageBytes reasoning (bytes can

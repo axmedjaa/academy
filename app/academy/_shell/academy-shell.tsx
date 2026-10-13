@@ -1,14 +1,51 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { Icon } from "./icons";
+import { BrandMark, Icon } from "./icons";
 import { hasExpandableSubItems, type AcademyNavItem, type AcademyNavSubItem } from "@/lib/academies/nav-items";
 import type { AcademyRole } from "@/lib/auth/roles";
 import { signOut } from "@/lib/auth/actions";
 import { color, shell, spacing } from "@/lib/ui/theme";
+
+// Sidebar collapse-to-rail preference and the desktop/mobile breakpoint are
+// both external-to-React state (localStorage, matchMedia) — `useSyncExternalStore`
+// is React's own documented fit for this (its canonical example IS a
+// matchMedia hook), and avoids the react-hooks/set-state-in-effect lint
+// finding that a useEffect-plus-setState version would trigger, while also
+// sidestepping any SSR/hydration mismatch: `getServerSnapshot` always
+// returns the same value React used for the server-rendered markup.
+const COLLAPSE_STORAGE_KEY = "academy-shell-collapsed";
+const COLLAPSE_CHANGE_EVENT = "academy-shell-collapsed-change";
+
+function subscribeToCollapsePref(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener(COLLAPSE_CHANGE_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener(COLLAPSE_CHANGE_EVENT, onStoreChange);
+  };
+}
+function getCollapsePrefSnapshot() {
+  return window.localStorage.getItem(COLLAPSE_STORAGE_KEY) === "1";
+}
+function getCollapsePrefServerSnapshot() {
+  return false;
+}
+
+function subscribeToDesktopQuery(onStoreChange: () => void) {
+  const mql = window.matchMedia("(min-width: 1025px)");
+  mql.addEventListener("change", onStoreChange);
+  return () => mql.removeEventListener("change", onStoreChange);
+}
+function getIsDesktopSnapshot() {
+  return window.matchMedia("(min-width: 1025px)").matches;
+}
+function getIsDesktopServerSnapshot() {
+  return false;
+}
 
 /**
  * PLAN.md/DESIGN.md §2 "App Shell" — the one shared sidebar/topbar frame
@@ -60,6 +97,37 @@ export function AcademyShell({
 }: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
+
+  // Sidebar redesign pass: desktop-persistent collapse-to-rail, inspired by
+  // the Softtech sidebar-navigation study case the user shared (dark/light,
+  // expanded/collapsed rail states, icon-only with tooltips) — adapted to
+  // Afoogy's own light brand surface and existing nav content, not copied.
+  // `collapsed` defaults to false on the server (matches `getServerSnapshot`
+  // above) and syncs to the stored preference on the client without a
+  // useEffect+setState round trip. Only meaningful at desktop — mobile's
+  // drawer is a separate on/off concept (`drawerOpen` above) and always
+  // renders full-width when open regardless of this flag; `isDesktop`
+  // (below) is what actually enforces that.
+  const collapsed = useSyncExternalStore(
+    subscribeToCollapsePref,
+    getCollapsePrefSnapshot,
+    getCollapsePrefServerSnapshot,
+  );
+  function toggleCollapsed() {
+    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "0" : "1");
+    window.dispatchEvent(new Event(COLLAPSE_CHANGE_EVENT));
+  }
+
+  // `collapsed` is a stored preference, not a viewport fact — a user who
+  // collapsed the rail on desktop and later opens the same session on a
+  // narrow screen must still see the mobile drawer's full content, not an
+  // icon-only drawer with no labels. `isDesktop` gates every *content*
+  // decision below (hiding labels/sub-items, which CSS alone can't undo
+  // once React never rendered them); the sidebar's own on-screen width is
+  // separately forced back to full by the `@media (max-width: 1024px)`
+  // rule in the scoped <style> block, belt-and-suspenders.
+  const isDesktop = useSyncExternalStore(subscribeToDesktopQuery, getIsDesktopSnapshot, getIsDesktopServerSnapshot);
+  const effectiveCollapsed = collapsed && isDesktop;
 
   function isActive(href: string): boolean {
     return pathname === href || pathname.startsWith(`${href}/`);
@@ -165,7 +233,8 @@ export function AcademyShell({
           top: 0,
           left: 0,
           bottom: 0,
-          width: shell.sidebarWidth,
+          width: effectiveCollapsed ? shell.sidebarCollapsedWidth : shell.sidebarWidth,
+          transition: "width 200ms var(--ease-in-out)",
           // `transform` instead of the old `left` — transform/opacity are
           // the two properties a browser can animate on the compositor
           // alone; `left` forces layout on every frame. Open forces the
@@ -187,30 +256,70 @@ export function AcademyShell({
         }}
       >
         <div
+          className="academy-shell-brand-row"
           style={{
             flexShrink: 0,
             height: shell.headerHeight,
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
-            padding: `0 ${spacing.lg}`,
+            justifyContent: effectiveCollapsed ? "center" : "space-between",
+            padding: effectiveCollapsed ? 0 : `0 ${spacing.lg}`,
             borderBottom: `1px solid ${color.border}`,
           }}
         >
-          <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
-            <span style={{ fontWeight: 700, color: color.primaryNavy }}>Afoogy</span>
-            <span style={{ fontSize: "0.7rem", color: color.textMuted }}>Skill Academy</span>
-          </div>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            onClick={() => setDrawerOpen(false)}
-            aria-label="Close menu"
-            className="academy-shell-close-btn rounded-control p-3 transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98]"
-            style={{ background: "none", border: "none", cursor: "pointer", color: color.textMuted }}
-          >
-            <Icon name="close" />
-          </button>
+          {effectiveCollapsed ? (
+            // Collapsed rail: the brand mark itself is the expand control —
+            // the same common pattern GitHub/Linear/VS Code use for a
+            // collapsed-logo re-expand affordance, and the only thing that
+            // fits in a 72px rail alongside nothing else. Desktop-only
+            // (`academy-shell-collapse-toggle` is hidden under 1025px, see
+            // the scoped <style> block), since mobile's drawer never
+            // collapses.
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              className="academy-shell-collapse-toggle rounded-control p-1 transition-transform duration-150 ease-out motion-safe:active:scale-[0.95] hover:brightness-95"
+              style={{ background: "none", border: "none", cursor: "pointer" }}
+            >
+              <BrandMark size={28} fill={color.primaryBlue} />
+            </button>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: spacing.xs, minWidth: 0 }}>
+                <BrandMark size={28} fill={color.primaryBlue} />
+                <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.1, minWidth: 0 }}>
+                  <span style={{ fontWeight: 700, color: color.primaryNavy }}>Afoogy</span>
+                  <span style={{ fontSize: "0.7rem", color: color.textMuted }}>Skill Academy</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={toggleCollapsed}
+                  aria-label="Collapse sidebar"
+                  title="Collapse sidebar"
+                  className="academy-shell-collapse-toggle rounded-control p-2 transition-[color,background-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.95]"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: color.textMuted }}
+                >
+                  <span style={{ display: "flex", transform: "rotate(90deg)" }}>
+                    <Icon name="expand_more" />
+                  </span>
+                </button>
+                <button
+                  ref={closeButtonRef}
+                  type="button"
+                  onClick={() => setDrawerOpen(false)}
+                  aria-label="Close menu"
+                  className="academy-shell-close-btn rounded-control p-3 transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98]"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: color.textMuted }}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         <nav
@@ -231,8 +340,8 @@ export function AcademyShell({
               // unit rather than every row looking equally adjacent to every
               // other row — tighter at desktop, where every group already
               // stays expanded and the list is already longer.
-              <div key={item.key} className={expandable ? "pb-2 min-[1025px]:pb-1" : ""}>
-                <div className="flex items-center gap-1">
+              <div key={item.key} className={expandable && !effectiveCollapsed ? "pb-2 min-[1025px]:pb-1" : ""}>
+                <div className="academy-shell-navrow flex items-center gap-1">
                   {/* Active state: a tinted fill + brand-colored text/icon +
                    * a 3px left accent — a lighter-weight "you are here" cue.
                    * The transparent border on the inactive state reserves
@@ -249,21 +358,35 @@ export function AcademyShell({
                    * rule below, not Tailwind's default `lg:` (1024px),
                    * which would otherwise disagree with this shell's own
                    * breakpoint by one pixel (e.g. an exact 1024px-wide
-                   * iPad-landscape viewport is still drawer mode here). */}
+                   * iPad-landscape viewport is still drawer mode here).
+                   *
+                   * Collapsed rail (desktop only, `effectiveCollapsed`
+                   * gates it off below 1024px even if the stored preference
+                   * is "collapsed"): the label is dropped and the icon
+                   * centered, with `aria-label` restoring the accessible
+                   * name a sighted mouse user still gets for free via
+                   * `title`, and a CSS-only `academy-shell-tooltip` (shown
+                   * on hover AND :focus-visible, so keyboard users get the
+                   * same label) replacing it visually. */}
                   <Link
                     href={item.href}
                     aria-current={active ? "page" : undefined}
+                    aria-label={effectiveCollapsed ? item.label : undefined}
+                    title={effectiveCollapsed ? item.label : undefined}
                     onClick={() => setDrawerOpen(false)}
-                    className={`flex flex-1 items-center gap-3 rounded-control border-l-[3px] px-3 py-3 text-sm no-underline transition-[color,background-color,border-color,transform] duration-150 ease-out motion-safe:active:scale-[0.98] min-[1025px]:py-1.5 ${
+                    className={`relative flex flex-1 items-center gap-3 rounded-control border-l-[3px] px-3 py-3 text-sm no-underline transition-[color,background-color,border-color,transform] duration-150 ease-out motion-safe:active:scale-[0.98] min-[1025px]:py-1.5 ${
+                      effectiveCollapsed ? "min-[1025px]:justify-center min-[1025px]:px-0" : ""
+                    } ${
                       active
                         ? "border-brand bg-brand-tint font-semibold text-brand"
                         : "border-transparent font-medium text-ink hover:bg-app"
                     }`}
                   >
                     <Icon name={item.icon} />
-                    <span>{item.label}</span>
+                    {!effectiveCollapsed && <span>{item.label}</span>}
+                    {effectiveCollapsed && <span className="academy-shell-tooltip">{item.label}</span>}
                   </Link>
-                  {expandable && (
+                  {expandable && !effectiveCollapsed && (
                     <button
                       type="button"
                       onClick={() => setExpandedKey((current) => (current === item.key ? null : item.key))}
@@ -280,7 +403,7 @@ export function AcademyShell({
                     </button>
                   )}
                 </div>
-                {expandable && (
+                {expandable && !effectiveCollapsed && (
                   // `data-mobile-collapsed` only matters below the 1024px
                   // breakpoint (see the scoped <style> block's
                   // .academy-subnav-collapse rules) — at desktop this group
@@ -319,26 +442,55 @@ export function AcademyShell({
 
         <div style={{ flexShrink: 0, padding: spacing.sm, borderTop: `1px solid ${color.border}` }}>
           <Link
+            href="/account/activity"
+            onClick={() => setDrawerOpen(false)}
+            aria-label={effectiveCollapsed ? "My activity" : undefined}
+            title={effectiveCollapsed ? "My activity" : undefined}
+            className={`relative flex items-center gap-3 rounded-control px-3 py-3 text-sm font-medium text-muted no-underline transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${
+              effectiveCollapsed ? "min-[1025px]:justify-center min-[1025px]:px-0" : ""
+            }`}
+          >
+            <Icon name="history" />
+            {!effectiveCollapsed && <span>My activity</span>}
+            {effectiveCollapsed && <span className="academy-shell-tooltip">My activity</span>}
+          </Link>
+          <Link
             href="/account/security"
             onClick={() => setDrawerOpen(false)}
-            className="flex items-center gap-3 rounded-control px-3 py-3 text-sm font-medium text-muted no-underline transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2"
+            aria-label={effectiveCollapsed ? "Account settings" : undefined}
+            title={effectiveCollapsed ? "Account settings" : undefined}
+            className={`relative flex items-center gap-3 rounded-control px-3 py-3 text-sm font-medium text-muted no-underline transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${
+              effectiveCollapsed ? "min-[1025px]:justify-center min-[1025px]:px-0" : ""
+            }`}
           >
             <Icon name="settings" />
-            <span>Account settings</span>
+            {!effectiveCollapsed && <span>Account settings</span>}
+            {effectiveCollapsed && <span className="academy-shell-tooltip">Account settings</span>}
           </Link>
           <form action={signOut}>
             <button
               type="submit"
-              className="flex w-full items-center gap-3 rounded-control border-none bg-transparent px-3 py-3 text-left text-sm font-medium text-muted transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2"
+              aria-label={effectiveCollapsed ? "Sign out" : undefined}
+              title={effectiveCollapsed ? "Sign out" : undefined}
+              className={`relative flex w-full items-center gap-3 rounded-control border-none bg-transparent px-3 py-3 text-left text-sm font-medium text-muted transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${
+                effectiveCollapsed ? "min-[1025px]:justify-center min-[1025px]:px-0" : ""
+              }`}
             >
               <Icon name="logout" />
-              <span>Sign out</span>
+              {!effectiveCollapsed && <span>Sign out</span>}
+              {effectiveCollapsed && <span className="academy-shell-tooltip">Sign out</span>}
             </button>
           </form>
         </div>
       </aside>
 
-      <div className="academy-shell-content" style={{ marginLeft: shell.sidebarWidth }}>
+      <div
+        className="academy-shell-content"
+        style={{
+          marginLeft: effectiveCollapsed ? shell.sidebarCollapsedWidth : shell.sidebarWidth,
+          transition: "margin-left 200ms var(--ease-in-out)",
+        }}
+      >
         <header
           style={{
             position: "sticky",
@@ -479,6 +631,58 @@ export function AcademyShell({
         .academy-shell-account-chip:hover {
           background-color: #dbe6fd;
         }
+        /* Collapse/expand toggle: only meaningful at desktop (mobile's
+           sidebar is always full-width when the drawer is open). Mirrors
+           .academy-shell-close-btn's inverse visibility rule below.
+           display (hidden by default, flex at desktop) is declared ONLY
+           here, never as an inline style or a Tailwind flex utility class
+           on the button itself — a bug fixed in this same pass: an inline
+           display:flex on the expanded-header toggle was unconditionally
+           beating this class's display:none default (inline styles always
+           win over stylesheet rules, regardless of the media query), so
+           the button stayed visible on mobile. */
+        .academy-shell-collapse-toggle {
+          display: none;
+          align-items: center;
+          justify-content: center;
+        }
+        @media (min-width: 1025px) {
+          .academy-shell-collapse-toggle {
+            display: flex;
+          }
+        }
+        /* Collapsed-rail tooltip: CSS-only (no JS, no new dependency),
+           shown on :hover AND :focus-visible so keyboard users navigating
+           the rail with Tab get the same label a mouse user gets from the
+           native title attribute. position:fixed (not absolute) so it
+           escapes the sidebar's own overflow:hidden instead of being
+           clipped by it; top is left unset so the browser falls back to
+           the element's static (in-flow) position for vertical placement. */
+        .academy-shell-tooltip {
+          position: fixed;
+          left: ${shell.sidebarCollapsedWidth + 8}px;
+          opacity: 0;
+          pointer-events: none;
+          transform: translateX(-4px);
+          transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
+          background-color: ${color.primaryNavy};
+          color: #fff;
+          font-size: 0.75rem;
+          font-weight: 600;
+          white-space: nowrap;
+          padding: 0.35rem 0.6rem;
+          border-radius: 6px;
+          z-index: 60;
+        }
+        .academy-shell-navrow a:hover .academy-shell-tooltip,
+        .academy-shell-navrow a:focus-visible .academy-shell-tooltip,
+        a:hover .academy-shell-tooltip,
+        a:focus-visible .academy-shell-tooltip,
+        button:hover .academy-shell-tooltip,
+        button:focus-visible .academy-shell-tooltip {
+          opacity: 1;
+          transform: translateX(0);
+        }
         /* Nav scrollbar: invisible at rest, a thin 4px gray thumb appears
            only on hover/keyboard-focus of the nav region — the plain
            native scrollbar, proportional thumb length and all. An earlier
@@ -583,7 +787,9 @@ export function AcademyShell({
         }
         @media (prefers-reduced-motion: reduce) {
           .academy-shell-sidebar,
+          .academy-shell-content,
           .academy-shell-scrim,
+          .academy-shell-tooltip,
           .academy-shell-sidebar .academy-subnav-collapse,
           .academy-shell-sidebar .academy-subnav-collapse > div {
             transition: none !important;

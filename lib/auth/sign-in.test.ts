@@ -87,4 +87,59 @@ describe("attemptSignIn", () => {
       expect(result.error.message).toBe("Invalid email or password.");
     }
   });
+
+  /**
+   * Security regression test (CWE-208, account enumeration via timing).
+   * Before the fix, a nonexistent email returned as soon as the `users`
+   * lookup came back empty — skipping Argon2id entirely — while an
+   * existing account with a wrong password always paid for one real
+   * `verifyPassword` call. Measured directly against this project's own
+   * Neon instance: a consistent ~90-115ms gap (nonexistent ~209ms median,
+   * wrong-password ~325ms median), reliably distinguishable above normal
+   * network jitter. The fix (lib/auth/password.ts's `verifyAgainstDummyHash`)
+   * makes the "no such user" path pay for one dummy Argon2id verification
+   * too, with the same cost parameters, closing the gap to a few ms.
+   *
+   * Asserts the *median of the per-iteration paired differences* stays
+   * under a generous 70ms. Paired (same iteration's two calls, taken
+   * back-to-back) rather than comparing two independently-computed
+   * medians: a shared ambient-load spike (another process on the same
+   * machine, a slow Neon round trip) inflates both of a pair's calls
+   * together, which cancels out of their difference — comparing two
+   * separately-aggregated series doesn't cancel that correlation as
+   * cleanly, and did measure one flaky 79ms gap under concurrent system
+   * load (a production build running at the same time) despite the
+   * underlying fix being unaffected. 20 samples (not 10) for a sturdier
+   * median on top of that. 70ms stays comfortably above the ~10-15ms
+   * typical post-fix gap and comfortably below the ~90-115ms gap this
+   * test would have measured before the fix, so it still fails on a true
+   * regression without chasing ordinary network/system noise.
+   */
+  it(
+    "takes approximately the same time for a nonexistent email as a wrong password (no timing-based account enumeration)",
+    async () => {
+      const SAMPLES = 20;
+      const median = (values: number[]): number => {
+        const sorted = [...values].sort((a, b) => a - b);
+        return sorted[Math.floor(sorted.length / 2)];
+      };
+
+      const pairedDifferences: number[] = [];
+
+      for (let i = 0; i < SAMPLES; i++) {
+        const startA = performance.now();
+        await attemptSignIn(`no-such-user-${randomUUID()}@example.com`, "whatever-password-here");
+        const nonexistentTime = performance.now() - startA;
+
+        const startB = performance.now();
+        await attemptSignIn(activeUserEmail, "totally-wrong-password");
+        const wrongPasswordTime = performance.now() - startB;
+
+        pairedDifferences.push(Math.abs(wrongPasswordTime - nonexistentTime));
+      }
+
+      expect(median(pairedDifferences)).toBeLessThan(70);
+    },
+    60_000,
+  );
 });

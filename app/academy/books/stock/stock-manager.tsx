@@ -5,10 +5,7 @@ import type { BookRecord } from "@/lib/academies/books";
 import { getStockStatus, LOW_STOCK_THRESHOLD } from "@/lib/academies/book-stock";
 import { Badge, Button, Field, FormDialog, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { getStatusTone } from "@/lib/ui/status";
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
+import { formatMoney } from "@/lib/ui/money";
 
 const STOCK_STATUS_LABEL: Record<ReturnType<typeof getStockStatus>, string> = {
   out_of_stock: "Out of stock",

@@ -1,10 +1,11 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { createBatch, deleteBatch, setBatchStatus, type BatchFormState } from "@/lib/academies/batches-actions";
 import type { BatchDeletionEligibilitySummary, BatchRecord } from "@/lib/academies/batches";
 import type { BranchRecord } from "@/lib/academies/branches";
 import type { CourseRecord } from "@/lib/academies/courses";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import {
   Badge,
   Button,
@@ -57,6 +58,11 @@ export function BatchesList({ batches, branches, courses, canManage, canDelete }
   const [archiveRowId, setArchiveRowId] = useState<string | null>(null);
   const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (createState.ok) showSuccessToast("Batch created.");
+    else if (createState.error) showErrorToast(createState.error.message);
+  }, [createState]);
+
   const courseNameById = new Map(courses.map((course) => [course.id, course.name]));
 
   function toggleBatchStatus(batch: BatchRecord) {
@@ -104,7 +110,7 @@ export function BatchesList({ batches, branches, courses, canManage, canDelete }
                         <button
                           type="button"
                           aria-label={`Actions for ${batch.name}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                         >
                           <Icon name="more" />
                         </button>
@@ -135,7 +141,8 @@ export function BatchesList({ batches, branches, courses, canManage, canDelete }
 
                     <ConfirmButton
                       label={batch.status === "archived" ? "Restore" : "Archive"}
-                      variant={batch.status === "archived" ? "secondary" : "danger"}
+                      variant={batch.status === "archived" ? "success" : "danger"}
+                      icon={batch.status === "archived" ? "autorenew" : "archive"}
                       open={archiveRowId === batch.id}
                       onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? batch.id : null)}
                       title={batch.status === "archived" ? `Restore "${batch.name}"?` : `Archive "${batch.name}"?`}

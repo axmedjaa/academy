@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAcademyDashboardData } from "@/lib/academies/dashboard";
 import { getStatusTone } from "@/lib/ui/status";
+import { formatMoney } from "@/lib/ui/money";
 import { Icon } from "@/app/academy/_shell/icons";
 import { TrendAreaChart } from "@/app/academy/_shell/charts";
 import {
@@ -20,10 +21,6 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
 
 // Same convention as app/academy/students/students-list.tsx and
 // app/academy/staff/staff-table.tsx's own local copies — a tiny, pure
@@ -87,6 +84,34 @@ function formatMonthPeriod(period: string): string {
  * `enrollmentTrend` — the exact same `getStudentReports` call this page
  * already made for `totalStudents`, now also threaded through
  * `AcademyDashboardData` instead of a second query.
+ *
+ * Visual-parity pass (dashboard redesign wave): each StatCard now carries a
+ * real status tone (`iconTone`) instead of the flat default — warning when
+ * a count needs attention (upcoming exams, pending approvals, outstanding
+ * charges), success when a financial figure is in a healthy state (zero
+ * outstanding charges, payments collected). No delta pills here: unlike the
+ * Platform dashboard's "Total Academies" (whose trend series is a literal
+ * cumulative count), none of this page's stat cards are the cumulative sum
+ * of `enrollmentTrend` (new enrollments per month doesn't reconcile against
+ * `totalStudents`, which also moves on dropouts/withdrawals) — a delta here
+ * would misrepresent the number, so it's omitted rather than approximated.
+ * Added a "Payments Collected" card from `finance.paymentsReceived`, already
+ * computed by the same `getFinanceReports` call `outstandingCharges` uses —
+ * no new query.
+ *
+ * "Last updated" header timestamp: this page is server-rendered fresh on
+ * every request (no caching layer in front of it), so `new Date()` at
+ * render time is a truthful "as of now" marker, not a fabricated one.
+ *
+ * Entrance stagger: the chart/table `Section`s below the KPI row continue
+ * the same `motion-safe:animate-fade-in-up` cadence `StatCard` already uses
+ * for its own index-based stagger (60ms per step), via `Section`'s new
+ * `style` passthrough — so the whole page reveals top-to-bottom once, on
+ * first load/navigation, not on every interaction. Deliberately NOT applied
+ * to the sidebar nav itself (`academy-shell.tsx`): that renders on every
+ * page navigation, tens of times a session, which this project's own
+ * animation guidance treats as "no animation" territory, not "occasional
+ * entrance" territory.
  */
 export default async function AcademyDashboardPage() {
   const context = await getAuthContext();
@@ -100,10 +125,20 @@ export default async function AcademyDashboardPage() {
   }
 
   const { data } = result;
+  const generatedAt = new Date();
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader title="Dashboard" description="Overview of your academy performance." />
+      <PageHeader
+        title="Dashboard"
+        description="Overview of your academy performance."
+        actions={
+          <span className="text-xs text-muted">
+            Last updated {generatedAt.toLocaleDateString(undefined, { weekday: "short" })},{" "}
+            {generatedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+          </span>
+        }
+      />
 
       <div className="flex flex-col gap-6">
         {data.alerts.length > 0 && (
@@ -140,18 +175,27 @@ export default async function AcademyDashboardPage() {
               label="Total Students"
               value={data.totalStudents}
               icon={<Icon name="group" />}
+              iconTone="brand"
               index={0}
               href="/academy/students"
             />
           )}
           {data.activeStaffCount !== null && (
-            <StatCard label="Staff" value={data.activeStaffCount} icon={<Icon name="badge" />} index={1} href="/academy/staff" />
+            <StatCard
+              label="Staff"
+              value={data.activeStaffCount}
+              icon={<Icon name="badge" />}
+              iconTone="brand"
+              index={1}
+              href="/academy/staff"
+            />
           )}
           {data.upcomingExamsCount !== null && (
             <StatCard
               label="Upcoming Exams"
               value={data.upcomingExamsCount}
               icon={<Icon name="fact_check" />}
+              iconTone={data.upcomingExamsCount > 0 ? "warning" : "brand"}
               index={2}
               href="/academy/exams"
             />
@@ -161,6 +205,7 @@ export default async function AcademyDashboardPage() {
               label="Pending Approvals"
               value={data.pendingApprovalsCount}
               icon={<Icon name="receipt_long" />}
+              iconTone={data.pendingApprovalsCount > 0 ? "warning" : "brand"}
               index={3}
             />
           )}
@@ -172,13 +217,27 @@ export default async function AcademyDashboardPage() {
                 .map((row) => formatMoney(row.amountCents, row.currency))
                 .join(", ") || undefined}
               icon={<Icon name="payments" />}
+              iconTone={data.finance.outstandingCharges.count > 0 ? "warning" : "success"}
               index={4}
+              href="/academy/finance"
+            />
+          )}
+          {data.finance && (
+            <StatCard
+              label="Payments Collected"
+              value={data.finance.paymentsReceived.count}
+              hint={data.finance.paymentsReceived.totalsByCurrency
+                .map((row) => formatMoney(row.amountCents, row.currency))
+                .join(", ") || undefined}
+              icon={<Icon name="payments" />}
+              iconTone="success"
+              index={5}
               href="/academy/finance"
             />
           )}
         </div>
 
-        <Section>
+        <Section className="motion-safe:animate-fade-in-up" style={{ animationDelay: "360ms" }}>
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-base font-semibold text-ink">Recent payments</h2>
             {data.recentPayments !== null && data.recentPayments.length > 0 && (
@@ -232,7 +291,7 @@ export default async function AcademyDashboardPage() {
         </Section>
 
         {data.enrollmentTrend && (
-          <Section>
+          <Section className="motion-safe:animate-fade-in-up" style={{ animationDelay: "420ms" }}>
             <h2 className="text-base font-semibold text-ink">Enrollment trend</h2>
             <div className="mt-4">
               <TrendAreaChart
@@ -246,7 +305,7 @@ export default async function AcademyDashboardPage() {
         )}
 
         {data.usage && (
-          <Section>
+          <Section className="motion-safe:animate-fade-in-up" style={{ animationDelay: "480ms" }}>
             <h2 className="text-base font-semibold text-ink">Usage</h2>
             {data.usage.metrics && data.usage.limits ? (
               <div className="mt-4 flex flex-col gap-3">

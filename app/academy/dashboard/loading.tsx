@@ -23,16 +23,23 @@ export default function DashboardLoading() {
 
       <div className="flex flex-col gap-6">
         <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4">
-          {Array.from({ length: 4 }).map((_, index) => (
+          {Array.from({ length: 5 }).map((_, index) => (
             <div key={index} className="flex flex-col gap-2 rounded-card border border-border bg-surface p-5 shadow-card">
               <div className="flex items-center justify-between">
                 <Pulse className="h-3.5 w-24" />
-                <Pulse className="h-5 w-5 rounded-full" />
+                <Pulse className="h-9 w-9 rounded-[10px]" />
               </div>
-              <Pulse className="h-7 w-16" />
+              <Pulse className="h-8 w-16" />
             </div>
           ))}
         </div>
+
+        <Section>
+          <Pulse className="h-5 w-40" />
+          <div className="mt-4">
+            <Pulse className="h-56 w-full" />
+          </div>
+        </Section>
 
         <Section>
           <div className="flex items-center justify-between">

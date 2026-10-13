@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import { recalculateUsageAction } from "@/lib/subscriptions/usage-actions";
 import type { AcademyUsageOverviewRow } from "@/lib/subscriptions/usage";
-import { Badge, Button, ErrorMessage, Section } from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, ErrorMessage, Section } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 
 interface Props {
   rows: AcademyUsageOverviewRow[];
@@ -92,11 +93,7 @@ export function UsageManager({ rows }: Props) {
   }
 
   if (rows.length === 0) {
-    return (
-      <Section>
-        <p className="text-sm text-muted">No academies yet.</p>
-      </Section>
-    );
+    return <EmptyState message="No academies yet." icon={<Icon name="apartment" />} />;
   }
 
   return (

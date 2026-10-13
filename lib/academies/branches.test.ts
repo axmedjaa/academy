@@ -27,6 +27,7 @@ import {
   getBranch,
   getBranchDeletionEligibility,
   listBranches,
+  restoreBranch,
   updateBranch,
   type CreateBranchInput,
 } from "./branches";
@@ -336,6 +337,122 @@ describe("checkAllowance('branches') — hard block at plan limit", () => {
 
     const afterArchive = await createBranch(context, validInput());
     expect(afterArchive.ok).toBe(true);
+  });
+
+  it("restoring an archived branch re-blocks at the plan limit if another branch has since filled the slot", async () => {
+    const { context } = await setupAcademy("academy_owner", 1);
+
+    const first = await createBranch(context, validInput());
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const archived = await archiveBranch(context, first.branch.id);
+    expect(archived.ok).toBe(true);
+
+    const second = await createBranch(context, validInput());
+    expect(second.ok).toBe(true);
+
+    const restoreResult = await restoreBranch(context, first.branch.id);
+    expect(restoreResult.ok).toBe(false);
+    if (!restoreResult.ok) {
+      expect(restoreResult.error.code).toBe("allowance");
+      expect(restoreResult.error.message).toMatch(/limit/i);
+    }
+  });
+});
+
+describe("restoreBranch", () => {
+  it("sets an archived branch's status back to active", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const created = await createBranch(context, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const archived = await archiveBranch(context, created.branch.id);
+    expect(archived.ok).toBe(true);
+
+    const restored = await restoreBranch(context, created.branch.id);
+    expect(restored.ok).toBe(true);
+    if (restored.ok) {
+      expect(restored.branch.status).toBe("active");
+      expect(restored.branch.id).toBe(created.branch.id);
+    }
+
+    const refetched = await getBranch(context, created.branch.id);
+    expect(refetched.ok).toBe(true);
+    if (refetched.ok) expect(refetched.branch.status).toBe("active");
+  });
+
+  it("is a no-op (not an error) when the branch is already active", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const created = await createBranch(context, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const restored = await restoreBranch(context, created.branch.id);
+    expect(restored.ok).toBe(true);
+    if (restored.ok) expect(restored.branch.status).toBe("active");
+  });
+
+  it("writes an auditable 'restoreBranch' row on success", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const created = await createBranch(context, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await archiveBranch(context, created.branch.id);
+
+    const result = await restoreBranch(context, created.branch.id);
+    expect(result.ok).toBe(true);
+
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, created.branch.id), eq(auditLogs.action, "restoreBranch")));
+    expect(audit?.actorUserId).toBe(userId);
+    expect(audit?.academyId).toBe(academyId);
+  });
+
+  it("returns code 'not_found' for a nonexistent branch id", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const result = await restoreBranch(context, randomUUID());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("returns code 'not_found' for a branch belonging to a different academy", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const other = await setupAcademy("academy_owner");
+    const created = await createBranch(owner.context, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await archiveBranch(owner.context, created.branch.id);
+
+    const result = await restoreBranch(other.context, created.branch.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it.each<[AcademyRole, boolean]>([
+    ["academy_owner", true],
+    ["academy_admin", true],
+    ["manager", true],
+    ["admissions_officer", false],
+    ["finance_officer", false],
+    ["trainer", false],
+  ])("role %s: restore allowed = %s", async (role, allowed) => {
+    const owner = await setupAcademy("academy_owner");
+    const created = await createBranch(owner.context, validInput());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await archiveBranch(owner.context, created.branch.id);
+
+    const actingUserId = await createUser();
+    await addMembership(actingUserId, owner.academyId, role);
+    const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
+
+    const result = await restoreBranch(actingContext, created.branch.id);
+    expect(result.ok).toBe(allowed);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 });
 

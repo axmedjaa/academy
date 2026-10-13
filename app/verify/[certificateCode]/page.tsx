@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { verifyCertificate } from "@/lib/academies/certificates";
+import { getClientIp } from "@/lib/http/client-ip";
 import { AuthLogo } from "@/lib/ui/auth-components";
 import { color, radius, spacing } from "@/lib/ui/theme";
 import { VerifyLookupForm } from "../lookup-form";
@@ -34,11 +35,10 @@ import { VerifyLookupForm } from "../lookup-form";
  * task's explicit constraint.
  *
  * Server Component: reads `headers()` directly (no client-side fetch),
- * extracting the client IP the same way lib/auth/actions.ts's
- * `getClientIp` does (first `x-forwarded-for` entry), and passes both IP
- * and user-agent straight into `verifyCertificate`, which does its own
- * rate-limiting and lookup — this call and its inputs are completely
- * unchanged from before this restyle.
+ * extracting the client IP via the shared, trusted-proxy-aware
+ * lib/http/client-ip.ts (see that module's own comment), and passes both
+ * IP and user-agent straight into `verifyCertificate`, which does its own
+ * rate-limiting and lookup.
  *
  * Not-found and rate-limited both render a generic message and neither one
  * is styled or worded to look like a "yes, a certificate exists but..."
@@ -48,16 +48,6 @@ import { VerifyLookupForm } from "../lookup-form";
  * with its own explicit "Cancelled" status, per PLAN.md's explicit rule
  * that a cancelled certificate stays permanently, distinctly visible here.
  */
-// Trusts the first `x-forwarded-for` entry as the client IP for rate
-// limiting (see lib/academies/certificate-verify-rate-limit.ts). Production
-// deployment assumes a trusted reverse proxy/load balancer sets (and
-// overwrites, never appends to) this header — direct/untrusted access to
-// this public route must not be allowed to reach it, or a caller could
-// spoof this value to evade rate limiting.
-function getClientIp(headerList: Awaited<ReturnType<typeof headers>>): string {
-  return headerList.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-}
-
 function formatDate(date: Date): string {
   return new Intl.DateTimeFormat("en-US", {
     year: "numeric",

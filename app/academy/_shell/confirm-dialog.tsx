@@ -13,9 +13,30 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "./ui";
+import { Icon } from "./icons";
 import { showSuccessToast } from "@/lib/ui/toast";
 
-type Variant = "primary" | "secondary" | "danger" | "dangerSolid";
+type Variant = "primary" | "secondary" | "success" | "danger" | "dangerSolid";
+
+/**
+ * DESIGN.md §1's accessibility floor ("every status/state is color + icon +
+ * text label, never color alone") applied to this dialog's own `variant`
+ * coloring — previously carried by button color alone. Same
+ * `bg-{tone}-bg text-{tone}` tinted-chip convention `app/academy/_shell/
+ * ui.tsx`'s `Badge`/`BADGE_TONE_CLASS` already established, not a new
+ * pattern. Keyed by `variant` rather than by `icon` name, since the two
+ * destructive variants share one meaning (red) regardless of which glyph
+ * the caller passes. `secondary` stays neutral gray here (e.g. Subscriptions'
+ * "Renew") — `success` is the dedicated tone for Restore, matching the
+ * `success` button variant it now pairs with.
+ */
+const VARIANT_ICON_TONE_CLASS: Record<Variant, string> = {
+  primary: "bg-brand-tint text-brand",
+  secondary: "bg-app text-muted",
+  success: "bg-success-bg text-success",
+  danger: "bg-danger-bg text-danger",
+  dangerSolid: "bg-danger-bg text-danger",
+};
 
 export interface ConfirmActionResult {
   ok: boolean;
@@ -25,6 +46,17 @@ export interface ConfirmActionResult {
 interface ConfirmButtonProps {
   /** Trigger button's visible label, e.g. "Delete", "Archive", "Remove access". */
   label: string;
+  /**
+   * Optional leading glyph (a name from `app/academy/_shell/icons.tsx`),
+   * shown in a tinted circular chip beside the title — tone derives from
+   * `variant` (see `VARIANT_ICON_TONE_CLASS` above). Opt-in: omitted, the
+   * dialog renders exactly as before. Reserved for the status-toggle
+   * confirmations (Archive/Restore) across Students/Courses/Batches/
+   * Programs/Exams/Branches, where the glyph repeats the row's own action
+   * so the dialog's intent reads at a glance, not just "Delete", whose
+   * own `dangerSolid` button is already unambiguous without one.
+   */
+  icon?: string;
   /** Modal heading — include the entity's name where practical, e.g. `Delete "Frontend Development"?`. */
   title: string;
   /** Modal body copy — say what happens and whether it can be undone. */
@@ -92,6 +124,7 @@ export function ConfirmButton({
   onSuccess,
   successMessage,
   confirmInput,
+  icon,
   open: controlledOpen,
   onOpenChange,
 }: ConfirmButtonProps) {
@@ -147,10 +180,20 @@ export function ConfirmButton({
         </AlertDialogTrigger>
       )}
       <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
+        <div className="flex items-start gap-3">
+          {icon && (
+            <span
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${VARIANT_ICON_TONE_CLASS[variant]}`}
+              aria-hidden="true"
+            >
+              <Icon name={icon} width={20} height={20} strokeWidth={1.8} />
+            </span>
+          )}
+          <AlertDialogHeader className="flex-1 pt-0.5">
+            <AlertDialogTitle>{title}</AlertDialogTitle>
+            <AlertDialogDescription>{description}</AlertDialogDescription>
+          </AlertDialogHeader>
+        </div>
 
         {confirmInput && (
           <label className="mt-4 block">

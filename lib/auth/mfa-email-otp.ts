@@ -8,6 +8,7 @@ import { recordAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email/client";
 import { mfaEmailOtpEmail } from "@/lib/email/templates";
 import { checkMfaEmailOtpRateLimit } from "@/lib/auth/mfa-email-otp-rate-limit";
+import { formatRetryAfter } from "@/lib/ui/duration";
 
 // Duplicated (not imported) from lib/auth/mfa.ts's hasVerifiedMfaCredential
 // on purpose — that module will import verifyMfaEmailOtp/sendMfaEmailOtp
@@ -70,7 +71,10 @@ export async function sendMfaEmailOtp(userId: string): Promise<SendMfaEmailOtpRe
   if (!rateLimit.allowed) {
     return {
       ok: false,
-      error: { code: "RATE_LIMITED", message: `Too many codes requested. Try again in ${rateLimit.retryAfterSeconds}s.` },
+      error: {
+        code: "RATE_LIMITED",
+        message: `Too many codes requested. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
+      },
     };
   }
 

@@ -5,8 +5,10 @@ import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { ACADEMY_SETTINGS_ACTION, hasAcademyPermission } from "@/lib/auth/academy-permissions";
 import { recordAudit } from "@/lib/audit";
 import { logger } from "@/lib/logger";
-import { deleteObject, getDownloadUrl, getUploadUrl, headObject, type StorageContentType } from "@/lib/storage/client";
+import { deleteObject, getDownloadUrl, getUploadUrl } from "@/lib/storage/client";
 import { getAcademyLogoKey, isAcademyLogoKey } from "@/lib/storage/keys";
+import { RASTER_IMAGE_POLICY, isRasterImageContentType } from "@/lib/storage/upload-policy";
+import { verifyUploadedObject } from "@/lib/storage/verify-upload";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -24,25 +26,15 @@ import type { AuthContext } from "@/lib/auth/auth-context";
  * `updateAcademySettings` no longer touches this column at all (see that
  * file's own comment) — it is exclusively managed by the three actions
  * below.
+ *
+ * Format/size policy (security audit follow-up — file-upload format
+ * coverage): shared with book covers/student photos/course images via
+ * `RASTER_IMAGE_POLICY` (lib/storage/upload-policy.ts) rather than its own
+ * copy — see that module's own comment for exactly which formats are
+ * accepted and why (and why SVG/GIF are deliberately not).
  */
 
-export const MAX_LOGO_SIZE_BYTES = 10 * 1024 * 1024;
-
-const ALLOWED_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-type AllowedLogoContentType = (typeof ALLOWED_CONTENT_TYPES)[number];
-
-// SVG is deliberately excluded — it can carry active/scriptable content,
-// a different security posture than a raster image; not supported in this
-// first implementation (see this task's own brief).
-const EXTENSION_BY_CONTENT_TYPE: Record<AllowedLogoContentType, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-};
-
-function isAllowedContentType(value: string): value is AllowedLogoContentType {
-  return (ALLOWED_CONTENT_TYPES as readonly string[]).includes(value);
-}
+export const MAX_LOGO_SIZE_BYTES = RASTER_IMAGE_POLICY.maxSizeBytes;
 
 export interface AcademyLogoActionError {
   code: "forbidden" | "validation" | "not_found" | "blocked" | "upload_failed" | "verification_failed";
@@ -61,12 +53,17 @@ const NOT_FOUND: AcademyLogoActionError = {
 
 const INVALID_FORMAT: AcademyLogoActionError = {
   code: "validation",
-  message: "Logo must be JPEG, PNG, or WebP.",
+  message: "Logo must be JPEG, PNG, WebP, or AVIF.",
 };
 
 const TOO_LARGE: AcademyLogoActionError = {
   code: "validation",
   message: "Logo must be 10 MB or smaller.",
+};
+
+const EMPTY_FILE: AcademyLogoActionError = {
+  code: "validation",
+  message: "That file is empty.",
 };
 
 const VERIFICATION_FAILED: AcademyLogoActionError = {
@@ -120,7 +117,7 @@ export async function requestAcademyLogoUploadUrl(
   const resolved = await resolveAuthorizedAcademy(actorContext);
   if (!resolved.ok) return resolved;
 
-  if (!isAllowedContentType(input.contentType)) {
+  if (!isRasterImageContentType(input.contentType)) {
     return { ok: false, error: INVALID_FORMAT };
   }
   if (!Number.isFinite(input.fileSizeBytes) || input.fileSizeBytes <= 0 || input.fileSizeBytes > MAX_LOGO_SIZE_BYTES) {
@@ -129,7 +126,7 @@ export async function requestAcademyLogoUploadUrl(
 
   const key = getAcademyLogoKey({
     academyId: resolved.academyId,
-    extension: EXTENSION_BY_CONTENT_TYPE[input.contentType],
+    extension: RASTER_IMAGE_POLICY.extensionByContentType[input.contentType],
   });
 
   const result = await getUploadUrl({ key, contentType: input.contentType });
@@ -184,20 +181,27 @@ export async function confirmAcademyLogoUpload(
     return { ok: false, error: { code: "validation", message: "Invalid upload reference." } };
   }
 
-  const head = await headObject(input.key);
-  if (!head.ok) {
+  // Real post-upload verification (security audit follow-up — file-upload
+  // format coverage): content-type/size against RASTER_IMAGE_POLICY, not
+  // empty, and the object's actual leading bytes match its declared
+  // content-type's magic-byte signature — see lib/storage/verify-upload.ts.
+  // An invalid object (wrong/empty/mismatched-signature) is deleted from
+  // R2 immediately, same as before; "not_found"/"verification_failed" have
+  // nothing to delete, also same as before.
+  const verified = await verifyUploadedObject(input.key, RASTER_IMAGE_POLICY);
+  if (!verified.ok) {
+    if (verified.error.code === "invalid_format" || verified.error.code === "empty") {
+      await deleteObject(input.key);
+      return { ok: false, error: verified.error.code === "invalid_format" ? INVALID_FORMAT : EMPTY_FILE };
+    }
+    if (verified.error.code === "too_large") {
+      await deleteObject(input.key);
+      return { ok: false, error: TOO_LARGE };
+    }
+    if (verified.error.code === "not_found") {
+      return { ok: false, error: verified.error };
+    }
     return { ok: false, error: VERIFICATION_FAILED };
-  }
-  if (!head.exists) {
-    return { ok: false, error: { code: "not_found", message: "The uploaded file could not be found. Please try uploading again." } };
-  }
-  if (!head.info.contentType || !isAllowedContentType(head.info.contentType)) {
-    await deleteObject(input.key);
-    return { ok: false, error: INVALID_FORMAT };
-  }
-  if (!head.info.contentLength || head.info.contentLength > MAX_LOGO_SIZE_BYTES) {
-    await deleteObject(input.key);
-    return { ok: false, error: TOO_LARGE };
   }
 
   const result = await db.transaction(async (tx) => {
@@ -330,5 +334,9 @@ export async function getAcademyLogoUrl(logoRef: string | null): Promise<string 
   return result.ok ? result.downloadUrl : null;
 }
 
-export { ALLOWED_CONTENT_TYPES as ALLOWED_LOGO_CONTENT_TYPES };
-export type { StorageContentType };
+// Security/format-coverage pass: the allowlist itself now lives in
+// lib/storage/upload-policy.ts (RASTER_IMAGE_CONTENT_TYPES), shared with
+// book covers/student photos/course images — nothing outside this file
+// imported the old `ALLOWED_LOGO_CONTENT_TYPES`/`StorageContentType`
+// re-exports (confirmed by searching every importer of this module), so
+// they're removed here rather than kept as unused re-exports.

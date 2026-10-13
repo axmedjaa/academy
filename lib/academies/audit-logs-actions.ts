@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   AUDIT_LOG_MAX_PAGE_SIZE,
+  resolveAuditActorEmails,
   type AuditLogPagination,
   type AuditLogQueryResult,
 } from "@/lib/audit-query";
@@ -42,7 +43,7 @@ export type AcademyAuditLogsError =
   | { code: "VALIDATION_ERROR"; message: string };
 
 export type AcademyAuditLogsState =
-  | { ok: true; data: AuditLogQueryResult }
+  | { ok: true; data: AuditLogQueryResult; actorEmailsByUserId: Record<string, string> }
   | { ok: false; error: AcademyAuditLogsError };
 
 const UNAUTHENTICATED_MESSAGE = "Sign in required.";
@@ -98,5 +99,6 @@ export async function getAuditLogsForOwnAcademy(
     };
   }
 
-  return { ok: true, data: result.data };
+  const actorEmailsByUserId = await resolveAuditActorEmails(result.data.rows);
+  return { ok: true, data: result.data, actorEmailsByUserId };
 }

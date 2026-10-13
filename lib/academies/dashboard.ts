@@ -74,6 +74,11 @@ export type GetAcademyDashboardDataResult =
 
 const CAN_SEE_APPROVALS_ROLES = new Set(["academy_owner", "academy_admin", "manager"]);
 
+/** Previously fetched the academy's entire payment history and sorted/
+ * sliced to 5 in JS; now pushed down to a DB-level ORDER BY/LIMIT via
+ * `listStudentPayments`'s own `limit` option — see that call below. */
+const RECENT_PAYMENTS_LIMIT = 10;
+
 export async function getAcademyDashboardData(
   actorContext: AuthContext,
 ): Promise<GetAcademyDashboardDataResult> {
@@ -81,7 +86,6 @@ export async function getAcademyDashboardData(
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
-
   const [studentReportsResult, staffResult, examsResult, financeResult, usageResult, paymentsResult] =
     await Promise.all([
       getStudentReports(actorContext, {}),
@@ -89,7 +93,7 @@ export async function getAcademyDashboardData(
       listExams(actorContext),
       getFinanceReports(actorContext, {}),
       getOwnAcademyUsage(actorContext),
-      listStudentPayments(actorContext),
+      listStudentPayments(actorContext, { limit: RECENT_PAYMENTS_LIMIT }),
     ]);
 
   const totalStudents = studentReportsResult.ok ? studentReportsResult.report.totalStudents : null;
@@ -103,9 +107,28 @@ export async function getAcademyDashboardData(
       ).length
     : null;
 
-  const pendingApprovalsCount = CAN_SEE_APPROVALS_ROLES.has(access.membershipRole)
-    ? (await listPendingApprovalRequests(access.academyId)).length
-    : null;
+  // Both reads below are independent of each other (one scoped by
+  // academyId, the other by the already-resolved payments' studentIds) —
+  // previously two sequential round trips after the main Promise.all;
+  // run together instead, same "don't serialize independent queries" fix
+  // as checkAcademyAccess's own two lookups (lib/academies/access-gate.ts).
+  const studentIdsForPayments = paymentsResult.ok
+    ? [...new Set(paymentsResult.payments.map((payment) => payment.studentId))]
+    : [];
+
+  const [pendingApprovalRequests, paymentStudentNameRows] = await Promise.all([
+    CAN_SEE_APPROVALS_ROLES.has(access.membershipRole)
+      ? listPendingApprovalRequests(access.academyId)
+      : Promise.resolve(null),
+    studentIdsForPayments.length
+      ? db
+          .select({ id: students.id, fullName: students.fullName })
+          .from(students)
+          .where(and(eq(students.academyId, access.academyId), inArray(students.id, studentIdsForPayments)))
+      : Promise.resolve([]),
+  ]);
+
+  const pendingApprovalsCount = pendingApprovalRequests ? pendingApprovalRequests.length : null;
 
   const usage =
     usageResult.ok ? { metrics: usageResult.usage, limits: usageResult.limits } : null;
@@ -116,20 +139,13 @@ export async function getAcademyDashboardData(
 
   let recentPayments: RecentPaymentRow[] | null = null;
   if (paymentsResult.ok) {
-    const sorted = [...paymentsResult.payments].sort(
-      (a, b) => b.receivedAt.getTime() - a.receivedAt.getTime(),
-    );
-    const top = sorted.slice(0, 5);
-    const studentIds = [...new Set(top.map((payment) => payment.studentId))];
-    const nameRows = studentIds.length
-      ? await db
-          .select({ id: students.id, fullName: students.fullName })
-          .from(students)
-          .where(and(eq(students.academyId, access.academyId), inArray(students.id, studentIds)))
-      : [];
-    const nameById = new Map(nameRows.map((row) => [row.id, row.fullName]));
+    // Already the most recent RECENT_PAYMENTS_LIMIT rows, newest first —
+    // `listStudentPayments`'s own `limit` option pushes the ORDER BY/LIMIT
+    // down to Postgres now, so this no longer fetches the academy's entire
+    // payment history just to sort/slice it in JS.
+    const nameById = new Map(paymentStudentNameRows.map((row) => [row.id, row.fullName]));
 
-    recentPayments = top.map((payment) => ({
+    recentPayments = paymentsResult.payments.map((payment) => ({
       id: payment.id,
       studentId: payment.studentId,
       studentName: nameById.get(payment.studentId) ?? "Unknown student",

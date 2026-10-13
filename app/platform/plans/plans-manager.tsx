@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 import {
   createSubscriptionPlan,
   updateSubscriptionPlan,
@@ -11,6 +11,7 @@ import type { SubscriptionPlanRecord } from "@/lib/subscriptions/plans";
 import {
   Badge,
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
   FormDialog,
@@ -22,6 +23,7 @@ import {
   trHover,
 } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -60,9 +62,7 @@ export function PlansManager({ plans }: Props) {
       <div>
         <h2 className="mb-3 text-lg font-semibold text-ink">Plan templates</h2>
         {plans.length === 0 ? (
-          <Section>
-            <p className="text-sm text-muted">No plans yet — create one above.</p>
-          </Section>
+          <EmptyState message="No plans yet — create one above." icon={<Icon name="inventory_2" />} />
         ) : (
           <TableWrap>
             <thead>
@@ -123,6 +123,8 @@ function PlanRow({
       const result = await setPlanActive(plan.id, !plan.isActive);
       if (!result.ok) {
         setError(result.error.message);
+      } else {
+        showSuccessToast(plan.isActive ? "Plan retired." : "Plan restored.");
       }
     });
   }
@@ -145,7 +147,7 @@ function PlanRow({
               <button
                 type="button"
                 aria-label={`Actions for ${plan.name}`}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
               >
                 <Icon name="more" />
               </button>
@@ -189,6 +191,11 @@ function PlanForm({
 }) {
   const action = mode === "create" ? createSubscriptionPlan : updateSubscriptionPlan;
   const [state, formAction, pending] = useActionState(action, initialState);
+
+  useEffect(() => {
+    if (state.ok) showSuccessToast(mode === "create" ? "Plan created." : "Plan updated.");
+    else if (state.error) showErrorToast(state.error.message);
+  }, [state, mode]);
 
   const [prevOk, setPrevOk] = useState(state.ok);
   if (state.ok !== prevOk) {

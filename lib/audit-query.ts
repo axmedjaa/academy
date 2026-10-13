@@ -1,6 +1,6 @@
-import { and, count, desc, eq, gte, lte, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gte, lte, inArray, type SQL } from "drizzle-orm";
 import { db, type DbClient } from "@/lib/db";
-import { auditLogs } from "@/lib/db/schema";
+import { auditLogs, users } from "@/lib/db/schema";
 
 // PLAN.md "Pagination, Search & Export Limits" (Planning Gaps Resolution §9)
 // — the project-wide rule, applied here since this is the first real list
@@ -129,4 +129,33 @@ export async function fetchAuditLogs(
     pageSize,
     totalCount: totalRows[0]?.value ?? 0,
   };
+}
+
+/**
+ * Both audit-log pages (`/academy/audit-logs`, `/platform/audit-logs`)
+ * previously rendered only `row.actorRole` ("manager", "academy_owner", ...)
+ * with no way to tell apart two different people holding the same role —
+ * every "manager" row looked identical, which reads as "I can only see my
+ * own actions" even though every actor's rows were always present (the
+ * query itself was never scoped to the caller's own `actorUserId` anywhere
+ * in this codebase; `auditLogs.actorUserId` was simply never surfaced in the
+ * UI). This resolves the real identity behind each row's `actorUserId`, the
+ * same "batch-fetch by id, build a Map" pattern already used for recent
+ * payments' student names (lib/academies/dashboard.ts) — one extra indexed
+ * query, not a join, so `fetchAuditLogs`'s own return shape (relied on by
+ * its existing tests and the CSV export) stays untouched.
+ */
+export async function resolveAuditActorEmails(
+  rows: AuditLogRow[],
+  executor: DbClient = db,
+): Promise<Record<string, string>> {
+  const actorUserIds = [...new Set(rows.map((row) => row.actorUserId).filter((id): id is string => id !== null))];
+  if (actorUserIds.length === 0) return {};
+
+  const actorRows = await executor
+    .select({ id: users.id, email: users.email })
+    .from(users)
+    .where(inArray(users.id, actorUserIds));
+
+  return Object.fromEntries(actorRows.map((row) => [row.id, row.email]));
 }

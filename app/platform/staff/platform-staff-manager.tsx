@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 import {
   createPlatformAdminAccount,
   grantPlatformPermission,
@@ -13,7 +13,9 @@ import {
   PERMISSION_PRESETS,
 } from "@/lib/platform-staff/capabilities";
 import type { PlatformStaffAccount } from "@/lib/platform-staff/staff";
-import { Badge, Button, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialCreateState: CreatePlatformAdminAccountState = { ok: false };
 
@@ -35,6 +37,11 @@ export function PlatformStaffManager({ staff, ungrantableCapabilities }: Props) 
   const [isPending, startTransition] = useTransition();
   const [grantError, setGrantError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (createState.ok) showSuccessToast("Account created.");
+    else if (createState.error) showErrorToast(createState.error.message);
+  }, [createState]);
+
   const selected = staff.find((account) => account.userId === selectedUserId);
   const grantedSet = new Set(selected?.grantedCapabilities ?? []);
 
@@ -47,6 +54,8 @@ export function PlatformStaffManager({ staff, ungrantableCapabilities }: Props) 
         : await grantPlatformPermission(selectedUserId, capability);
       if (!result.ok) {
         setGrantError(result.error.message);
+      } else {
+        showSuccessToast(currentlyGranted ? "Permission revoked." : "Permission granted.");
       }
     });
   }
@@ -55,14 +64,17 @@ export function PlatformStaffManager({ staff, ungrantableCapabilities }: Props) 
     if (!selectedUserId) return;
     setGrantError(null);
     startTransition(async () => {
+      let failed = false;
       for (const capability of capabilities) {
         if (!grantedSet.has(capability)) {
           const result = await grantPlatformPermission(selectedUserId, capability);
           if (!result.ok) {
             setGrantError(result.error.message);
+            failed = true;
           }
         }
       }
+      if (!failed) showSuccessToast("Preset applied.");
     });
   }
 
@@ -124,7 +136,7 @@ export function PlatformStaffManager({ staff, ungrantableCapabilities }: Props) 
       <Section>
         <h2 className="text-base font-semibold text-ink">Grant permissions</h2>
         {admins.length === 0 ? (
-          <p className="mt-2 text-sm text-muted">No platform_admin accounts yet — create one above.</p>
+          <EmptyState message="No platform_admin accounts yet — create one above." icon={<Icon name="badge" />} />
         ) : (
           <div className="mt-4 flex flex-col gap-4">
             <Field label="Platform admin account" className="max-w-sm">

@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
-import { and, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
 import * as OTPAuth from "otpauth";
 import QRCode from "qrcode";
 import { db } from "@/lib/db";
@@ -10,6 +10,10 @@ import { recordAudit } from "@/lib/audit";
 
 const ISSUER = "Academy Management SaaS";
 const RECOVERY_CODE_COUNT = 10;
+// Shared with the replay-prevention step math in `validateTotpChallenge`
+// below — must stay the same value `buildTotp` configures the TOTP
+// instance with, or the computed absolute step number would be wrong.
+const TOTP_PERIOD_SECONDS = 30;
 
 function buildTotp(email: string, secretBase32: string): OTPAuth.TOTP {
   return new OTPAuth.TOTP({
@@ -17,7 +21,7 @@ function buildTotp(email: string, secretBase32: string): OTPAuth.TOTP {
     label: email,
     algorithm: "SHA1",
     digits: 6,
-    period: 30,
+    period: TOTP_PERIOD_SECONDS,
     secret: secretBase32,
   });
 }
@@ -300,6 +304,24 @@ const INVALID_MFA_CODE: MfaChallengeError = {
   message: "Invalid code.",
 };
 
+/**
+ * Security audit finding (TOTP replay prevention — see mfaTotpCredentials'
+ * own schema comment for the full rationale). `totp.validate()` only
+ * checks whether the code matches *some* step within the window; it has
+ * no concept of "already used," so without this, the same captured code
+ * would keep authenticating successfully until it naturally expired
+ * (~90s, given `window: 1`).
+ *
+ * `delta` is the matched step's offset from the current step, not an
+ * absolute counter — converted to one here so it can be compared and
+ * persisted. The UPDATE's `WHERE id = ? AND (lastUsedStep IS NULL OR
+ * lastUsedStep < matchedStep)` makes "is this step new" and "claim it"
+ * one atomic round trip rather than a separate read-then-write: two
+ * concurrent requests presenting the same step race on this single
+ * UPDATE, and only the one Postgres actually applies it for returns a row
+ * from `.returning()` — the loser's WHERE no longer matches (the winner
+ * already moved `lastUsedStep` forward) and it correctly gets `false`.
+ */
 async function validateTotpChallenge(
   userId: string,
   code: string,
@@ -327,7 +349,24 @@ async function validateTotpChallenge(
   const secretBase32 = decryptSecret(credential.secretEncrypted);
   const totp = buildTotp(user.email, secretBase32);
 
-  return totp.validate({ token: code, window: 1 }) !== null;
+  const delta = totp.validate({ token: code, window: 1 });
+  if (delta === null) return false;
+
+  const currentStep = Math.floor(Date.now() / 1000 / TOTP_PERIOD_SECONDS);
+  const matchedStep = currentStep + delta;
+
+  const claimed = await db
+    .update(mfaTotpCredentials)
+    .set({ lastUsedStep: matchedStep })
+    .where(
+      and(
+        eq(mfaTotpCredentials.id, credential.id),
+        or(isNull(mfaTotpCredentials.lastUsedStep), lt(mfaTotpCredentials.lastUsedStep, matchedStep)),
+      ),
+    )
+    .returning({ id: mfaTotpCredentials.id });
+
+  return claimed.length > 0;
 }
 
 async function validateRecoveryCodeChallenge(

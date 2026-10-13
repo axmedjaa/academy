@@ -70,3 +70,16 @@ export function centsToDollars(cents: number): string {
   const remainder = abs % 100;
   return `${sign}${whole}.${String(remainder).padStart(2, "0")}`;
 }
+
+/**
+ * The one centralized money DISPLAY formatter — `"${currency} ${amount}"`
+ * (e.g. "USD 6.00"), ISO-code-prefixed rather than a `$` glyph since this
+ * app is multi-currency-aware per academy (`academies.default_currency`),
+ * where a bare `$` would be ambiguous. Previously hand-copied verbatim
+ * across 14 files; one of those 14 (app/platform/academies/[id]/page.tsx)
+ * had silently reversed the argument order to `"${amount} ${currency}"` —
+ * fixed by centralizing here instead of patching that file in isolation.
+ */
+export function formatMoney(amountCents: number, currency: string): string {
+  return `${currency} ${(amountCents / 100).toFixed(2)}`;
+}

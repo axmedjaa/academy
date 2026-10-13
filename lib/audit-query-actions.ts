@@ -6,6 +6,7 @@ import { hasPermission } from "@/lib/auth/permissions";
 import {
   AUDIT_LOG_MAX_PAGE_SIZE,
   fetchAuditLogs,
+  resolveAuditActorEmails,
   type AuditLogFilters,
   type AuditLogPagination,
   type AuditLogQueryResult,
@@ -35,7 +36,7 @@ export type QueryAuditLogsError =
   | { code: "VALIDATION_ERROR"; message: string };
 
 export type QueryAuditLogsState =
-  | { ok: true; data: AuditLogQueryResult }
+  | { ok: true; data: AuditLogQueryResult; actorEmailsByUserId: Record<string, string> }
   | { ok: false; error: QueryAuditLogsError };
 
 const ACCESS_DENIED_MESSAGE = "You don't have permission to view audit logs.";
@@ -94,5 +95,6 @@ export async function queryAuditLogs(
   }
 
   const data = await fetchAuditLogs(parsedFilters.data, parsedPagination.data);
-  return { ok: true, data };
+  const actorEmailsByUserId = await resolveAuditActorEmails(data.rows);
+  return { ok: true, data, actorEmailsByUserId };
 }

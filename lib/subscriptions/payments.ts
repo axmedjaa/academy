@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import {
@@ -146,9 +146,43 @@ function toRecord(
  * helper does not re-check, matching listSubscriptionPlans()'s convention
  * (lib/subscriptions/plans.ts) of gating once at the page level.
  */
-export async function listSubscriptionPayments(): Promise<
-  SubscriptionPaymentRecord[]
-> {
+export interface RecentSubscriptionPaymentWithAcademy extends SubscriptionPaymentRecord {
+  academyName: string | null;
+}
+
+/**
+ * `limit` is for callers that only ever want the most recent N rows (e.g.
+ * the platform dashboard's "Recent payments" panel) — passing it pushes
+ * `ORDER BY created_at DESC LIMIT n` down to Postgres instead of fetching
+ * every subscription payment the platform has ever recorded and slicing in
+ * JS, which is what the dashboard used to do. Omit it (the default, used by
+ * `/platform/payments`'s own full list) for unchanged behavior.
+ *
+ * The `limit` path also joins `academies` directly on
+ * `subscription_payments.academy_id` (a real column on this table, not
+ * something that needs resolving through `academy_subscriptions`) to
+ * attach `academyName` to every row in the same query — one round trip,
+ * always correct, no "most recent N academies" heuristic that could miss
+ * a renewal payment on an older subscription (an earlier version of this
+ * fix tried capping a *separate* name-lookup query instead, which could
+ * resolve to `null` for any payment whose subscription wasn't among the
+ * N most-recently-started ones; this replaces that with a single join).
+ */
+export async function listSubscriptionPayments(limit: number): Promise<RecentSubscriptionPaymentWithAcademy[]>;
+export async function listSubscriptionPayments(limit?: undefined): Promise<SubscriptionPaymentRecord[]>;
+export async function listSubscriptionPayments(
+  limit?: number,
+): Promise<SubscriptionPaymentRecord[] | RecentSubscriptionPaymentWithAcademy[]> {
+  if (limit) {
+    const rows = await db
+      .select({ payment: subscriptionPayments, academyName: academies.name })
+      .from(subscriptionPayments)
+      .innerJoin(academies, eq(academies.id, subscriptionPayments.academyId))
+      .orderBy(desc(subscriptionPayments.createdAt))
+      .limit(limit);
+    return rows.map((row) => ({ ...toRecord(row.payment), academyName: row.academyName }));
+  }
+
   const rows = await db
     .select()
     .from(subscriptionPayments)
@@ -176,10 +210,31 @@ export interface AcademySubscriptionOption {
  * hasPermission(context, "recordSubscriptionPayment") themselves, same
  * convention as every other list* helper in this file.
  */
-export async function listAcademySubscriptionOptions(): Promise<
-  AcademySubscriptionOption[]
-> {
-  const rows = await db
+/**
+ * `subscriptionIds`, when passed, narrows to just those rows. `limit`
+ * (mutually exclusive with `subscriptionIds` — see the platform dashboard's
+ * own call site) caps to the N most-recently-started subscriptions instead.
+ *
+ * Measured round-trip latency to this app's Postgres is ~217ms even for a
+ * trivial query on an already-warm connection (query execution itself is
+ * sub-millisecond — see lib/platform/dashboard.ts's own comment) — at that
+ * latency, one extra *sequential* round trip costs far more than this query
+ * returning a few hundred extra rows. So the platform dashboard's "Recent
+ * payments" panel uses `limit`, not `subscriptionIds`: it can run in
+ * parallel with the payments fetch instead of waiting for it, trading
+ * perfect precision (an academy name could theoretically be missing for a
+ * very old outlier payment, rendered as "—") for one fewer round trip.
+ *
+ * Omit both (the default) for the existing picker use case
+ * (`/platform/payments`'s Record-Payment "academy, plan" select), which
+ * genuinely needs every option — behavior there is unchanged.
+ */
+export async function listAcademySubscriptionOptions(
+  options: { subscriptionIds?: string[]; limit?: number } = {},
+): Promise<AcademySubscriptionOption[]> {
+  const conditions = options.subscriptionIds ? [inArray(academySubscriptions.id, options.subscriptionIds)] : [];
+
+  const query = db
     .select({
       subscriptionId: academySubscriptions.id,
       academyId: academySubscriptions.academyId,
@@ -193,7 +248,10 @@ export async function listAcademySubscriptionOptions(): Promise<
       subscriptionPlans,
       eq(subscriptionPlans.id, academySubscriptions.planId),
     )
+    .where(conditions.length > 0 ? conditions[0] : undefined)
     .orderBy(desc(academySubscriptions.startsAt));
+
+  const rows = options.limit ? await query.limit(options.limit) : await query;
 
   return rows;
 }

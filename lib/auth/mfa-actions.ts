@@ -27,22 +27,13 @@ import {
 import { checkMfaChallengeRateLimit } from "@/lib/auth/mfa-challenge-rate-limit";
 import { checkMfaEnrollmentRateLimit } from "@/lib/auth/mfa-enrollment-rate-limit";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
+import { getClientIp } from "@/lib/http/client-ip";
+import { formatRetryAfter } from "@/lib/ui/duration";
 import {
   SESSION_COOKIE_NAME,
   createSession,
   sessionCookieOptions,
 } from "@/lib/auth/session";
-
-// Trusts the first `x-forwarded-for` entry as the client IP. Production
-// deployment assumes a trusted reverse proxy/load balancer sets (and
-// overwrites, never appends to) this header — direct/untrusted access to
-// the app must not be allowed to reach it, or a caller could spoof this
-// value to evade rate limiting.
-function getClientIp(headerList: {
-  get(name: string): string | null;
-}): string | undefined {
-  return headerList.get("x-forwarded-for")?.split(",")[0]?.trim();
-}
 
 /**
  * Only ever reached for a platform_owner (Item 14: this path is taken only
@@ -114,7 +105,7 @@ export async function verifyMfaEnrollment(
       ok: false,
       error: {
         code: "RATE_LIMITED",
-        message: `Too many attempts. Try again in ${rateLimit.retryAfterSeconds}s.`,
+        message: `Too many attempts. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
       },
     };
   }
@@ -171,7 +162,7 @@ export async function challengeMfa(
   formData: FormData,
 ): Promise<ChallengeMfaState> {
   const headerList = await headers();
-  const ip = getClientIp(headerList) ?? "unknown";
+  const ip = getClientIp(headerList);
 
   const rateLimit = await checkMfaChallengeRateLimit(ip);
   if (!rateLimit.allowed) {
@@ -179,7 +170,7 @@ export async function challengeMfa(
       ok: false,
       error: {
         code: "RATE_LIMITED",
-        message: `Too many attempts. Try again in ${rateLimit.retryAfterSeconds}s.`,
+        message: `Too many attempts. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
       },
     };
   }

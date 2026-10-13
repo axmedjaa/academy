@@ -17,9 +17,10 @@ vi.mock("@/lib/storage/client", () => ({
   getDownloadUrl: vi.fn(),
   deleteObject: vi.fn(),
   headObject: vi.fn(),
+  getObjectPrefix: vi.fn(),
 }));
 
-import { deleteObject, getUploadUrl, headObject } from "@/lib/storage/client";
+import { deleteObject, getObjectPrefix, getUploadUrl, headObject } from "@/lib/storage/client";
 import {
   MAX_LOGO_SIZE_BYTES,
   confirmAcademyLogoUpload,
@@ -28,10 +29,12 @@ import {
   requestAcademyLogoUploadUrl,
 } from "./academy-logo";
 import { getAcademyLogoKey } from "@/lib/storage/keys";
+import { VALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
 
 const getUploadUrlMock = vi.mocked(getUploadUrl);
 const headObjectMock = vi.mocked(headObject);
 const deleteObjectMock = vi.mocked(deleteObject);
+const getObjectPrefixMock = vi.mocked(getObjectPrefix);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -112,8 +115,13 @@ beforeEach(() => {
   getUploadUrlMock.mockReset();
   headObjectMock.mockReset();
   deleteObjectMock.mockReset();
+  getObjectPrefixMock.mockReset();
   getUploadUrlMock.mockResolvedValue({ ok: true, uploadUrl: "https://r2.example/signed-put", expiresInSeconds: 300 });
   deleteObjectMock.mockResolvedValue({ ok: true });
+  // Default to a real PNG signature so success-path tests pass the
+  // magic-byte check without each one wiring it up individually; tests
+  // that need a different declared content-type override this.
+  getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: VALID_SIGNATURE_BYTES["image/png"] });
 });
 
 afterAll(async () => {
@@ -138,7 +146,10 @@ afterAll(async () => {
   for (const userId of createdUserIds) {
     await db.delete(users).where(eq(users.id, userId));
   }
-});
+  // Default 30s hook timeout is too tight for this many serial per-row
+  // deletes against the remote DB once the suite has this many cases; bump
+  // rather than batch the cleanup, to keep the change minimal.
+}, 90_000);
 
 describe("requestAcademyLogoUploadUrl — authorization", () => {
   it("refuses a role without the academy.settings permission (finance_officer)", async () => {
@@ -175,7 +186,7 @@ describe("requestAcademyLogoUploadUrl — authorization", () => {
 });
 
 describe("requestAcademyLogoUploadUrl — file validation", () => {
-  it.each(["image/jpeg", "image/png", "image/webp"])("accepts %s", async (contentType) => {
+  it.each(["image/jpeg", "image/png", "image/webp", "image/avif"])("accepts %s", async (contentType) => {
     const { context } = await setupAcademy("academy_owner");
     const result = await requestAcademyLogoUploadUrl(context, { contentType, fileSizeBytes: 1000 });
     expect(result.ok).toBe(true);
@@ -263,6 +274,30 @@ describe("confirmAcademyLogoUpload — server-verified object validation", () =>
     expect(deleteObjectMock).toHaveBeenCalledWith(key);
   });
 
+  it("rejects and deletes the object when the real bytes don't match the declared content-type (spoofed MIME)", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const key = getAcademyLogoKey({ academyId, extension: "png" });
+    headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 1000 } });
+    const { INVALID_SIGNATURE_BYTES } = await import("@/lib/storage/test-signature-fixtures");
+    getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: INVALID_SIGNATURE_BYTES });
+
+    const result = await confirmAcademyLogoUpload(context, { key });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(deleteObjectMock).toHaveBeenCalledWith(key);
+  });
+
+  it("rejects and deletes an empty (0-byte) object", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const key = getAcademyLogoKey({ academyId, extension: "png" });
+    headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 0 } });
+
+    const result = await confirmAcademyLogoUpload(context, { key });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(deleteObjectMock).toHaveBeenCalledWith(key);
+  });
+
   it("does not touch the database when confirmation fails — the old logo remains authoritative", async () => {
     const { academyId, context } = await setupAcademy("academy_owner");
     const oldKey = "academies/pre-existing/logos/old.png";
@@ -304,6 +339,7 @@ describe("confirmAcademyLogoUpload — success and replacement", () => {
 
     const newKey = getAcademyLogoKey({ academyId, extension: "webp" });
     headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/webp", contentLength: 2000 } });
+    getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: VALID_SIGNATURE_BYTES["image/webp"] });
 
     const result = await confirmAcademyLogoUpload(context, { key: newKey });
     expect(result.ok).toBe(true);

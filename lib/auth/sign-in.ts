@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
-import { verifyPassword } from "@/lib/auth/password";
+import { verifyAgainstDummyHash, verifyPassword } from "@/lib/auth/password";
 
 export interface ActionError {
   code: "UNAUTHENTICATED";
@@ -43,6 +43,14 @@ export async function attemptSignIn(
     .limit(1);
 
   if (!user || user.status === "disabled") {
+    // Security audit fix (account enumeration via login timing, CWE-208):
+    // this branch used to return immediately, so a nonexistent/disabled
+    // email answered measurably faster than an existing-active account
+    // with a wrong password (no Argon2id verification paid for) — the
+    // response body was already identical, but wall-clock time was not.
+    // Paying for one dummy verification here (see password.ts's own
+    // comment) closes that gap without changing the result.
+    await verifyAgainstDummyHash(password);
     return { ok: false, error: INVALID_CREDENTIALS };
   }
 

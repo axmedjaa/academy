@@ -1,11 +1,12 @@
 "use client";
 
-import { useActionState, useMemo, useState, useTransition } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import {
   createWeeklyTimetableEntry,
   deleteTimetableEntry,
   type TimetableFormState,
 } from "@/lib/academies/timetables-actions";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import type { TimetableEntryWithBatch } from "@/lib/academies/timetables";
 import { DAYS_OF_WEEK, DAY_LABELS, formatTimetableTime, type TimetableDay } from "@/lib/academies/timetable-constants";
 import { buildTimetableGrid, filterTimetableEntries } from "@/lib/academies/timetable-grid";
@@ -14,6 +15,7 @@ import type { BatchRecord } from "@/lib/academies/batches";
 import type { CourseRecord } from "@/lib/academies/courses";
 import { Button, EmptyState, ErrorMessage, Field, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import { WeeklyGrid } from "./weekly-grid";
 
 const initialState: TimetableFormState = { ok: false };
@@ -61,8 +63,13 @@ export function TimetableList({ entries, branches, batches, courses, staffOption
     createWeeklyTimetableEntry,
     initialState,
   );
-  const [isPending, startTransition] = useTransition();
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  useEffect(() => {
+    if (createState.ok && createState.createdDays && createState.createdDays.length > 0) {
+      showSuccessToast("Weekly timetable created.");
+    } else if (createState.error) {
+      showErrorToast(createState.error.message);
+    }
+  }, [createState]);
 
   // Cascading selection state for the CREATE form — independent of the
   // filter state below (a user can be filtering the view to one batch while
@@ -164,14 +171,6 @@ export function TimetableList({ entries, branches, batches, courses, staffOption
       if (next.has(day)) next.delete(day);
       else next.add(day);
       return next;
-    });
-  }
-
-  function handleDelete(entryId: string, batchId: string) {
-    setDeleteError(null);
-    startTransition(async () => {
-      const result = await deleteTimetableEntry(entryId, batchId);
-      if (!result.ok) setDeleteError(result.error.message);
     });
   }
 
@@ -412,26 +411,20 @@ export function TimetableList({ entries, branches, batches, courses, staffOption
                 <td className={td}>{entry.trainerName ?? "—"}</td>
                 {canManage && (
                   <td className={td}>
-                    <Button
-                      type="button"
-                      variant="danger"
+                    <ConfirmButton
+                      label="Delete"
+                      variant="dangerSolid"
                       className="px-2.5 py-1 text-xs"
-                      disabled={isPending}
-                      onClick={() => handleDelete(entry.id, entry.batchId)}
-                    >
-                      Delete
-                    </Button>
+                      title="Delete this timetable entry?"
+                      description={<>This cannot be undone.</>}
+                      onConfirm={() => deleteTimetableEntry(entry.id, entry.batchId)}
+                    />
                   </td>
                 )}
               </tr>
             ))}
           </tbody>
         </TableWrap>
-        )}
-        {deleteError && (
-          <div className="mt-2">
-            <ErrorMessage message={deleteError} />
-          </div>
         )}
       </section>
     </div>

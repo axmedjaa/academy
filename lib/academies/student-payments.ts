@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -373,14 +373,30 @@ async function resolveStudentPaymentsAccess(
 }
 
 export type ListStudentChargesResult =
-  | { ok: true; charges: StudentChargeRecord[]; canManage: boolean }
+  | {
+      ok: true;
+      charges: StudentChargeRecord[];
+      canManage: boolean;
+      /** Present only when `pagination` was passed to the call. */
+      totalCount?: number;
+    }
   | { ok: false; error: StudentPaymentsActionError };
 
 /** Academy-wide read (see this file's module comment on the no-branch-scoping
- * judgment call), optionally narrowed to one student. */
+ * judgment call), optionally narrowed to one student and/or one or more
+ * statuses (e.g. the Record Payment form's "payable charges" picker wants
+ * only `open`/`partially_paid`, not the academy's full charge history).
+ *
+ * `pagination`, when passed, pushes `ORDER BY created_at DESC LIMIT/OFFSET`
+ * down to Postgres and also returns `totalCount` (one extra COUNT query) —
+ * for `/academy/finance`'s own Charges table, which previously fetched
+ * every charge the academy has ever recorded on every page load. Omit it
+ * (the default) for every other existing caller (the payable-charges
+ * picker, etc.) — behavior there is unchanged. */
 export async function listStudentCharges(
   actorContext: AuthContext,
-  filters: { studentId?: string } = {},
+  filters: { studentId?: string; status?: StudentChargeRecord["status"][] } = {},
+  pagination?: { page: number; pageSize: number },
 ): Promise<ListStudentChargesResult> {
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -390,12 +406,32 @@ export async function listStudentCharges(
   if (filters.studentId) {
     conditions.push(eq(studentCharges.studentId, filters.studentId));
   }
+  if (filters.status && filters.status.length > 0) {
+    conditions.push(inArray(studentCharges.status, filters.status));
+  }
+  const where = and(...conditions);
 
-  const rows = await db
-    .select()
-    .from(studentCharges)
-    .where(and(...conditions));
+  if (pagination) {
+    const offset = (pagination.page - 1) * pagination.pageSize;
+    const [rows, totalRows] = await Promise.all([
+      db
+        .select()
+        .from(studentCharges)
+        .where(where)
+        .orderBy(desc(studentCharges.createdAt))
+        .limit(pagination.pageSize)
+        .offset(offset),
+      db.select({ value: count() }).from(studentCharges).where(where),
+    ]);
+    return {
+      ok: true,
+      charges: rows.map(toChargeRecord),
+      canManage: canManage(permissionLevel),
+      totalCount: totalRows[0]?.value ?? 0,
+    };
+  }
 
+  const rows = await db.select().from(studentCharges).where(where);
   return { ok: true, charges: rows.map(toChargeRecord), canManage: canManage(permissionLevel) };
 }
 
@@ -410,12 +446,25 @@ export type ListStudentPaymentsResult =
        * step anymore; this flag exists purely so the UI knows whether to
        * render Reverse/Adjust controls. */
       canReverse: boolean;
+      /** Present only when `pagination` was passed to the call. */
+      totalCount?: number;
     }
   | { ok: false; error: StudentPaymentsActionError };
 
 export async function listStudentPayments(
   actorContext: AuthContext,
-  filters: { studentId?: string } = {},
+  /** `limit` is for callers that only ever want the most recent N rows
+   * (e.g. the dashboard's "Recent payments" panel) — passing it pushes
+   * `ORDER BY received_at DESC LIMIT n` down to Postgres instead of
+   * fetching every payment the academy has ever recorded and slicing in
+   * JS, which is what the dashboard used to do. Omit it (the default) for
+   * every other existing caller — behavior there is unchanged. */
+  filters: { studentId?: string; limit?: number } = {},
+  /** Full page/pageSize pagination (distinct from `limit` above, which has
+   * no `totalCount`/offset concept) — for `/academy/finance`'s own
+   * Payments table, which previously fetched every payment the academy has
+   * ever recorded on every page load. One extra COUNT query when passed. */
+  pagination?: { page: number; pageSize: number },
 ): Promise<ListStudentPaymentsResult> {
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -425,11 +474,31 @@ export async function listStudentPayments(
   if (filters.studentId) {
     conditions.push(eq(studentPayments.studentId, filters.studentId));
   }
+  const where = and(...conditions);
 
-  const rows = await db
-    .select()
-    .from(studentPayments)
-    .where(and(...conditions));
+  if (pagination) {
+    const offset = (pagination.page - 1) * pagination.pageSize;
+    const [rows, totalRows] = await Promise.all([
+      db
+        .select()
+        .from(studentPayments)
+        .where(where)
+        .orderBy(desc(studentPayments.receivedAt))
+        .limit(pagination.pageSize)
+        .offset(offset),
+      db.select({ value: count() }).from(studentPayments).where(where),
+    ]);
+    return {
+      ok: true,
+      payments: rows.map(toPaymentRecord),
+      canManage: canManage(permissionLevel),
+      canReverse: canReverse(permissionLevel),
+      totalCount: totalRows[0]?.value ?? 0,
+    };
+  }
+
+  const query = db.select().from(studentPayments).where(where);
+  const rows = filters.limit ? await query.orderBy(desc(studentPayments.receivedAt)).limit(filters.limit) : await query;
 
   return {
     ok: true,

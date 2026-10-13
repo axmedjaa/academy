@@ -12,6 +12,7 @@ import {
 } from "@/lib/academies/courses-actions";
 import type { CourseDeletionEligibilitySummary, CourseWithInstructor } from "@/lib/academies/courses";
 import type { ProgramRecord } from "@/lib/academies/programs";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import {
   Badge,
   Button,
@@ -35,11 +36,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { MAX_RASTER_IMAGE_SIZE_BYTES, RASTER_IMAGE_ACCEPT_ATTRIBUTE, isRasterImageContentType } from "@/lib/storage/upload-policy";
 
 const initialState: CourseFormState = { ok: false };
 
-const ALLOWED_COURSE_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_COURSE_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_COURSE_IMAGE_SIZE_BYTES = MAX_RASTER_IMAGE_SIZE_BYTES;
 
 interface InstructorOption {
   id: string;
@@ -78,6 +79,15 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
   const [archiveRowId, setArchiveRowId] = useState<string | null>(null);
   const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (createState.ok) showSuccessToast("Course created.");
+    else if (createState.error) showErrorToast(createState.error.message);
+  }, [createState]);
+  useEffect(() => {
+    if (updateState.ok) showSuccessToast("Course updated.");
+    else if (updateState.error) showErrorToast(updateState.error.message);
+  }, [updateState]);
 
   // New course's image is uploaded to R2 as soon as a file is chosen (same
   // "upload before the row exists" convention as books-manager.tsx's new
@@ -128,8 +138,8 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
     const file = event.target.files?.[0];
     if (!file) return;
     setNewImageError(null);
-    if (!ALLOWED_COURSE_IMAGE_TYPES.includes(file.type)) {
-      setNewImageError("Image must be JPEG, PNG, or WebP.");
+    if (!isRasterImageContentType(file.type)) {
+      setNewImageError("Image must be JPEG, PNG, WebP, or AVIF.");
       return;
     }
     if (file.size > MAX_COURSE_IMAGE_SIZE_BYTES) {
@@ -220,7 +230,7 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                         <button
                           type="button"
                           aria-label={`Actions for ${course.name}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                         >
                           <Icon name="more" />
                         </button>
@@ -248,7 +258,8 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
 
                     <ConfirmButton
                       label={course.status === "active" ? "Archive" : "Restore"}
-                      variant={course.status === "active" ? "danger" : "secondary"}
+                      variant={course.status === "active" ? "danger" : "success"}
+                      icon={course.status === "active" ? "archive" : "autorenew"}
                       open={archiveRowId === course.id}
                       onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? course.id : null)}
                       title={course.status === "active" ? `Archive "${course.name}"?` : `Restore "${course.name}"?`}
@@ -368,13 +379,13 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                     <input
                       ref={newImageInputRef}
                       type="file"
-                      accept="image/jpeg,image/png,image/webp"
+                      accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
                       className="hidden"
                       disabled={newImageUploading}
                       onChange={handleNewImageChange}
                     />
                   </label>
-                  <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 10 MB.</p>
+                  <p className="mt-1 text-xs text-muted">JPEG, PNG, WebP, or AVIF, up to 10 MB.</p>
                   {newImageError && <p className="mt-1 text-xs text-danger">{newImageError}</p>}
                 </div>
               </div>
@@ -447,8 +458,8 @@ function EditCourseForm({
     const file = event.target.files?.[0];
     if (!file) return;
     setImageError(null);
-    if (!ALLOWED_COURSE_IMAGE_TYPES.includes(file.type)) {
-      setImageError("Image must be JPEG, PNG, or WebP.");
+    if (!isRasterImageContentType(file.type)) {
+      setImageError("Image must be JPEG, PNG, WebP, or AVIF.");
       return;
     }
     if (file.size > MAX_COURSE_IMAGE_SIZE_BYTES) {
@@ -515,13 +526,13 @@ function EditCourseForm({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/jpeg,image/png,image/webp"
+                accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
                 className="hidden"
                 disabled={imageUploading}
                 onChange={handleImageChange}
               />
             </label>
-            <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 10 MB.</p>
+            <p className="mt-1 text-xs text-muted">JPEG, PNG, WebP, or AVIF, up to 10 MB.</p>
             {imageError && <p className="mt-1 text-xs text-danger">{imageError}</p>}
           </div>
         </div>

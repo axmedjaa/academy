@@ -15,6 +15,8 @@ import { passwordSchema } from "@/lib/auth/password";
 import { getPlatformRole, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
 import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
+import { getClientIp } from "@/lib/http/client-ip";
+import { formatRetryAfter } from "@/lib/ui/duration";
 import {
   MFA_PENDING_COOKIE_NAME,
   createPendingMfaToken,
@@ -58,23 +60,12 @@ export interface SignInState {
   error?: SignInError;
 }
 
-// Trusts the first `x-forwarded-for` entry as the client IP. Production
-// deployment assumes a trusted reverse proxy/load balancer sets (and
-// overwrites, never appends to) this header — direct/untrusted access to
-// the app must not be allowed to reach it, or a caller could spoof this
-// value to evade rate limiting.
-function getClientIp(headerList: {
-  get(name: string): string | null;
-}): string | undefined {
-  return headerList.get("x-forwarded-for")?.split(",")[0]?.trim();
-}
-
 export async function signIn(
   _prevState: SignInState,
   formData: FormData,
 ): Promise<SignInState> {
   const headerList = await headers();
-  const ip = getClientIp(headerList) ?? "unknown";
+  const ip = getClientIp(headerList);
 
   // Checked (and incremented) before any parsing/DB work, so a flood of
   // requests is rejected cheaply regardless of whether credentials are
@@ -85,7 +76,7 @@ export async function signIn(
       ok: false,
       error: {
         code: "RATE_LIMITED",
-        message: `Too many attempts. Try again in ${rateLimit.retryAfterSeconds}s.`,
+        message: `Too many attempts. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
       },
     };
   }
@@ -205,7 +196,7 @@ export async function requestPasswordReset(
       ok: false,
       error: {
         code: "RATE_LIMITED",
-        message: `Too many requests. Try again in ${rateLimit.retryAfterSeconds}s.`,
+        message: `Too many requests. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
       },
     };
   }

@@ -15,22 +15,34 @@ export interface PaginationNavProps {
   totalCount: number;
   /** The page's own resolved `searchParams` (Next's async server-component
    * prop, already awaited by the caller) — every existing filter/search
-   * value is preserved on every page link; only `page` itself changes. */
+   * value is preserved on every page link; only `paramName` itself changes. */
   searchParams: Record<string, string | string[] | undefined>;
+  /** Query-param key this control reads/writes — defaults to `"page"`,
+   * every existing single-list page's own convention. Override when a page
+   * paginates more than one independent list at once (e.g.
+   * `/academy/finance`'s Charges and Payments tabs each need their own
+   * page number, so one uses `"chargesPage"` and the other
+   * `"paymentsPage"` — otherwise paging one would silently also move the
+   * other). */
+  paramName?: string;
 }
 
-/** `searchParams` -> a `?query=string`, replacing `page` with the given
- * value and dropping any empty-string params (same normalization every
- * consumer of this pattern already did locally, e.g. the old per-page
- * `paramsToRecord`). */
-function buildPageHref(searchParams: Record<string, string | string[] | undefined>, page: number): string {
+/** `searchParams` -> a `?query=string`, replacing `paramName` with the
+ * given value and dropping any empty-string params (same normalization
+ * every consumer of this pattern already did locally, e.g. the old
+ * per-page `paramsToRecord`). */
+function buildPageHref(
+  searchParams: Record<string, string | string[] | undefined>,
+  page: number,
+  paramName: string,
+): string {
   const record: Record<string, string> = {};
   for (const [key, value] of Object.entries(searchParams)) {
-    if (key === "page") continue;
+    if (key === paramName) continue;
     const v = Array.isArray(value) ? value[0] : value;
     if (v) record[key] = v;
   }
-  record.page = String(page);
+  record[paramName] = String(page);
   return `?${new URLSearchParams(record).toString()}`;
 }
 
@@ -50,7 +62,7 @@ function buildPageHref(searchParams: Record<string, string | string[] | undefine
  * "never show a control with nothing useful to do" — matching this
  * feature's own "hide pagination entirely for one page" requirement.
  */
-export function PaginationNav({ page, pageSize, totalCount, searchParams }: PaginationNavProps) {
+export function PaginationNav({ page, pageSize, totalCount, searchParams, paramName = "page" }: PaginationNavProps) {
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   if (totalPages <= 1) {
     return null;
@@ -66,7 +78,7 @@ export function PaginationNav({ page, pageSize, totalCount, searchParams }: Pagi
       <Pagination className="mx-0 w-auto justify-end">
         <PaginationContent>
           <PaginationItem>
-            <PaginationPrevious href={hasPrevious ? buildPageHref(searchParams, page - 1) : undefined} />
+            <PaginationPrevious href={hasPrevious ? buildPageHref(searchParams, page - 1, paramName) : undefined} />
           </PaginationItem>
           {items.map((item, index) =>
             item === "ellipsis" ? (
@@ -75,14 +87,14 @@ export function PaginationNav({ page, pageSize, totalCount, searchParams }: Pagi
               </PaginationItem>
             ) : (
               <PaginationItem key={item}>
-                <PaginationLink href={buildPageHref(searchParams, item)} isActive={item === page}>
+                <PaginationLink href={buildPageHref(searchParams, item, paramName)} isActive={item === page}>
                   {item}
                 </PaginationLink>
               </PaginationItem>
             ),
           )}
           <PaginationItem>
-            <PaginationNext href={hasNext ? buildPageHref(searchParams, page + 1) : undefined} />
+            <PaginationNext href={hasNext ? buildPageHref(searchParams, page + 1, paramName) : undefined} />
           </PaginationItem>
         </PaginationContent>
       </Pagination>

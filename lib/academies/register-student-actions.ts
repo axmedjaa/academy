@@ -38,6 +38,10 @@ export interface RegisterStudentFormState {
    * still succeeded, so this is a warning, not `error`. The admin can
    * enroll the student from the batch's own roster page instead. */
   enrollmentWarning?: string;
+  /** Set whenever `ok` is true — the newly-created student's id, so the
+   * client can redirect to its detail page (`/academy/students/[id]`).
+   * Never set on failure. */
+  studentId?: string;
 }
 
 /**
@@ -128,9 +132,10 @@ export async function registerStudent(
       return {
         ok: true,
         enrollmentWarning: `Student registered, but could not be enrolled in the selected course: ${enrollResult.error.message}`,
+        studentId: result.student.id,
       };
     }
   }
 
-  return { ok: true };
+  return { ok: true, studentId: result.student.id };
 }

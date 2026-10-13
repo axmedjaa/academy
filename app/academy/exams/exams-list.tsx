@@ -116,7 +116,7 @@ export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
                             <button
                               type="button"
                               aria-label={`Actions for ${exam.name}`}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                              className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                             >
                               <Icon name="more" />
                             </button>
@@ -144,7 +144,8 @@ export function ExamsList({ exams, batches, canManage, canEnterMarks }: Props) {
                       {canManage && (
                         <ConfirmButton
                           label={exam.status === "archived" ? "Restore" : "Archive"}
-                          variant={exam.status === "archived" ? "secondary" : "danger"}
+                          variant={exam.status === "archived" ? "success" : "danger"}
+                          icon={exam.status === "archived" ? "autorenew" : "archive"}
                           open={archiveRowId === exam.id}
                           onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? exam.id : null)}
                           title={exam.status === "archived" ? `Restore "${exam.name}"?` : `Archive "${exam.name}"?`}

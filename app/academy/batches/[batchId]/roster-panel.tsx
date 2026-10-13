@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import {
   assignTrainerToBatch,
   deleteBatchEnrollment,
@@ -16,6 +16,7 @@ import type {
 import { Badge, Button, EmptyState, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialState: BatchAssignmentFormState = { ok: false };
 
@@ -75,6 +76,23 @@ export function RosterPanel({
     withdrawStudentFromBatch,
     initialState,
   );
+
+  useEffect(() => {
+    if (assignState.ok) showSuccessToast("Trainer assigned.");
+    else if (assignState.error) showErrorToast(assignState.error.message);
+  }, [assignState]);
+  useEffect(() => {
+    if (unassignState.ok) showSuccessToast("Trainer unassigned.");
+    else if (unassignState.error) showErrorToast(unassignState.error.message);
+  }, [unassignState]);
+  useEffect(() => {
+    if (enrollState.ok) showSuccessToast("Student enrolled.");
+    else if (enrollState.error) showErrorToast(enrollState.error.message);
+  }, [enrollState]);
+  useEffect(() => {
+    if (withdrawState.ok) showSuccessToast("Student withdrawn.");
+    else if (withdrawState.error) showErrorToast(withdrawState.error.message);
+  }, [withdrawState]);
 
   return (
     <div className="flex flex-col gap-8">

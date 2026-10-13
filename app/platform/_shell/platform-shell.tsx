@@ -1,13 +1,47 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { Icon } from "@/app/academy/_shell/icons";
+import { BrandMark, Icon } from "@/app/academy/_shell/icons";
 import { signOut } from "@/lib/auth/actions";
 import { color, shell, spacing } from "@/lib/ui/theme";
 import type { PlatformNavItem } from "@/lib/platform/nav-items";
+
+// Same useSyncExternalStore approach as app/academy/_shell/academy-shell.tsx
+// (see that file's own comment for why this is the correct fit over
+// useEffect+setState) — a separate storage key/event name so the two
+// consoles' collapse preferences don't leak into each other.
+const COLLAPSE_STORAGE_KEY = "platform-shell-collapsed";
+const COLLAPSE_CHANGE_EVENT = "platform-shell-collapsed-change";
+
+function subscribeToCollapsePref(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener(COLLAPSE_CHANGE_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener(COLLAPSE_CHANGE_EVENT, onStoreChange);
+  };
+}
+function getCollapsePrefSnapshot() {
+  return window.localStorage.getItem(COLLAPSE_STORAGE_KEY) === "1";
+}
+function getCollapsePrefServerSnapshot() {
+  return false;
+}
+
+function subscribeToDesktopQuery(onStoreChange: () => void) {
+  const mql = window.matchMedia("(min-width: 1025px)");
+  mql.addEventListener("change", onStoreChange);
+  return () => mql.removeEventListener("change", onStoreChange);
+}
+function getIsDesktopSnapshot() {
+  return window.matchMedia("(min-width: 1025px)").matches;
+}
+function getIsDesktopServerSnapshot() {
+  return false;
+}
 
 /**
  * Platform Owner console shell — same structural pattern as
@@ -37,6 +71,22 @@ export function PlatformShell({
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();
+
+  // Desktop-persistent collapse-to-rail — same feature and reasoning as
+  // AcademyShell's own (see that file's comment); mobile's drawer is
+  // unaffected (`effectiveCollapsed` is false whenever `isDesktop` is
+  // false, regardless of the stored preference).
+  const collapsed = useSyncExternalStore(
+    subscribeToCollapsePref,
+    getCollapsePrefSnapshot,
+    getCollapsePrefServerSnapshot,
+  );
+  function toggleCollapsed() {
+    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "0" : "1");
+    window.dispatchEvent(new Event(COLLAPSE_CHANGE_EVENT));
+  }
+  const isDesktop = useSyncExternalStore(subscribeToDesktopQuery, getIsDesktopSnapshot, getIsDesktopServerSnapshot);
+  const effectiveCollapsed = collapsed && isDesktop;
 
   function isActive(href: string): boolean {
     return pathname === href || pathname.startsWith(`${href}/`);
@@ -95,7 +145,8 @@ export function PlatformShell({
           top: 0,
           left: 0,
           bottom: 0,
-          width: shell.sidebarWidth,
+          width: effectiveCollapsed ? shell.sidebarCollapsedWidth : shell.sidebarWidth,
+          transition: "width 200ms var(--ease-in-out)",
           // `transform` instead of the old `left` — see the matching
           // comment in app/academy/_shell/academy-shell.tsx for why.
           transform: drawerOpen ? "translateX(0)" : undefined,
@@ -116,25 +167,59 @@ export function PlatformShell({
             height: shell.headerHeight,
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between",
-            padding: `0 ${spacing.lg}`,
+            justifyContent: effectiveCollapsed ? "center" : "space-between",
+            padding: effectiveCollapsed ? 0 : `0 ${spacing.lg}`,
             borderBottom: "1px solid rgba(255,255,255,0.1)",
           }}
         >
-          <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
-            <span style={{ fontWeight: 700, color: "#fff" }}>Afoogy</span>
-            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.55)" }}>Platform Console</span>
-          </div>
-          <button
-            ref={closeButtonRef}
-            type="button"
-            onClick={() => setDrawerOpen(false)}
-            aria-label="Close menu"
-            className="platform-shell-close-btn platform-shell-icon-btn rounded-control p-3 motion-safe:active:scale-[0.98]"
-            style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.7)" }}
-          >
-            <Icon name="close" />
-          </button>
+          {effectiveCollapsed ? (
+            // Collapsed rail: the brand mark itself is the expand control —
+            // same pattern as AcademyShell's own collapsed header.
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              className="platform-shell-collapse-toggle rounded-control p-1 transition-transform duration-150 ease-out motion-safe:active:scale-[0.95]"
+              style={{ background: "none", border: "none", cursor: "pointer" }}
+            >
+              <BrandMark size={28} fill="#fff" />
+            </button>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: spacing.xs, minWidth: 0 }}>
+                <BrandMark size={28} fill="#fff" />
+                <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+                  <span style={{ fontWeight: 700, color: "#fff" }}>Afoogy</span>
+                  <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.55)" }}>Platform Console</span>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={toggleCollapsed}
+                  aria-label="Collapse sidebar"
+                  title="Collapse sidebar"
+                  className="platform-shell-collapse-toggle platform-shell-icon-btn rounded-control p-2 motion-safe:active:scale-[0.95]"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.7)" }}
+                >
+                  <span style={{ display: "flex", transform: "rotate(90deg)" }}>
+                    <Icon name="expand_more" />
+                  </span>
+                </button>
+                <button
+                  ref={closeButtonRef}
+                  type="button"
+                  onClick={() => setDrawerOpen(false)}
+                  aria-label="Close menu"
+                  className="platform-shell-close-btn platform-shell-icon-btn rounded-control p-3 motion-safe:active:scale-[0.98]"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.7)" }}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         <nav
@@ -155,8 +240,12 @@ export function PlatformShell({
                 key={item.key}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
+                aria-label={effectiveCollapsed ? item.label : undefined}
+                title={effectiveCollapsed ? item.label : undefined}
                 onClick={() => setDrawerOpen(false)}
-                className={`flex items-center gap-3 rounded-[10px] py-3 px-3 no-underline motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${active ? "" : "platform-shell-navlink"}`}
+                className={`relative flex items-center gap-3 rounded-[10px] py-3 px-3 no-underline motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${
+                  effectiveCollapsed ? "min-[1025px]:justify-center min-[1025px]:px-0" : ""
+                } ${active ? "" : "platform-shell-navlink"}`}
                 style={{
                   color: active ? "#fff" : "rgba(255,255,255,0.75)",
                   backgroundColor: active ? color.primaryBlue : "transparent",
@@ -166,7 +255,8 @@ export function PlatformShell({
                 }}
               >
                 <Icon name={item.icon} />
-                <span>{item.label}</span>
+                {!effectiveCollapsed && <span>{item.label}</span>}
+                {effectiveCollapsed && <span className="platform-shell-tooltip">{item.label}</span>}
               </Link>
             );
           })}
@@ -179,9 +269,31 @@ export function PlatformShell({
 
         <div style={{ flexShrink: 0, padding: spacing.sm, borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", flexDirection: "column", gap: "2px" }}>
           <Link
+            href="/account/activity"
+            onClick={() => setDrawerOpen(false)}
+            aria-label={effectiveCollapsed ? "My activity" : undefined}
+            title={effectiveCollapsed ? "My activity" : undefined}
+            className={`platform-shell-navlink relative flex items-center gap-3 rounded-[10px] py-3 px-3 no-underline motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${
+              effectiveCollapsed ? "min-[1025px]:justify-center min-[1025px]:px-0" : ""
+            }`}
+            style={{
+              color: "rgba(255,255,255,0.75)",
+              fontSize: "0.9rem",
+              fontWeight: 500,
+            }}
+          >
+            <Icon name="history" />
+            {!effectiveCollapsed && <span>My activity</span>}
+            {effectiveCollapsed && <span className="platform-shell-tooltip">My activity</span>}
+          </Link>
+          <Link
             href="/account/security"
             onClick={() => setDrawerOpen(false)}
-            className="platform-shell-navlink flex items-center gap-3 rounded-[10px] py-3 px-3 no-underline motion-safe:active:scale-[0.98] min-[1025px]:py-2"
+            aria-label={effectiveCollapsed ? "Account settings" : undefined}
+            title={effectiveCollapsed ? "Account settings" : undefined}
+            className={`platform-shell-navlink relative flex items-center gap-3 rounded-[10px] py-3 px-3 no-underline motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${
+              effectiveCollapsed ? "min-[1025px]:justify-center min-[1025px]:px-0" : ""
+            }`}
             style={{
               color: "rgba(255,255,255,0.75)",
               fontSize: "0.9rem",
@@ -189,12 +301,17 @@ export function PlatformShell({
             }}
           >
             <Icon name="settings" />
-            <span>Account settings</span>
+            {!effectiveCollapsed && <span>Account settings</span>}
+            {effectiveCollapsed && <span className="platform-shell-tooltip">Account settings</span>}
           </Link>
           <form action={signOut}>
             <button
               type="submit"
-              className="platform-shell-navlink flex w-full items-center gap-3 rounded-[10px] py-3 px-3 text-left motion-safe:active:scale-[0.98] min-[1025px]:py-2"
+              aria-label={effectiveCollapsed ? "Sign out" : undefined}
+              title={effectiveCollapsed ? "Sign out" : undefined}
+              className={`platform-shell-navlink relative flex w-full items-center gap-3 rounded-[10px] py-3 px-3 text-left motion-safe:active:scale-[0.98] min-[1025px]:py-2 ${
+                effectiveCollapsed ? "min-[1025px]:justify-center min-[1025px]:px-0" : ""
+              }`}
               style={{
                 background: "none",
                 border: "none",
@@ -205,13 +322,20 @@ export function PlatformShell({
               }}
             >
               <Icon name="logout" />
-              <span>Sign out</span>
+              {!effectiveCollapsed && <span>Sign out</span>}
+              {effectiveCollapsed && <span className="platform-shell-tooltip">Sign out</span>}
             </button>
           </form>
         </div>
       </aside>
 
-      <div className="platform-shell-content" style={{ marginLeft: shell.sidebarWidth }}>
+      <div
+        className="platform-shell-content"
+        style={{
+          marginLeft: effectiveCollapsed ? shell.sidebarCollapsedWidth : shell.sidebarWidth,
+          transition: "margin-left 200ms var(--ease-in-out)",
+        }}
+      >
         <header
           style={{
             position: "sticky",
@@ -271,6 +395,48 @@ export function PlatformShell({
       </div>
 
       <style>{`
+        /* Collapse/expand toggle: desktop-only, mirrors
+           .platform-shell-close-btn's inverse visibility below. display
+           is declared ONLY here (never as an inline style or a Tailwind
+           flex utility class on the button) — see academy-shell.tsx's
+           matching comment for the inline-style-beats-media-query bug this
+           fixes. */
+        .platform-shell-collapse-toggle {
+          display: none;
+          align-items: center;
+          justify-content: center;
+        }
+        @media (min-width: 1025px) {
+          .platform-shell-collapse-toggle {
+            display: flex;
+          }
+        }
+        /* Collapsed-rail tooltip: same CSS-only approach (position:fixed to
+           escape the sidebar's own overflow:hidden, shown on :hover and
+           :focus-visible) as academy-shell.tsx's .academy-shell-tooltip. */
+        .platform-shell-tooltip {
+          position: fixed;
+          left: ${shell.sidebarCollapsedWidth + 8}px;
+          opacity: 0;
+          pointer-events: none;
+          transform: translateX(-4px);
+          transition: opacity 120ms var(--ease-out), transform 120ms var(--ease-out);
+          background-color: ${color.primaryNavy};
+          color: #fff;
+          font-size: 0.75rem;
+          font-weight: 600;
+          white-space: nowrap;
+          padding: 0.35rem 0.6rem;
+          border-radius: 6px;
+          z-index: 60;
+        }
+        a:hover .platform-shell-tooltip,
+        a:focus-visible .platform-shell-tooltip,
+        button:hover .platform-shell-tooltip,
+        button:focus-visible .platform-shell-tooltip {
+          opacity: 1;
+          transform: translateX(0);
+        }
         /* Base transition for BOTH directions (hover-in and hover-out) and
            for the active:scale press feedback — previously only the
            :hover state below was declared, so hover color and the press
@@ -332,7 +498,9 @@ export function PlatformShell({
         }
         @media (prefers-reduced-motion: reduce) {
           .platform-shell-sidebar,
-          .platform-shell-scrim {
+          .platform-shell-content,
+          .platform-shell-scrim,
+          .platform-shell-tooltip {
             transition: none !important;
           }
         }

@@ -12,6 +12,14 @@ import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { FinanceChargesPayments } from "./finance-charges-payments";
 import { FinanceIncomeExpenses } from "./finance-income-expenses";
 
+// Charges/Payments tables previously fetched the academy's ENTIRE charge
+// and payment history unconditionally on every page load, with no
+// pagination at all. Now server-paginated like every other list page in
+// this app (audit-logs, students, admissions) — 15/page, same GET-query-
+// param convention (?chargesPage=N / ?paymentsPage=N, distinct keys since
+// this one page paginates two independent lists at once).
+const FINANCE_PAGE_SIZE = 15;
+
 /**
  * PLAN.md Phase 4, Item 51 — `/academy/finance` (Charges/Payments tabs),
  * extended by Item 53 with Income/Expenses tabs. Reports remain Item 55's
@@ -71,17 +79,41 @@ import { FinanceIncomeExpenses } from "./finance-income-expenses";
  * "list students for a picker" call site already accepts rather than
  * building unbounded/paginated combobox UI for this.
  */
-export default async function AcademyFinancePage() {
+export default async function AcademyFinancePage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const context = await getAuthContext();
 
   if (!context) {
     redirect("/login");
   }
 
-  const chargesResult = await listStudentCharges(context);
-  const paymentsResult = await listStudentPayments(context);
-  const incomeResult = await listIncomeRecords(context);
-  const expensesResult = await listExpenseRecords(context);
+  const params = await searchParams;
+  const getPage = (key: string): number => {
+    const value = params[key];
+    const raw = Array.isArray(value) ? value[0] : value;
+    const parsed = Number.parseInt(raw ?? "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  };
+  const chargesPage = getPage("chargesPage");
+  const paymentsPage = getPage("paymentsPage");
+
+  const [chargesResult, payableChargesResult, paymentsResult, incomeResult, expensesResult] = await Promise.all([
+    listStudentCharges(context, {}, { page: chargesPage, pageSize: FINANCE_PAGE_SIZE }),
+    // Separate, unpaginated, narrower read for the Record Payment form's
+    // "Charge (optional)" picker — it needs every currently-payable charge
+    // academy-wide to pick from, not just whichever page of the full
+    // history the Charges table happens to be showing. In practice this is
+    // a much smaller set than "every charge ever" (most eventually reach
+    // `paid`/`cancelled`), so it stays a real, bounded read rather than a
+    // duplicate of the unpaginated fetch this page used to do.
+    listStudentCharges(context, { status: ["open", "partially_paid"] }),
+    listStudentPayments(context, {}, { page: paymentsPage, pageSize: FINANCE_PAGE_SIZE }),
+    listIncomeRecords(context),
+    listExpenseRecords(context),
+  ]);
 
   const chargesPaymentsAccessible = chargesResult.ok && paymentsResult.ok;
   const incomeAccessible = incomeResult.ok;
@@ -108,6 +140,9 @@ export default async function AcademyFinancePage() {
   const studentIds = new Set<string>();
   if (chargesResult.ok) {
     for (const charge of chargesResult.charges) studentIds.add(charge.studentId);
+  }
+  if (payableChargesResult.ok) {
+    for (const charge of payableChargesResult.charges) studentIds.add(charge.studentId);
   }
   if (paymentsResult.ok) {
     for (const payment of paymentsResult.payments) studentIds.add(payment.studentId);
@@ -173,7 +208,15 @@ export default async function AcademyFinancePage() {
         {chargesResult.ok && paymentsResult.ok && (
           <FinanceChargesPayments
             charges={chargesResult.charges}
+            chargesPage={chargesPage}
+            chargesPageSize={FINANCE_PAGE_SIZE}
+            chargesTotalCount={chargesResult.totalCount ?? chargesResult.charges.length}
+            payableCharges={payableChargesResult.ok ? payableChargesResult.charges : []}
             payments={paymentsResult.payments}
+            paymentsPage={paymentsPage}
+            paymentsPageSize={FINANCE_PAGE_SIZE}
+            paymentsTotalCount={paymentsResult.totalCount ?? paymentsResult.payments.length}
+            searchParams={params}
             studentLabels={studentLabels}
             studentOptions={studentOptions}
             courseByPayment={courseByPayment}

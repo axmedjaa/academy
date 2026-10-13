@@ -49,7 +49,16 @@ async function deleteTestUser(id: string): Promise<void> {
 
 let userId: string;
 
-function currentCodeFor(secretBase32: string): string {
+/**
+ * `timestamp` defaults to now; pass a future one to deterministically land
+ * on a step this suite hasn't already consumed. Needed since the replay-
+ * prevention fix (lib/auth/mfa.ts) now makes `currentCodeFor(secret)`
+ * *not* idempotent across calls within the same ~30s step for the same
+ * credential — a second test re-validating "the same code still works"
+ * would otherwise flakily depend on how much wall-clock time elapsed
+ * since an earlier test already consumed that step.
+ */
+function currentCodeFor(secretBase32: string, timestamp?: number): string {
   return new OTPAuth.TOTP({
     issuer: "Academy Management SaaS",
     label: "test",
@@ -57,7 +66,7 @@ function currentCodeFor(secretBase32: string): string {
     digits: 6,
     period: 30,
     secret: secretBase32,
-  }).generate();
+  }).generate({ timestamp });
 }
 
 beforeAll(async () => {
@@ -313,6 +322,43 @@ describe("verifyMfaChallenge", () => {
     }
   });
 
+  /**
+   * Security regression test (TOTP replay prevention — see
+   * mfaTotpCredentials' own schema comment for the full CWE/NIST
+   * citation). Before the fix, `totp.validate()` alone decided validity,
+   * with no memory of a code already being spent — the exact same valid
+   * code could authenticate a second, attacker-controlled session before
+   * its ~90s window expired (`window: 1` tolerates the adjacent step too).
+   * This test presents the identical valid code twice back-to-back: it
+   * must succeed once and fail the second time.
+   *
+   * Uses its own dedicated user/credential (not the shared
+   * `challengeUserId` this describe block's other tests reuse) —
+   * `lastUsedStep` is now real, persisted state on the credential row, so
+   * sharing a credential with another test that calls `currentCodeFor`
+   * for the *same* 30s step would make both tests' outcomes depend on
+   * execution order/timing rather than this test's own setup.
+   */
+  it("rejects reusing the same valid TOTP code a second time (replay prevention)", async () => {
+    const freshUserId = await insertTestUser("replay");
+    const { secretBase32: freshSecret } = await enrollMfaForUser(freshUserId);
+    const enrolled = await verifyMfaEnrollmentForUser(freshUserId, currentCodeFor(freshSecret));
+    if (!enrolled.ok) throw new Error("test setup: enrollment failed");
+
+    const code = currentCodeFor(freshSecret);
+
+    const first = await verifyMfaChallenge(freshUserId, "totp", code);
+    expect(first.ok).toBe(true);
+
+    const second = await verifyMfaChallenge(freshUserId, "totp", code);
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.error.code).toBe("INVALID_CODE");
+    }
+
+    await deleteTestUser(freshUserId);
+  });
+
   it("accepts a correct, unused recovery code and then rejects reusing it", async () => {
     const code = recoveryCodes[0];
 
@@ -355,7 +401,15 @@ describe("verifyMfaChallenge", () => {
     expect(result.ok).toBe(true);
 
     // TOTP still works afterward — email OTP is additive, not a replacement.
-    const totpResult = await verifyMfaChallenge(challengeUserId, "totp", currentCodeFor(secretBase32));
+    // A step one full period ahead, not "now": an earlier test in this same
+    // describe block already validated (and thus consumed, post the
+    // replay-prevention fix) whatever step "now" currently falls in for
+    // this credential, and TOTP steps are only 30s wide.
+    const totpResult = await verifyMfaChallenge(
+      challengeUserId,
+      "totp",
+      currentCodeFor(secretBase32, Date.now() + 30_000),
+    );
     expect(totpResult.ok).toBe(true);
 
     await db.delete(mfaEmailOtps).where(eq(mfaEmailOtps.userId, challengeUserId));

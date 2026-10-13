@@ -52,7 +52,8 @@
      never used as the resting state of a static card. */
   --shadow-card-hover: 0 4px 16px 0 rgba(15, 23, 42, 0.1);
 
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-sans: var(--font-alexandria), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 
   /* Design-engineering pass — overrides Tailwind's own built-in `ease-out`/
      `ease-in-out` theme values (`cubic-bezier(0,0,0.2,1)` /
@@ -192,6 +193,15 @@
 
 html {
   height: 100%;
+  /* Smooth in-page scrolling (anchor links, programmatic scrollIntoView) —
+     disabled under reduced-motion below, same convention as every other
+     motion token in this file. */
+  scroll-behavior: smooth;
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 html,
 body {

@@ -599,6 +599,105 @@ export async function archiveBranch(
   return { ok: true, branch: toRecord(result) };
 }
 
+export type RestoreBranchResult = ArchiveBranchResult;
+
+/**
+ * The inverse of `archiveBranch` — sets `status` back to "active". Same
+ * "full"/"manage" gate, same academy-scoped lookup, idempotent the same
+ * way (restoring an already-active branch is a no-op re-read, not an
+ * error) so a stale UI (two tabs, a double-click) can't surface a
+ * confusing failure for an action that already succeeded.
+ *
+ * Unlike archiveBranch, this re-enters the plan's branch allowance: an
+ * archived branch doesn't count toward `maxBranches` (lib/subscriptions/
+ * usage.ts's `countActiveBranches` filters on `status = "active"`), so
+ * restoring one is exactly as capped as creating a new one — same
+ * `checkAllowance` call createBranch already makes, same transaction as
+ * the status flip so the check and the write can't race.
+ */
+export async function restoreBranch(
+  actorContext: AuthContext,
+  branchId: string,
+): Promise<RestoreBranchResult> {
+  const resolved = await resolveBranchAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManage(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const parsedId = z.string().uuid().safeParse(branchId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(branches)
+        .where(and(eq(branches.id, branchId), eq(branches.academyId, academyId)))
+        .limit(1);
+      if (!existing) return null;
+
+      if (existing.status === "active") {
+        return existing;
+      }
+
+      const allowance = await checkAllowance(academyId, "branches", tx);
+      if (!allowance.ok) {
+        throw new AllowanceCheckFailure(allowance.error);
+      }
+      if (!allowance.result.allowed) {
+        throw new AllowanceLimitReached(allowance.result.current, allowance.result.limit);
+      }
+
+      const [updated] = await tx
+        .update(branches)
+        .set({ status: "active" })
+        .where(eq(branches.id, branchId))
+        .returning();
+
+      await recordAudit(
+        {
+          actorUserId: actorContext.userId,
+          actorRole: membershipRole,
+          academyId,
+          action: "restoreBranch",
+          entityType: "branch",
+          entityId: branchId,
+          branchId,
+          before: toRecord(existing),
+          after: toRecord(updated),
+        },
+        tx,
+      );
+
+      return updated;
+    });
+
+    if (!result) {
+      return { ok: false, error: NOT_FOUND };
+    }
+    return { ok: true, branch: toRecord(result) };
+  } catch (err) {
+    if (err instanceof AllowanceLimitReached) {
+      return {
+        ok: false,
+        error: {
+          code: "allowance",
+          message: `This academy has reached its plan's branch limit (${err.current}/${err.limit}). Archive another branch or upgrade the plan before restoring this one.`,
+        },
+      };
+    }
+    if (err instanceof AllowanceCheckFailure) {
+      return { ok: false, error: { code: "validation", message: err.usageError.message } };
+    }
+    throw err;
+  }
+}
+
 /**
  * ---------------------------------------------------------------------
  * Permanent branch deletion — narrow, eligibility-gated, distinct from

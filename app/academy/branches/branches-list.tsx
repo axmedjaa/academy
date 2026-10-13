@@ -1,13 +1,15 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import {
   archiveBranch,
   createBranch,
   deleteBranch,
+  restoreBranch,
   updateBranch,
   type BranchFormState,
 } from "@/lib/academies/branches-actions";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import type { BranchDeletionEligibilitySummary, BranchRecord } from "@/lib/academies/branches";
 import {
   Badge,
@@ -56,6 +58,23 @@ export function BranchesList({ branches, canManage }: Props) {
   // no-confirmation-step behavior (direct submit), unchanged — only its
   // trigger moves into the menu.
   const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
+  // Same controlled-ConfirmButton pattern for Restore — unlike Archive,
+  // Restore gets a confirmation step since re-activating a branch can
+  // immediately push the academy back over its plan's branch allowance.
+  const [restoreRowId, setRestoreRowId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (createState.ok) showSuccessToast("Branch created.");
+    else if (createState.error) showErrorToast(createState.error.message);
+  }, [createState]);
+  useEffect(() => {
+    if (updateState.ok) showSuccessToast("Branch updated.");
+    else if (updateState.error) showErrorToast(updateState.error.message);
+  }, [updateState]);
+  useEffect(() => {
+    if (archiveState.ok) showSuccessToast("Branch status updated.");
+    else if (archiveState.error) showErrorToast(archiveState.error.message);
+  }, [archiveState]);
 
   const editingBranch = branches.find((branch) => branch.id === editingId) ?? null;
 
@@ -112,19 +131,20 @@ export function BranchesList({ branches, canManage }: Props) {
                         <button
                           type="button"
                           aria-label={`Actions for ${branch.name}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                         >
                           <Icon name="more" />
                         </button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => setEditingId(branch.id)}>Edit</DropdownMenuItem>
-                        <DropdownMenuItem
-                          disabled={archiving || branch.status === "archived"}
-                          onClick={() => handleArchive(branch)}
-                        >
-                          Archive
-                        </DropdownMenuItem>
+                        {branch.status === "archived" ? (
+                          <DropdownMenuItem onClick={() => setRestoreRowId(branch.id)}>Restore</DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem disabled={archiving} onClick={() => handleArchive(branch)}>
+                            Archive
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuSeparator />
                         {branch.deletionEligibility.eligible ? (
                           <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(branch.id)}>
@@ -151,6 +171,19 @@ export function BranchesList({ branches, canManage }: Props) {
                         description={<>This cannot be undone.</>}
                         confirmInput={{ label: `Type "${branch.name}" to confirm`, requiredValue: branch.name }}
                         onConfirm={() => deleteBranch(branch.id, branch.name)}
+                      />
+                    )}
+
+                    {branch.status === "archived" && (
+                      <ConfirmButton
+                        label="Restore"
+                        variant="success"
+                        icon="autorenew"
+                        open={restoreRowId === branch.id}
+                        onOpenChange={(nextOpen) => setRestoreRowId(nextOpen ? branch.id : null)}
+                        title={`Restore "${branch.name}"?`}
+                        description={<>This branch will become active again and count toward the academy&apos;s branch limit.</>}
+                        onConfirm={() => restoreBranch(branch.id)}
                       />
                     )}
                   </td>

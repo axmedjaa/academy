@@ -5,6 +5,7 @@ import { users } from "@/lib/db/schema";
 import { hashPassword, passwordSchema, verifyPassword } from "@/lib/auth/password";
 import { issueEmailChangeToken } from "@/lib/auth/email-change";
 import { checkEmailChangeRateLimit } from "@/lib/auth/email-change-rate-limit";
+import { formatRetryAfter } from "@/lib/ui/duration";
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
@@ -109,7 +110,7 @@ export async function updateOwnEmail(
       ok: false,
       error: {
         code: "rate_limited",
-        message: `Too many verification emails requested. Try again in ${rateLimit.retryAfterSeconds}s.`,
+        message: `Too many verification emails requested. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
       },
     };
   }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState, useTransition } from "react";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import {
   approveGradeConfigAction,
   activateGradeConfigurationAction,
@@ -149,14 +150,16 @@ function GradeConfigRow({ config, canManage, canApprove, currentUserId }: RowPro
     setBands((prev) => prev.filter((_, i) => i !== index));
   }
 
-  function runLifecycleAction(action: () => Promise<GradeConfigLifecycleActionResult>): void {
+  function runLifecycleAction(action: () => Promise<GradeConfigLifecycleActionResult>, successMessage: string): void {
     setActionError(null);
     startTransition(async () => {
       const result = await action();
       if (!result.ok) {
         setActionError(result.error.message);
+        showErrorToast(result.error.message);
         return;
       }
+      showSuccessToast(successMessage);
       if (showRejectReason) {
         setShowRejectReason(false);
         setRejectReason("");
@@ -187,7 +190,7 @@ function GradeConfigRow({ config, canManage, canApprove, currentUserId }: RowPro
                   type="button"
                   className="px-2.5 py-1 text-xs"
                   disabled={pending}
-                  onClick={() => runLifecycleAction(() => submitGradeConfigForApprovalAction(config.id))}
+                  onClick={() => runLifecycleAction(() => submitGradeConfigForApprovalAction(config.id), "Grade configuration submitted for approval.")}
                 >
                   Submit for approval
                 </Button>
@@ -201,7 +204,7 @@ function GradeConfigRow({ config, canManage, canApprove, currentUserId }: RowPro
                   className="px-2.5 py-1 text-xs"
                   disabled={pending || !canApprove || isOwnSubmission}
                   title={isOwnSubmission ? "You can't approve a transaction you recorded." : undefined}
-                  onClick={() => runLifecycleAction(() => approveGradeConfigAction(config.id))}
+                  onClick={() => runLifecycleAction(() => approveGradeConfigAction(config.id), "Grade configuration approved.")}
                 >
                   Approve
                 </Button>
@@ -223,7 +226,7 @@ function GradeConfigRow({ config, canManage, canApprove, currentUserId }: RowPro
                 type="button"
                 className="px-2.5 py-1 text-xs"
                 disabled={pending}
-                onClick={() => runLifecycleAction(() => activateGradeConfigurationAction(config.id))}
+                onClick={() => runLifecycleAction(() => activateGradeConfigurationAction(config.id), "Grade configuration activated.")}
               >
                 Activate
               </Button>
@@ -264,7 +267,7 @@ function GradeConfigRow({ config, canManage, canApprove, currentUserId }: RowPro
               variant="danger"
               className="mt-2"
               disabled={pending || rejectReason.trim().length === 0}
-              onClick={() => runLifecycleAction(() => rejectGradeConfigAction(config.id, rejectReason))}
+              onClick={() => runLifecycleAction(() => rejectGradeConfigAction(config.id, rejectReason), "Grade configuration rejected.")}
             >
               Confirm reject
             </Button>

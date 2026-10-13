@@ -1,10 +1,11 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
-import { listAcademies, type AcademySummary } from "@/lib/academies/approve";
+import { listAcademiesPage, type AcademySummary } from "@/lib/academies/approve";
 import type { SubscriptionStatus } from "@/lib/subscriptions/state-machine";
 import {
   Badge,
+  EmptyState,
   LinkButton,
   PAGE_WRAP,
   PageHeader,
@@ -14,6 +15,7 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
 import { parsePageParam } from "@/lib/ui/pagination";
 
@@ -119,19 +121,18 @@ export default async function AcademiesPage({
     return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
-  // `listAcademies()` is also used internally (e.g. onboarding-checklist.ts)
-  // where it must keep returning every row — it isn't changed to accept a
-  // `pagination` param. This page instead slices the already-fetched array
-  // itself before rendering: still fully server-side (nothing beyond the
-  // current page's rows is ever sent to the browser), just without a
-  // database-level LIMIT/OFFSET, since the platform's own academy count
-  // isn't at a scale where that distinction matters.
+  // Perf investigation (Afoogy slow-dashboard task): this page previously
+  // called `listAcademies()` — every academy on the platform (2,700+ at
+  // measured scale), joined and enriched with a subscription-summary and
+  // branch-count batch lookup over all of them — then sliced the array
+  // down to 15 rows in JS. Measured at ~2-3s on its own for that reason.
+  // `listAcademiesPage()` pushes the LIMIT/OFFSET down to Postgres and
+  // scopes every batch lookup to just this page's 15 academy ids instead.
+  // `listAcademies()` itself is untouched and still used where it must
+  // keep returning every row (e.g. lib/academies/onboarding-checklist.ts).
   const params = await searchParams;
   const page = parsePageParam(params);
-  const allAcademies = await listAcademies();
-  const totalCount = allAcademies.length;
-  const offset = (page - 1) * PAGE_SIZE;
-  const academies = allAcademies.slice(offset, offset + PAGE_SIZE);
+  const { academies, totalCount } = await listAcademiesPage({ page, pageSize: PAGE_SIZE });
 
   return (
     <div className={PAGE_WRAP}>
@@ -155,6 +156,9 @@ export default async function AcademiesPage({
         documents) — inventing a number here would be exactly the kind of
         fake data this item's brief says not to render.
       */}
+      {academies.length === 0 ? (
+        <EmptyState message="No academies registered yet." icon={<Icon name="apartment" />} />
+      ) : (
       <TableWrap>
         <thead>
           <tr>
@@ -169,13 +173,6 @@ export default async function AcademiesPage({
           </tr>
         </thead>
         <tbody>
-          {academies.length === 0 && (
-            <tr>
-              <td colSpan={8} className={`${td} text-center text-muted`}>
-                No academies registered yet.
-              </td>
-            </tr>
-          )}
           {academies.map((academy) => (
             <tr key={academy.id} className={trHover}>
               <td className={`${td} font-medium`}>{academy.name}</td>
@@ -201,6 +198,7 @@ export default async function AcademiesPage({
           ))}
         </tbody>
       </TableWrap>
+      )}
 
       <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} />
     </div>

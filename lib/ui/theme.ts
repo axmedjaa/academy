@@ -79,6 +79,11 @@ export const shadow = {
 // shape without pinning exact pixel widths).
 export const shell = {
   sidebarWidth: 260,
+  // Sidebar redesign pass: desktop-persistent collapse-to-rail width (icon
+  // + padding only, no label). Wide enough for the 24px icon plus the same
+  // horizontal padding the expanded rows use, so the icon doesn't jump
+  // position when toggling.
+  sidebarCollapsedWidth: 72,
   // Navigation-density pass: 64 -> 56. Used as a literal height for both
   // the sidebar's own brand masthead and the main content's sticky top bar
   // (grepped for every usage before changing — only those two places read

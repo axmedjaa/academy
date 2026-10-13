@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 import {
   recordSubscriptionPayment,
   verifySubscriptionPayment,
@@ -15,8 +15,10 @@ import type {
 import {
   Badge,
   Button,
+  EmptyState,
   ErrorMessage,
   Field,
+  FormDialog,
   Section,
   TableWrap,
   inputClass,
@@ -24,6 +26,8 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialState: PaymentFormState = { ok: false };
 
@@ -59,9 +63,7 @@ export function PaymentsManager({ payments, subscriptionOptions, canVerify }: Pr
       <div>
         <h2 className="mb-3 text-lg font-semibold text-ink">Payment history</h2>
         {payments.length === 0 ? (
-          <Section>
-            <p className="text-sm text-muted">No payments recorded yet.</p>
-          </Section>
+          <EmptyState message="No payments recorded yet." icon={<Icon name="payments" />} />
         ) : (
           <TableWrap>
             <thead>
@@ -87,6 +89,27 @@ export function PaymentsManager({ payments, subscriptionOptions, canVerify }: Pr
   );
 }
 
+const REASON_ACTION: Record<
+  "verify" | "reject" | "reverse",
+  (id: string, reason: string) => Promise<{ ok: true } | { ok: false; error: { message: string } }>
+> = {
+  verify: verifySubscriptionPayment,
+  reject: rejectSubscriptionPayment,
+  reverse: reverseSubscriptionPayment,
+};
+
+const REASON_LABEL: Record<"verify" | "reject" | "reverse", string> = {
+  verify: "Verify",
+  reject: "Reject",
+  reverse: "Reverse",
+};
+
+const REASON_PAST_TENSE: Record<"verify" | "reject" | "reverse", string> = {
+  verify: "verified",
+  reject: "rejected",
+  reverse: "reversed",
+};
+
 function PaymentRow({
   payment,
   canVerify,
@@ -96,31 +119,31 @@ function PaymentRow({
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [pendingReasonFor, setPendingReasonFor] = useState<
-    "verify" | "reject" | "reverse" | null
-  >(null);
+  const [pendingKind, setPendingKind] = useState<"verify" | "reject" | "reverse" | null>(null);
+  const [reason, setReason] = useState("");
 
-  function runAction(
-    kind: "verify" | "reject" | "reverse",
-    action: (id: string, reason: string) => Promise<{ ok: true } | { ok: false; error: { message: string } }>,
-  ) {
-    const reason = window.prompt(
-      `Reason for ${kind === "verify" ? "verifying" : kind === "reject" ? "rejecting" : "reversing"} this payment:`,
-    );
-    if (reason === null) return; // cancelled
+  function openReasonDialog(kind: "verify" | "reject" | "reverse") {
+    setError(null);
+    setReason("");
+    setPendingKind(kind);
+  }
+
+  function submitReason() {
+    if (!pendingKind) return;
     if (reason.trim().length === 0) {
       setError("A reason is required.");
       return;
     }
-
     setError(null);
-    setPendingReasonFor(kind);
+    const kind = pendingKind;
     startTransition(async () => {
-      const result = await action(payment.id, reason);
+      const result = await REASON_ACTION[kind](payment.id, reason);
       if (!result.ok) {
         setError(result.error.message);
+        return;
       }
-      setPendingReasonFor(null);
+      setPendingKind(null);
+      showSuccessToast(`Payment ${REASON_PAST_TENSE[kind]}.`);
     });
   }
 
@@ -145,19 +168,17 @@ function PaymentRow({
                   <Button
                     type="button"
                     className="px-2.5 py-1 text-xs"
-                    disabled={isPending}
-                    onClick={() => runAction("verify", verifySubscriptionPayment)}
+                    onClick={() => openReasonDialog("verify")}
                   >
-                    {isPending && pendingReasonFor === "verify" ? "Verifying..." : "Verify"}
+                    Verify
                   </Button>
                   <Button
                     type="button"
                     variant="danger"
                     className="px-2.5 py-1 text-xs"
-                    disabled={isPending}
-                    onClick={() => runAction("reject", rejectSubscriptionPayment)}
+                    onClick={() => openReasonDialog("reject")}
                   >
-                    {isPending && pendingReasonFor === "reject" ? "Rejecting..." : "Reject"}
+                    Reject
                   </Button>
                 </>
               )}
@@ -166,10 +187,9 @@ function PaymentRow({
                   type="button"
                   variant="danger"
                   className="px-2.5 py-1 text-xs"
-                  disabled={isPending}
-                  onClick={() => runAction("reverse", reverseSubscriptionPayment)}
+                  onClick={() => openReasonDialog("reverse")}
                 >
-                  {isPending && pendingReasonFor === "reverse" ? "Reversing..." : "Reverse"}
+                  Reverse
                 </Button>
               )}
               {payment.status !== "pending" && payment.status !== "verified" && (
@@ -179,12 +199,38 @@ function PaymentRow({
           </td>
         )}
       </tr>
-      {error && (
-        <tr>
-          <td colSpan={canVerify ? 7 : 6} className="px-4 py-2">
-            <ErrorMessage message={error} />
-          </td>
-        </tr>
+      {pendingKind && (
+        <FormDialog
+          open={pendingKind !== null}
+          onOpenChange={(nextOpen) => !nextOpen && setPendingKind(null)}
+          title={`${REASON_LABEL[pendingKind]} this payment?`}
+        >
+          <div className="flex flex-col gap-3">
+            <Field label="Reason">
+              <textarea
+                className={inputClass}
+                rows={3}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                autoFocus
+              />
+            </Field>
+            {error && <ErrorMessage message={error} />}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setPendingKind(null)} disabled={isPending}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant={pendingKind === "verify" ? "primary" : "dangerSolid"}
+                onClick={submitReason}
+                disabled={isPending}
+              >
+                {isPending ? "Working..." : REASON_LABEL[pendingKind]}
+              </Button>
+            </div>
+          </div>
+        </FormDialog>
       )}
     </>
   );
@@ -199,6 +245,12 @@ function RecordPaymentForm({
     recordSubscriptionPayment,
     initialState,
   );
+
+  useEffect(() => {
+    if (state.ok) showSuccessToast("Payment recorded.");
+    else if (state.error) showErrorToast(state.error.message);
+  }, [state]);
+
   const [selectedSubscriptionId, setSelectedSubscriptionId] = useState("");
   const selectedOption = subscriptionOptions.find(
     (option) => option.subscriptionId === selectedSubscriptionId,

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, or } from "drizzle-orm";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
   academies,
@@ -17,6 +17,24 @@ import {
 } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
+import { getCourseImageKey } from "@/lib/storage/keys";
+
+// Real Cloudflare R2 is never called from the test suite — same
+// single-boundary mock as academy-logo.test.ts/books.test.ts. None of this
+// file's existing tests exercise a real upload key (they only pass legacy
+// externally-hosted-URL `imageRef` strings, which `getCourseImageUrl`/
+// `isCourseImageKey` deliberately skip R2 entirely for), so mocking this
+// module is safe to add without touching any pre-existing test's behavior.
+vi.mock("@/lib/storage/client", () => ({
+  getUploadUrl: vi.fn(),
+  getDownloadUrl: vi.fn(),
+  deleteObject: vi.fn(),
+  headObject: vi.fn(),
+  getObjectPrefix: vi.fn(),
+}));
+
+import { deleteObject, getObjectPrefix, getUploadUrl, headObject } from "@/lib/storage/client";
+import { VALID_SIGNATURE_BYTES, INVALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
 import {
   archiveCourse,
   createCourse,
@@ -25,9 +43,26 @@ import {
   getCourseDeletionEligibility,
   listCourseEnrollments,
   listCourses,
+  requestCourseImageUploadUrl,
   updateCourse,
   type CreateCourseInput,
 } from "./courses";
+
+const getUploadUrlMock = vi.mocked(getUploadUrl);
+const headObjectMock = vi.mocked(headObject);
+const deleteObjectMock = vi.mocked(deleteObject);
+const getObjectPrefixMock = vi.mocked(getObjectPrefix);
+
+beforeEach(() => {
+  getUploadUrlMock.mockReset();
+  headObjectMock.mockReset();
+  deleteObjectMock.mockReset();
+  getObjectPrefixMock.mockReset();
+  getUploadUrlMock.mockResolvedValue({ ok: true, uploadUrl: "https://r2.example/signed-put", expiresInSeconds: 300 });
+  deleteObjectMock.mockResolvedValue({ ok: true });
+  headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 1000 } });
+  getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: VALID_SIGNATURE_BYTES["image/png"] });
+});
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -173,7 +208,7 @@ afterAll(async () => {
   for (const userId of createdUserIds) {
     await db.delete(users).where(eq(users.id, userId));
   }
-});
+}, 180_000);
 
 describe("createCourse — permission matrix", () => {
   it.each<[AcademyRole, boolean]>([
@@ -407,6 +442,106 @@ describe("createCourse / updateCourse — dates, image, and instructor", () => {
       expect(updated.course.endDate).toBeNull();
       expect(updated.course.imageRef).toBeNull();
     }
+  });
+});
+
+describe("requestCourseImageUploadUrl — authorization and format validation", () => {
+  it("refuses a trainer (not allowed to manage courses)", async () => {
+    const { context } = await setupAcademy("trainer");
+    const result = await requestCourseImageUploadUrl(context, { contentType: "image/png", fileSizeBytes: 1000 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+    expect(getUploadUrlMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["image/jpeg", "image/png", "image/webp", "image/avif"])("accepts %s", async (contentType) => {
+    const { context } = await setupAcademy("academy_owner");
+    const result = await requestCourseImageUploadUrl(context, { contentType, fileSizeBytes: 1000 });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects image/gif (no animation use case for a course image)", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const result = await requestCourseImageUploadUrl(context, { contentType: "image/gif", fileSizeBytes: 1000 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("rejects image/svg+xml (no sanitization pipeline)", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const result = await requestCourseImageUploadUrl(context, { contentType: "image/svg+xml", fileSizeBytes: 1000 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("rejects a declared size over the 10 MB limit", async () => {
+    const { context } = await setupAcademy("academy_owner");
+    const result = await requestCourseImageUploadUrl(context, { contentType: "image/png", fileSizeBytes: 50 * 1024 * 1024 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+});
+
+describe("createCourse/updateCourse — uploaded (own) image key verification", () => {
+  // `imageRef` predates the upload feature as a plain externally-hosted-URL
+  // text field (see courses.ts's own `createCourseSchema.imageRef` comment)
+  // and still accepts any string at face value when it ISN'T recognized as
+  // the CALLER's own academy-scoped upload key — `isCourseImageKey` gates
+  // re-verification on the caller's academyId, so another academy's own key
+  // is treated exactly like a legacy pasted URL here (unverified, never
+  // touching R2), not rejected. This is pre-existing, unchanged behavior —
+  // unlike logo/book-cover/student-photo, a course image was never a
+  // required, always-our-own-key field. The stored value is still harmless:
+  // at render time `getCourseImageUrl` reruns the same `isCourseImageKey`
+  // check against the DISPLAYING academy, so a foreign key never resolves
+  // to a real signed URL for anyone — it just renders as a broken image.
+  it("accepts (unverified) an uploaded key belonging to a different academy, treating it like a legacy pasted URL", async () => {
+    const { context, programId } = await setupAcademy("academy_owner");
+    const other = await setupAcademy("academy_owner");
+    const foreignKey = getCourseImageKey({ academyId: other.academyId, extension: "png" });
+
+    const result = await createCourse(context, validInput(programId, { imageRef: foreignKey }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.course.imageRef).toBe(foreignKey);
+    expect(headObjectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects and deletes the object when the real bytes don't match the declared content-type (spoofed MIME)", async () => {
+    const { context, academyId, programId } = await setupAcademy("academy_owner");
+    const key = getCourseImageKey({ academyId, extension: "png" });
+    getObjectPrefixMock.mockResolvedValueOnce({ ok: true, exists: true, bytes: INVALID_SIGNATURE_BYTES });
+
+    const result = await createCourse(context, validInput(programId, { imageRef: key }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(deleteObjectMock).toHaveBeenCalledWith(key);
+  });
+
+  it("rejects and deletes an empty (0-byte) uploaded object", async () => {
+    const { context, academyId, programId } = await setupAcademy("academy_owner");
+    const key = getCourseImageKey({ academyId, extension: "png" });
+    headObjectMock.mockResolvedValueOnce({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 0 } });
+
+    const result = await createCourse(context, validInput(programId, { imageRef: key }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(deleteObjectMock).toHaveBeenCalledWith(key);
+  });
+
+  it("persists a verified uploaded key as the course's imageRef", async () => {
+    const { context, academyId, programId } = await setupAcademy("academy_owner");
+    const key = getCourseImageKey({ academyId, extension: "png" });
+
+    const result = await createCourse(context, validInput(programId, { imageRef: key }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.course.imageRef).toBe(key);
+  });
+
+  it("a legacy externally-hosted-URL imageRef is accepted at face value, without ever touching R2", async () => {
+    const { context, programId } = await setupAcademy("academy_owner");
+    const result = await createCourse(context, validInput(programId, { imageRef: "https://example.com/legacy.jpg" }));
+    expect(result.ok).toBe(true);
+    expect(headObjectMock).not.toHaveBeenCalled();
   });
 });
 

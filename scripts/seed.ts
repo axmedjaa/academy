@@ -291,6 +291,7 @@ async function ensureSubscription(
     academyId,
     planId,
     status: "active",
+    activatedAt: new Date(),
     endsAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
     createdBy: creatorUserId,
   });

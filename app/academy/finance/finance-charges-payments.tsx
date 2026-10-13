@@ -24,23 +24,37 @@ import {
   th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { PaginationNav } from "@/components/pagination-nav";
 import { Icon } from "@/app/academy/_shell/icons";
 import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
-import { dollarsToCents } from "@/lib/ui/money";
+import { dollarsToCents, formatMoney } from "@/lib/ui/money";
 
 const initialState: StudentPaymentsFormState = { ok: false };
 
 const SELF_REVERSAL_TOOLTIP = "You can't reverse or adjust a payment you recorded yourself.";
 
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
-
 interface Props {
+  /** Current page of the academy's charge history (server-paginated — see
+   * page.tsx's own comment on why this table used to fetch everything). */
   charges: StudentChargeRecord[];
+  chargesPage: number;
+  chargesPageSize: number;
+  chargesTotalCount: number;
+  /** Every currently open/partially-paid charge academy-wide, fetched
+   * separately and unpaginated — backs the Record Payment form's "Charge"
+   * picker, which needs the full payable set regardless of which page of
+   * the Charges table happens to be showing (see page.tsx's own comment). */
+  payableCharges: StudentChargeRecord[];
+  /** Current page of the academy's payment history (server-paginated). */
   payments: StudentPaymentRecord[];
+  paymentsPage: number;
+  paymentsPageSize: number;
+  paymentsTotalCount: number;
+  /** This page's resolved `searchParams`, passed straight to `PaginationNav`
+   * so every existing filter/query value survives a page-link click. */
+  searchParams: Record<string, string | string[] | undefined>;
   /** studentId -> "Full Name (STD-XXXX)", resolved server-side once for
    * every student referenced by any charge/payment (see page.tsx's own
    * comment) — falls back to the raw id if a student was somehow deleted
@@ -76,7 +90,15 @@ interface Props {
 
 export function FinanceChargesPayments({
   charges,
+  chargesPage,
+  chargesPageSize,
+  chargesTotalCount,
+  payableCharges,
   payments,
+  paymentsPage,
+  paymentsPageSize,
+  paymentsTotalCount,
+  searchParams,
   studentLabels,
   studentOptions,
   courseByPayment,
@@ -100,10 +122,11 @@ export function FinanceChargesPayments({
   // charge across all students, each already labeled with its own student
   // name, so there's still something useful to pick from immediately.
   const [paymentStudentId, setPaymentStudentId] = useState("");
-  const payableCharges = charges.filter(
-    (charge) =>
-      (charge.status === "open" || charge.status === "partially_paid") &&
-      (paymentStudentId === "" || charge.studentId === paymentStudentId),
+  // `payableCharges` (the prop) is already status-filtered server-side
+  // (open/partially-paid, academy-wide, unpaginated — see page.tsx's own
+  // comment); this just narrows it to the selected student, client-side.
+  const filteredPayableCharges = payableCharges.filter(
+    (charge) => paymentStudentId === "" || charge.studentId === paymentStudentId,
   );
   const [issuingId, setIssuingId] = useState<string | null>(null);
   const [issueError, setIssueError] = useState<string | null>(null);
@@ -232,7 +255,7 @@ export function FinanceChargesPayments({
                   <tr key={charge.id} className={trHover}>
                     <td className={`${td} font-medium`}>{studentLabel(charge.studentId)}</td>
                     <td className={td}>{charge.description}</td>
-                    <td className={td}>{formatMoney(charge.amountCents, charge.currency)}</td>
+                    <td className={`${td} text-right tabular-nums`}>{formatMoney(charge.amountCents, charge.currency)}</td>
                     <td className={td}>{charge.dueDate ?? "—"}</td>
                     <td className={td}>
                       <Badge label={charge.status.replace("_", " ")} tone={getStatusTone(charge.status)} />
@@ -242,6 +265,13 @@ export function FinanceChargesPayments({
             </tbody>
           </TableWrap>
           )}
+          <PaginationNav
+            page={chargesPage}
+            pageSize={chargesPageSize}
+            totalCount={chargesTotalCount}
+            searchParams={searchParams}
+            paramName="chargesPage"
+          />
 
           {canManage && (
             <div className="mt-6 border-t border-border pt-5">
@@ -311,7 +341,7 @@ export function FinanceChargesPayments({
                     <tr key={payment.id} className={trHover}>
                       <td className={`${td} font-medium`}>{studentLabel(payment.studentId)}</td>
                       <td className={td}>{courseByPayment[payment.id] ?? "—"}</td>
-                      <td className={td}>{formatMoney(payment.amountCents, payment.currency)}</td>
+                      <td className={`${td} text-right tabular-nums`}>{formatMoney(payment.amountCents, payment.currency)}</td>
                       <td className={td}>{payment.method.replace("_", " ")}</td>
                       <td className={td}>
                         <Badge label={effectiveStatus.replace("_", " ")} tone={getStatusTone(effectiveStatus)} />
@@ -369,6 +399,13 @@ export function FinanceChargesPayments({
             </tbody>
           </TableWrap>
           )}
+          <PaginationNav
+            page={paymentsPage}
+            pageSize={paymentsPageSize}
+            totalCount={paymentsTotalCount}
+            searchParams={searchParams}
+            paramName="paymentsPage"
+          />
           {issueError && (
             <div className="mt-3">
               <ErrorMessage message={issueError} />
@@ -458,7 +495,7 @@ export function FinanceChargesPayments({
                 <Field label="Charge (optional — leave blank if this payment isn't against a specific charge)">
                   <select name="chargeId" defaultValue="" className={inputClass}>
                     <option value="">No specific charge</option>
-                    {payableCharges.map((charge) => (
+                    {filteredPayableCharges.map((charge) => (
                       <option key={charge.id} value={charge.id}>
                         {studentLabel(charge.studentId)} — {charge.description} —{" "}
                         {formatMoney(charge.amountCents, charge.currency)} ({charge.status.replace("_", " ")})

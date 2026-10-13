@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -24,6 +24,7 @@ import {
 } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
 import { StudentAvatar } from "@/app/academy/students/student-avatar";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -144,7 +145,7 @@ export function AdmissionsList({ admissions, canManage, canEnroll, courseOptions
                       <button
                         type="button"
                         aria-label={`Actions for ${row.fullName}`}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-[color,background-color,border-color,transform] duration-150 ease-out hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                       >
                         <Icon name="more" />
                       </button>
@@ -260,6 +261,11 @@ function EnrollDialog({
 }) {
   const [state, formAction, isPending] = useActionState(updateStudentEnrollment, initialEnrollmentState);
   const [batchId, setBatchId] = useState("");
+
+  useEffect(() => {
+    if (state.ok) showSuccessToast("Student enrolled.");
+    else if (state.error) showErrorToast(state.error.message);
+  }, [state]);
 
   // Auto-close once enrollment actually succeeds — the functional
   // equivalent of "redirect back to Admissions" (this dialog IS the

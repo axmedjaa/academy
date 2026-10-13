@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import {
   createProgram,
   deleteProgram,
@@ -8,6 +8,7 @@ import {
   type ProgramFormState,
 } from "@/lib/academies/programs-actions";
 import type { ProgramDeletionEligibilitySummary, ProgramRecord } from "@/lib/academies/programs";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { Badge, Button, EmptyState, ErrorMessage, Field, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
@@ -33,6 +34,11 @@ export function ProgramsList({ programs, canManage }: Props) {
   // mode), same pattern as app/academy/students/students-list.tsx.
   const [archiveRowId, setArchiveRowId] = useState<string | null>(null);
   const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (createState.ok) showSuccessToast("Program created.");
+    else if (createState.error) showErrorToast(createState.error.message);
+  }, [createState]);
 
   function toggleProgramStatus(program: ProgramRecord) {
     return setProgramStatus(program.id, program.status === "active" ? "archived" : "active");
@@ -69,7 +75,7 @@ export function ProgramsList({ programs, canManage }: Props) {
                         <button
                           type="button"
                           aria-label={`Actions for ${program.name}`}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                         >
                           <Icon name="more" />
                         </button>
@@ -96,7 +102,8 @@ export function ProgramsList({ programs, canManage }: Props) {
 
                     <ConfirmButton
                       label={program.status === "active" ? "Archive" : "Restore"}
-                      variant={program.status === "active" ? "danger" : "secondary"}
+                      variant={program.status === "active" ? "danger" : "success"}
+                      icon={program.status === "active" ? "archive" : "autorenew"}
                       open={archiveRowId === program.id}
                       onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? program.id : null)}
                       title={

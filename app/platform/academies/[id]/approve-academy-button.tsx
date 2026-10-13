@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { approveAcademyAction } from "@/lib/academies/approve-actions";
 import { Button, ErrorMessage } from "@/app/academy/_shell/ui";
 
@@ -16,6 +17,7 @@ interface Props {
  * exist yet. See the page component for the full list of what's deferred.
  */
 export function ApproveAcademyButton({ academyId }: Props) {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [succeeded, setSucceeded] = useState(false);
@@ -29,6 +31,7 @@ export function ApproveAcademyButton({ academyId }: Props) {
         return;
       }
       setSucceeded(true);
+      router.refresh();
     });
   }
 

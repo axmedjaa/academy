@@ -50,12 +50,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { getStatusTone } from "@/lib/ui/status";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
-import { centsToDollars, dollarsToCents } from "@/lib/ui/money";
+import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
 import Link from "next/link";
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
 
 const initialState: StudentFormState = { ok: false };
 const initialEnrollmentState: BatchAssignmentFormState = { ok: false };
@@ -346,7 +342,7 @@ export function StudentsList({
                                 <button
                                   type="button"
                                   aria-label={`Actions for ${student.fullName}`}
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                                  className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                                 >
                                   <Icon name="more" />
                                 </button>
@@ -395,7 +391,8 @@ export function StudentsList({
                             <>
                               <ConfirmButton
                                 label={student.status === "active" ? "Archive" : "Restore"}
-                                variant={student.status === "active" ? "danger" : "secondary"}
+                                variant={student.status === "active" ? "danger" : "success"}
+                                icon={student.status === "active" ? "archive" : "autorenew"}
                                 open={archiveRowId === student.id}
                                 onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? student.id : null)}
                                 title={

@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getPlatformDashboardData } from "@/lib/platform/dashboard";
+import { formatMoney } from "@/lib/ui/money";
 import { Icon } from "@/app/academy/_shell/icons";
+import { TrendAreaChart } from "@/app/academy/_shell/charts";
 import {
   Badge,
   EmptyState,
@@ -20,8 +23,26 @@ function formatDate(date: Date): string {
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(new Date(date));
 }
 
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
+/** Same currency-agnostic cents formatter as app/platform/reports/
+ * reports-manager.tsx's own copy — subscription_payments/subscription_plans
+ * currency is a free-text per-row field this codebase never reconciles
+ * across a mixed-currency deployment, so `revenue.totals` (summed across
+ * rows) has no single currency to pass to `formatMoney`. Small, pure,
+ * per-file helper — not worth centralizing for a second call site. */
+function formatCents(cents: number): string {
+  return (cents / 100).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** Same "YYYY-MM" source format as app/academy/dashboard/page.tsx's
+ * identical copy. */
+function formatMonthPeriod(period: string): string {
+  const [year, month] = period.split("-");
+  const parsed = new Date(Number(year), Number(month) - 1, 1);
+  if (Number.isNaN(parsed.getTime())) return period;
+  return parsed.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
 }
 
 const PAYMENT_STATUS_TONE: Record<string, "amber" | "green" | "red" | "slate" | "gray"> = {
@@ -45,6 +66,22 @@ const PAYMENT_STATUS_TONE: Record<string, "amber" | "green" | "red" | "slate" | 
  * beyond its own layout. Each section below is independently omitted (not
  * shown as an error) when the actor's specific capability grant doesn't
  * cover it — mirrors the academy dashboard's per-section visibility.
+ *
+ * Visual-parity pass (dashboard redesign wave): brought onto the same KPI
+ * row / chart / table layout as `/academy/dashboard`, using fields
+ * (`academyCounts`, `activeAcademyTrend`, `revenue`) that `getPlatformReports`
+ * and `listAcademies` already computed on every load but
+ * `lib/platform/dashboard.ts` previously discarded — no new queries. The
+ * "Total Academies" delta pill is derived from `activeAcademyTrend`'s own
+ * last two points (the same series rendered in the chart below), never a
+ * fabricated comparison.
+ *
+ * Entrance stagger: the chart/table `Section`s below the KPI row continue
+ * the same `motion-safe:animate-fade-in-up` cadence `StatCard` uses for its
+ * own index-based stagger, via `Section`'s `style` passthrough — same
+ * reasoning as the Academy dashboard's identical addition (see that file's
+ * comment); not applied to `platform-shell.tsx`'s nav for the same
+ * every-navigation-frequency reason.
  */
 export default async function PlatformDashboardPage() {
   const context = await getAuthContext();
@@ -54,19 +91,64 @@ export default async function PlatformDashboardPage() {
 
   const data = await getPlatformDashboardData(context);
 
+  // Derived strictly from activeAcademyTrend's own last two points (already
+  // fetched for the chart below) — never a fabricated comparison period, per
+  // StatCard's `delta` contract. Cumulative counts never fall in this trend's
+  // own derivation (see lib/subscriptions/reports.ts), so "down" never fires.
+  let totalAcademiesDelta: { label: string; direction: "up" | "down" | "flat" } | undefined;
+  if (data.activeAcademyTrend && data.activeAcademyTrend.length > 0) {
+    const latest = data.activeAcademyTrend[data.activeAcademyTrend.length - 1];
+    totalAcademiesDelta =
+      latest.newlyActivated > 0
+        ? { label: `+${latest.newlyActivated} this month`, direction: "up" }
+        : { label: "No change this month", direction: "flat" };
+  }
+
+  const hasKpis =
+    data.academyCounts !== null ||
+    data.pendingApprovals !== null ||
+    data.expiringSubscriptions !== null ||
+    data.revenue !== null;
+
+  // Server-rendered fresh on every request (no caching layer in front), so
+  // this is a truthful "as of now" marker, not a fabricated one — same
+  // reasoning as the Academy dashboard's identical header addition.
+  const generatedAt = new Date();
+
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader title="Dashboard" description="Overview of academies, subscriptions, and payments across the platform." />
+      <PageHeader
+        title="Dashboard"
+        description="Overview of academies, subscriptions, and payments across the platform."
+        actions={
+          <span className="text-xs text-muted">
+            Last updated {generatedAt.toLocaleDateString(undefined, { weekday: "short" })},{" "}
+            {generatedAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+          </span>
+        }
+      />
 
       <div className="flex flex-col gap-6">
-        {(data.pendingApprovals !== null || data.expiringSubscriptions !== null) && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        {hasKpis && (
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4">
+            {data.academyCounts !== null && (
+              <StatCard
+                label="Total Academies"
+                value={data.academyCounts.total}
+                delta={totalAcademiesDelta}
+                icon={<Icon name="apartment" />}
+                iconTone="brand"
+                index={0}
+                href="/platform/academies"
+              />
+            )}
             {data.pendingApprovals !== null && (
               <StatCard
                 label="Pending Approvals"
                 value={data.pendingApprovals.length}
-                icon={<Icon name="apartment" />}
-                index={0}
+                icon={<Icon name="receipt_long" />}
+                iconTone={data.pendingApprovals.length > 0 ? "warning" : "brand"}
+                index={1}
                 href="/platform/academies"
               />
             )}
@@ -75,14 +157,55 @@ export default async function PlatformDashboardPage() {
                 label="Expiring Subscriptions"
                 value={data.expiringSubscriptions.length}
                 icon={<Icon name="autorenew" />}
-                index={1}
+                iconTone={data.expiringSubscriptions.length > 0 ? "warning" : "brand"}
+                index={2}
+                href="/platform/reports"
+              />
+            )}
+            {data.revenue !== null && (
+              <StatCard
+                label="Total Collected"
+                value={formatCents(data.revenue.totals.collectedCents)}
+                hint={
+                  data.revenue.totals.expectedCents > 0
+                    ? `${formatCents(data.revenue.totals.expectedCents)} expected/pending`
+                    : undefined
+                }
+                icon={<Icon name="payments" />}
+                iconTone="success"
+                index={3}
                 href="/platform/reports"
               />
             )}
           </div>
         )}
 
-        <Section>
+        {data.activeAcademyTrend && data.activeAcademyTrend.length > 0 && (
+          <Section className="motion-safe:animate-fade-in-up" style={{ animationDelay: "240ms" }}>
+            <h2 className="text-base font-semibold text-ink">Active academies</h2>
+            <div className="mt-4">
+              <TrendAreaChart
+                id="platform-dashboard-active-academies"
+                points={data.activeAcademyTrend.map((p) => ({
+                  label: formatMonthPeriod(p.month),
+                  value: p.cumulativeActive,
+                }))}
+                ariaLabel="Cumulative active academies by activation month"
+                emptyMessage="No active academies yet."
+              />
+            </div>
+            <p className="mt-3 text-sm text-muted">
+              Academies currently active, grouped by the month their subscription was activated —
+              not a historical snapshot, see{" "}
+              <Link href="/platform/reports" className="text-brand hover:underline">
+                full reports
+              </Link>{" "}
+              for details.
+            </p>
+          </Section>
+        )}
+
+        <Section className="motion-safe:animate-fade-in-up" style={{ animationDelay: "300ms" }}>
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-base font-semibold text-ink">Pending approvals</h2>
             <LinkButton href="/platform/academies" variant="secondary">
@@ -115,7 +238,7 @@ export default async function PlatformDashboardPage() {
           )}
         </Section>
 
-        <Section>
+        <Section className="motion-safe:animate-fade-in-up" style={{ animationDelay: "360ms" }}>
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-base font-semibold text-ink">Expiring subscriptions</h2>
             <LinkButton href="/platform/reports" variant="secondary">
@@ -155,7 +278,7 @@ export default async function PlatformDashboardPage() {
           )}
         </Section>
 
-        <Section>
+        <Section className="motion-safe:animate-fade-in-up" style={{ animationDelay: "420ms" }}>
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-base font-semibold text-ink">Recent payments</h2>
             <LinkButton href="/platform/payments" variant="secondary">

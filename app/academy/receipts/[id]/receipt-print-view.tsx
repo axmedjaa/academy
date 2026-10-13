@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import type { ReceiptPrintData } from "@/lib/academies/receipt-print";
+import { formatMoney } from "@/lib/ui/money";
 import { Button, LinkButton } from "@/app/academy/_shell/ui";
 import styles from "./receipt-print.module.css";
 
@@ -18,10 +19,6 @@ function formatDate(date: Date): string {
 
 function formatDateTime(date: Date): string {
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
-}
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
 }
 
 const METHOD_LABELS: Record<ReceiptPrintData["payment"]["method"], string> = {

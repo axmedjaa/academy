@@ -1,8 +1,10 @@
 import { forwardRef, type AnchorHTMLAttributes, type CSSProperties, type ReactNode } from "react";
 import Link from "next/link";
 import { color, radius, shadow, spacing } from "@/lib/ui/theme";
+import { CountUpValue } from "./count-up-value";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { Icon } from "./icons";
 
 /**
  * Small set of shared presentational primitives for `/academy/*` screens
@@ -50,18 +52,45 @@ export function Card({
  * `prefers-reduced-motion: reduce`; those users simply see the finished
  * state immediately, with full functionality unaffected either way.
  */
+/** StatCard's icon-chip color pairing. "brand" (blue) is the neutral
+ * default for a plain informational count; success/warning/danger are
+ * reserved for a card whose count is itself a real status signal (e.g. an
+ * overdue/expiring/pending-approval count) — never applied decoratively,
+ * matching DESIGN.md §1's "one meaning each" status discipline. */
+const STAT_ICON_TONES = {
+  brand: { bg: color.primaryBlueTint, fg: color.primaryBlue },
+  success: { bg: color.statusGreenBg, fg: color.statusGreen },
+  warning: { bg: color.statusAmberBg, fg: color.statusAmber },
+  danger: { bg: color.statusRedBg, fg: color.statusRed },
+} as const;
+
 export function StatCard({
   label,
   value,
   hint,
   icon,
+  iconTone = "brand",
+  delta,
   index = 0,
   href,
 }: {
   label: string;
+  /** A numeric `value` gets the reference-video count-up entrance
+   * (`CountUpValue`, animating to this exact real number once on mount);
+   * a pre-formatted string renders as-is. Every money figure in this app's
+   * StatCards is a pre-formatted string in `hint`, not a tweened number in
+   * `value` — the headline `value` is always a plain count. */
   value: string | number;
   hint?: string;
   icon?: ReactNode;
+  iconTone?: keyof typeof STAT_ICON_TONES;
+  /** Period-over-period comparison shown as a small pill beside the value.
+   * Omit entirely rather than pass an estimated/fabricated figure — every
+   * call site must derive this from real, already-fetched data (e.g. the
+   * last two points of a trend series already loaded for a chart on the
+   * same page), never invent a comparison period that doesn't exist in the
+   * underlying query. */
+  delta?: { label: string; direction: "up" | "down" | "flat" };
   index?: number;
   /** When provided, the whole card becomes a link to the stat's own module
    * (e.g. "Total Students" -> /academy/students) — optional and additive;
@@ -69,23 +98,66 @@ export function StatCard({
    * non-interactive card exactly as before. */
   href?: string;
 }) {
+  const tone = STAT_ICON_TONES[iconTone];
+  const deltaTone =
+    delta?.direction === "up"
+      ? { bg: color.statusGreenBg, fg: color.statusGreen }
+      : delta?.direction === "down"
+        ? { bg: color.statusRedBg, fg: color.statusRed }
+        : { bg: color.statusGrayBg, fg: color.textMuted };
+
   const content = (
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: "0.8rem", color: color.textMuted, fontWeight: 500 }}>{label}</span>
-        {icon && <span style={{ color: color.textMuted, display: "flex" }}>{icon}</span>}
+        {icon && (
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 36,
+              height: 36,
+              flexShrink: 0,
+              borderRadius: 10,
+              backgroundColor: tone.bg,
+              color: tone.fg,
+            }}
+          >
+            {icon}
+          </span>
+        )}
       </div>
-      <span
-        style={{
-          fontSize: "1.75rem",
-          fontWeight: 700,
-          color: color.text,
-          letterSpacing: "-0.01em",
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {value}
-      </span>
+      <div style={{ display: "flex", alignItems: "baseline", gap: spacing.xs, flexWrap: "wrap" }}>
+        <span
+          style={{
+            fontSize: "2rem",
+            fontWeight: 700,
+            color: color.text,
+            letterSpacing: "-0.02em",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {typeof value === "number" ? <CountUpValue value={value} /> : value}
+        </span>
+        {delta && (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.15rem",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              padding: "0.1rem 0.45rem",
+              borderRadius: 999,
+              backgroundColor: deltaTone.bg,
+              color: deltaTone.fg,
+            }}
+          >
+            {delta.direction === "up" ? "↑" : delta.direction === "down" ? "↓" : null} {delta.label}
+          </span>
+        )}
+      </div>
       {hint && <span style={{ fontSize: "0.75rem", color: color.textMuted }}>{hint}</span>}
     </>
   );
@@ -132,14 +204,29 @@ const BADGE_TONES = {
   slate: { bg: color.statusSlateBg, fg: color.statusSlate },
 } as const;
 
-/** DESIGN.md §3 "Status badge" — one component, color + label always paired
- * (never color alone, per the §1 accessibility floor). */
+/** One icon per status tone (DESIGN.md §1 accessibility floor: "every
+ * status/state is color + icon + text label, never color alone") — shared
+ * by both Badge implementations below so a tone always carries the same
+ * shape regardless of which one a page uses. */
+const BADGE_TONE_ICON = {
+  gray: "circle",
+  amber: "pending",
+  green: "check_circle",
+  red: "cancel",
+  blue: "info",
+  slate: "archive",
+} as const;
+
+/** DESIGN.md §3 "Status badge" — one component, color + icon + label always
+ * paired (never color alone, per the §1 accessibility floor). */
 export function StatusBadge({ label, tone }: { label: string; tone: keyof typeof BADGE_TONES }) {
   const { bg, fg } = BADGE_TONES[tone];
   return (
     <span
       style={{
-        display: "inline-block",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.25rem",
         backgroundColor: bg,
         color: fg,
         borderRadius: 999,
@@ -148,6 +235,7 @@ export function StatusBadge({ label, tone }: { label: string; tone: keyof typeof
         fontWeight: 600,
       }}
     >
+      <Icon name={BADGE_TONE_ICON[tone]} width={12} height={12} strokeWidth={2.2} />
       {label}
     </span>
   );
@@ -203,6 +291,7 @@ export function ErrorMessage({ message }: { message: string }) {
   return (
     <p
       role="alert"
+      className="motion-safe:animate-fade-in"
       style={{
         color: color.statusRed,
         backgroundColor: color.statusRedBg,
@@ -383,16 +472,25 @@ export function Section({
   children,
   className = "",
   interactive = false,
+  style,
 }: {
   children: ReactNode;
   className?: string;
   interactive?: boolean;
+  /** Same `animationDelay`-via-style pattern `StatCard` already uses for its
+   * own entrance stagger — a Tailwind arbitrary-value class (e.g.
+   * `[animation-delay:420ms]`) can't reliably win against `animate-*`'s own
+   * shorthand-implied `animation-delay: 0s` (cascade order between two
+   * separate utility classes isn't guaranteed), so an inline style is the
+   * correct tool here, not a workaround. */
+  style?: CSSProperties;
 }) {
   return (
     <div
       className={`rounded-card border border-border bg-surface p-5 shadow-card ${
         interactive ? "transition-shadow duration-150 hover:shadow-card-hover" : ""
       } ${className}`}
+      style={style}
     >
       {children}
     </div>
@@ -472,6 +570,13 @@ const BUTTON_VARIANTS = {
    * Archive/Remove access) so a Delete button is never visually
    * confusable with one. */
   dangerSolid: `${BUTTON_BASE} bg-danger text-white hover:bg-danger/90`,
+  /** `danger`'s positive mirror — same outlined-tint construction, green
+   * instead of red. For Restore (Students/Courses/Batches/Programs/Exams/
+   * Branches): previously styled as plain `secondary` (zero color), which
+   * read as a generic button rather than a confident, reversing-the-archive
+   * action, and didn't agree with the green icon chip
+   * `app/academy/_shell/confirm-dialog.tsx` already shows beside its title. */
+  success: `${BUTTON_BASE} border border-success/30 bg-success-bg text-success hover:bg-success/10`,
 } as const;
 
 type ButtonVariant = keyof typeof BUTTON_VARIANTS;
@@ -516,7 +621,10 @@ const BADGE_TONE_CLASS = {
 
 export function Badge({ label, tone }: { label: string; tone: keyof typeof BADGE_TONE_CLASS }) {
   return (
-    <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${BADGE_TONE_CLASS[tone]}`}>
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${BADGE_TONE_CLASS[tone]}`}
+    >
+      <Icon name={BADGE_TONE_ICON[tone]} width={12} height={12} strokeWidth={2.2} />
       {label}
     </span>
   );

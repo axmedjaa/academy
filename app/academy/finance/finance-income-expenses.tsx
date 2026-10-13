@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 import { createIncomeRecordAction, type IncomeRecordFormState } from "@/lib/academies/income-records-actions";
 import type { IncomeRecordRecord } from "@/lib/academies/income-records";
 import {
@@ -33,14 +33,11 @@ import {
 } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
 import { getStatusTone } from "@/lib/ui/status";
-import { dollarsToCents } from "@/lib/ui/money";
+import { dollarsToCents, formatMoney } from "@/lib/ui/money";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 const initialIncomeState: IncomeRecordFormState = { ok: false };
 const initialExpenseState: ExpenseRecordFormState = { ok: false };
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
 
 interface Props {
   income: IncomeRecordRecord[] | null;
@@ -122,12 +119,22 @@ export function FinanceIncomeExpenses({
   const reversingIncome = income?.find((record) => `income:${record.id}` === reversingKey) ?? null;
   const reversingExpense = expenses?.find((record) => `expense:${record.id}` === reversingKey) ?? null;
 
+  useEffect(() => {
+    if (createIncomeState.ok) showSuccessToast("Income posted.");
+    else if (createIncomeState.error) showErrorToast(createIncomeState.error.message);
+  }, [createIncomeState]);
+  useEffect(() => {
+    if (createExpenseState.ok) showSuccessToast("Expense created as draft.");
+    else if (createExpenseState.error) showErrorToast(createExpenseState.error.message);
+  }, [createExpenseState]);
+
   async function handleSubmitForApproval(expenseRecordId: string) {
     setBusyExpenseId(expenseRecordId);
     setExpenseActionError(null);
     const result = await submitExpenseForApprovalAction(expenseRecordId);
     setBusyExpenseId(null);
     if (!result.ok) setExpenseActionError(result.error.message);
+    else showSuccessToast("Expense submitted for approval.");
   }
 
   async function handleApprove(expenseRecordId: string) {
@@ -136,6 +143,7 @@ export function FinanceIncomeExpenses({
     const result = await approveExpenseAction(expenseRecordId);
     setBusyExpenseId(null);
     if (!result.ok) setExpenseActionError(result.error.message);
+    else showSuccessToast("Expense approved.");
   }
 
   async function handleReject(expenseRecordId: string) {
@@ -145,6 +153,7 @@ export function FinanceIncomeExpenses({
     const result = await rejectExpenseAction(expenseRecordId, reason);
     setBusyExpenseId(null);
     if (!result.ok) setExpenseActionError(result.error.message);
+    else showSuccessToast("Expense rejected.");
   }
 
   function startReversal(key: string, mode: "reverse" | "adjust") {
@@ -181,6 +190,7 @@ export function FinanceIncomeExpenses({
         return;
       }
       setReversedKeys((prev) => new Set(prev).add(`income:${incomeRecordId}`));
+      showSuccessToast(reversalMode === "adjust" ? "Income adjusted." : "Income reversed.");
       cancelReversal();
     });
   }
@@ -201,6 +211,7 @@ export function FinanceIncomeExpenses({
         return;
       }
       setReversedKeys((prev) => new Set(prev).add(`expense:${expenseRecordId}`));
+      showSuccessToast(reversalMode === "adjust" ? "Expense adjusted." : "Expense reversed.");
       cancelReversal();
     });
   }
@@ -340,7 +351,7 @@ export function FinanceIncomeExpenses({
                     <tr key={record.id} className={trHover}>
                       <td className={`${td} font-medium`}>{record.category}</td>
                       <td className={td}>{record.description ?? "—"}</td>
-                      <td className={td}>{formatMoney(record.amountCents, record.currency)}</td>
+                      <td className={`${td} text-right tabular-nums`}>{formatMoney(record.amountCents, record.currency)}</td>
                       <td className={td}>
                         <Badge label={effectiveStatus} tone={getStatusTone(effectiveStatus)} />
                       </td>
@@ -414,7 +425,7 @@ export function FinanceIncomeExpenses({
                   return (
                     <tr key={record.id} className={trHover}>
                       <td className={`${td} font-medium`}>{record.category}</td>
-                      <td className={td}>{formatMoney(record.amountCents, record.currency)}</td>
+                      <td className={`${td} text-right tabular-nums`}>{formatMoney(record.amountCents, record.currency)}</td>
                       <td className={td}>
                         <Badge label={effectiveStatus.replace("_", " ")} tone={getStatusTone(effectiveStatus)} />
                       </td>

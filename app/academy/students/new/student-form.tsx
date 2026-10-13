@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   registerStudent,
   type RegisterStudentFormState,
@@ -58,6 +59,7 @@ function FormGroup({ label, children }: { label: string; children: React.ReactNo
  * `generateStudentId` inside `registerStudent`, never client-supplied.
  */
 export function StudentForm({ branches, courseOptions }: StudentFormProps) {
+  const router = useRouter();
   const [state, formAction, pending] = useActionState(registerStudent, initialState);
   const [selectedBatchId, setSelectedBatchId] = useState("");
   // Bumped on every successful registration — passed as StudentPhotoField's
@@ -84,13 +86,18 @@ export function StudentForm({ branches, courseOptions }: StudentFormProps) {
 
   useEffect(() => {
     if (state.ok && state.enrollmentWarning) {
+      // Stay on the form rather than redirecting away — the warning names
+      // an actionable next step (enroll from the batch's own roster
+      // instead), and a redirect would carry it only as a transient toast
+      // and drop the persistent inline banner below.
       showInfoToast(state.enrollmentWarning);
     } else if (state.ok) {
       showSuccessToast("Student registered.");
+      if (state.studentId) router.push(`/academy/students/${state.studentId}`);
     } else if (state.error) {
       showErrorToast(state.error.message);
     }
-  }, [state]);
+  }, [state, router]);
 
   return (
     <form action={formAction} className="flex flex-col gap-6">

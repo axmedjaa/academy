@@ -8,6 +8,7 @@ import { recordAudit } from "@/lib/audit";
 import { sendEmail } from "@/lib/email/client";
 import { verifyEmailChangeEmail } from "@/lib/email/templates";
 import { checkEmailChangeRateLimit } from "@/lib/auth/email-change-rate-limit";
+import { formatRetryAfter } from "@/lib/ui/duration";
 
 const DEFAULT_TOKEN_TTL_MINUTES = 60;
 const TOKEN_TTL_MS =
@@ -201,7 +202,10 @@ export async function resendEmailChangeVerification(userId: string): Promise<Res
 
   const rateLimit = await checkEmailChangeRateLimit(userId);
   if (!rateLimit.allowed) {
-    return { ok: false, error: `Too many verification emails requested. Try again in ${rateLimit.retryAfterSeconds}s.` };
+    return {
+      ok: false,
+      error: `Too many verification emails requested. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
+    };
   }
 
   return issueEmailChangeToken(userId, pending.newEmail);

@@ -1,7 +1,12 @@
 import { hasPermission } from "@/lib/auth/permissions";
-import { listAcademies, type AcademySummary } from "@/lib/academies/approve";
-import { getPlatformReports, type ExpiringSubscriptionRow } from "@/lib/subscriptions/reports";
-import { listAcademySubscriptionOptions, listSubscriptionPayments } from "@/lib/subscriptions/payments";
+import { getAcademyStatusCounts, listPendingApprovalAcademies } from "@/lib/academies/approve";
+import {
+  getPlatformReports,
+  type ActiveAcademyTrendPoint,
+  type ExpiringSubscriptionRow,
+  type RevenueBreakdownResult,
+} from "@/lib/subscriptions/reports";
+import { listSubscriptionPayments } from "@/lib/subscriptions/payments";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -34,16 +39,46 @@ export interface RecentSubscriptionPaymentRow {
   receivedAt: Date;
 }
 
+export interface AcademyCounts {
+  total: number;
+  /** Per-status breakdown, keyed by the academy's own `status` string
+   * (e.g. "approved", "pending_approval", "closed") — no hardcoded status
+   * list here, so this stays correct if that enum ever changes. */
+  byStatus: Record<string, number>;
+}
+
 export interface PlatformDashboardData {
   pendingApprovals: PendingApprovalRow[] | null;
   expiringSubscriptions: ExpiringSubscriptionRow[] | null;
   recentPayments: RecentSubscriptionPaymentRow[] | null;
+  /** Same `listAcademies()` call already made for `pendingApprovals` above,
+   * just also summarized into counts — no second query. Null under the
+   * same condition `pendingApprovals` is null (actor lacks visibility into
+   * the academies list at all). */
+  academyCounts: AcademyCounts | null;
+  /** Same `getPlatformReports` call already made for `expiringSubscriptions`
+   * below — threaded through here too rather than fetched again, so the
+   * dashboard's active-academies chart and revenue stat cost nothing extra.
+   * `revenue` independently null per `getPlatformReports`'s own two-tier
+   * capability split (see that function's module comment) even when
+   * `activeAcademyTrend` itself is present. */
+  activeAcademyTrend: ActiveAcademyTrendPoint[] | null;
+  revenue: RevenueBreakdownResult | null;
 }
 
 const PENDING_APPROVALS_CAPABILITY = "approveAcademy";
+/** Dashboard preview cap — a platform with many pending academies all
+ * waiting at once previously rendered every one of them inline; the full
+ * set is still one click away via the panel's own "View all academies"
+ * link to `/platform/academies`. `academyCounts`'s own total/byStatus
+ * numbers (from the separate `getAcademyStatusCounts` query) are
+ * unaffected by this cap — they're never derived from this list. */
+const PENDING_APPROVALS_PREVIEW_LIMIT = 10;
 const RECENT_PAYMENTS_CAPABILITY = "recordSubscriptionPayment";
-const RECENT_PAYMENTS_LIMIT = 5;
-
+/** Previously fetched every subscription payment the platform has ever
+ * recorded and sorted/sliced to 5 in JS; now pushed down to a DB-level
+ * ORDER BY/LIMIT via `listSubscriptionPayments`'s own `limit` argument. */
+const RECENT_PAYMENTS_LIMIT = 10;
 export async function getPlatformDashboardData(
   actorContext: AuthContext,
 ): Promise<PlatformDashboardData> {
@@ -52,37 +87,38 @@ export async function getPlatformDashboardData(
     hasPermission(actorContext, RECENT_PAYMENTS_CAPABILITY),
   ]);
 
-  const [academiesList, reportsResult, paymentsData] = await Promise.all([
-    canSeeApprovals ? listAcademies() : Promise.resolve(null),
+  const [pendingApprovalAcademies, academyStatusCounts, reportsResult, recentPaymentRows] = await Promise.all([
+    // Both previously came from `listAcademies()` — every academy
+    // platform-wide, plus a per-academy subscription-summary and
+    // branch-count join neither of these needs — filtered/reduced in JS
+    // afterward. Two small, purpose-built reads instead (see their own
+    // comments in lib/academies/approve.ts).
+    canSeeApprovals ? listPendingApprovalAcademies(PENDING_APPROVALS_PREVIEW_LIMIT) : Promise.resolve(null),
+    canSeeApprovals ? getAcademyStatusCounts() : Promise.resolve(null),
     getPlatformReports(actorContext),
-    canSeePayments
-      ? Promise.all([listSubscriptionPayments(), listAcademySubscriptionOptions()])
-      : Promise.resolve(null),
+    // The `limit` path joins `academies` directly (subscription_payments
+    // carries its own academyId — see that function's own comment), so
+    // `academyName` arrives on each row in this one query — no second
+    // lookup query needed.
+    canSeePayments ? listSubscriptionPayments(RECENT_PAYMENTS_LIMIT) : Promise.resolve(null),
   ]);
 
-  const pendingApprovals = academiesList
-    ? academiesList
-        .filter((academy: AcademySummary) => academy.status === "pending_approval")
-        .map((academy) => ({
-          id: academy.id,
-          name: academy.name,
-          createdAt: academy.createdAt,
-          createdByEmail: academy.createdByEmail,
-        }))
-    : null;
+  const pendingApprovals = pendingApprovalAcademies;
+
+  const academyCounts: AcademyCounts | null = academyStatusCounts;
 
   const expiringSubscriptions = reportsResult.ok ? reportsResult.data.expiringSubscriptions : null;
+  const activeAcademyTrend = reportsResult.ok ? reportsResult.data.activeAcademyTrend : null;
+  const revenue = reportsResult.ok ? reportsResult.data.revenue : null;
 
   let recentPayments: RecentSubscriptionPaymentRow[] | null = null;
-  if (paymentsData) {
-    const [allPayments, subscriptionOptions] = paymentsData;
-    const academyNameBySubscriptionId = new Map(
-      subscriptionOptions.map((option) => [option.subscriptionId, option.academyName]),
-    );
-    const sorted = [...allPayments].sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
-    recentPayments = sorted.slice(0, RECENT_PAYMENTS_LIMIT).map((payment) => ({
+  if (recentPaymentRows) {
+    // Already the most recent RECENT_PAYMENTS_LIMIT rows, newest first, each
+    // already carrying its own real `academyName` from the join above —
+    // no JS sort/slice or second lookup query needed anymore.
+    recentPayments = recentPaymentRows.map((payment) => ({
       id: payment.id,
-      academyName: academyNameBySubscriptionId.get(payment.subscriptionId) ?? null,
+      academyName: payment.academyName,
       amountCents: payment.amountCents,
       currency: payment.currency,
       status: payment.status,
@@ -90,5 +126,12 @@ export async function getPlatformDashboardData(
     }));
   }
 
-  return { pendingApprovals, expiringSubscriptions, recentPayments };
+  return {
+    pendingApprovals,
+    expiringSubscriptions,
+    recentPayments,
+    academyCounts,
+    activeAcademyTrend,
+    revenue,
+  };
 }

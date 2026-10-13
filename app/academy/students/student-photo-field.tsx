@@ -10,9 +10,9 @@ import { requestNewStudentPhotoUploadUrlAction } from "@/lib/academies/register-
 import { ConfirmButton, type ConfirmActionResult } from "@/app/academy/_shell/confirm-dialog";
 import { Button, ErrorMessage } from "@/app/academy/_shell/ui";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import { MAX_RASTER_IMAGE_SIZE_BYTES, RASTER_IMAGE_ACCEPT_ATTRIBUTE, isRasterImageContentType } from "@/lib/storage/upload-policy";
 
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_SIZE_BYTES = MAX_RASTER_IMAGE_SIZE_BYTES;
 const MAX_SIZE_LABEL = "10 MB";
 
 type Status = "idle" | "uploading" | "confirming" | "error";
@@ -74,8 +74,8 @@ export function StudentPhotoField(props: Props) {
     setStatus("idle");
     if (!file) return;
 
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      setError("Photo must be JPEG, PNG, or WebP.");
+    if (!isRasterImageContentType(file.type)) {
+      setError("Photo must be JPEG, PNG, WebP, or AVIF.");
       resetSelection();
       return;
     }
@@ -176,7 +176,7 @@ export function StudentPhotoField(props: Props) {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
           onChange={handleFileChange}
           disabled={busy}
           className="text-sm text-ink file:mr-3 file:rounded-control file:border file:border-border file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-ink hover:file:bg-app"

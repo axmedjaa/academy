@@ -157,6 +157,17 @@ const envSchema = z.object({
     .int()
     .positive()
     .optional(),
+  // Security audit finding (Priority 1, X-Forwarded-For trust boundary —
+  // see lib/http/client-ip.ts's own module comment for the full rationale
+  // and the PLAN.md/release-checklist citations confirming no production
+  // hosting provider has been chosen yet). How many trusted reverse-proxy
+  // hops sit between the real client and this app, each one appending —
+  // never just forwarding verbatim — the peer IP it observed to
+  // X-Forwarded-For. Defaults to 0 ("no trusted proxy configured — trust
+  // nothing a client could have set"), which is the only safe default
+  // given that no deployment target/proxy topology is decided yet; must
+  // be set correctly once one is.
+  TRUSTED_PROXY_HOP_COUNT: z.coerce.number().int().nonnegative().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

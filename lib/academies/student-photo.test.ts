@@ -26,9 +26,10 @@ vi.mock("@/lib/storage/client", () => ({
   getDownloadUrl: vi.fn(),
   deleteObject: vi.fn(),
   headObject: vi.fn(),
+  getObjectPrefix: vi.fn(),
 }));
 
-import { deleteObject, getDownloadUrl, getUploadUrl, headObject } from "@/lib/storage/client";
+import { deleteObject, getDownloadUrl, getObjectPrefix, getUploadUrl, headObject } from "@/lib/storage/client";
 import { getStudentPhotoKey } from "@/lib/storage/keys";
 import {
   MAX_STUDENT_PHOTO_SIZE_BYTES,
@@ -39,11 +40,13 @@ import {
   requestStudentPhotoUploadUrl,
 } from "./students";
 import { registerStudent } from "./register-student";
+import { INVALID_SIGNATURE_BYTES, VALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
 
 const getUploadUrlMock = vi.mocked(getUploadUrl);
 const getDownloadUrlMock = vi.mocked(getDownloadUrl);
 const headObjectMock = vi.mocked(headObject);
 const deleteObjectMock = vi.mocked(deleteObject);
+const getObjectPrefixMock = vi.mocked(getObjectPrefix);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -160,8 +163,10 @@ beforeEach(() => {
   getDownloadUrlMock.mockReset();
   headObjectMock.mockReset();
   deleteObjectMock.mockReset();
+  getObjectPrefixMock.mockReset();
   getUploadUrlMock.mockResolvedValue({ ok: true, uploadUrl: "https://r2.example/signed-put", expiresInSeconds: 300 });
   deleteObjectMock.mockResolvedValue({ ok: true });
+  getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: VALID_SIGNATURE_BYTES["image/png"] });
 });
 
 afterAll(async () => {
@@ -181,7 +186,7 @@ afterAll(async () => {
   for (const userId of createdUserIds) {
     await db.delete(users).where(eq(users.id, userId));
   }
-});
+}, 90_000);
 
 describe("requestStudentPhotoUploadUrl — authorization and scope", () => {
   it("refuses a role with no write access to students (finance_officer)", async () => {
@@ -285,6 +290,26 @@ describe("requestNewStudentPhotoUploadUrl — authorization (no student yet)", (
     if (!result.ok) return;
     expect(result.key.startsWith(`academies/${academyId}/student-photos/`)).toBe(true);
   });
+
+  it.each(["image/jpeg", "image/png", "image/webp", "image/avif"])("accepts %s", async (contentType) => {
+    const { context } = await setupAcademy("admissions_officer");
+    const result = await requestNewStudentPhotoUploadUrl(context, { contentType, fileSizeBytes: 1000 });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects image/gif (no animation use case for a student photo)", async () => {
+    const { context } = await setupAcademy("admissions_officer");
+    const result = await requestNewStudentPhotoUploadUrl(context, { contentType: "image/gif", fileSizeBytes: 1000 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("rejects image/svg+xml (no sanitization pipeline)", async () => {
+    const { context } = await setupAcademy("admissions_officer");
+    const result = await requestNewStudentPhotoUploadUrl(context, { contentType: "image/svg+xml", fileSizeBytes: 1000 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
 });
 
 describe("verifyStudentPhotoUpload / confirmStudentPhotoUpload", () => {
@@ -350,6 +375,37 @@ describe("verifyStudentPhotoUpload / confirmStudentPhotoUpload", () => {
     expect(deleteObjectMock).toHaveBeenCalledWith(key);
   });
 
+  it("deletes the object and rejects when the real bytes don't match the declared content-type (spoofed MIME)", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const branchId = await insertBranchDirect(academyId);
+    const creator = await createUser();
+    const student = await insertStudentDirect(academyId, branchId, creator);
+    const key = getStudentPhotoKey({ academyId, extension: "png" });
+    headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 1000 } });
+    getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: INVALID_SIGNATURE_BYTES });
+
+    const result = await confirmStudentPhotoUpload(context, student.id, { key });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(deleteObjectMock).toHaveBeenCalledWith(key);
+  });
+
+  it("deletes the object and rejects an empty (0-byte) upload", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const branchId = await insertBranchDirect(academyId);
+    const creator = await createUser();
+    const student = await insertStudentDirect(academyId, branchId, creator);
+    const key = getStudentPhotoKey({ academyId, extension: "png" });
+    headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 0 } });
+
+    const result = await confirmStudentPhotoUpload(context, student.id, { key });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(deleteObjectMock).toHaveBeenCalledWith(key);
+  });
+
   it("persists the key on students.profileImageRef, writes an audit row, and never deletes the first photo", async () => {
     const { academyId, userId, context } = await setupAcademy("manager");
     const branchId = await insertBranchDirect(academyId);
@@ -378,6 +434,7 @@ describe("verifyStudentPhotoUpload / confirmStudentPhotoUpload", () => {
     const student = await insertStudentDirect(academyId, branchId, userId, { profileImageRef: oldKey });
     const newKey = getStudentPhotoKey({ academyId, extension: "webp" });
     headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/webp", contentLength: 2000 } });
+    getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: VALID_SIGNATURE_BYTES["image/webp"] });
 
     const result = await confirmStudentPhotoUpload(context, student.id, { key: newKey });
 

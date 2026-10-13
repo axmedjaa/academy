@@ -15,14 +15,10 @@ import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/st
 import { Badge, Button, ErrorMessage, Field, FormDialog, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
-import { dollarsToCents } from "@/lib/ui/money";
+import { dollarsToCents, formatMoney } from "@/lib/ui/money";
+import { MAX_RASTER_IMAGE_SIZE_BYTES, RASTER_IMAGE_ACCEPT_ATTRIBUTE, isRasterImageContentType } from "@/lib/storage/upload-policy";
 
-const ALLOWED_COVER_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_COVER_SIZE_BYTES = 10 * 1024 * 1024;
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
+const MAX_COVER_SIZE_BYTES = MAX_RASTER_IMAGE_SIZE_BYTES;
 
 interface Props {
   books: BookRecord[];
@@ -90,8 +86,8 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
     const file = event.target.files?.[0];
     if (!file) return;
     setCoverError(null);
-    if (!ALLOWED_COVER_TYPES.includes(file.type)) {
-      setCoverError("Cover must be JPEG, PNG, or WebP.");
+    if (!isRasterImageContentType(file.type)) {
+      setCoverError("Cover must be JPEG, PNG, WebP, or AVIF.");
       return;
     }
     if (file.size > MAX_COVER_SIZE_BYTES) {
@@ -189,13 +185,13 @@ export function BooksManager({ books, coverUrls, canManage, studentOptions }: Pr
                     <input
                       ref={coverFileInputRef}
                       type="file"
-                      accept="image/jpeg,image/png,image/webp"
+                      accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
                       className="hidden"
                       disabled={coverUploading}
                       onChange={handleCoverFileChange}
                     />
                   </label>
-                  <p className="mt-1 text-xs text-muted">JPEG, PNG, or WebP, up to 10 MB. Every new book needs a cover.</p>
+                  <p className="mt-1 text-xs text-muted">JPEG, PNG, WebP, or AVIF, up to 10 MB. Every new book needs a cover.</p>
                   {coverError && <p className="mt-1 text-xs text-danger">{coverError}</p>}
                 </div>
               </div>
@@ -304,8 +300,8 @@ function BookRow({ book, coverUrl, canManage, studentOptions, isSelling, onToggl
   async function handleCoverChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!ALLOWED_COVER_TYPES.includes(file.type)) {
-      showErrorToast("Cover must be JPEG, PNG, or WebP.");
+    if (!isRasterImageContentType(file.type)) {
+      showErrorToast("Cover must be JPEG, PNG, WebP, or AVIF.");
       return;
     }
     if (file.size > MAX_COVER_SIZE_BYTES) {
@@ -372,7 +368,7 @@ function BookRow({ book, coverUrl, canManage, studentOptions, isSelling, onToggl
           {canManage && (
             <label className="mt-1 block cursor-pointer text-[11px] text-brand hover:underline">
               {uploading ? "Uploading..." : "Change cover"}
-              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={uploading} onChange={handleCoverChange} />
+              <input ref={fileInputRef} type="file" accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE} className="hidden" disabled={uploading} onChange={handleCoverChange} />
             </label>
           )}
         </td>

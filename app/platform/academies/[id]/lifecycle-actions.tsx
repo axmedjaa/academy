@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   activateAcademyAction,
   cancelAcademyAction,
@@ -85,6 +86,7 @@ function ReasonAction({
   onSubmit: (reason: string | undefined) => Promise<LifecycleActionResult>;
   variant?: "secondary" | "danger";
 }) {
+  const router = useRouter();
   const [reason, setReason] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -104,6 +106,7 @@ function ReasonAction({
         return;
       }
       setSuccess(`${label} succeeded.`);
+      router.refresh();
     });
   }
 
@@ -158,6 +161,7 @@ export function LifecycleActions({
   checklistUnmetReasons,
   academyClosed,
 }: LifecycleActionsProps) {
+  const router = useRouter();
   const [activateError, setActivateError] = useState<string | null>(null);
   const [activateSuccess, setActivateSuccess] = useState<string | null>(null);
   const [isActivatePending, startActivateTransition] = useTransition();
@@ -193,6 +197,7 @@ export function LifecycleActions({
         return;
       }
       setActivateSuccess("Academy activated.");
+      router.refresh();
     });
   }
 

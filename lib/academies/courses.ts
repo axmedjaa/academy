@@ -10,9 +10,11 @@ import {
 } from "@/lib/auth/academy-permissions";
 import { checkAllowance, type UsageActionError } from "@/lib/subscriptions/usage";
 import { recordAudit } from "@/lib/audit";
-import { deleteObject, getDownloadUrl, getUploadUrl, headObject } from "@/lib/storage/client";
+import { deleteObject, getDownloadUrl, getUploadUrl } from "@/lib/storage/client";
 import { getCourseImageKey, isCourseImageKey } from "@/lib/storage/keys";
 import { logger } from "@/lib/logger";
+import { RASTER_IMAGE_POLICY, isRasterImageContentType } from "@/lib/storage/upload-policy";
+import { verifyUploadedObject } from "@/lib/storage/verify-upload";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 
@@ -76,20 +78,10 @@ const INSTRUCTOR_NOT_FOUND: CourseActionError = {
 // only an uploaded key is ever re-verified/resolved against R2.
 // ===========================================================================
 
-export const MAX_COURSE_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
-const ALLOWED_COURSE_IMAGE_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
-type AllowedCourseImageContentType = (typeof ALLOWED_COURSE_IMAGE_CONTENT_TYPES)[number];
-const COURSE_IMAGE_EXTENSION_BY_CONTENT_TYPE: Record<AllowedCourseImageContentType, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-};
+export const MAX_COURSE_IMAGE_SIZE_BYTES = RASTER_IMAGE_POLICY.maxSizeBytes;
 
-function isAllowedCourseImageContentType(value: string): value is AllowedCourseImageContentType {
-  return (ALLOWED_COURSE_IMAGE_CONTENT_TYPES as readonly string[]).includes(value);
-}
-
-const INVALID_IMAGE_FORMAT: CourseActionError = { code: "validation", message: "Course image must be JPEG, PNG, or WebP." };
+const INVALID_IMAGE_FORMAT: CourseActionError = { code: "validation", message: "Course image must be JPEG, PNG, WebP, or AVIF." };
+const EMPTY_IMAGE: CourseActionError = { code: "validation", message: "That file is empty." };
 const IMAGE_TOO_LARGE: CourseActionError = { code: "validation", message: "Course image must be 10 MB or smaller." };
 const IMAGE_VERIFICATION_FAILED: CourseActionError = {
   code: "validation",
@@ -100,29 +92,36 @@ type VerifyCourseImageUploadResult = { ok: true } | { ok: false; error: CourseAc
 
 /**
  * Re-verifies an already-PUT-to-R2 object actually matches this academy's
- * key shape and the allowed format/size — the real authority, never the
- * client's claims from the presigned-URL request step. An object that fails
- * verification is deleted from R2 immediately (never left orphaned). Only
- * called when `imageRef` is one of our own upload keys (`isCourseImageKey`)
- * — see this section's own header comment for why a legacy pasted URL skips
- * this entirely.
+ * key shape and the allowed format/size/signature — the real authority,
+ * never the client's claims from the presigned-URL request step. An object
+ * that fails verification is deleted from R2 immediately (never left
+ * orphaned). Only called when `imageRef` is one of our own upload keys
+ * (`isCourseImageKey`) — see this section's own header comment for why a
+ * legacy pasted URL skips this entirely.
  */
 async function verifyCourseImageUpload(key: string, academyId: string): Promise<VerifyCourseImageUploadResult> {
   if (!isCourseImageKey(key, academyId)) {
     return { ok: false, error: { code: "validation", message: "Invalid upload reference." } };
   }
-  const head = await headObject(key);
-  if (!head.ok) return { ok: false, error: IMAGE_VERIFICATION_FAILED };
-  if (!head.exists) {
-    return { ok: false, error: { code: "not_found", message: "The uploaded file could not be found. Please try uploading again." } };
-  }
-  if (!head.info.contentType || !isAllowedCourseImageContentType(head.info.contentType)) {
-    await deleteObject(key);
-    return { ok: false, error: INVALID_IMAGE_FORMAT };
-  }
-  if (!head.info.contentLength || head.info.contentLength > MAX_COURSE_IMAGE_SIZE_BYTES) {
-    await deleteObject(key);
-    return { ok: false, error: IMAGE_TOO_LARGE };
+
+  const verified = await verifyUploadedObject(key, RASTER_IMAGE_POLICY);
+  if (!verified.ok) {
+    if (verified.error.code === "invalid_format") {
+      await deleteObject(key);
+      return { ok: false, error: INVALID_IMAGE_FORMAT };
+    }
+    if (verified.error.code === "empty") {
+      await deleteObject(key);
+      return { ok: false, error: EMPTY_IMAGE };
+    }
+    if (verified.error.code === "too_large") {
+      await deleteObject(key);
+      return { ok: false, error: IMAGE_TOO_LARGE };
+    }
+    if (verified.error.code === "not_found") {
+      return { ok: false, error: verified.error };
+    }
+    return { ok: false, error: IMAGE_VERIFICATION_FAILED };
   }
   return { ok: true };
 }
@@ -511,12 +510,12 @@ export async function requestCourseImageUploadUrl(
   const { academyId, membershipRole, permissionLevel } = resolved.access;
   if (!canManageCourses(membershipRole, permissionLevel)) return { ok: false, error: FORBIDDEN };
 
-  if (!isAllowedCourseImageContentType(input.contentType)) return { ok: false, error: INVALID_IMAGE_FORMAT };
+  if (!isRasterImageContentType(input.contentType)) return { ok: false, error: INVALID_IMAGE_FORMAT };
   if (!Number.isFinite(input.fileSizeBytes) || input.fileSizeBytes <= 0 || input.fileSizeBytes > MAX_COURSE_IMAGE_SIZE_BYTES) {
     return { ok: false, error: IMAGE_TOO_LARGE };
   }
 
-  const key = getCourseImageKey({ academyId, extension: COURSE_IMAGE_EXTENSION_BY_CONTENT_TYPE[input.contentType] });
+  const key = getCourseImageKey({ academyId, extension: RASTER_IMAGE_POLICY.extensionByContentType[input.contentType] });
   const result = await getUploadUrl({ key, contentType: input.contentType });
   if (!result.ok) {
     return { ok: false, error: { code: "validation", message: "The image upload could not be started. Please try again." } };

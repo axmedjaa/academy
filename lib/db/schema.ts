@@ -230,6 +230,21 @@ export const mfaTotpCredentials = pgTable("mfa_totp_credentials", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  // Security audit finding (TOTP replay prevention, RFC 6238 §5/NIST SP
+  // 800-63B §5.1.4.1: "verifiers SHOULD NOT allow more than one valid
+  // authentication per code"). Deliberately beyond PLAN.md's original
+  // id/user_id/secret_encrypted/verified_at/created_at list (see this
+  // table's own module comment above) — `verifyMfaChallenge`
+  // (lib/auth/mfa.ts) previously accepted the same valid 6-digit code
+  // repeatedly for its whole ~90s validity window (±1 step), so a code
+  // captured once (shoulder-surfing, a compromised proxy, a malicious
+  // browser extension) could authenticate a second, attacker-controlled
+  // session before it expired. Nullable (a brand-new credential has never
+  // verified a code yet); holds the absolute TOTP step counter
+  // (`floor(unixSeconds / period)`) of the most recently successfully
+  // verified code — see `validateTotpChallenge`'s own comment for how
+  // this is checked and updated atomically.
+  lastUsedStep: integer("last_used_step"),
 });
 
 export const mfaRecoveryCodes = pgTable(

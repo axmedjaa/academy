@@ -21,6 +21,14 @@ const AUDIT_LOGS_CAPABILITY = "queryAuditLogs";
 // query params, matching this project's existing preference for the
 // simplest mechanism that satisfies the requirement (no client component
 // needed just to filter/paginate a table).
+//
+// Bug fix: the query here was never scoped to the caller's own actions —
+// every actor's rows were always returned — but the table used to render
+// only `actorRole` ("manager", "academy_owner", ...), with no way to tell
+// two different people holding the same role apart. That read as "I can
+// only see my own activity." Now resolves each row's real `actorUserId`
+// to an email via `resolveAuditActorEmails` (lib/audit-query.ts) and shows
+// it as its own "Actor" column.
 export default async function AuditLogsPage({
   searchParams,
 }: {
@@ -119,8 +127,8 @@ export default async function AuditLogsPage({
             <thead>
               <tr>
                 <th className={th}>When</th>
+                <th className={th}>Actor</th>
                 <th className={th}>Action</th>
-                <th className={th}>Actor role</th>
                 <th className={th}>Entity</th>
                 <th className={th}>Result</th>
               </tr>
@@ -129,8 +137,11 @@ export default async function AuditLogsPage({
               {response.data.rows.map((row) => (
                 <tr key={row.id} className={trHover}>
                   <td className={`${td} whitespace-nowrap`}>{row.createdAt.toISOString()}</td>
+                  <td className={td}>
+                    {row.actorUserId ? (response.actorEmailsByUserId[row.actorUserId] ?? "Unknown user") : "System"}
+                    {row.actorRole && <span className="text-muted"> ({row.actorRole})</span>}
+                  </td>
                   <td className={td}>{row.action}</td>
-                  <td className={td}>{row.actorRole ?? "—"}</td>
                   <td className={td}>{row.entityType}</td>
                   <td className={td}>
                     <Badge label={row.result} tone={row.result === "success" ? "green" : "red"} />

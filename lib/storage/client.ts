@@ -35,7 +35,13 @@ import { logger } from "@/lib/logger";
 const UPLOAD_URL_EXPIRES_SECONDS = 5 * 60;
 const DOWNLOAD_URL_EXPIRES_SECONDS = 15 * 60;
 
-export type StorageContentType = "image/jpeg" | "image/png" | "image/webp" | "application/pdf";
+// Security/format-coverage pass — "image/avif" added alongside the three
+// raster types already here (see lib/storage/upload-policy.ts's own
+// comment for why AVIF, and why not GIF/SVG, for this app's upload
+// fields). "application/pdf" stays listed for forward-compatibility —
+// no current upload field uses it (see upload-policy.ts), but nothing
+// here assumes otherwise.
+export type StorageContentType = "image/jpeg" | "image/png" | "image/webp" | "image/avif" | "application/pdf";
 
 interface R2Config {
   accountId: string;
@@ -263,6 +269,50 @@ export async function headObject(key: string): Promise<HeadObjectResult> {
       return { ok: true, exists: false };
     }
     logger.error("storage object verification failed", { key, error: safeErrorMessage(err) });
+    return { ok: false, error: "Failed to verify the uploaded file." };
+  }
+}
+
+export type GetObjectPrefixResult =
+  | { ok: true; exists: true; bytes: Buffer }
+  | { ok: true; exists: false }
+  | { ok: false; error: string };
+
+/**
+ * Fetches only the first `byteCount` bytes of an object (an S3 `Range`
+ * GET, same mechanism a browser uses to resume a download) — for
+ * lib/storage/file-signature.ts's magic-byte check, which only ever
+ * needs a small fixed prefix, never the whole file. `headObject` cannot
+ * serve this: HEAD has no response body on any S3-compatible API, so it
+ * can confirm size/declared-content-type but never the real bytes.
+ *
+ * A `Range` request that asks for more bytes than the object actually
+ * has (a file smaller than `byteCount`) is answered with however many
+ * bytes exist, not an error — callers (`matchesFileSignature`) already
+ * handle a too-short buffer by failing the match, not throwing.
+ */
+export async function getObjectPrefix(key: string, byteCount: number): Promise<GetObjectPrefixResult> {
+  const config = loadConfig();
+  if (!config) {
+    logNotConfigured("object prefix not read", { key });
+    return { ok: false, error: "File storage is not configured." };
+  }
+
+  try {
+    const client = getClient(config);
+    const result = await client.send(
+      new GetObjectCommand({ Bucket: config.bucketName, Key: key, Range: `bytes=0-${byteCount - 1}` }),
+    );
+    if (!result.Body) {
+      return { ok: true, exists: false };
+    }
+    const bytes = Buffer.from(await result.Body.transformToByteArray());
+    return { ok: true, exists: true, bytes };
+  } catch (err) {
+    if (err instanceof Error && err.name === "NoSuchKey") {
+      return { ok: true, exists: false };
+    }
+    logger.error("storage object prefix read failed", { key, error: safeErrorMessage(err) });
     return { ok: false, error: "Failed to verify the uploaded file." };
   }
 }

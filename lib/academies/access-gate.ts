@@ -80,6 +80,7 @@
  * effective status for a read, and persist the result back onto the
  * row themselves when it differs from what's stored").
  */
+import { cache } from "react";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { academies, academyMemberships, academySubscriptions } from "@/lib/db/schema";
@@ -311,11 +312,44 @@ export async function checkAcademyAccess(
 
   const resolvedAcademyId = membership.academyId;
 
-  const [academy] = await db
-    .select({ closedAt: academies.closedAt })
-    .from(academies)
-    .where(eq(academies.id, resolvedAcademyId))
-    .limit(1);
+  // The academy's closedAt and its current subscription row are both
+  // looked up by `resolvedAcademyId` alone — neither depends on the
+  // other's result, so there is no reason to pay for them as two
+  // sequential round trips. Perf investigation (Afoogy slow-dashboard
+  // task): this function is the single most frequently repeated query in
+  // the app (every /academy/* page calls checkAcademyAccessForContext, and
+  // several of its own downstream reads call it again independently —
+  // see that export's own `cache()` wrapper above), so halving its own
+  // round-trip count compounds with that fix rather than overlapping it.
+  const [[academy], [subscription]] = await Promise.all([
+    db
+      .select({ closedAt: academies.closedAt })
+      .from(academies)
+      .where(eq(academies.id, resolvedAcademyId))
+      .limit(1),
+    // "Current" subscription = the most recently started row for this
+    // academy. There is no explicit "current"/"is_active" flag on
+    // academy_subscriptions and no created_at column on that table (see
+    // schema.ts's comment on it) — PLAN.md's Cancelled row is the only
+    // documented case where an academy can accumulate more than one
+    // subscription row over time ("resuming service requires a NEW
+    // academy_subscriptions row"), so ordering by starts_at descending
+    // picks the newest one, which is always the one created most recently
+    // by createAcademySubscription. Judgment call: PLAN.md never states
+    // this ordering rule explicitly because it never needed to name a
+    // "current subscription" lookup before this item.
+    db
+      .select({
+        id: academySubscriptions.id,
+        status: academySubscriptions.status,
+        trialEndsAt: academySubscriptions.trialEndsAt,
+        endsAt: academySubscriptions.endsAt,
+      })
+      .from(academySubscriptions)
+      .where(eq(academySubscriptions.academyId, resolvedAcademyId))
+      .orderBy(desc(academySubscriptions.startsAt))
+      .limit(1),
+  ]);
 
   // Defensive: academyId is a real FK on academy_memberships, so this
   // should be unreachable, but never trust a lookup to short-circuit
@@ -327,37 +361,15 @@ export async function checkAcademyAccess(
   // Closure overrides every subscription state, per PLAN.md Phase 1 §6
   // ("closeAcademy is a one-way, permanent action... every `/academy/*`
   // route becomes inaccessible to academy users") and DESIGN.md §11.1
-  // ("overrides every other state") — checked before the subscription is
-  // even loaded.
+  // ("overrides every other state") — still checked, and still wins, even
+  // though the subscription row above was already fetched in parallel
+  // rather than only on demand after this check.
   if (academy.closedAt) {
     return blocked(
       "closed",
       "This academy has been permanently closed. Historical data is retained as read-only.",
     );
   }
-
-  // "Current" subscription = the most recently started row for this
-  // academy. There is no explicit "current"/"is_active" flag on
-  // academy_subscriptions and no created_at column on that table (see
-  // schema.ts's comment on it) — PLAN.md's Cancelled row is the only
-  // documented case where an academy can accumulate more than one
-  // subscription row over time ("resuming service requires a NEW
-  // academy_subscriptions row"), so ordering by starts_at descending picks
-  // the newest one, which is always the one created most recently by
-  // createAcademySubscription. Judgment call: PLAN.md never states this
-  // ordering rule explicitly because it never needed to name a "current
-  // subscription" lookup before this item.
-  const [subscription] = await db
-    .select({
-      id: academySubscriptions.id,
-      status: academySubscriptions.status,
-      trialEndsAt: academySubscriptions.trialEndsAt,
-      endsAt: academySubscriptions.endsAt,
-    })
-    .from(academySubscriptions)
-    .where(eq(academySubscriptions.academyId, resolvedAcademyId))
-    .orderBy(desc(academySubscriptions.startsAt))
-    .limit(1);
 
   if (!subscription) {
     return blocked(
@@ -399,7 +411,7 @@ export async function checkAcademyAccess(
  * "not_authenticated" block for a null context (no valid session) rather
  * than making every caller re-check that first.
  */
-export async function checkAcademyAccessForContext(
+export const checkAcademyAccessForContext = cache(async function checkAcademyAccessForContext(
   authContext: AuthContext | null,
   academyId?: string,
 ): Promise<AcademyAccessResult> {
@@ -407,4 +419,4 @@ export async function checkAcademyAccessForContext(
     return blocked("not_authenticated", "You must be signed in to access this academy.");
   }
   return checkAcademyAccess(authContext.userId, academyId);
-}
+});

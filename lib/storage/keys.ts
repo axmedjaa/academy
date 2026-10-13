@@ -29,8 +29,8 @@ const COURSE_IMAGE_SEGMENT = "course-images";
 export interface AcademyLogoKeyInput {
   academyId: string;
   /** Server-derived from an allowlisted content-type map (see
-   * ALLOWED_LOGO_CONTENT_TYPES in academy-logo.ts) — never the client's
-   * original filename/extension. */
+   * RASTER_IMAGE_POLICY in lib/storage/upload-policy.ts) — never the
+   * client's original filename/extension. */
   extension: string;
 }
 

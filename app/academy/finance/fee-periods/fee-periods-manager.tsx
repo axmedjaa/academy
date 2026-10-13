@@ -14,12 +14,8 @@ import { Badge, Button, EmptyState, ErrorMessage, Field, FormDialog, Section, Ta
 import { Icon } from "@/app/academy/_shell/icons";
 import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
-import { centsToDollars, dollarsToCents } from "@/lib/ui/money";
+import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
 import { getStatusTone } from "@/lib/ui/status";
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
-}
 
 /**
  * A period that hasn't started yet is "future," never "currently due" —

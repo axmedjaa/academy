@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import type { BookSaleReceiptPrintData } from "@/lib/academies/book-sale-receipt-print";
+import { formatMoney } from "@/lib/ui/money";
 import { Button, LinkButton } from "@/app/academy/_shell/ui";
 import sheetStyles from "@/app/academy/receipts/[id]/receipt-print.module.css";
 import styles from "../../book-sale-receipt.module.css";
@@ -19,10 +20,6 @@ function formatDate(date: Date): string {
 
 function formatDateTime(date: Date): string {
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
-}
-
-function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
 }
 
 const METHOD_LABELS: Record<"cash" | "mobile_money", string> = { cash: "Cash", mobile_money: "Mobile Money" };

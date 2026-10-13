@@ -30,13 +30,18 @@ vi.mock("@/lib/storage/client", () => ({
   deleteObject: vi.fn(),
   getDownloadUrl: vi.fn(),
   headObject: vi.fn(),
+  getObjectPrefix: vi.fn(),
 }));
-import { headObject } from "@/lib/storage/client";
+import { getObjectPrefix, headObject } from "@/lib/storage/client";
+import { VALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
 const headObjectMock = vi.mocked(headObject);
+const getObjectPrefixMock = vi.mocked(getObjectPrefix);
 
 beforeEach(() => {
   headObjectMock.mockReset();
+  getObjectPrefixMock.mockReset();
   headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 1000 } });
+  getObjectPrefixMock.mockResolvedValue({ ok: true, exists: true, bytes: VALID_SIGNATURE_BYTES["image/png"] });
 });
 
 const createdUserIds: string[] = [];
@@ -148,7 +153,7 @@ afterAll(async () => {
   for (const userId of createdUserIds) {
     await db.delete(users).where(eq(users.id, userId));
   }
-});
+}, 90_000);
 
 describe("computeBookSalePricing", () => {
   it("computes a fixed discount", () => {

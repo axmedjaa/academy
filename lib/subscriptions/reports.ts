@@ -191,6 +191,14 @@ export async function getActiveAcademyTrend(
   }));
 }
 
+/** Default cap on `getExpiringSubscriptions`'s row count — the date window
+ * alone (`withinDays`) bounds this query correctly, but with no row cap a
+ * platform with many academies expiring in the same window renders every
+ * one of them in a single unpaginated table (this page has no pagination
+ * control today). Soonest/most-overdue rows are kept — see the `orderBy`
+ * below — so a cap never hides the most urgent ones. */
+export const EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT = 50;
+
 /**
  * PLAN.md/DESIGN.md's "expiring-subscriptions list". Includes every
  * non-cancelled subscription with a known endsAt on or before `withinDays`
@@ -198,10 +206,11 @@ export async function getActiveAcademyTrend(
  * already passed (overdue, not yet renewed) is included too, with a
  * negative daysUntilExpiry, since that is exactly the kind of row a platform
  * operator needs to see on an "expiring" list. Sorted soonest/most-overdue
- * first.
+ * first, capped to `limit` rows (see `EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT`).
  */
 export async function getExpiringSubscriptions(
   withinDays = 30,
+  limit = EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT,
 ): Promise<ExpiringSubscriptionRow[]> {
   const now = new Date();
   const windowEnd = new Date(now.getTime() + withinDays * 24 * 60 * 60 * 1000);
@@ -225,7 +234,8 @@ export async function getExpiringSubscriptions(
         lte(academySubscriptions.endsAt, windowEnd),
       ),
     )
-    .orderBy(asc(academySubscriptions.endsAt));
+    .orderBy(asc(academySubscriptions.endsAt))
+    .limit(limit);
 
   return rows.map((row) => {
     const endsAt = row.endsAt as Date;
@@ -433,13 +443,19 @@ export async function getPlatformReports(
   const trendMonths = params.trendMonths ?? 12;
   const expiringWithinDays = params.expiringWithinDays ?? 30;
 
-  const [activeAcademyTrend, expiringSubscriptions, canViewRevenue] = await Promise.all([
+  // `getRevenueBreakdown` only ever depended on `canViewRevenue` (a cheap
+  // permission lookup), never on `activeAcademyTrend`/`expiringSubscriptions`
+  // — but previously sat in a second, sequential `await` after a Promise.all
+  // that already contained that permission check, so it paid for the other
+  // two reads' time before it could even start. Resolving the permission
+  // check on its own first (cheap) lets all three real reads run together.
+  const canViewRevenue = await hasPermission(actorContext, REVENUE_VIEW_CAPABILITY);
+
+  const [activeAcademyTrend, expiringSubscriptions, revenue] = await Promise.all([
     getActiveAcademyTrend(trendMonths),
     getExpiringSubscriptions(expiringWithinDays),
-    hasPermission(actorContext, REVENUE_VIEW_CAPABILITY),
+    canViewRevenue ? getRevenueBreakdown(groupBy) : Promise.resolve(null),
   ]);
-
-  const revenue = canViewRevenue ? await getRevenueBreakdown(groupBy) : null;
 
   return { ok: true, data: { activeAcademyTrend, expiringSubscriptions, revenue } };
 }

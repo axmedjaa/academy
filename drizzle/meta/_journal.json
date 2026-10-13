@@ -218,6 +218,20 @@
       "when": 1790879949641,
       "tag": "0030_peaceful_puck",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790879949642,
+      "tag": "0031_rename_student_profile_image_ref",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791882000000,
+      "tag": "0032_mfa_totp_replay_prevention",
+      "breakpoints": true
     }
   ]
 }

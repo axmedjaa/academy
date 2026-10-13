@@ -20,6 +20,11 @@ import { PaginationNav } from "@/components/pagination-nav";
  * GET-query-param convention (plain <form method="get">, re-navigate,
  * server-render) — the one difference is there is no "Academy ID" filter
  * field at all, since this route can only ever see its own academy's rows.
+ *
+ * Bug fix: same actor-identity gap as the platform page (see that file's
+ * comment) — this route already returned every member's rows, scoped only
+ * by academy, never by actor; it just never showed who, beyond role. Now
+ * resolves and displays each row's real actor email.
  */
 export default async function AcademyAuditLogsPage({
   searchParams,
@@ -120,8 +125,8 @@ export default async function AcademyAuditLogsPage({
             <thead>
               <tr>
                 <th className={th}>When</th>
+                <th className={th}>Actor</th>
                 <th className={th}>Action</th>
-                <th className={th}>Actor role</th>
                 <th className={th}>Entity</th>
                 <th className={th}>Result</th>
               </tr>
@@ -130,8 +135,11 @@ export default async function AcademyAuditLogsPage({
               {response.data.rows.map((row) => (
                 <tr key={row.id} className={trHover}>
                   <td className={`${td} whitespace-nowrap`}>{row.createdAt.toISOString()}</td>
+                  <td className={td}>
+                    {row.actorUserId ? (response.actorEmailsByUserId[row.actorUserId] ?? "Unknown user") : "System"}
+                    {row.actorRole && <span className="text-muted"> ({row.actorRole})</span>}
+                  </td>
                   <td className={td}>{row.action}</td>
-                  <td className={td}>{row.actorRole ?? "—"}</td>
                   <td className={td}>{row.entityType}</td>
                   <td className={td}>
                     <Badge label={row.result} tone={row.result === "success" ? "green" : "red"} />
