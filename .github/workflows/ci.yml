@@ -33,6 +33,12 @@ jobs:
 
       - run: npm ci
 
+      # Fails on any high/critical advisory in the dependencies that ship
+      # with the app. Dev tooling is excluded on purpose; its accepted
+      # findings are tracked in docs/dependency-advisories.md.
+      - name: Audit production dependencies
+        run: npm run audit:prod
+
       - run: npm run lint
 
       # next build's own TypeScript check is the "typecheck" step — it also

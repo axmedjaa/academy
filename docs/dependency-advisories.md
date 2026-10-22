@@ -73,10 +73,13 @@ request to the running app.
 ## How to re-check
 
 ```sh
-npm audit --omit=dev          # must stay at 0 findings
+npm run audit:prod            # shipped deps; CI fails on any high/critical
 npm audit                     # should list only the two chains above
 npm ls esbuild braces         # confirms the dependency paths described here
 ```
+
+`npm run audit:prod` (`npm audit --omit=dev --audit-level=high`) also runs
+in CI (`.github/workflows/ci.yml`, right after `npm ci`).
 
 Any new finding, or any change to the paths above, needs fixing or a new
 entry in this file.

@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated / vendored output, never hand-written source:
+    // Playwright's separate Next build dir (E2E_DIST_DIR in
+    // playwright.config.ts) and the vendored design-system bundle.
+    ".next-e2e/**",
+    "ds-bundle/**",
   ]),
 ]);
 
