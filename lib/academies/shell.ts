@@ -31,6 +31,9 @@ const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set(["admissions_offi
 
 export interface AcademyShellData {
   academyName: string;
+  /** Storage key of the academy's own logo (shown in place of the Dardar
+   * mark in the sidebar), or null. */
+  logoRef: string | null;
   branchChipLabel: string;
   unreadNotificationsCount: number;
 }
@@ -41,7 +44,7 @@ export async function getAcademyShellData(
   membershipRole: AcademyRole,
 ): Promise<AcademyShellData> {
   const [academy, unread] = await Promise.all([
-    db.select({ name: academies.name }).from(academies).where(eq(academies.id, academyId)).limit(1),
+    db.select({ name: academies.name, logoRef: academies.logoRef }).from(academies).where(eq(academies.id, academyId)).limit(1),
     listNotificationsForUser(actorContext, { unreadOnly: true }),
   ]);
 
@@ -68,6 +71,7 @@ export async function getAcademyShellData(
 
   return {
     academyName: academy[0]?.name ?? "Academy",
+    logoRef: academy[0]?.logoRef ?? null,
     branchChipLabel,
     unreadNotificationsCount: unread.length,
   };

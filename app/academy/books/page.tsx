@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { getBookCoverUrl, listBooks } from "@/lib/academies/books";
 import { searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { BooksTabs } from "./books-tabs";
 import { BooksManager } from "./books-manager";
 
 /**
@@ -44,6 +45,7 @@ export default async function AcademyBooksPage() {
 
   return (
     <div className={PAGE_WRAP}>
+      <BooksTabs />
       <PageHeader
         title="Books"
         description="The academy's book inventory. Sell to students or walk-in buyers, track stock, and record payments/refunds."

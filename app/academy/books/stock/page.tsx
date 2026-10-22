@@ -3,6 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { getBookCoverUrl, listBooks } from "@/lib/academies/books";
 import { getRecentSaleCountsByBook } from "@/lib/academies/book-sales";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { BooksTabs } from "../books-tabs";
 import { StockManager } from "./stock-manager";
 
 /**
@@ -46,6 +47,7 @@ export default async function AcademyBooksStockPage() {
 
   return (
     <div className={PAGE_WRAP}>
+      <BooksTabs />
       <PageHeader
         title="Stock"
         description="Inventory levels across the book catalogue — covers, quantities, prices, and recent sales activity."

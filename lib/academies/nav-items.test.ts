@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  ACADEMY_NAV_ITEMS,
-  getVisibleAcademyNavItems,
-  getVisibleAcademyNavSubItems,
-  hasExpandableSubItems,
-} from "./nav-items";
+import { ACADEMY_NAV_ITEMS, getVisibleAcademyNavItems, groupNavItems } from "./nav-items";
 
 describe("getVisibleAcademyNavItems", () => {
   it("never includes an attendance item for any role (PLAN.md: permanently out of scope)", () => {
@@ -16,24 +11,23 @@ describe("getVisibleAcademyNavItems", () => {
     expect(ACADEMY_NAV_ITEMS.some((item) => item.label.toLowerCase().includes("attendance"))).toBe(false);
   });
 
-  it("shows the full tree to academy_owner", () => {
-    const items = getVisibleAcademyNavItems("academy_owner");
-    const keys = items.map((item) => item.key);
-    expect(keys).toEqual([
-      "dashboard",
-      "students",
-      "staff",
-      "branches",
-      "academics",
-      "exams",
-      "finance",
-      "books",
-      "certificates",
-      "reports",
-      "notifications",
-      "audit-log",
-      "settings",
+  it("shows academy_owner the design's full grouped tree, in order", () => {
+    const groups = groupNavItems(getVisibleAcademyNavItems("academy_owner"));
+    expect(groups.map((group) => [group.title, group.items.map((item) => item.label)])).toEqual([
+      ["Overview", ["Dashboard"]],
+      ["People", ["Students", "Admissions", "Staff", "Branches"]],
+      ["Academy", ["Programs", "Courses", "Batches", "Timetable"]],
+      ["Assessment", ["Exams", "Grades", "Results"]],
+      ["Finance", ["Finance", "Fee periods", "Reports"]],
+      ["Books", ["Books"]],
+      ["Records", ["Certificates", "ID cards", "Audit log"]],
+      ["Account", ["Settings"]],
     ]);
+  });
+
+  it("drops a whole group when a role can see none of its items", () => {
+    const titles = groupNavItems(getVisibleAcademyNavItems("trainer")).map((group) => group.title);
+    expect(titles).not.toContain("Account");
   });
 
   it("navigation-audit Phase 1: shows Branches to every role with academy.branches access, and hides it from finance_officer (no grant at all)", () => {
@@ -56,10 +50,11 @@ describe("getVisibleAcademyNavItems", () => {
     expect(getVisibleAcademyNavItems("academy_admin").some((item) => item.key === "audit-log")).toBe(true);
   });
 
-  it("always shows Dashboard, Reports, Notifications regardless of role", () => {
+  it("always shows Dashboard and Reports regardless of role (Notifications lives in the header bell)", () => {
     for (const role of ["academy_owner", "academy_admin", "manager", "admissions_officer", "finance_officer", "trainer"] as const) {
       const keys = getVisibleAcademyNavItems(role).map((item) => item.key);
-      expect(keys).toEqual(expect.arrayContaining(["dashboard", "reports", "notifications"]));
+      expect(keys).toEqual(expect.arrayContaining(["dashboard", "reports"]));
+      expect(keys).not.toContain("notifications");
     }
   });
 
@@ -77,88 +72,27 @@ describe("getVisibleAcademyNavItems", () => {
   });
 });
 
-describe("getVisibleAcademyNavSubItems", () => {
-  it("gives finance_officer visibility into Certificates sub-items only where permitted", () => {
-    // finance_officer has "none" on ACADEMY_CERTIFICATES_ACTION per academy-permissions.ts
-    const subItems = getVisibleAcademyNavSubItems("finance_officer", "certificates");
-    expect(subItems).toEqual([]);
-  });
-
-  it("navigation-audit Phase 1: gives academy_owner only the ID Cards sub-item under certificates — the redundant self-referencing 'Certificates' entry (same href as the parent) is gone", () => {
-    const subItems = getVisibleAcademyNavSubItems("academy_owner", "certificates");
-    expect(subItems.map((item) => item.label)).toEqual(["ID Cards"]);
-  });
-
-  it("navigation-audit Phase 1: finance sub-items are just Fee Periods — no self-referencing 'Finance' entry and no 'Finance Reports' entry (that route is now a redirect to /academy/reports)", () => {
-    const subItems = getVisibleAcademyNavSubItems("academy_owner", "finance");
-    expect(subItems.map((item) => item.label)).toEqual(["Fee Periods"]);
-  });
-
-  it("navigation-audit Phase 1: books sub-items are Stock and Book Sales — no self-referencing 'Books' entry", () => {
-    const subItems = getVisibleAcademyNavSubItems("academy_owner", "books");
-    expect(subItems.map((item) => item.label)).toEqual(["Stock", "Book Sales"]);
-  });
-
-  it("navigation-audit Phase 1: Branches is a standalone top-level item with no sub-items of its own", () => {
-    expect(getVisibleAcademyNavSubItems("academy_owner", "branches")).toEqual([]);
-  });
-
-  it("no longer has an Approvals sub-item under Finance for any role (student-payment approval workflow removed)", () => {
-    for (const role of [
-      "academy_owner",
-      "academy_admin",
-      "manager",
-      "finance_officer",
-      "trainer",
-      "admissions_officer",
-    ] as const) {
-      expect(getVisibleAcademyNavSubItems(role, "finance").some((item) => item.label === "Approvals")).toBe(false);
-    }
-  });
-
-  it("F3: gives trainer the Results sub-item via the exams/enter_marks alternate action", () => {
-    // ACADEMY_RESULTS_ACTION has no entry for trainer ("none"), but
-    // lib/academies/results.ts's listResults() also admits access via
-    // ACADEMY_EXAMS_ACTION at "enter_marks" or above, which trainer holds —
-    // the nav must reflect that OR, not just the first action.
-    const subItems = getVisibleAcademyNavSubItems("trainer", "exams");
-    expect(subItems.some((item) => item.label === "Results")).toBe(true);
+describe("permission-specific items", () => {
+  it("F3: gives trainer Results via the exams/enter_marks alternate action", () => {
+    // ACADEMY_RESULTS_ACTION has no entry for trainer, but listResults() also
+    // admits ACADEMY_EXAMS_ACTION at "enter_marks", which trainer holds.
+    expect(getVisibleAcademyNavItems("trainer").some((item) => item.key === "results")).toBe(true);
   });
 
   it("F3: still hides Results for roles with none on both the results and exams rows", () => {
-    // admissions_officer and finance_officer have "none" on both
-    // ACADEMY_RESULTS_ACTION and ACADEMY_EXAMS_ACTION.
     for (const role of ["admissions_officer", "finance_officer"] as const) {
-      const subItems = getVisibleAcademyNavSubItems(role, "exams");
-      expect(subItems.some((item) => item.label === "Results")).toBe(false);
+      expect(getVisibleAcademyNavItems(role).some((item) => item.key === "results")).toBe(false);
     }
   });
-});
 
-describe("hasExpandableSubItems", () => {
-  const item = { key: "staff", label: "Staff", href: "/academy/staff", icon: "badge", requiredAction: null };
-
-  it("returns false for an empty sub-items list (plain leaf item)", () => {
-    expect(hasExpandableSubItems(item, [])).toBe(false);
+  it("shows ID cards only to roles holding the id-cards row", () => {
+    expect(getVisibleAcademyNavItems("academy_owner").some((item) => item.key === "id-cards")).toBe(true);
+    expect(getVisibleAcademyNavItems("trainer").some((item) => item.key === "id-cards")).toBe(false);
   });
 
-  it("returns false for the Staff-shaped case: one sub-item whose href duplicates the parent's own href", () => {
-    const subItems = [{ parentKey: "staff", label: "Staff", href: "/academy/staff", requiredAction: "staff" }];
-    expect(hasExpandableSubItems(item, subItems)).toBe(false);
-  });
-
-  it("returns true for a single sub-item with a distinct href (e.g. Finance's Fee Periods)", () => {
-    const financeItem = { key: "finance", label: "Finance", href: "/academy/finance", icon: "payments", requiredAction: null };
-    const subItems = [{ parentKey: "finance", label: "Fee Periods", href: "/academy/finance/fee-periods", requiredAction: "fee_periods" }];
-    expect(hasExpandableSubItems(financeItem, subItems)).toBe(true);
-  });
-
-  it("returns true for multiple sub-items (e.g. Academics)", () => {
-    const academicsItem = { key: "academics", label: "Academics", href: "/academy/programs", icon: "school", requiredAction: null };
-    const subItems = [
-      { parentKey: "academics", label: "Programs", href: "/academy/programs", requiredAction: "courses" },
-      { parentKey: "academics", label: "Courses", href: "/academy/courses", requiredAction: "courses" },
-    ];
-    expect(hasExpandableSubItems(academicsItem, subItems)).toBe(true);
+  it("every item points at a distinct /academy route", () => {
+    const hrefs = ACADEMY_NAV_ITEMS.map((item) => item.href);
+    expect(new Set(hrefs).size).toBe(hrefs.length);
+    expect(hrefs.every((href) => href.startsWith("/academy/"))).toBe(true);
   });
 });

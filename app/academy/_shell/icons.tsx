@@ -249,6 +249,54 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
       <path d="m9.3 9.3 5.4 5.4M14.7 9.3l-5.4 5.4" />
     </Base>
   ),
+  user_plus: (props) => (
+    <Base {...props}>
+      <circle cx="10" cy="8" r="3.5" />
+      <path d="M3 20c0-3.6 3.1-6.2 7-6.2 1.3 0 2.5.3 3.5.8" />
+      <path d="M18 14v6M15 17h6" />
+    </Base>
+  ),
+  layers: (props) => (
+    <Base {...props}>
+      <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+      <path d="m3 12.5 9 5 9-5" />
+      <path d="m3 17 9 5 9-5" />
+    </Base>
+  ),
+  calendar: (props) => (
+    <Base {...props}>
+      <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
+      <path d="M3.5 10h17M8 3v4M16 3v4" />
+    </Base>
+  ),
+  sliders: (props) => (
+    <Base {...props}>
+      <path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" />
+      <circle cx="16" cy="6" r="2" />
+      <circle cx="10" cy="12" r="2" />
+      <circle cx="18" cy="18" r="2" />
+    </Base>
+  ),
+  clipboard: (props) => (
+    <Base {...props}>
+      <rect x="5" y="4.5" width="14" height="16.5" rx="2" />
+      <rect x="9" y="2.5" width="6" height="4" rx="1" />
+      <path d="M8.5 11h7M8.5 15h5" />
+    </Base>
+  ),
+  book: (props) => (
+    <Base {...props}>
+      <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5v-15Z" />
+      <path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3" />
+    </Base>
+  ),
+  idcard: (props) => (
+    <Base {...props}>
+      <rect x="2.5" y="5" width="19" height="14" rx="2" />
+      <circle cx="8.5" cy="11" r="2" />
+      <path d="M5.5 16c.5-1.5 1.6-2.3 3-2.3s2.5.8 3 2.3M14 10h4.5M14 13.5h3" />
+    </Base>
+  ),
   info: (props) => (
     <Base {...props}>
       <circle cx="12" cy="12" r="9" />
@@ -275,25 +323,49 @@ export function Icon({ name, ...props }: { name: string } & IconProps) {
   return <Render {...props} />;
 }
 
-/** The rounded-square monogram half of lib/ui/auth-components.tsx's
- * `AuthLogo` (same rect/paths/circle, same coordinates) — without its
- * wordmark, for the one other place the brand mark needs to stand alone: a
- * collapsed desktop sidebar rail, where there's no room for the "Afoogy"
- * text. Reuses the existing brand asset rather than inventing a second
- * logo mark. `fill` lets the two shells pass their own blue
- * (AcademyShell's `color.primaryBlue` vs PlatformShell's white-on-navy). */
-export function BrandMark({ size = 36, fill }: { size?: number; fill: string }) {
+/** The real Dardar "D" mark (`public/dardar-mark.png`, supplied source
+ * asset — burgundy/gold on transparent, not redrawn or approximated),
+ * shared by both shells' sidebar header and collapsed rail. The source PNG
+ * is a fixed-color raster (~1.93:1 wide, speed-lines extending left of the
+ * "D"), so unlike the old inline-SVG placeholder it can no longer be
+ * recolored per shell via a `fill` prop — `onDark` instead adds a small
+ * white backdrop plate (mirroring the reference brand image's own white
+ * badge-circle treatment) ONLY where the mark sits directly on the
+ * Platform shell's burgundy sidebar (`color.primaryNavy`), where the
+ * unmodified burgundy mark was verified too low-contrast to read on its
+ * own. On a light surface (the console shell's light sidebar) the mark is used as-is,
+ * no plate. `alt` defaults to "" (decorative) because every current call
+ * site already sits inside an aria-labeled button or next to visible
+ * "Dardar" text — pass a real `alt` only for a future standalone usage
+ * with no adjacent accessible name. */
+export function BrandMark({
+  size = 36,
+  onDark = false,
+  alt = "",
+}: {
+  size?: number;
+  onDark?: boolean;
+  alt?: string;
+}) {
+  const MARK_ASPECT_RATIO = 1046 / 542;
+  const width = Math.round(size * MARK_ASPECT_RATIO);
+  const img = (
+    // eslint-disable-next-line @next/next/no-img-element -- this codebase renders every image via a plain <img> (see student-avatar.tsx), no next/image usage anywhere
+    <img src="/dardar-mark.png" alt={alt} width={width} height={size} style={{ display: "block" }} />
+  );
+  if (!onDark) return img;
   return (
-    <svg width={size} height={size} viewBox="0 0 52 52" fill="none" role="img" aria-label="Afoogy">
-      <rect x="6" y="10" width="40" height="40" rx="10" fill={fill} />
-      <path
-        d="M26 18L37 26V38L26 42L15 38V26L26 18Z"
-        stroke="#FFFFFF"
-        strokeWidth="2.5"
-        strokeLinejoin="round"
-      />
-      <path d="M26 27V42M26 27L37 26M26 27L15 26" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="26" cy="18" r="2.5" fill="#93C5FD" />
-    </svg>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: "#FFFFFF",
+        borderRadius: 8,
+        padding: Math.round(size * 0.14),
+      }}
+    >
+      {img}
+    </span>
   );
 }

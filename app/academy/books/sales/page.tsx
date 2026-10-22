@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listBookSales } from "@/lib/academies/book-sales";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { BooksTabs } from "../books-tabs";
 import { BookSalesManager } from "./book-sales-manager";
 
 /** §50-57 — Book Sales history: additional payments and refunds. */
@@ -23,6 +24,7 @@ export default async function BookSalesPage() {
 
   return (
     <div className={PAGE_WRAP}>
+      <BooksTabs />
       <PageHeader title="Book sales" description="Sale history, outstanding balances, additional payments, and refunds." />
       <BookSalesManager sales={salesResult.sales} canManage={salesResult.canManage} />
     </div>

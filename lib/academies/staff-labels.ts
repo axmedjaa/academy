@@ -3,11 +3,9 @@ import { db } from "@/lib/db";
 import { academyMemberships, users } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 
-/** Same labels as app/academy/_shell/academy-shell.tsx's own ROLE_LABELS —
- * duplicated rather than imported since that file is a "use client"
- * component and this is a server-side data helper; keep the two in sync if
- * either changes. */
-const ROLE_LABELS: Record<AcademyRole, string> = {
+/** Display labels for academy roles — shared with the console shell's
+ * account menu (lib/console/shell-data.ts). */
+export const ROLE_LABELS: Record<AcademyRole, string> = {
   academy_owner: "Academy Owner",
   academy_admin: "Academy Administrator",
   manager: "Manager",

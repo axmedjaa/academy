@@ -1,11 +1,9 @@
 import { redirect } from "next/navigation";
-import { Inter } from "next/font/google";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { getAcademyShellData } from "@/lib/academies/shell";
-import { getVisibleAcademyNavItems, getVisibleAcademyNavSubItems } from "@/lib/academies/nav-items";
+import { getAcademyConsoleShellData } from "@/lib/console/shell-data";
 import { AcademyAccessMessage } from "./academy-access-message";
-import { AcademyShell } from "./_shell/academy-shell";
+import { ConsoleShell } from "@/app/_console/console-shell";
 
 /**
  * PLAN.md Item 28 — "Minimal `/academy/dashboard` shell." This is the
@@ -39,13 +37,6 @@ import { AcademyShell } from "./_shell/academy-shell";
  * (e.g. via a request-scoped React `cache()` wrapper) to avoid touching
  * access-gate.ts, which is out of scope for this item.
  */
-// DESIGN.md §1: "one sans-serif family (e.g. Inter)" — Stitch's own mockups
-// use the same font. Loaded via `next/font/google` (self-hosted at build
-// time, zero external network request at runtime — the same mechanism this
-// app already uses for Geist in app/layout.tsx) and scoped to the academy
-// shell only, rather than changing the root layout's font for every route
-// (auth, platform, public) — out of scope for this shell-only wave.
-const inter = Inter({ subsets: ["latin"], variable: "--font-academy" });
 
 export default async function AcademyLayout({ children }: LayoutProps<"/academy">) {
   const authContext = await getAuthContext();
@@ -76,31 +67,14 @@ export default async function AcademyLayout({ children }: LayoutProps<"/academy"
       </div>
     ) : null;
 
-  // Post-Phase-5 UI gap closure, Phase A: the shared app shell (sidebar +
-  // topbar). Nav items are filtered here, server-side, from the SAME
-  // resolved `access.membershipRole` this layout already computed above —
-  // no second access-gate call. See lib/academies/nav-items.ts's module
-  // comment for why that filtering is pure/DB-free and unit-tested on its
-  // own, and lib/academies/shell.ts for the small amount of display-only
-  // data (academy name, branch chip, unread count) fetched below.
-  const navItems = getVisibleAcademyNavItems(access.membershipRole);
-  const subItemsByParent = Object.fromEntries(
-    navItems.map((item) => [item.key, getVisibleAcademyNavSubItems(access.membershipRole, item.key)]),
-  );
-  const shellData = await getAcademyShellData(authContext, access.academyId, access.membershipRole);
+  // Shared console shell (app/_console/console-shell.tsx). Navigation is
+  // filtered server-side from the SAME resolved `access.membershipRole`
+  // above — see lib/academies/nav-items.ts and lib/console/shell-data.ts.
+  const shellData = await getAcademyConsoleShellData(authContext, access.academyId, access.membershipRole);
 
   return (
-    <AcademyShell
-      className={inter.className}
-      navItems={navItems}
-      subItemsByParent={subItemsByParent}
-      academyName={shellData.academyName}
-      branchChipLabel={shellData.branchChipLabel}
-      membershipRole={access.membershipRole}
-      unreadNotificationsCount={shellData.unreadNotificationsCount}
-      graceBanner={graceBanner}
-    >
+    <ConsoleShell data={shellData} banner={graceBanner}>
       {children}
-    </AcademyShell>
+    </ConsoleShell>
   );
 }

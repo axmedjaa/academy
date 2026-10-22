@@ -23,7 +23,7 @@ import { useEffect, useState } from "react";
  * its own today (every component it exports is server-renderable as-is),
  * and this is the one case in `StatCard` that genuinely needs client-side
  * state, so it stays a small, separate island per this codebase's existing
- * convention (academy-shell.tsx / platform-shell.tsx are the same kind of
+ * convention (app/_console/console-shell.tsx are the same kind of
  * isolated client leaf for their own interactivity).
  *
  * Only ever given a plain count (students, staff, charges...) — every

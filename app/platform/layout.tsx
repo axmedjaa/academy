@@ -1,13 +1,9 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
-import { getVisiblePlatformNavItems } from "@/lib/platform/nav-items";
-import { PlatformShell } from "./_shell/platform-shell";
+import { getPlatformConsoleShellData } from "@/lib/console/shell-data";
+import { ConsoleShell } from "@/app/_console/console-shell";
 import { PageMessage } from "@/app/academy/_shell/ui";
 
-const ROLE_LABELS = {
-  platform_owner: "Platform Owner",
-  platform_admin: "Platform Admin",
-} as const;
 
 /**
  * UI quality pass, Platform Owner console wave. Before this, every
@@ -47,11 +43,5 @@ export default async function PlatformLayout({ children }: LayoutProps<"/platfor
     );
   }
 
-  const navItems = await getVisiblePlatformNavItems(context);
-
-  return (
-    <PlatformShell navItems={navItems} roleLabel={ROLE_LABELS[context.platformRole]}>
-      {children}
-    </PlatformShell>
-  );
+  return <ConsoleShell data={await getPlatformConsoleShellData(context)}>{children}</ConsoleShell>;
 }

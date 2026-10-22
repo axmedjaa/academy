@@ -95,6 +95,8 @@ export interface NotificationListItem {
 
 export interface ListNotificationsFilters {
   unreadOnly?: boolean;
+  /** Newest-N cap pushed down to SQL (the header bell's preview). */
+  limit?: number;
 }
 
 /**
@@ -133,7 +135,7 @@ export async function listNotificationsForUser(
     );
   }
 
-  const rows = await db
+  const query = db
     .select({ notification: notifications, sharedReadAt: notificationReads.readAt })
     .from(notifications)
     .leftJoin(
@@ -142,6 +144,7 @@ export async function listNotificationsForUser(
     )
     .where(and(...conditions))
     .orderBy(desc(notifications.createdAt));
+  const rows = filters.limit ? await query.limit(filters.limit) : await query;
 
   return rows.map(({ notification, sharedReadAt }) => ({
     id: notification.id,

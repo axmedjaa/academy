@@ -605,8 +605,23 @@ export function LinkButton({
   href,
   ...rest
 }: AnchorHTMLAttributes<HTMLAnchorElement> & { variant?: ButtonVariant; href: string }) {
-  return <Link href={href} {...rest} className={`${BUTTON_VARIANTS[variant]} ${className}`} />;
+  return <Link href={href} {...rest} className={`${BUTTON_VARIANTS[variant]} ${LINK_BUTTON_TEXT[variant]} ${className}`} />;
 }
+
+/** app/globals.css resets `a { color: inherit }` outside any cascade layer,
+ * so it outranks Tailwind's layered `text-*` utilities on an <a> — a
+ * primary LinkButton rendered dark text on burgundy. Each variant's own
+ * text colour is re-asserted with `!important` for the anchor form only;
+ * <button> variants and every other link are untouched. */
+const LINK_BUTTON_TEXT: Record<ButtonVariant, string> = {
+  primary: "!text-white hover:no-underline",
+  secondary: "!text-ink hover:no-underline",
+  outline: "!text-ink hover:no-underline",
+  ghost: "!text-ink hover:no-underline",
+  danger: "!text-danger hover:no-underline",
+  dangerSolid: "!text-white hover:no-underline",
+  success: "!text-success hover:no-underline",
+};
 
 /** Badge tone classes matching lib/ui/theme.ts's status palette, for pages
  * using Tailwind class names instead of the `StatusBadge` component above. */

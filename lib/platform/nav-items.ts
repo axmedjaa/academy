@@ -25,6 +25,8 @@ export interface PlatformNavItem {
   label: string;
   href: string;
   icon: string;
+  /** Section heading in the sidebar (Platform Console "Main navigation"). */
+  group: string;
   /** `null` = always visible to any signed-in platform actor (Dashboard),
    * mirroring lib/academies/nav-items.ts's `requiredAction: null`
    * convention. Non-null = only visible when `hasPermission(context,
@@ -32,17 +34,19 @@ export interface PlatformNavItem {
   requiredCapability: string | null;
 }
 
+// Order and grouping follow the active Platform Console design: Overview /
+// Manage / Finance / Insights / Administration. Capabilities unchanged.
 export const PLATFORM_NAV_ITEMS: readonly PlatformNavItem[] = [
-  { key: "dashboard", label: "Dashboard", href: "/platform/dashboard", icon: "dashboard", requiredCapability: null },
-  { key: "academies", label: "Academies", href: "/platform/academies", icon: "apartment", requiredCapability: "approveAcademy" },
-  { key: "subscriptions", label: "Subscriptions", href: "/platform/subscriptions", icon: "autorenew", requiredCapability: "renewSubscription" },
-  { key: "payments", label: "Payments", href: "/platform/payments", icon: "payments", requiredCapability: "recordSubscriptionPayment" },
-  { key: "plans", label: "Plans", href: "/platform/plans", icon: "inventory_2", requiredCapability: "plans.manage" },
-  { key: "usage", label: "Usage", href: "/platform/usage", icon: "speed", requiredCapability: "getPlatformReports" },
-  { key: "reports", label: "Reports", href: "/platform/reports", icon: "bar_chart", requiredCapability: "getPlatformReports" },
-  { key: "audit-logs", label: "Audit Log", href: "/platform/audit-logs", icon: "history", requiredCapability: "queryAuditLogs" },
-  { key: "staff", label: "Platform Staff", href: "/platform/staff", icon: "badge", requiredCapability: "platform.staff.manage" },
-  { key: "settings", label: "Settings", href: "/platform/settings", icon: "settings", requiredCapability: "platform.settings.manage" },
+  { key: "dashboard", label: "Dashboard", href: "/platform/dashboard", icon: "dashboard", group: "Overview", requiredCapability: null },
+  { key: "academies", label: "Academies", href: "/platform/academies", icon: "apartment", group: "Manage", requiredCapability: "approveAcademy" },
+  { key: "subscriptions", label: "Subscriptions", href: "/platform/subscriptions", icon: "autorenew", group: "Manage", requiredCapability: "renewSubscription" },
+  { key: "plans", label: "Plans", href: "/platform/plans", icon: "receipt_long", group: "Manage", requiredCapability: "plans.manage" },
+  { key: "payments", label: "Payments", href: "/platform/payments", icon: "payments", group: "Finance", requiredCapability: "recordSubscriptionPayment" },
+  { key: "usage", label: "Usage", href: "/platform/usage", icon: "speed", group: "Insights", requiredCapability: "getPlatformReports" },
+  { key: "reports", label: "Reports", href: "/platform/reports", icon: "bar_chart", group: "Insights", requiredCapability: "getPlatformReports" },
+  { key: "audit-logs", label: "Audit log", href: "/platform/audit-logs", icon: "history", group: "Insights", requiredCapability: "queryAuditLogs" },
+  { key: "staff", label: "Platform staff", href: "/platform/staff", icon: "group", group: "Administration", requiredCapability: "platform.staff.manage" },
+  { key: "settings", label: "Settings", href: "/platform/settings", icon: "settings", group: "Administration", requiredCapability: "platform.settings.manage" },
 ] as const;
 
 export async function getVisiblePlatformNavItems(
