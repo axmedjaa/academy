@@ -12,10 +12,13 @@ The product is dense, operational, and built for desktop-first data work (dashbo
 
 Sourced 1:1 from `DESIGN.md` §1 and implemented identically in `app/globals.css`'s `@theme` block and `lib/ui/theme.ts` — the two are kept in sync by convention; never introduce a third copy of these values.
 
-- **Navy** (`#1B2A4A`): Primary brand color — surfaces/headers in the original spec; in practice used sparingly (e.g. dialog overlay tint `bg-navy/40`), not a dominant UI color
-- **Brand / Interactive Blue** (`#2F5FE0`): Primary CTAs, links, active nav states, focus rings
-- **Brand Hover** (`#24499F`): Hover state for brand-filled buttons
-- **Brand Tint** (`#EEF2FF`): Light brand-blue surface for "selected/active" rows and informational highlight backgrounds — distinct from status tokens below; reserved for brand emphasis, never status semantics
+**Dardar School System rebrand** (color tokens only): the brand is now a single primary hue (burgundy) rather than a separate navy/blue pair — `primaryNavy`/`--color-navy` and `primaryBlue`/`--color-brand` now hold the same value. A new gold accent token exists for sparing highlight use.
+
+- **Brand / Navy** (`#850019`, burgundy): Primary brand color — surfaces/headers, navigation emphasis (e.g. dialog overlay tint `bg-navy/40`, Platform shell sidebar). The former "Navy" and "Brand/Interactive Blue" tokens are now the same burgundy value.
+- **Brand / Interactive** (`#850019`, burgundy): Primary CTAs, links, active nav states, focus rings
+- **Brand Hover** (`#6B0014`): Hover/pressed state for brand-filled buttons
+- **Brand Tint** (`#F9E8EC`): Light burgundy surface for "selected/active" rows and informational highlight backgrounds — distinct from status tokens below; reserved for brand emphasis, never status semantics
+- **Accent Gold** (`#F5B638`): Sparing accent/highlight use only (e.g. the ID card's thin accent border, the brand mark's accent dot). Never a background behind white/light text, never small text color on a light surface — pair with dark ink text or the dark burgundy surface
 - **App Background** (`#F7F8FA`): Page background behind the sidebar/header/cards
 - **Surface** (`#FFFFFF`): Card, sidebar, header, input, modal background
 - **Border** (`#E2E5EA`): Default hairline borders (cards, table dividers)

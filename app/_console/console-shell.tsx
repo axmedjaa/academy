@@ -5,7 +5,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { BrandMark, Icon } from "@/app/academy/_shell/icons";
 import { signOut } from "@/lib/auth/actions";
-import { markNotificationsReadAction } from "@/lib/notifications/list-notifications-actions";
+import { markNotificationReadAction, markNotificationsReadAction } from "@/lib/notifications/list-notifications-actions";
+import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
+import { showErrorToast } from "@/lib/ui/toast";
 import {
   searchAcademyConsoleAction,
   searchPlatformConsoleAction,
@@ -77,6 +79,7 @@ const ACCOUNT_TITLES: Record<string, string> = {
   "/account/security": "Account settings",
   "/account/activity": "Activity",
   "/account/verify-email": "Verify email",
+  "/academy/notifications": "Notifications",
 };
 
 function relativeTime(iso: string): string {
@@ -547,8 +550,38 @@ function NotificationBell({
 }) {
   const ref = useDismiss(open, () => setOpen(false));
   const [pending, startTransition] = useTransition();
-  const unreadIds = notifications.latest.filter((item) => item.unread).map((item) => item.id);
-  const count = notifications.unreadCount;
+  // Marked read here, shown right away while the server data refreshes.
+  const [readIds, setReadIds] = useState<Set<string>>(() => new Set());
+  // Rows with a request in flight (one request per row at a time).
+  const [markingIds, setMarkingIds] = useState<Set<string>>(() => new Set());
+  const isUnread = (item: { id: string; unread: boolean }) => item.unread && !readIds.has(item.id);
+  const unreadIds = notifications.latest.filter(isUnread).map((item) => item.id);
+  const locallyRead = notifications.latest.filter((item) => item.unread && readIds.has(item.id)).length;
+  const count = Math.max(0, notifications.unreadCount - locallyRead);
+
+  async function markOne(id: string) {
+    if (markingIds.has(id) || readIds.has(id)) return;
+    setMarkingIds((current) => new Set(current).add(id));
+    try {
+      // Scoped on the server to the caller's own notifications.
+      const result = await markNotificationReadAction(id);
+      if (result.ok) {
+        setReadIds((current) => new Set(current).add(id));
+        onMarked();
+      } else {
+        // Left unread; the row's button can be used again.
+        showErrorToast(result.error.message);
+      }
+    } catch {
+      showErrorToast(NETWORK_ERROR_MESSAGE);
+    } finally {
+      setMarkingIds((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
 
   return (
     <div ref={ref} className="relative shrink-0">
@@ -582,8 +615,12 @@ function NotificationBell({
                 disabled={pending}
                 onClick={() =>
                   startTransition(async () => {
-                    const result = await markNotificationsReadAction(unreadIds);
-                    if (result.ok) onMarked();
+                    const ids = unreadIds;
+                    const result = await markNotificationsReadAction(ids);
+                    if (result.ok) {
+                      setReadIds((current) => new Set([...current, ...ids]));
+                      onMarked();
+                    }
                   })
                 }
                 className="border-0 bg-transparent py-2 text-[13px] text-brand hover:underline disabled:opacity-60"
@@ -595,22 +632,37 @@ function NotificationBell({
           {notifications.latest.length === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-muted">You have no notifications.</div>
           ) : (
-            notifications.latest.map((item) => (
-              <div
-                key={item.id}
-                role="menuitem"
-                className={`flex items-start gap-3 border-b border-border px-4 py-3 ${item.unread ? "bg-brand-tint/40" : ""}`}
-              >
-                <span
-                  className={`mt-[7px] h-2 w-2 shrink-0 rounded-full ${item.unread ? "bg-brand" : "bg-border"}`}
-                  aria-label={item.unread ? "Unread" : undefined}
-                />
-                <div className="min-w-0">
-                  <div className={`text-[13px] text-ink ${item.unread ? "font-semibold" : ""}`}>{item.label}</div>
-                  <div className="text-xs text-muted">{relativeTime(item.createdAt)}</div>
+            notifications.latest.map((item) => {
+              const unread = isUnread(item);
+              const marking = markingIds.has(item.id);
+              return (
+                <div
+                  key={item.id}
+                  role="menuitem"
+                  className={`flex items-start gap-3 border-b border-border px-4 py-3 ${unread ? "bg-brand-tint/40" : ""}`}
+                >
+                  <span
+                    className={`mt-[7px] h-2 w-2 shrink-0 rounded-full ${unread ? "bg-brand" : "bg-border"}`}
+                    aria-label={unread ? "Unread" : undefined}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className={`text-[13px] text-ink ${unread ? "font-semibold" : ""}`}>{item.label}</div>
+                    <div className="text-xs text-muted">{relativeTime(item.createdAt)}</div>
+                  </div>
+                  {unread && (
+                    <button
+                      type="button"
+                      disabled={marking || pending}
+                      onClick={() => void markOne(item.id)}
+                      aria-label={`Mark as read: ${item.label}`}
+                      className="-my-1 min-h-9 shrink-0 rounded-md border-0 bg-transparent px-2 text-xs font-semibold text-brand hover:bg-brand-tint disabled:opacity-60"
+                    >
+                      {marking ? "Marking…" : "Mark as read"}
+                    </button>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
           {notifications.viewAllHref && (
             <Link

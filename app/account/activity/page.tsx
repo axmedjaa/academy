@@ -2,27 +2,31 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getMyActivity } from "@/lib/my-activity-actions";
 import type { AuditResult } from "@/lib/audit-query";
-import { AuthLink, Card, SecondaryLinkButton } from "@/lib/ui/auth-components";
-import { color, spacing } from "@/lib/ui/theme";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { Badge, EmptyState, PageHeader } from "@/app/academy/_shell/ui";
+import { ClearFilters, DateParamField, FilterBar, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
+import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
+import { ACCOUNT_WRAP, AccountTabs } from "../account-tabs";
+
+const WHEN = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+
+/** "student_id_card" / "academySettings" -> "Student id card" / "Academy settings". */
+function humanizeEntity(value: string): string {
+  const words = value
+    .replace(/[._-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .trim()
+    .toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : value;
+}
 
 /**
- * "My Activity" — a personal, role-agnostic page reachable from both
- * consoles' own "Account settings" link (same spot `/account/security`
- * already sits, outside either shell's DESIGN.md-documented nav tree —
- * see that page's own module comment for why this route isn't part of
- * `app/academy/*`/`app/platform/*` at all). Every signed-in user gets this
- * page regardless of role or permission — unlike `/academy/audit-logs`
- * (Owner/Admin only) and `/platform/audit-logs` (the `queryAuditLogs`
- * grant), which stay exactly as they are: this is a *third*, narrower view
- * onto the same `audit_logs` table, hard-scoped server-side to the caller's
- * own `actorUserId` (lib/my-activity.ts), never anyone else's — the two
- * oversight pages' own roles/permissions are untouched.
- *
- * Same GET-query-param filter/pagination convention as `/academy/audit-logs`
- * and `/platform/audit-logs` (plain `<form method="get">`, re-navigate,
- * server-render) — deliberately no "Actor" filter/column at all, since
- * every row on this page is already known to be the viewer's own.
+ * Activity (design S02): actions taken by the signed-in user's own account,
+ * newest first, filtered by action, result and date (URL params). Every
+ * row comes from `getMyActivity`, which is hard-scoped on the server to the
+ * caller's own `actorUserId`, so no role or permission is involved and no
+ * one else's activity can appear here.
  */
 export default async function MyActivityPage({
   searchParams,
@@ -40,161 +44,91 @@ export default async function MyActivityPage({
     return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
   };
 
-  const action = get("action");
-  const result = get("result");
+  const action = get("action").trim();
+  const result = get("result") === "success" || get("result") === "failure" ? get("result") : "";
   const createdFrom = get("createdFrom");
   const createdTo = get("createdTo");
   const pageParam = Number.parseInt(get("page"), 10);
   const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
+  const filtered = Boolean(action || result || createdFrom || createdTo);
 
-  const response = await getMyActivity(
-    {
-      action: action || undefined,
-      result: (result || undefined) as AuditResult | undefined,
-      createdFrom: createdFrom ? new Date(createdFrom) : undefined,
-      createdTo: createdTo ? new Date(createdTo) : undefined,
-    },
-    { page },
-  );
-
-  const backHref = context.platformRole ? "/platform/academies" : "/academy/dashboard";
+  const [response, access] = await Promise.all([
+    getMyActivity(
+      {
+        action: action || undefined,
+        result: (result || undefined) as AuditResult | undefined,
+        createdFrom: createdFrom ? new Date(createdFrom) : undefined,
+        // Inclusive "to" day: up to the end of that day.
+        createdTo: createdTo ? new Date(`${createdTo}T23:59:59.999Z`) : undefined,
+      },
+      { page },
+    ),
+    context.platformRole ? Promise.resolve(null) : checkAcademyAccessForContext(context),
+  ]);
+  const notificationsHref = access && access.level !== "blocked" ? "/academy/notifications" : null;
 
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: color.bg, padding: spacing.xl }}>
-      <div style={{ maxWidth: 860, margin: "0 auto", display: "flex", flexDirection: "column", gap: spacing.xl }}>
-        <div>
-          <SecondaryLinkButton href={backHref} style={{ marginBottom: spacing.md }}>
-            {context.platformRole ? "← Back to platform console" : "← Back to dashboard"}
-          </SecondaryLinkButton>
-          <h1 style={{ margin: 0, color: color.text }}>My activity</h1>
-          <p style={{ margin: 0, marginTop: spacing.xxs, color: color.textMuted }}>
-            A record of actions taken on your own account. Only your own activity ever appears here.
-          </p>
+    <div className={ACCOUNT_WRAP}>
+      <AccountTabs current="activity" notificationsHref={notificationsHref} />
+      <PageHeader title="Activity" description="Actions taken by your account. Only you can see this page." />
+
+      <FilterBar>
+        <SearchField param="action" placeholder="Exact action, for example login" />
+        <FilterDropdown
+          param="result"
+          label="Result"
+          icon="check_circle"
+          options={[
+            { value: "", label: "Any" },
+            { value: "success", label: "Success" },
+            { value: "failure", label: "Failure" },
+          ]}
+        />
+        <DateParamField param="createdFrom" label="From" />
+        <DateParamField param="createdTo" label="To" />
+        <ClearFilters params={["action", "result", "createdFrom", "createdTo"]} />
+      </FilterBar>
+
+      {!response.ok ? (
+        <div role="alert" className="mb-6 rounded-lg border border-[#FECACA] bg-[#FEF2F2] px-3 py-2.5 text-[13px] text-[#991B1B]">
+          {response.error.message}
         </div>
-
-        <Card>
-          <form method="get" style={{ display: "flex", flexWrap: "wrap", gap: spacing.sm, alignItems: "flex-end", marginBottom: spacing.md }}>
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", fontSize: "0.8rem", color: color.textMuted, minWidth: 160 }}>
-              Action
-              <input
-                type="text"
-                name="action"
-                defaultValue={action}
-                style={{ padding: "0.5rem 0.65rem", fontSize: "0.85rem", border: `1px solid ${color.border}`, borderRadius: 8, color: color.text }}
-              />
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", fontSize: "0.8rem", color: color.textMuted, minWidth: 140 }}>
-              Result
-              <select
-                name="result"
-                defaultValue={result}
-                style={{ padding: "0.5rem 0.65rem", fontSize: "0.85rem", border: `1px solid ${color.border}`, borderRadius: 8, color: color.text }}
-              >
-                <option value="">Any</option>
-                <option value="success">Success</option>
-                <option value="failure">Failure</option>
-              </select>
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", fontSize: "0.8rem", color: color.textMuted, minWidth: 140 }}>
-              From
-              <input
-                type="date"
-                name="createdFrom"
-                defaultValue={createdFrom}
-                style={{ padding: "0.5rem 0.65rem", fontSize: "0.85rem", border: `1px solid ${color.border}`, borderRadius: 8, color: color.text }}
-              />
-            </label>
-            <label style={{ display: "flex", flexDirection: "column", gap: "0.3rem", fontSize: "0.8rem", color: color.textMuted, minWidth: 140 }}>
-              To
-              <input
-                type="date"
-                name="createdTo"
-                defaultValue={createdTo}
-                style={{ padding: "0.5rem 0.65rem", fontSize: "0.85rem", border: `1px solid ${color.border}`, borderRadius: 8, color: color.text }}
-              />
-            </label>
-            <button
-              type="submit"
-              style={{
-                backgroundColor: color.card,
-                color: color.text,
-                border: `1px solid ${color.border}`,
-                borderRadius: 8,
-                padding: "0.5rem 0.9rem",
-                fontSize: "0.85rem",
-                fontWeight: 500,
-                cursor: "pointer",
-              }}
-            >
-              Filter
-            </button>
-            {(action || result || createdFrom || createdTo) && (
-              <AuthLink href="/account/activity">Clear filters</AuthLink>
-            )}
-          </form>
-
-          {!response.ok ? (
-            <p role="alert" style={{ color: color.statusRed, fontSize: "0.9rem" }}>
-              {response.error.message}
-            </p>
-          ) : response.data.rows.length === 0 ? (
-            <p style={{ margin: 0, padding: `${spacing.md} 0`, color: color.textMuted, fontSize: "0.9rem", textAlign: "center" }}>
-              {action || result || createdFrom || createdTo
-                ? "No activity matches these filters."
-                : "No activity recorded on your account yet."}
-            </p>
-          ) : (
-            <>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
-                  <thead>
-                    <tr style={{ textAlign: "left", borderBottom: `1px solid ${color.border}` }}>
-                      <th style={{ padding: "0.4rem 0", color: color.textMuted, fontWeight: 500 }}>When</th>
-                      <th style={{ padding: "0.4rem 0", color: color.textMuted, fontWeight: 500 }}>Action</th>
-                      <th style={{ padding: "0.4rem 0", color: color.textMuted, fontWeight: 500 }}>Entity</th>
-                      <th style={{ padding: "0.4rem 0", color: color.textMuted, fontWeight: 500 }}>Result</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {response.data.rows.map((row) => (
-                      <tr key={row.id} style={{ borderBottom: `1px solid ${color.border}` }}>
-                        <td style={{ padding: "0.6rem 0", whiteSpace: "nowrap", color: color.textMuted }}>
-                          {row.createdAt.toLocaleString()}
-                        </td>
-                        <td style={{ padding: "0.6rem 0", color: color.text }}>{row.action}</td>
-                        <td style={{ padding: "0.6rem 0", color: color.text }}>{row.entityType}</td>
-                        <td style={{ padding: "0.6rem 0" }}>
-                          <span
-                            style={{
-                              display: "inline-block",
-                              backgroundColor: row.result === "success" ? color.statusGreenBg : color.statusRedBg,
-                              color: row.result === "success" ? color.statusGreen : color.statusRed,
-                              borderRadius: 999,
-                              padding: "0.15rem 0.6rem",
-                              fontSize: "0.75rem",
-                              fontWeight: 600,
-                            }}
-                            title={row.result === "failure" && row.failureReason ? row.failureReason : undefined}
-                          >
-                            {row.result}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <PaginationNav
-                page={response.data.page}
-                pageSize={response.data.pageSize}
-                totalCount={response.data.totalCount}
-                searchParams={params}
-              />
-            </>
+      ) : response.data.rows.length === 0 ? (
+        <section className="mb-6 rounded-card border border-border bg-surface p-6 shadow-card">
+          <EmptyState
+            message={filtered ? "No activity matches these filters." : "No activity recorded on your account yet."}
+            icon={<Icon name="history" />}
+          />
+        </section>
+      ) : (
+        <>
+          <section className="mb-3 overflow-hidden rounded-card border border-border bg-surface shadow-card">
+            <ul role="list">
+              {response.data.rows.map((row) => (
+                <li key={row.id} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border px-4 py-3 last:border-b-0">
+                  <span className="min-w-0 flex-[1_1_220px]">
+                    <span className="block font-mono text-[13px] font-medium text-ink [overflow-wrap:anywhere]">{row.action}</span>
+                    <span className="block text-xs text-muted">
+                      {humanizeEntity(row.entityType)}
+                      {row.result === "failure" && row.failureReason ? ` · ${row.failureReason}` : ""}
+                    </span>
+                  </span>
+                  <span className="whitespace-nowrap text-[13px] tabular-nums text-muted">{WHEN.format(row.createdAt)}</span>
+                  <span className="flex w-[92px] justify-end">
+                    <Badge label={row.result === "success" ? "Success" : "Failure"} tone={row.result === "success" ? "green" : "red"} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+          <p className="mb-4 text-[13px] text-muted">
+            Showing {response.data.rows.length} of {response.data.totalCount}.
+          </p>
+          {response.data.totalCount > response.data.pageSize && (
+            <PaginationNav page={response.data.page} pageSize={response.data.pageSize} totalCount={response.data.totalCount} searchParams={params} />
           )}
-        </Card>
-      </div>
+        </>
+      )}
     </div>
   );
 }

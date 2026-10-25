@@ -13,6 +13,16 @@ const nextConfig: NextConfig = {
   // without needing to hardcode today's specific hostname. Dev-only
   // concern — has no effect on `next build`/production.
   allowedDevOrigins: ["*.trycloudflare.com"],
+
+  // Playwright's isolated e2e webServer (playwright.config.ts) runs a
+  // second `next dev` instance concurrently with the developer's own dev
+  // server, against a separate Neon test branch — see
+  // docs/testing-database.md. Both processes must not write to the same
+  // `.next` build cache at once. E2E_DIST_DIR is set only by that
+  // webServer's own `env`; every other invocation (normal `next dev`/
+  // `next build`, or `next dev` run by hand) is unaffected and keeps the
+  // default `.next`.
+  distDir: process.env.E2E_DIST_DIR || ".next",
 };
 
 export default nextConfig;

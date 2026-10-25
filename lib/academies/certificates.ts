@@ -1,13 +1,15 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, ilike } from "drizzle-orm";
+import { and, eq, getTableColumns, ilike, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
+  batchCourses,
   batches,
-  certificates,
   certificateVerifications,
+  certificates,
   courses,
   examResults,
+  exams,
   gradeBands,
   programs,
   students,
@@ -69,10 +71,13 @@ import { logger } from "@/lib/logger";
  * certificate eligibility never silently drifts from the grade-bands
  * mechanism even if that invariant were ever violated elsewhere.
  *
- * Any ONE published Pass result in the batch is sufficient — PLAN.md is
- * explicit that this plan defines no "final exam" concept distinct from
- * other exams, so multiple exams per batch each independently satisfy
- * eligibility on their own.
+ * Certificates are per course: a student gets one certificate per course
+ * they complete, also when a batch runs several courses. Eligibility is
+ * therefore checked per (student, batch, course): any ONE published Pass
+ * result in an exam of that course in that batch is sufficient — the plan
+ * defines no "final exam" concept, so each exam of the course independently
+ * satisfies eligibility. A pass in another course of the same batch never
+ * counts.
  *
  * ---------------------------------------------------------------------
  * Certificate code — opaque, non-sequential, collision-retried
@@ -162,12 +167,22 @@ const CERTIFICATE_NOT_FOUND: CertificateActionError = {
 const NOT_ELIGIBLE: CertificateActionError = {
   code: "not_eligible",
   message:
-    "This student does not yet have a published, passing result in this batch, so a certificate cannot be issued.",
+    "This student does not yet have a published, passing result in this course, so a certificate cannot be issued.",
 };
 
 const DUPLICATE_CERTIFICATE: CertificateActionError = {
   code: "conflict",
-  message: "A certificate has already been issued to this student for this batch.",
+  message: "A certificate has already been issued to this student for this course in this batch.",
+};
+
+const COURSE_NOT_IN_BATCH: CertificateActionError = {
+  code: "not_found",
+  message: "That course is not part of this batch.",
+};
+
+const COURSE_REQUIRED: CertificateActionError = {
+  code: "validation",
+  message: "This batch runs several courses. Choose the course the certificate is for.",
 };
 
 const ALREADY_CANCELLED: CertificateActionError = {
@@ -198,11 +213,65 @@ export const cancelCertificateReasonSchema = z
   .min(1, "A cancellation reason is required.")
   .max(2000);
 
+// ---------------------------------------------------------------------
+// Before migration 0035 (certificates.course_id) is applied
+// ---------------------------------------------------------------------
+// Certificates are per course, stored in `certificates.course_id`. Until a
+// database has run migration 0035 that column does not exist, and every
+// query naming it fails. On such a database a certificate's course is its
+// batch's primary course (`batches.course_id`) — exactly what 0035
+// backfills and what those certificates already displayed — and issuing
+// keeps the earlier one-per-batch rule, which only matches the per-course
+// rule for single-course batches, so multi-course batches wait for 0035.
+
+let courseColumnPresent: boolean | null = null;
+let courseColumnCheckedAt = 0;
+
+/** Whether this database has `certificates.course_id` (cached; a missing
+ * column is re-checked every 30 seconds so applying 0035 takes effect). */
+async function hasCertificateCourseColumn(executor: DbClient = db): Promise<boolean> {
+  if (courseColumnPresent === true) return true;
+  if (courseColumnPresent === false && Date.now() - courseColumnCheckedAt < 30_000) return false;
+  const result = await executor.execute(
+    sql`select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'certificates' and column_name = 'course_id' limit 1`,
+  );
+  courseColumnPresent = result.rows.length > 0;
+  courseColumnCheckedAt = Date.now();
+  return courseColumnPresent;
+}
+
+// Every certificate column except course_id (pre-0035 reads and writes).
+const { courseId: _courseColumn, ...certificateColumnsWithoutCourse } = getTableColumns(certificates);
+void _courseColumn;
+
+/** Certificate rows matching `where`, with `courseId` from the column when
+ * it exists, else from the batch's primary course. */
+async function selectCertificateRows(executor: DbClient, where: SQL | undefined, limit?: number) {
+  if (await hasCertificateCourseColumn(executor)) {
+    const query = executor.select().from(certificates).where(where);
+    return limit ? query.limit(limit) : query;
+  }
+  const query = executor
+    .select({ ...certificateColumnsWithoutCourse, courseId: batches.courseId })
+    .from(certificates)
+    .innerJoin(batches, eq(batches.id, certificates.batchId))
+    .where(where);
+  return limit ? query.limit(limit) : query;
+}
+
+const COURSE_CERTIFICATES_NOT_ENABLED: CertificateActionError = {
+  code: "validation",
+  message:
+    "This batch runs several courses. Per-course certificates are not enabled on this database yet (migration 0035), so a certificate can't be issued for it.",
+};
+
 export interface CertificateRecord {
   id: string;
   academyId: string;
   studentId: string;
   batchId: string;
+  /** The completed course this certificate is for. */
+  courseId: string;
   certificateCode: string;
   issuedAt: Date;
   issuedBy: string;
@@ -219,6 +288,7 @@ function toCertificateRecord(row: typeof certificates.$inferSelect): Certificate
     academyId: row.academyId,
     studentId: row.studentId,
     batchId: row.batchId,
+    courseId: row.courseId,
     certificateCode: row.certificateCode,
     issuedAt: row.issuedAt,
     issuedBy: row.issuedBy,
@@ -276,15 +346,16 @@ interface EligibilityGradeBand {
 /**
  * See this file's module comment ("Eligibility") for the full derivation.
  * Loads every published `exam_results` row for this exact
- * (academy, student, batch) triple, and re-evaluates each one's own
- * snapshotted `grade_configuration_id` bands against its `marks_obtained`
- * — any single Pass is sufficient.
+ * (academy, student, batch) triple in exams of the given course, and
+ * re-evaluates each one's own snapshotted `grade_configuration_id` bands
+ * against its `marks_obtained` — any single Pass is sufficient.
  */
 async function isStudentEligibleForCertificate(
   executor: DbClient,
   academyId: string,
   studentId: string,
   batchId: string,
+  courseId: string,
 ): Promise<boolean> {
   const rows = await executor
     .select({
@@ -292,11 +363,13 @@ async function isStudentEligibleForCertificate(
       gradeConfigurationId: examResults.gradeConfigurationId,
     })
     .from(examResults)
+    .innerJoin(exams, eq(exams.id, examResults.examId))
     .where(
       and(
         eq(examResults.academyId, academyId),
         eq(examResults.studentId, studentId),
         eq(examResults.batchId, batchId),
+        eq(exams.courseId, courseId),
         eq(examResults.status, "published"),
       ),
     );
@@ -372,7 +445,7 @@ export type ListCertificatesResult =
  * so that UI has something to call. */
 export async function listCertificates(
   actorContext: AuthContext,
-  filters: { studentId?: string; batchId?: string } = {},
+  filters: { studentId?: string; batchId?: string; courseId?: string } = {},
 ): Promise<ListCertificatesResult> {
   const resolved = await resolveCertificatesAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -385,11 +458,12 @@ export async function listCertificates(
   if (filters.batchId) {
     conditions.push(eq(certificates.batchId, filters.batchId));
   }
+  const withCourseColumn = await hasCertificateCourseColumn();
+  if (filters.courseId) {
+    conditions.push(withCourseColumn ? eq(certificates.courseId, filters.courseId) : eq(batches.courseId, filters.courseId));
+  }
 
-  const rows = await db
-    .select()
-    .from(certificates)
-    .where(and(...conditions));
+  const rows = await selectCertificateRows(db, and(...conditions));
 
   return {
     ok: true,
@@ -421,11 +495,11 @@ export async function getCertificate(
     return { ok: false, error: CERTIFICATE_NOT_FOUND };
   }
 
-  const [row] = await db
-    .select()
-    .from(certificates)
-    .where(and(eq(certificates.id, certificateId), eq(certificates.academyId, academyId)))
-    .limit(1);
+  const [row] = await selectCertificateRows(
+    db,
+    and(eq(certificates.id, certificateId), eq(certificates.academyId, academyId)),
+    1,
+  );
   if (!row) {
     return { ok: false, error: CERTIFICATE_NOT_FOUND };
   }
@@ -438,11 +512,13 @@ export type IssueCertificateResult =
   | { ok: false; error: CertificateActionError };
 
 /**
- * PLAN.md Phase 5, Item 57 — `issueCertificate(studentId, batchId)`.
- * Certificate Lifecycle table: `Eligible -> Issued`, actor Owner/Admin/
- * Manager (`canManage`'s "full"-or-"manage" gate), "blocked by the
- * `(student_id, batch_id)` unique constraint" — see this file's module
- * comment for the full retry-loop shape.
+ * PLAN.md Phase 5, Item 57 — `issueCertificate(studentId, batchId,
+ * courseId)`. Certificate Lifecycle table: `Eligible -> Issued`, actor
+ * Owner/Admin/Manager (`canManage`'s "full"-or-"manage" gate), blocked by
+ * the `(student_id, batch_id, course_id)` unique constraint — see this
+ * file's module comment for the full retry-loop shape. `courseId` must be
+ * one of the batch's courses; it may be omitted only when the batch runs
+ * exactly one course (that course is used, as before multi-course batches).
  */
 /**
  * Accepts either the student's UUID `id` OR their human-readable
@@ -502,10 +578,34 @@ async function resolveBatchIdOrCode(
   return row?.id ?? null;
 }
 
+/** The batch's course to certify: the given one if it belongs to the batch
+ * (same academy), or the only course when none is given. */
+async function resolveBatchCourse(
+  executor: DbClient,
+  academyId: string,
+  batchId: string,
+  courseId: string | undefined,
+): Promise<{ ok: true; courseId: string } | { ok: false; error: CertificateActionError }> {
+  const rows = await executor
+    .select({ courseId: batchCourses.courseId })
+    .from(batchCourses)
+    .where(and(eq(batchCourses.academyId, academyId), eq(batchCourses.batchId, batchId)));
+  const wanted = courseId?.trim();
+  if (wanted) {
+    if (!z.string().uuid().safeParse(wanted).success || !rows.some((row) => row.courseId === wanted)) {
+      return { ok: false, error: COURSE_NOT_IN_BATCH };
+    }
+    return { ok: true, courseId: wanted };
+  }
+  if (rows.length === 1) return { ok: true, courseId: rows[0].courseId };
+  return { ok: false, error: rows.length === 0 ? COURSE_NOT_IN_BATCH : COURSE_REQUIRED };
+}
+
 export async function issueCertificate(
   actorContext: AuthContext,
   studentIdOrNumber: string,
   batchIdOrCode: string,
+  courseIdInput?: string,
 ): Promise<IssueCertificateResult> {
   const resolved = await resolveCertificatesAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -525,7 +625,27 @@ export async function issueCertificate(
     return { ok: false, error: BATCH_NOT_FOUND };
   }
 
-  const eligible = await isStudentEligibleForCertificate(db, academyId, studentId, batchId);
+  const course = await resolveBatchCourse(db, academyId, batchId, courseIdInput);
+  if (!course.ok) {
+    return { ok: false, error: course.error };
+  }
+  const courseId = course.courseId;
+
+  const withCourseColumn = await hasCertificateCourseColumn();
+  if (!withCourseColumn) {
+    // Before 0035 a certificate's course is the batch's primary course and
+    // the old one-per-batch rule applies: only single-course batches.
+    const [batchRow] = await db.select({ courseId: batches.courseId }).from(batches).where(eq(batches.id, batchId)).limit(1);
+    const batchCourseRows = await db
+      .select({ courseId: batchCourses.courseId })
+      .from(batchCourses)
+      .where(and(eq(batchCourses.academyId, academyId), eq(batchCourses.batchId, batchId)));
+    if (batchCourseRows.length > 1 || batchRow?.courseId !== courseId) {
+      return { ok: false, error: COURSE_CERTIFICATES_NOT_ENABLED };
+    }
+  }
+
+  const eligible = await isStudentEligibleForCertificate(db, academyId, studentId, batchId, courseId);
   if (!eligible) {
     return { ok: false, error: NOT_ELIGIBLE };
   }
@@ -536,7 +656,13 @@ export async function issueCertificate(
         const [existing] = await tx
           .select({ id: certificates.id })
           .from(certificates)
-          .where(and(eq(certificates.studentId, studentId), eq(certificates.batchId, batchId)))
+          .where(
+            and(
+              eq(certificates.studentId, studentId),
+              eq(certificates.batchId, batchId),
+              withCourseColumn ? eq(certificates.courseId, courseId) : undefined,
+            ),
+          )
           .limit(1);
         if (existing) {
           return { kind: "duplicate" as const };
@@ -544,16 +670,28 @@ export async function issueCertificate(
 
         const certificateCode = generateCertificateCode();
 
-        const [row] = await tx
-          .insert(certificates)
-          .values({
-            academyId,
-            studentId,
-            batchId,
-            certificateCode,
-            issuedBy: actorContext.userId,
-          })
-          .returning();
+        let row: typeof certificates.$inferSelect;
+        if (withCourseColumn) {
+          [row] = await tx
+            .insert(certificates)
+            .values({
+              academyId,
+              studentId,
+              batchId,
+              courseId,
+              certificateCode,
+              issuedBy: actorContext.userId,
+            })
+            .returning();
+        } else {
+          // Pre-0035 insert: the column list must not name course_id.
+          const inserted = await tx.execute<{ id: string }>(
+            sql`insert into ${certificates} (academy_id, student_id, batch_id, certificate_code, issued_by)
+                values (${academyId}, ${studentId}, ${batchId}, ${certificateCode}, ${actorContext.userId})
+                returning id`,
+          );
+          [row] = await selectCertificateRows(tx, eq(certificates.id, inserted.rows[0].id), 1);
+        }
 
         await recordAudit(
           {
@@ -661,7 +799,7 @@ export async function cancelCertificate(
 
   const result = await db.transaction(async (tx) => {
     const [certificate] = await tx
-      .select()
+      .select(certificateColumnsWithoutCourse)
       .from(certificates)
       .where(and(eq(certificates.id, certificateId), eq(certificates.academyId, academyId)))
       .for("update");
@@ -681,7 +819,7 @@ export async function cancelCertificate(
         cancellationReason: parsedReason.data,
       })
       .where(eq(certificates.id, certificateId))
-      .returning();
+      .returning(certificateColumnsWithoutCourse);
 
     await recordAudit(
       {
@@ -702,7 +840,9 @@ export async function cancelCertificate(
       tx,
     );
 
-    return { kind: "ok" as const, row: updated };
+    // The full record (with its course, read the way this database stores it).
+    const [row] = await selectCertificateRows(tx, eq(certificates.id, updated.id), 1);
+    return { kind: "ok" as const, row };
   });
 
   if (result.kind === "not_found") {
@@ -744,6 +884,8 @@ export async function cancelCertificate(
 export interface PublicCertificateVerification {
   studentName: string;
   programName: string;
+  /** The completed course the certificate is for. */
+  courseName: string;
   issuedAt: Date;
   status: "valid" | "cancelled";
 }
@@ -817,6 +959,7 @@ export async function verifyCertificate(
     return { ok: false, error: VERIFY_NOT_FOUND };
   }
 
+  const withCourseColumn = await hasCertificateCourseColumn();
   const [row] = await db
     .select({
       id: certificates.id,
@@ -824,11 +967,13 @@ export async function verifyCertificate(
       issuedAt: certificates.issuedAt,
       studentFullName: students.fullName,
       programName: programs.name,
+      courseName: courses.name,
     })
     .from(certificates)
     .innerJoin(students, eq(certificates.studentId, students.id))
     .innerJoin(batches, eq(certificates.batchId, batches.id))
-    .innerJoin(courses, eq(batches.courseId, courses.id))
+    // The certificate's own course; before 0035, its batch's primary course.
+    .innerJoin(courses, eq(withCourseColumn ? certificates.courseId : batches.courseId, courses.id))
     .innerJoin(programs, eq(courses.programId, programs.id))
     .where(eq(certificates.certificateCode, parsedCode.data))
     .limit(1);
@@ -850,6 +995,7 @@ export async function verifyCertificate(
     certificate: {
       studentName: row.studentFullName,
       programName: row.programName,
+      courseName: row.courseName,
       issuedAt: row.issuedAt,
       status: row.status === "cancelled" ? "cancelled" : "valid",
     },

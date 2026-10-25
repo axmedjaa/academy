@@ -1,145 +1,152 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
-import { z } from "zod";
-import {
-  updateAcademySettings,
-  type AcademySettingsFormState,
-} from "@/lib/academies/settings-actions";
+import { startTransition, useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { updateAcademySettings, type AcademySettingsFormState } from "@/lib/academies/settings-actions";
 import type { AcademySettingsRecord } from "@/lib/academies/settings";
-import { useFieldErrors } from "@/lib/validation/use-field-errors";
-import { Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
-import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import { guardAction } from "@/lib/ui/guard-action";
+import { showSuccessToast } from "@/lib/ui/toast";
+import { Button } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
+import {
+  DField,
+  DesignDialog,
+  DialogBody,
+  DialogFooter,
+  FieldGrid,
+  FormErrorBanner,
+  PhoneField,
+  controlClass,
+  invalidProps,
+  onDesignSubmit,
+  useDesignForm,
+  type DesignFormRule,
+} from "@/app/academy/_shell/design-form";
 
+const guardedUpdate = guardAction(updateAcademySettings);
 const initialState: AcademySettingsFormState = { ok: false };
 
-// Mirrors lib/academies/settings.ts's own `updateAcademySettingsSchema" —
-// only the two checks worth instant client-side feedback for (name
-// required; email format when present). The optionalText() fields there
-// have no other meaningful client-checkable constraint.
-const settingsFieldSchema = z.object({
-  name: z.string().trim().min(1, "Academy name is required"),
-  email: z
-    .string()
-    .trim()
-    .optional()
-    .or(z.literal(""))
-    .refine((value) => !value || z.string().email().safeParse(value).success, {
-      message: "Enter a valid academy email address",
-    }),
-});
-
-interface Props {
-  academy: AcademySettingsRecord;
-  /** "full" | "view_edit" | "view" | "manage" | "none" — see
-   * lib/auth/academy-permissions.ts. The page only ever renders this form
-   * once getAcademySettings has already confirmed the caller's role is not
-   * "none", and for the one row that exists today ("academy.settings")
-   * every non-"none" level is edit-capable (see that file's `manager`
-   * comment) — so this only affects labeling, never whether the form is
-   * shown or the Save button is enabled. */
-  permissionLevel: string;
-}
+const RULES: DesignFormRule[] = [
+  { name: "name", label: "Academy name", required: true },
+  {
+    name: "email",
+    label: "Email",
+    check: (value) => (!value.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) ? null : "Enter a valid email address, for example hello@academy.so."),
+  },
+];
 
 /**
- * PLAN.md Item 41 / DESIGN.md §9.11 "Academy Profile": one direct-edit form
- * (no approval step, no "pending change" state) for the full expanded
- * profile field set. `slug` and `defaultCurrency` are shown read-only, not
- * editable — see lib/academies/settings.ts's schema comment for why those
- * two columns are excluded from the editable set. The logo has its own
- * separate upload UI (academy-logo-upload.tsx, rendered alongside this
- * form by page.tsx) — no "Logo reference" field here anymore, per that
- * file's own comment on why logo management moved out of this general
- * update entirely.
+ * Edit profile (design `profile` form): the academy's own profile fields
+ * through the existing `updateAcademySettings` action (direct edit, no
+ * approval step, audited). Slug and default currency are not editable and
+ * are not offered here.
  */
-export function AcademySettingsForm({ academy, permissionLevel }: Props) {
-  const [state, formAction, pending] = useActionState(updateAcademySettings, initialState);
-  const { errors, validate } = useFieldErrors(settingsFieldSchema);
+export function EditProfileButton({ academy }: { academy: AcademySettingsRecord }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-2">
+        <Icon name="settings" width={18} height={18} />
+        Edit profile
+      </Button>
+      <DesignDialog open={open} onOpenChange={setOpen} title="Edit academy profile" description="Slug and currency cannot be changed." width={640}>
+        {open && (
+          <ProfileForm
+            academy={academy}
+            onCancel={() => setOpen(false)}
+            onSaved={() => {
+              setOpen(false);
+              router.refresh();
+            }}
+          />
+        )}
+      </DesignDialog>
+    </>
+  );
+}
+
+function ProfileForm({ academy, onCancel, onSaved }: { academy: AcademySettingsRecord; onCancel: () => void; onSaved: () => void }) {
+  const [state, formAction, pending] = useActionState(guardedUpdate, initialState);
+  const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(RULES);
 
   useEffect(() => {
     if (state.ok) {
-      showSuccessToast("Academy settings saved.");
+      showSuccessToast("Academy profile saved.");
+      onSaved();
     } else if (state.error) {
-      showErrorToast(state.error.message);
+      showServerError(state.error.message, [
+        [/name/i, "name"],
+        [/email/i, "email"],
+        [/website|url/i, "website"],
+        [/phone/i, "phone"],
+      ]);
     }
+    // Re-run only for a new action result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    const values = Object.fromEntries(new FormData(event.currentTarget));
-    if (!validate(values)) {
-      event.preventDefault();
-    }
-  }
+  const text = (name: keyof AcademySettingsRecord, label: string, placeholder?: string, full?: boolean) => (
+    <DField label={label} name={name} error={errors[name]} full={full}>
+      <input
+        type="text"
+        name={name}
+        defaultValue={(academy[name] as string | null) ?? ""}
+        placeholder={placeholder}
+        maxLength={300}
+        onBlur={blur(name)}
+        className={controlClass(Boolean(errors[name]))}
+        {...invalidProps(name, errors[name])}
+      />
+    </DField>
+  );
 
   return (
-    <Section>
-      <h2 className="text-base font-semibold text-ink">Academy profile</h2>
-      <p className="mt-1 text-sm text-muted">
-        Access level: {permissionLevel === "full" ? "Full" : "View/Edit"}. Changes save
-        immediately — there is no approval step.
-      </p>
-
-      <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-        <dt className="text-muted">Slug</dt>
-        <dd className="text-ink">{academy.slug}</dd>
-        <dt className="text-muted">Default currency</dt>
-        <dd className="text-ink">{academy.defaultCurrency}</dd>
-      </dl>
-
-      <form action={formAction} onSubmit={handleSubmit} className="mt-5 flex max-w-lg flex-col gap-3">
-        <Field label="Name" error={errors.name}>
-          <input type="text" name="name" defaultValue={academy.name} required className={inputClass} />
-        </Field>
-        <Field label="Type">
-          <input type="text" name="type" defaultValue={academy.type ?? ""} className={inputClass} />
-        </Field>
-        <Field label="Address">
-          <input type="text" name="address" defaultValue={academy.address ?? ""} className={inputClass} />
-        </Field>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Phone">
-            <input type="text" name="phone" defaultValue={academy.phone ?? ""} className={inputClass} />
-          </Field>
-          <Field label="Email" error={errors.email}>
-            <input type="email" name="email" defaultValue={academy.email ?? ""} className={inputClass} />
-          </Field>
-        </div>
-        <Field label="Website">
-          <input type="text" name="website" defaultValue={academy.website ?? ""} className={inputClass} />
-        </Field>
-        <Field label="Registration number">
-          <input
-            type="text"
-            name="registrationNumber"
-            defaultValue={academy.registrationNumber ?? ""}
-            className={inputClass}
-          />
-        </Field>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="Primary contact name">
+    <form
+      ref={formRef}
+      noValidate
+      className="flex min-h-0 flex-1 flex-col"
+      onSubmit={onDesignSubmit(validate, (data) => startTransition(() => formAction(data)))}
+    >
+      <DialogBody>
+        <FieldGrid>
+          <DField label="Academy name" name="name" required error={errors.name} full>
             <input
               type="text"
-              name="primaryContactName"
-              defaultValue={academy.primaryContactName ?? ""}
-              className={inputClass}
+              name="name"
+              defaultValue={academy.name}
+              maxLength={200}
+              onBlur={blur("name")}
+              className={controlClass(Boolean(errors.name))}
+              {...invalidProps("name", errors.name)}
             />
-          </Field>
-          <Field label="Primary contact phone">
+          </DField>
+          {text("type", "Type", "Training institute")}
+          {text("registrationNumber", "Registration number")}
+          {text("address", "Address", "Hargeisa, Somalia", true)}
+          <DField label="Phone" name="phone" error={errors.phone}>
+            <PhoneField name="phone" defaultValue={academy.phone} error={errors.phone} />
+          </DField>
+          <DField label="Email" name="email" error={errors.email}>
             <input
-              type="text"
-              name="primaryContactPhone"
-              defaultValue={academy.primaryContactPhone ?? ""}
-              className={inputClass}
+              type="email"
+              name="email"
+              defaultValue={academy.email ?? ""}
+              placeholder="hello@academy.so"
+              onBlur={blur("email")}
+              className={controlClass(Boolean(errors.email))}
+              {...invalidProps("email", errors.email)}
             />
-          </Field>
-        </div>
-
-        {state.error && <ErrorMessage message={state.error.message} />}
-
-        <Button type="submit" disabled={pending} className="self-start">
-          {pending ? "Saving..." : "Save changes"}
-        </Button>
-      </form>
-    </Section>
+          </DField>
+          {text("website", "Website", "academy.so", true)}
+          {text("primaryContactName", "Primary contact name")}
+          <DField label="Primary contact phone" name="primaryContactPhone">
+            <PhoneField name="primaryContactPhone" defaultValue={academy.primaryContactPhone} />
+          </DField>
+        </FieldGrid>
+        <FormErrorBanner message={banner} />
+      </DialogBody>
+      <DialogFooter onCancel={onCancel} submitLabel="Save" pendingLabel="Saving…" pending={pending} />
+    </form>
   );
 }

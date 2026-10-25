@@ -1,25 +1,13 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
-import { createBatch, deleteBatch, setBatchStatus, type BatchFormState } from "@/lib/academies/batches-actions";
+import { useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { deleteBatch, setBatchStatus } from "@/lib/academies/batches-actions";
 import type { BatchDeletionEligibilitySummary, BatchRecord } from "@/lib/academies/batches";
-import type { BranchRecord } from "@/lib/academies/branches";
-import type { CourseRecord } from "@/lib/academies/courses";
-import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
-import {
-  Badge,
-  Button,
-  EmptyState,
-  ErrorMessage,
-  Field,
-  LinkButton,
-  Section,
-  TableWrap,
-  inputClass,
-  td,
-  th,
-  trHover,
-} from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, PageHeader, Section, trHover } from "@/app/academy/_shell/ui";
+import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { formatDate } from "@/lib/ui/date";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import {
@@ -29,13 +17,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { BatchFormDialog, type BatchBranchOption, type BatchCourseOption } from "./batch-form";
 
-const initialState: BatchFormState = { ok: false };
+/**
+ * Batches (design A08): header with New batch, the Batch / Courses / Branch /
+ * Starts / Status / Roster table, Archive or Restore per row and Edit in the
+ * row menu. New and Edit use the design form dialog in batch-form.tsx.
+ */
+
+const ROW_BTN =
+  "inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app disabled:opacity-50";
 
 interface Props {
   batches: (BatchRecord & { deletionEligibility: BatchDeletionEligibilitySummary })[];
-  branches: BranchRecord[];
-  courses: CourseRecord[];
+  branches: BatchBranchOption[];
+  courses: BatchCourseOption[];
   canManage: boolean;
   /** Narrower than `canManage` — Trainer can archive their own assigned
    * batches but must never see a Delete action at all (permission-absent,
@@ -51,78 +47,107 @@ const STATUS_TONE: Record<BatchRecord["status"], "blue" | "green" | "slate" | "g
 };
 
 export function BatchesList({ batches, branches, courses, canManage, canDelete }: Props) {
-  const [createState, createFormAction, creating] = useActionState(createBatch, initialState);
-  // Which row's Archive/Restore or Delete confirmation is open — the
-  // dropdown menu item opens it externally (ConfirmButton's controlled
-  // mode), same pattern as app/academy/students/students-list.tsx.
+  const router = useRouter();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  // Which row's Archive/Restore or Delete confirmation is open.
   const [archiveRowId, setArchiveRowId] = useState<string | null>(null);
   const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (createState.ok) showSuccessToast("Batch created.");
-    else if (createState.error) showErrorToast(createState.error.message);
-  }, [createState]);
+  const editingBatch = batches.find((batch) => batch.id === editingId) ?? null;
 
   const courseNameById = new Map(courses.map((course) => [course.id, course.name]));
+  const branchNameById = new Map(branches.map((branch) => [branch.id, branch.name]));
 
   function toggleBatchStatus(batch: BatchRecord) {
     return setBatchStatus(batch.id, batch.status === "archived" ? "active" : "archived");
   }
 
   return (
-    <section className="flex flex-col gap-6">
+    <section className="flex flex-col">
+      <PageHeader
+        title="Batches"
+        description="Cohorts at one branch. A batch can run one course or several."
+        actions={
+          canManage ? (
+            <Button type="button" onClick={() => setCreateOpen(true)}>
+              New batch
+            </Button>
+          ) : undefined
+        }
+      />
+
       {batches.length === 0 ? (
         <Section>
-          <EmptyState message="No batches to show yet." icon={<Icon name="school" />} />
+          <EmptyState message={canManage ? "No batches yet. Create one to start enrolling students." : "No batches to show yet."} icon={<Icon name="layers" />} />
         </Section>
       ) : (
-      <TableWrap>
-        <thead>
-          <tr>
-            <th className={th}>Name</th>
-            <th className={th}>Course</th>
-            <th className={th}>Code</th>
-            <th className={th}>Start date</th>
-            <th className={th}>Status</th>
-            <th className={th}>Roster</th>
-            {canManage && <th className={th}>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
+        <DataTable stackBelow={900}>
+          <thead>
+            <tr>
+              <th className={rtTh}>Batch</th>
+              <th className={rtTh}>Courses</th>
+              <th className={rtTh}>Branch</th>
+              <th className={rtTh}>Starts</th>
+              <th className={rtTh}>Status</th>
+              <th className={rtTh}>Roster</th>
+              {canManage && <th className={rtTh}><span className="sr-only">Actions</span></th>}
+            </tr>
+          </thead>
+          <tbody>
             {batches.map((batch) => (
               <tr key={batch.id} className={trHover}>
-                <td className={`${td} font-medium`}>{batch.name}</td>
-                <td className={td}>{courseNameById.get(batch.courseId) ?? "—"}</td>
-                <td className={td}>{batch.code}</td>
-                <td className={td}>{batch.startDate}</td>
-                <td className={td}>
+                <td className={rtTd} data-label="Batch">
+                  <span className="flex flex-col">
+                    <span className="font-semibold tabular-nums">{batch.code}</span>
+                    <span className="text-xs text-muted">{batch.name}</span>
+                  </span>
+                </td>
+                <td className={rtTd} data-label="Courses">
+                  <span className="flex flex-wrap gap-1.5">
+                    {batch.courseIds.map((id) => (
+                      <span
+                        key={id}
+                        className="inline-flex items-center rounded-full bg-brand-tint px-2.5 py-1 text-xs font-semibold leading-snug text-brand"
+                      >
+                        {courseNameById.get(id) ?? "Unavailable course"}
+                      </span>
+                    ))}
+                  </span>
+                </td>
+                <td className={rtTd} data-label="Branch">
+                  {branchNameById.get(batch.branchId) ?? <span className="text-muted">—</span>}
+                </td>
+                <td className={`${rtTd} tabular-nums`} data-label="Starts">
+                  {formatDate(batch.startDate)}
+                </td>
+                <td className={rtTd} data-label="Status">
                   <Badge label={batch.status} tone={STATUS_TONE[batch.status]} />
                 </td>
-                <td className={td}>
-                  <LinkButton href={`/academy/batches/${batch.id}`} variant="secondary" className="px-2.5 py-1 text-xs">
-                    View roster
-                  </LinkButton>
+                <td className={rtTd} data-label="Roster">
+                  <Link href={`/academy/batches/${batch.id}`} className="min-h-11 inline-flex items-center font-semibold !text-brand hover:underline">
+                    Open
+                  </Link>
                 </td>
                 {canManage && (
-                  <td className={td}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          aria-label={`Actions for ${batch.name}`}
-                          className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
-                        >
-                          <Icon name="more" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setArchiveRowId(batch.id)}>
-                          {batch.status === "archived" ? "Restore" : "Archive"}
-                        </DropdownMenuItem>
-                        {canDelete && (
-                          <>
-                            <DropdownMenuSeparator />
-                            {batch.deletionEligibility.eligible ? (
+                  <td className={rtTd} data-actions="">
+                    <span className="inline-flex items-center gap-2">
+                      <button type="button" onClick={() => setArchiveRowId(batch.id)} className={ROW_BTN}>
+                        {batch.status === "archived" ? "Restore" : "Archive"}
+                      </button>
+                      <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={`More actions for ${batch.name}`}
+                              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-app hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                            >
+                              <Icon name="more" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setEditingId(batch.id)}>Edit</DropdownMenuItem>
+                            {canDelete && <DropdownMenuSeparator />}
+                            {!canDelete ? null : batch.deletionEligibility.eligible ? (
                               <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(batch.id)}>
                                 Delete
                               </DropdownMenuItem>
@@ -134,10 +159,9 @@ export function BatchesList({ batches, branches, courses, canManage, canDelete }
                                 Delete
                               </DropdownMenuItem>
                             )}
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                    </span>
 
                     <ConfirmButton
                       label={batch.status === "archived" ? "Restore" : "Archive"}
@@ -151,11 +175,12 @@ export function BatchesList({ batches, branches, courses, canManage, canDelete }
                           <>This batch will be marked active again and available for enrollment.</>
                         ) : (
                           <>
-                            Archived batches are hidden from new enrollment, but the roster and every
-                            student&apos;s history is kept and can be restored at any time.
+                            Archived batches are hidden from new enrollment, but the roster and every student&apos;s
+                            history is kept and can be restored at any time.
                           </>
                         )
                       }
+                      successMessage={batch.status === "archived" ? "Batch restored." : "Batch archived."}
                       onConfirm={() => toggleBatchStatus(batch)}
                     />
                     {canDelete && batch.deletionEligibility.eligible && (
@@ -167,6 +192,7 @@ export function BatchesList({ batches, branches, courses, canManage, canDelete }
                         title={`Delete "${batch.name}" permanently?`}
                         description={<>This cannot be undone.</>}
                         confirmInput={{ label: `Type "${batch.name}" to confirm`, requiredValue: batch.name }}
+                        successMessage="Batch deleted."
                         onConfirm={() => deleteBatch(batch.id, batch.name)}
                       />
                     )}
@@ -174,57 +200,29 @@ export function BatchesList({ batches, branches, courses, canManage, canDelete }
                 )}
               </tr>
             ))}
-        </tbody>
-      </TableWrap>
+          </tbody>
+        </DataTable>
       )}
 
       {canManage && (
-        <Section>
-          <h2 className="text-base font-semibold text-ink">Add batch</h2>
-          <p className="mt-1 text-sm text-muted">
-            A batch is a scheduled offering of a course — pick the course it belongs to, then the branch
-            it runs at.
-          </p>
-          <form action={createFormAction} className="mt-4 flex max-w-lg flex-col gap-3">
-            <Field label="Course">
-              <select name="courseId" required className={inputClass}>
-                {courses.map((course) => (
-                  <option key={course.id} value={course.id}>
-                    {course.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Branch">
-              <select name="branchId" required className={inputClass}>
-                {branches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Name">
-              <input type="text" name="name" required className={inputClass} />
-            </Field>
-            <Field label="Code">
-              <input type="text" name="code" required className={inputClass} />
-            </Field>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Start date">
-                <input type="date" name="startDate" required className={inputClass} />
-              </Field>
-              <Field label="End date">
-                <input type="date" name="endDate" className={inputClass} />
-              </Field>
-            </div>
-            {createState.error && <ErrorMessage message={createState.error.message} />}
-            {createState.ok && <p className="text-sm font-medium text-success">Batch created.</p>}
-            <Button type="submit" disabled={creating} className="self-start">
-              {creating ? "Creating..." : "Create batch"}
-            </Button>
-          </form>
-        </Section>
+        <>
+          <BatchFormDialog
+            open={createOpen}
+            onOpenChange={setCreateOpen}
+            batch={null}
+            branches={branches}
+            courses={courses}
+            onSaved={() => router.refresh()}
+          />
+          <BatchFormDialog
+            open={editingBatch !== null}
+            onOpenChange={(next) => !next && setEditingId(null)}
+            batch={editingBatch}
+            branches={branches}
+            courses={courses}
+            onSaved={() => router.refresh()}
+          />
+        </>
       )}
     </section>
   );

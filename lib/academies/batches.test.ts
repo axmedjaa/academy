@@ -3,6 +3,7 @@ import { and, eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -34,6 +35,7 @@ import {
   updateBatch,
   type CreateBatchInput,
 } from "./batches";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -154,7 +156,7 @@ function validInput(
 ): CreateBatchInput {
   return {
     branchId,
-    courseId,
+    courseIds: [courseId],
     name: `Test Batch ${randomUUID()}`,
     code: `B-${randomUUID().slice(0, 8)}`,
     startDate: "2026-01-15",
@@ -177,7 +179,7 @@ async function insertStudentDirect(academyId: string, branchId: string, creatorU
 }
 
 async function enrollStudentDirect(academyId: string, batchId: string, studentId: string): Promise<void> {
-  await db.insert(batchEnrollments).values({ academyId, batchId, studentId, status: "active" });
+  await db.insert(batchEnrollments).values({ academyId, batchId, courseId: await courseOfBatch(batchId), studentId, status: "active" });
 }
 
 async function insertGradeConfigDirect(academyId: string, creatorUserId: string): Promise<string> {
@@ -191,7 +193,7 @@ async function insertGradeConfigDirect(academyId: string, creatorUserId: string)
 async function insertExamDirect(academyId: string, batchId: string): Promise<string> {
   const [row] = await db
     .insert(exams)
-    .values({ academyId, batchId, name: `Exam ${randomUUID()}`, maxMarks: "100" })
+    .values({ academyId, batchId, courseId: await courseOfBatch(batchId), name: `Exam ${randomUUID()}`, maxMarks: "100" })
     .returning({ id: exams.id });
   return row.id;
 }
@@ -225,6 +227,7 @@ async function insertCertificateDirect(
     academyId,
     studentId,
     batchId,
+    courseId: await courseOfBatch(batchId),
     certificateCode: `CERT-${randomUUID()}`,
     issuedBy,
     status,
@@ -247,6 +250,7 @@ afterAll(async () => {
     await db.delete(gradeConfigurations).where(eq(gradeConfigurations.academyId, academyId));
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -476,6 +480,68 @@ describe("updateBatch / archiveBatch — branch scoping", () => {
     const archived = await archiveBatch(context, created.batch.id);
     expect(archived.ok).toBe(true);
     if (archived.ok) expect(archived.batch.status).toBe("archived");
+  });
+});
+
+describe("multi-course batches", () => {
+  it("creates a batch with one course and records it in batch_courses", async () => {
+    const { branchId, courseId, context } = await setupAcademy("academy_owner");
+    const result = await createBatch(context, validInput(branchId, courseId));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.batch.courseIds).toEqual([courseId]);
+    const rows = await db.select().from(batchCourses).where(eq(batchCourses.batchId, result.batch.id));
+    expect(rows.map((row) => row.courseId)).toEqual([courseId]);
+  });
+
+  it("creates a batch with several courses, the first as its primary", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const secondCourseId = await insertProgramAndCourse(academyId);
+    const result = await createBatch(context, { ...validInput(branchId, courseId), courseIds: [courseId, secondCourseId] });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.batch.courseId).toBe(courseId);
+    expect(result.batch.courseIds.sort()).toEqual([courseId, secondCourseId].sort());
+  });
+
+  it("refuses a batch with no course", async () => {
+    const { branchId, courseId, context } = await setupAcademy("academy_owner");
+    const result = await createBatch(context, { ...validInput(branchId, courseId), courseIds: [] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("refuses another academy's course", async () => {
+    const { branchId, courseId, context } = await setupAcademy("academy_owner");
+    const other = await setupAcademy("academy_owner");
+    const result = await createBatch(context, { ...validInput(branchId, courseId), courseIds: [courseId, other.courseId] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("adds and removes courses on edit, but keeps a course that students use", async () => {
+    const { academyId, userId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const secondCourseId = await insertProgramAndCourse(academyId);
+    const created = await createBatch(context, validInput(branchId, courseId));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const batchId = created.batch.id;
+
+    const added = await updateBatch(context, batchId, { ...validInput(branchId, courseId), courseIds: [courseId, secondCourseId] });
+    expect(added.ok).toBe(true);
+    if (added.ok) expect(added.batch.courseIds.sort()).toEqual([courseId, secondCourseId].sort());
+
+    const studentId = await insertStudentDirect(academyId, branchId, userId);
+    await db.insert(batchEnrollments).values({ academyId, batchId, courseId, studentId, status: "active" });
+
+    const removeUsed = await updateBatch(context, batchId, { ...validInput(branchId, courseId), courseIds: [secondCourseId] });
+    expect(removeUsed.ok).toBe(false);
+    if (!removeUsed.ok) expect(removeUsed.error.code).toBe("conflict");
+
+    const removeUnused = await updateBatch(context, batchId, { ...validInput(branchId, courseId), courseIds: [courseId] });
+    expect(removeUnused.ok).toBe(true);
+    const rows = await db.select().from(batchCourses).where(eq(batchCourses.batchId, batchId));
+    expect(rows.map((row) => row.courseId)).toEqual([courseId]);
   });
 });
 

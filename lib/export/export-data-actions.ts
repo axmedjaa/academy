@@ -5,6 +5,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { academicReportFiltersSchema } from "@/lib/academies/academic-reports";
 import { financeReportFiltersSchema } from "@/lib/academies/finance-reports";
 import { studentReportFiltersSchema } from "@/lib/academies/student-reports";
+import { getStudentsOverview } from "@/lib/academies/students-overview";
 import {
   exportData,
   type ExportDataError,
@@ -46,6 +47,12 @@ const studentListExportFiltersSchema = z.object({
   searchTerm: z.string().trim().min(1).max(200).optional(),
   branchId: z.string().uuid().optional(),
   status: z.enum(["active", "archived"]).optional(),
+  batchId: z.string().uuid().optional(),
+  needsEnrollment: z.boolean().optional(),
+  /** Resolved server-side to student ids via getStudentsOverview (the same
+   * scoped computation the Students page filters by); never accepted as a
+   * client-supplied id list. */
+  payment: z.enum(["unpaid", "overdue", "paid"]).optional(),
 });
 
 const formatSchema = z.enum(["csv", "json"]).optional();
@@ -100,8 +107,8 @@ function toResult(result: Awaited<ReturnType<typeof exportData>>): ExportDataAct
 }
 
 /**
- * `/academy/finance-reports` and `/academy/reports`'s Finance tab — both
- * render `FinanceReportsView`, which is where this is called from.
+ * `/academy/finance`'s header and `/academy/reports`'s Finance tab — both
+ * call this from their Export CSV buttons.
  */
 export async function exportFinanceReportAction(
   rawFilters: unknown = {},
@@ -204,7 +211,14 @@ export async function exportStudentListAction(
     return { ok: false, error: { code: "VALIDATION_ERROR", message: parsedFilters.error.issues[0]?.message ?? "Invalid filters." } };
   }
 
-  const result = await exportData(context, "student_list", parsedFilters.data, parsedFormat.data);
+  const { payment, ...searchFilters } = parsedFilters.data;
+  let studentIds: string[] | undefined;
+  if (payment) {
+    const overview = await getStudentsOverview(context, { branchId: searchFilters.branchId });
+    studentIds = overview.ok && overview.overview.finance ? overview.overview.finance.paymentIds[payment] : [];
+  }
+
+  const result = await exportData(context, "student_list", { ...searchFilters, studentIds }, parsedFormat.data);
   return toResult(result);
 }
 

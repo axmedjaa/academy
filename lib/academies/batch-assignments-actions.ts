@@ -50,10 +50,19 @@ function parsePaymentPlanFormData(formData: FormData): EnrollStudentInput["payme
   };
 }
 
+/** The batch courses chosen on an enroll form (`courseIds`, repeatable). */
+function parseCourseIds(formData: FormData): string[] {
+  return formData
+    .getAll("courseIds")
+    .map((value) => String(value))
+    .filter((value) => value.length > 0);
+}
+
 function parseEnrollStudentFormData(formData: FormData): EnrollStudentInput {
   return {
     batchId: String(formData.get("batchId") ?? ""),
     studentId: String(formData.get("studentId") ?? ""),
+    courseIds: parseCourseIds(formData),
     paymentPlan: parsePaymentPlanFormData(formData),
   };
 }
@@ -172,12 +181,15 @@ export async function updateStudentEnrollment(
 
   const studentId = String(formData.get("studentId") ?? "");
   const batchId = String(formData.get("batchId") ?? "").trim();
-  // Only relevant when enrolling into a NEW course (a plain withdraw, empty
-  // batchId, needs no plan) — parsed unconditionally since it's harmless
-  // when unused, and updateStudentEnrollment itself only requires it when
-  // batchId is present.
+  // Adds enrollments in the chosen batch's courses; never withdraws others.
   const paymentPlan = batchId ? parsePaymentPlanFormData(formData) : undefined;
-  const result = await updateStudentEnrollmentForActor(context, studentId, batchId || undefined, paymentPlan);
+  const result = await updateStudentEnrollmentForActor(
+    context,
+    studentId,
+    batchId || undefined,
+    paymentPlan,
+    parseCourseIds(formData),
+  );
   if (!result.ok) {
     return { ok: false, error: result.error };
   }

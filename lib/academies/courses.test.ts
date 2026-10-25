@@ -3,6 +3,7 @@ import { and, eq, or } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -191,6 +192,7 @@ afterAll(async () => {
       ),
     );
   for (const academyId of createdAcademyIds) {
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));

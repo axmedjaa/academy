@@ -22,15 +22,28 @@
   --color-border-strong: #cbd5e1;
   --color-muted: #6b7280;
   --color-ink: #111827;
-  --color-navy: #1b2a4a;
+  /* Dardar School System rebrand (color tokens only — see DESIGN.md §1).
+     --color-navy historically held a separate dark-navy hue used for the
+     Platform shell's sidebar/scrim/axis-label roles; the new brand has a
+     single primary hue (burgundy) rather than two unrelated brand hues, so
+     this now maps to the same burgundy as --color-brand. Kept as a distinct
+     variable (not removed) because utility classes and inline-style call
+     sites reference it by name. Overlays must not use it: a scrim is the
+     neutral rgba(17, 24, 39, 0.5), never the brand color. */
+  --color-navy: #850019;
 
-  --color-brand: #2f5fe0;
-  --color-brand-hover: #24499f;
-  /* Phase 1 addition: a light brand-blue surface for "selected/active" and
-     subtle highlight backgrounds (sidebar active item, info callouts) —
-     distinct from the *-bg status tokens below, which are reserved for
-     status semantics (success/warning/danger/info), not brand emphasis. */
-  --color-brand-tint: #eef2ff;
+  --color-brand: #850019;
+  --color-brand-hover: #6b0014;
+  /* A light brand surface for "selected/active" and subtle highlight
+     backgrounds (sidebar active item, info callouts) — distinct from the
+     *-bg status tokens below, which are reserved for status semantics
+     (success/warning/danger/info), not brand emphasis. */
+  --color-brand-tint: #f9e8ec;
+  /* Dardar School System accent gold. Used sparingly for highlights/accents
+     (never as a background behind white or light text — see DESIGN.md §1
+     for the contrast rule: gold only pairs with dark ink text or sits on a
+     dark brand surface). */
+  --color-accent-gold: #f5b638;
 
   --color-success: #047857;
   --color-success-bg: #ecfdf5;
@@ -282,6 +295,55 @@ html {
 }
 
 /*
+ * Dashboard card grids (A01/P01 reference motion): each card rises in with a
+ * short stagger, and on hover a card's border warms toward the brand and its
+ * shadow lifts. The trend chart's line reveals left to right once. All of it
+ * is skipped under prefers-reduced-motion.
+ */
+@keyframes dd-chart-reveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+    opacity: 0.4;
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+}
+.dd-grid > * {
+  animation: fade-in-up 0.22s ease-out backwards;
+  transition:
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+.dd-grid > *:nth-child(2) { animation-delay: 40ms; }
+.dd-grid > *:nth-child(3) { animation-delay: 80ms; }
+.dd-grid > *:nth-child(4) { animation-delay: 120ms; }
+.dd-grid > *:nth-child(5) { animation-delay: 160ms; }
+.dd-grid > *:nth-child(n + 6) { animation-delay: 200ms; }
+.dd-lift {
+  transition:
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+.dd-lift:hover {
+  border-color: #d8c3c8;
+  box-shadow: 0 6px 18px rgba(17, 24, 39, 0.08);
+}
+.dd-chart {
+  animation: dd-chart-reveal 0.6s ease-out backwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dd-grid > *,
+  .dd-chart {
+    animation: none;
+  }
+  .dd-lift {
+    transition: none;
+  }
+}
+
+/*
  * Console shell (app/_console/console-shell.tsx) — Platform Console design:
  * a light 260px sidebar at >=900px (collapsible to a 72px rail), a 72px icon
  * rail with tooltips at 640-899px, and an off-canvas 288px drawer below
@@ -425,3 +487,150 @@ html {
     animation: none !important;
   }
 }
+
+/*
+ * DataTable (app/academy/_shell/page-blocks.tsx): below its threshold the
+ * table becomes the design's stacked cards — header hidden, one card per
+ * row, each cell labelled from data-label. The threshold is the table's own
+ * container width (not the viewport), matching the design's rule of
+ * stacking once the columns no longer fit the content area.
+ */
+.rt-wrap { container-type: inline-size; }
+/* A stacked cell's label stays left-aligned even on a right-aligned
+   (numeric) column. */
+.rt td[data-label]::before { text-align: left; }
+@container (max-width: 599px) {
+  .rt-600 .rt-frame { border: 0; background: transparent; box-shadow: none; overflow: visible; }
+  .rt-600 .rt, .rt-600 .rt tbody, .rt-600 .rt tr, .rt-600 .rt td { display: block; }
+  .rt-600 .rt thead { display: none; }
+  .rt-600 .rt tbody { display: flex; flex-direction: column; gap: 14px; }
+  .rt-600 .rt tr {
+    padding: 6px 18px 10px;
+    background: var(--color-surface);
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 20px -14px rgba(17, 24, 39, 0.2);
+  }
+  .rt-600 .rt td {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 0;
+    border: 0;
+    border-top: 1px solid #f0f1f4;
+  }
+  .rt-600 .rt td:first-child { border-top: 0; padding: 10px 0 12px; }
+  .rt-600 .rt td[data-label]:not(:first-child)::before {
+    content: attr(data-label);
+    flex: 0 0 112px;
+    font-size: 12px;
+    line-height: 1.3;
+    color: var(--color-muted);
+  }
+  .rt-600 .rt td[data-actions] { justify-content: flex-end; padding: 12px 0 4px; }
+  .rt-600 .rt td[data-actions]::before { content: none; }
+  .rt-600 .rt td[data-empty] { display: none; }
+}
+@container (max-width: 759px) {
+  .rt-760 .rt-frame { border: 0; background: transparent; box-shadow: none; overflow: visible; }
+  .rt-760 .rt, .rt-760 .rt tbody, .rt-760 .rt tr, .rt-760 .rt td { display: block; }
+  .rt-760 .rt thead { display: none; }
+  .rt-760 .rt tbody { display: flex; flex-direction: column; gap: 14px; }
+  .rt-760 .rt tr {
+    padding: 6px 18px 10px;
+    background: var(--color-surface);
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 20px -14px rgba(17, 24, 39, 0.2);
+  }
+  .rt-760 .rt td {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 0;
+    border: 0;
+    border-top: 1px solid #f0f1f4;
+  }
+  .rt-760 .rt td:first-child { border-top: 0; padding: 10px 0 12px; }
+  .rt-760 .rt td[data-label]:not(:first-child)::before {
+    content: attr(data-label);
+    flex: 0 0 112px;
+    font-size: 12px;
+    line-height: 1.3;
+    color: var(--color-muted);
+  }
+  .rt-760 .rt td[data-actions] { justify-content: flex-end; padding: 12px 0 4px; }
+  .rt-760 .rt td[data-actions]::before { content: none; }
+  .rt-760 .rt td[data-empty] { display: none; }
+}
+@container (max-width: 899px) {
+  .rt-900 .rt-frame { border: 0; background: transparent; box-shadow: none; overflow: visible; }
+  .rt-900 .rt, .rt-900 .rt tbody, .rt-900 .rt tr, .rt-900 .rt td { display: block; }
+  .rt-900 .rt thead { display: none; }
+  .rt-900 .rt tbody { display: flex; flex-direction: column; gap: 14px; }
+  .rt-900 .rt tr {
+    padding: 6px 18px 10px;
+    background: var(--color-surface);
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 20px -14px rgba(17, 24, 39, 0.2);
+  }
+  .rt-900 .rt td {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 0;
+    border: 0;
+    border-top: 1px solid #f0f1f4;
+  }
+  .rt-900 .rt td:first-child { border-top: 0; padding: 10px 0 12px; }
+  .rt-900 .rt td[data-label]:not(:first-child)::before {
+    content: attr(data-label);
+    flex: 0 0 112px;
+    font-size: 12px;
+    line-height: 1.3;
+    color: var(--color-muted);
+  }
+  .rt-900 .rt td[data-actions] { justify-content: flex-end; padding: 12px 0 4px; }
+  .rt-900 .rt td[data-actions]::before { content: none; }
+  .rt-900 .rt td[data-empty] { display: none; }
+}
+@container (max-width: 1039px) {
+  .rt-1040 .rt-frame { border: 0; background: transparent; box-shadow: none; overflow: visible; }
+  .rt-1040 .rt, .rt-1040 .rt tbody, .rt-1040 .rt tr, .rt-1040 .rt td { display: block; }
+  .rt-1040 .rt thead { display: none; }
+  .rt-1040 .rt tbody { display: flex; flex-direction: column; gap: 14px; }
+  .rt-1040 .rt tr {
+    padding: 6px 18px 10px;
+    background: var(--color-surface);
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04), 0 8px 20px -14px rgba(17, 24, 39, 0.2);
+  }
+  .rt-1040 .rt td {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 0;
+    border: 0;
+    border-top: 1px solid #f0f1f4;
+  }
+  .rt-1040 .rt td:first-child { border-top: 0; padding: 10px 0 12px; }
+  .rt-1040 .rt td[data-label]:not(:first-child)::before {
+    content: attr(data-label);
+    flex: 0 0 112px;
+    font-size: 12px;
+    line-height: 1.3;
+    color: var(--color-muted);
+  }
+  .rt-1040 .rt td[data-actions] { justify-content: flex-end; padding: 12px 0 4px; }
+  .rt-1040 .rt td[data-actions]::before { content: none; }
+  .rt-1040 .rt td[data-empty] { display: none; }
+}
+
+/* Loading skeletons (app/academy/_shell/skeletons.tsx): when a table is in
+   its stacked-card form, show three placeholder cards, not the full row count. */
+@container (max-width: 599px) { .rt-600 .rt tr[data-skel-extra] { display: none; } }
+@container (max-width: 759px) { .rt-760 .rt tr[data-skel-extra] { display: none; } }
+@container (max-width: 899px) { .rt-900 .rt tr[data-skel-extra] { display: none; } }
+@container (max-width: 1039px) { .rt-1040 .rt tr[data-skel-extra] { display: none; } }

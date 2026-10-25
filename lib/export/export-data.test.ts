@@ -3,6 +3,7 @@ import { and, desc, eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -43,6 +44,7 @@ import {
   STUDENT_LIST_COLUMNS,
   STUDENT_REPORT_COLUMNS,
 } from "./export-data";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -289,7 +291,7 @@ async function insertGradeConfigDirect(academyId: string, creatorUserId: string)
 async function insertExamDirect(academyId: string, batchId: string): Promise<string> {
   const [row] = await db
     .insert(exams)
-    .values({ academyId, batchId, name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
+    .values({ academyId, batchId, courseId: await courseOfBatch(batchId), name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
     .returning({ id: exams.id });
   return row.id;
 }
@@ -393,6 +395,7 @@ afterAll(async () => {
     for (const batch of batchRows) {
       await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.batchId, batch.id));
     }
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));

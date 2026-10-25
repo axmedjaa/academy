@@ -1,12 +1,13 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
-import { getCourse, listCourseEnrollments } from "@/lib/academies/courses";
-import { BackLink, Badge, PAGE_WRAP, PageMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
-
-function formatDate(value: string | null): string {
-  if (!value) return "—";
-  return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
+import { getCourse, listCourseEnrollments, listCourses } from "@/lib/academies/courses";
+import { listPrograms } from "@/lib/academies/programs";
+import { listStaff } from "@/lib/academies/staff";
+import { formatDate } from "@/lib/ui/date";
+import { BackLink, Badge, PAGE_WRAP, PageHeader, PageMessage, trHover } from "@/app/academy/_shell/ui";
+import { BlockTitle, DataTable, KvCard, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { CoursePictureCard, EditCourseButton } from "./course-detail-actions";
 
 const ENROLLMENT_STATUS_LABEL: Record<string, string> = {
   active: "Active",
@@ -14,20 +15,17 @@ const ENROLLMENT_STATUS_LABEL: Record<string, string> = {
   completed: "Completed",
 };
 
-const ENROLLMENT_STATUS_TONE: Record<string, "green" | "gray" | "amber"> = {
+const ENROLLMENT_STATUS_TONE: Record<string, "green" | "gray" | "slate"> = {
   active: "green",
   withdrawn: "gray",
-  completed: "amber",
+  completed: "slate",
 };
 
 /**
- * Simple Academy course-details view — administration only. Course
- * information (name/image/description/instructor/dates/status) plus who's
- * enrolled, aggregated across the course's batches via the existing
- * Student -> Batch -> Course relationship (lib/academies/courses.ts's
- * listCourseEnrollments). Deliberately does NOT contain any lessons/
- * modules/videos/progress — this is not an LMS, per the approved simple
- * course/enrollment model.
+ * Course detail (design A07 detail): back link, the course name with its
+ * code and program, the Course picture block, the Course key-value card and
+ * Enrolled students across every batch of the course. Administration only:
+ * no lessons, modules or progress — this is not an LMS.
  */
 export default async function CourseDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: courseId } = await params;
@@ -48,72 +46,88 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ i
   }
   const { course } = courseResult;
 
-  const enrollmentsResult = await listCourseEnrollments(context, courseId);
+  const [enrollmentsResult, coursesResult, programsResult, staffResult] = await Promise.all([
+    listCourseEnrollments(context, courseId),
+    listCourses(context),
+    listPrograms(context),
+    listStaff(context),
+  ]);
   const enrollments = enrollmentsResult.ok ? enrollmentsResult.enrollments : [];
+  const canManage = coursesResult.ok && coursesResult.canManage;
+  const programs = programsResult.ok ? programsResult.programs : [];
+  const programName = programs.find((program) => program.id === course.programId)?.name;
+  const instructors = staffResult.ok
+    ? staffResult.staff.filter((s) => s.status === "active").map((s) => ({ id: s.id, fullName: s.fullName }))
+    : [];
   const activeCount = enrollments.filter((e) => e.status === "active").length;
+
+  const dates =
+    course.startDate || course.endDate
+      ? `${formatDate(course.startDate, "Not set")} to ${formatDate(course.endDate, "Not set")}`
+      : "Not set";
 
   return (
     <div className={PAGE_WRAP}>
-      <BackLink href="/academy/courses" label="Back to courses" />
+      <BackLink href="/academy/courses" label="All courses" />
+      <PageHeader
+        title={course.name}
+        description={[course.code, programName].filter(Boolean).join(" · ") || undefined}
+        actions={canManage ? <EditCourseButton course={course} programs={programs} instructors={instructors} /> : undefined}
+      />
 
-      <Section className="flex flex-col gap-5 sm:flex-row sm:items-start">
-        {course.imageUrl && (
-          // eslint-disable-next-line @next/next/no-img-element -- see app/academy/id-cards/id-card-visual.tsx precedent
-          <img
-            src={course.imageUrl}
-            alt={`${course.name} course cover`}
-            className="h-32 w-full shrink-0 rounded-md object-cover sm:w-52"
-          />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-bold text-ink">{course.name}</h1>
-            <Badge label={course.status} tone={course.status === "archived" ? "gray" : "green"} />
-          </div>
-          <p className="mt-1 text-sm text-muted">{course.code ? `Code: ${course.code}` : "No course code"}</p>
-          {course.description && <p className="mt-3 text-sm text-ink">{course.description}</p>}
+      <CoursePictureCard course={course} canManage={canManage} />
 
-          <dl className="mt-4 grid grid-cols-[140px_1fr] gap-y-2 text-sm">
-            <dt className="text-muted">Instructor</dt>
-            <dd className="text-ink">{course.instructorName ?? "—"}</dd>
-            <dt className="text-muted">Starts</dt>
-            <dd className="text-ink">{formatDate(course.startDate)}</dd>
-            <dt className="text-muted">Ends</dt>
-            <dd className="text-ink">{formatDate(course.endDate)}</dd>
-            {course.durationWeeks !== null && (
-              <>
-                <dt className="text-muted">Duration</dt>
-                <dd className="text-ink">{course.durationWeeks} weeks</dd>
-              </>
-            )}
-            <dt className="text-muted">Enrolled students</dt>
-            <dd className="text-ink">{activeCount}</dd>
-          </dl>
-        </div>
-      </Section>
+      <KvCard
+        title="Course"
+        rows={[
+          ["Duration", course.durationWeeks !== null ? `${course.durationWeeks} weeks` : <span key="d" className="text-muted">Not set</span>],
+          ["Dates", dates],
+          ["Instructor", course.instructorName ?? <span key="i" className="text-muted">Not assigned</span>],
+          ["Status", <Badge key="s" label={course.status} tone={course.status === "archived" ? "gray" : "green"} />],
+          ...(course.description ? ([["Description", course.description]] as [string, string][]) : []),
+        ]}
+      />
 
-      <h2 className="mb-3 mt-6 text-lg font-semibold text-ink">Enrolled students</h2>
+      <BlockTitle>
+        Enrolled students{" "}
+        <span className="font-normal text-muted">
+          ({activeCount} active{enrollments.length !== activeCount ? `, ${enrollments.length} in total` : ""})
+        </span>
+      </BlockTitle>
       {enrollments.length === 0 ? (
-        <Section>
-          <p className="text-sm text-muted">No students are enrolled in this course yet.</p>
-        </Section>
+        <div className="mb-8 rounded-card border border-border bg-surface px-4 py-8 text-center text-sm text-muted shadow-card">
+          No students enrolled yet.
+        </div>
       ) : (
-        <TableWrap>
+        <DataTable stackBelow={600}>
           <thead>
             <tr>
-              <th className={th}>Student #</th>
-              <th className={th}>Name</th>
-              <th className={th}>Batch</th>
-              <th className={th}>Status</th>
+              <th className={rtTh}>Student</th>
+              <th className={rtTh}>Batch</th>
+              <th className={rtTh}>Status</th>
             </tr>
           </thead>
           <tbody>
             {enrollments.map((enrollment) => (
               <tr key={`${enrollment.studentId}-${enrollment.batchId}`} className={trHover}>
-                <td className={td}>{enrollment.studentNumber}</td>
-                <td className={td}>{enrollment.studentFullName}</td>
-                <td className={td}>{enrollment.batchName}</td>
-                <td className={td}>
+                <td className={rtTd} data-label="Student">
+                  <Link
+                    href={`/academy/students/${enrollment.studentId}`}
+                    className="flex min-h-11 flex-col justify-center no-underline hover:no-underline"
+                  >
+                    <span className="font-semibold !text-ink hover:underline">{enrollment.studentFullName}</span>
+                    <span className="text-xs text-muted">{enrollment.studentNumber}</span>
+                  </Link>
+                </td>
+                <td className={rtTd} data-label="Batch">
+                  <Link
+                    href={`/academy/batches/${enrollment.batchId}`}
+                    className="inline-flex min-h-11 items-center !text-ink no-underline hover:underline"
+                  >
+                    {enrollment.batchName}
+                  </Link>
+                </td>
+                <td className={rtTd} data-label="Status">
                   <Badge
                     label={ENROLLMENT_STATUS_LABEL[enrollment.status] ?? enrollment.status}
                     tone={ENROLLMENT_STATUS_TONE[enrollment.status] ?? "gray"}
@@ -122,7 +136,7 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ i
               </tr>
             ))}
           </tbody>
-        </TableWrap>
+        </DataTable>
       )}
     </div>
   );

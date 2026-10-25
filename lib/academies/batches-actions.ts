@@ -28,7 +28,10 @@ export interface BatchFormState {
 function parseBatchFormData(formData: FormData): CreateBatchInput | UpdateBatchInput {
   return {
     branchId: String(formData.get("branchId") ?? ""),
-    courseId: String(formData.get("courseId") ?? ""),
+    // One or more `courseIds` fields; a single legacy `courseId` still works.
+    courseIds: (formData.getAll("courseIds").length > 0 ? formData.getAll("courseIds") : formData.getAll("courseId"))
+      .map((value) => String(value))
+      .filter((value) => value.length > 0),
     name: String(formData.get("name") ?? ""),
     code: String(formData.get("code") ?? ""),
     startDate: String(formData.get("startDate") ?? ""),

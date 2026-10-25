@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -461,6 +461,14 @@ export async function listAcademyUsageOverview(): Promise<AcademyUsageOverviewRo
     }
   }
 
+  return buildAcademyUsageOverviewRows(academyRows, latestSubscriptionByAcademy, latestUsageByAcademy);
+}
+
+function buildAcademyUsageOverviewRows(
+  academyRows: { id: string; name: string }[],
+  latestSubscriptionByAcademy: Map<string, { planName: string; maxBranches: number; maxStudents: number; maxStaff: number; maxCourses: number; maxStorageBytes: number }>,
+  latestUsageByAcademy: Map<string, AcademyUsageSnapshot>,
+): AcademyUsageOverviewRow[] {
   return academyRows.map((academy) => {
     const subscription = latestSubscriptionByAcademy.get(academy.id);
     return {
@@ -479,6 +487,89 @@ export async function listAcademyUsageOverview(): Promise<AcademyUsageOverviewRo
         : null,
     };
   });
+}
+
+export interface AcademyUsageOverviewPage {
+  rows: AcademyUsageOverviewRow[];
+  totalCount: number;
+}
+
+/**
+ * Perf investigation (Afoogy slow-dashboard task, query-performance step):
+ * same per-academy shape, same academy-name ordering, same "latest
+ * subscription/usage row per academy" semantics as
+ * `listAcademyUsageOverview()` above — but for /platform/usage
+ * (app/platform/usage/page.tsx), which only ever renders one `pageSize`-
+ * row slice. That function fetches *every* academy plus *every*
+ * academy_subscriptions/academy_usage row platform-wide just to reduce
+ * them to "latest per academy" in JS; this instead paginates the driving
+ * `academies` query in SQL first, then scopes both "latest per academy"
+ * lookups to only this page's academy ids (`inArray`) — same two Map-based
+ * dedupes as before, just over a handful of rows instead of the whole
+ * platform. `listAcademyUsageOverview()` itself is untouched — its own
+ * test (lib/subscriptions/usage.test.ts) still relies on the full list.
+ */
+export async function listAcademyUsageOverviewPage(
+  page: number,
+  pageSize: number,
+): Promise<AcademyUsageOverviewPage> {
+  const offset = Math.max(0, page - 1) * pageSize;
+
+  const [academyRows, [{ value: totalCount }]] = await Promise.all([
+    db
+      .select({ id: academies.id, name: academies.name })
+      .from(academies)
+      .orderBy(academies.name)
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ value: count() }).from(academies),
+  ]);
+
+  if (academyRows.length === 0) return { rows: [], totalCount };
+
+  const academyIds = academyRows.map((row) => row.id);
+
+  const [subscriptionRows, usageRows] = await Promise.all([
+    db
+      .select({
+        academyId: academySubscriptions.academyId,
+        startsAt: academySubscriptions.startsAt,
+        planName: subscriptionPlans.name,
+        maxBranches: subscriptionPlans.maxBranches,
+        maxStudents: subscriptionPlans.maxStudents,
+        maxStaff: subscriptionPlans.maxStaff,
+        maxCourses: subscriptionPlans.maxCourses,
+        maxStorageBytes: subscriptionPlans.maxStorageBytes,
+      })
+      .from(academySubscriptions)
+      .innerJoin(subscriptionPlans, eq(academySubscriptions.planId, subscriptionPlans.id))
+      .where(inArray(academySubscriptions.academyId, academyIds))
+      .orderBy(desc(academySubscriptions.startsAt)),
+    db
+      .select()
+      .from(academyUsage)
+      .where(inArray(academyUsage.academyId, academyIds))
+      .orderBy(desc(academyUsage.calculatedAt)),
+  ]);
+
+  const latestSubscriptionByAcademy = new Map<string, (typeof subscriptionRows)[number]>();
+  for (const row of subscriptionRows) {
+    if (!latestSubscriptionByAcademy.has(row.academyId)) {
+      latestSubscriptionByAcademy.set(row.academyId, row);
+    }
+  }
+
+  const latestUsageByAcademy = new Map<string, AcademyUsageSnapshot>();
+  for (const row of usageRows) {
+    if (!latestUsageByAcademy.has(row.academyId)) {
+      latestUsageByAcademy.set(row.academyId, toSnapshot(row));
+    }
+  }
+
+  return {
+    rows: buildAcademyUsageOverviewRows(academyRows, latestSubscriptionByAcademy, latestUsageByAcademy),
+    totalCount,
+  };
 }
 
 /** Used by the page/manager to gate rendering — see module comment above. */

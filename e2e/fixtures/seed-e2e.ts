@@ -59,6 +59,7 @@ import {
 } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/auth/password";
 import { ACADEMY_A, ACADEMY_B, E2E_PLAN_NAME, type E2EAcademyFixture } from "./constants";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 async function getOrCreateUser(email: string, password: string): Promise<string> {
   const [existing] = await db
@@ -310,6 +311,7 @@ async function ensureCertificate(
     academyId,
     studentId,
     batchId,
+    courseId: await courseOfBatch(batchId),
     certificateCode,
     issuedAt: new Date(),
     issuedBy: ownerId,

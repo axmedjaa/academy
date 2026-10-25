@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listBranches } from "@/lib/academies/branches";
 import { BranchesList } from "./branches-list";
-import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 34: `/academy/branches` — branch CRUD.
@@ -34,14 +34,6 @@ export default async function AcademyBranchesPage() {
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Branches"
-        description={
-          result.canManage
-            ? "You can create, edit, and archive branches."
-            : "You can view the branch(es) you're assigned to."
-        }
-      />
       <BranchesList branches={result.branches} canManage={result.canManage} />
     </div>
   );

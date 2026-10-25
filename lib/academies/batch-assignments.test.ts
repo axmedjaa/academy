@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -47,6 +48,7 @@ import {
   updateStudentEnrollment,
   withdrawStudentFromBatch,
 } from "./batch-assignments";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -162,6 +164,8 @@ async function insertBatchDirect(
       startDate,
     })
     .returning({ id: batches.id });
+  // Link the batch's course, as createBatch does (enrollment reads batch_courses).
+  await courseOfBatch(row.id);
   return row.id;
 }
 
@@ -212,7 +216,7 @@ async function insertExamResultDirect(
 ): Promise<void> {
   const [exam] = await db
     .insert(exams)
-    .values({ academyId, batchId, name: `Exam ${randomUUID()}`, maxMarks: "100" })
+    .values({ academyId, batchId, courseId: await courseOfBatch(batchId), name: `Exam ${randomUUID()}`, maxMarks: "100" })
     .returning({ id: exams.id });
   const gradeConfigurationId = await insertGradeConfigDirect(academyId, creatorUserId);
   await db.insert(examResults).values({
@@ -235,6 +239,7 @@ async function insertCertificateDirect(
     academyId,
     studentId,
     batchId,
+    courseId: await courseOfBatch(batchId),
     certificateCode: `CERT-${randomUUID()}`,
     issuedBy,
   });
@@ -310,6 +315,7 @@ afterAll(async () => {
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
     await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -1070,23 +1076,23 @@ describe("updateStudentEnrollment", () => {
     expect(active.get(studentId)?.[0].batchId).toBe(batchId);
   });
 
-  it("withdraws the old batch and enrolls into the new one when changing course", async () => {
+  it("adds an enrollment in another batch without withdrawing the first", async () => {
     const { academyId, branchId, courseId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
     const secondBatchId = await insertBatchDirect(academyId, branchId, courseId);
+    await courseOfBatch(secondBatchId);
 
     const first = await updateStudentEnrollment(context, studentId, batchId, DEFAULT_PAYMENT_PLAN);
     expect(first.ok).toBe(true);
 
-    const changed = await updateStudentEnrollment(context, studentId, secondBatchId, DEFAULT_PAYMENT_PLAN);
-    expect(changed.ok).toBe(true);
+    const second = await updateStudentEnrollment(context, studentId, secondBatchId, DEFAULT_PAYMENT_PLAN);
+    expect(second.ok).toBe(true);
 
     const active = await getActiveCoursesForStudents(academyId, [studentId]);
-    expect(active.get(studentId)).toHaveLength(1);
-    expect(active.get(studentId)?.[0].batchId).toBe(secondBatchId);
+    expect(active.get(studentId)?.map((c) => c.batchId).sort()).toEqual([batchId, secondBatchId].sort());
   });
 
-  it("withdraws without enrolling anywhere when given no batchId", async () => {
+  it("refuses without a batch (it never withdraws on its own)", async () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
@@ -1094,25 +1100,122 @@ describe("updateStudentEnrollment", () => {
     expect(enrolled.ok).toBe(true);
 
     const cleared = await updateStudentEnrollment(context, studentId, undefined);
-    expect(cleared.ok).toBe(true);
+    expect(cleared.ok).toBe(false);
+    if (!cleared.ok) expect(cleared.error.code).toBe("validation");
 
     const active = await getActiveCoursesForStudents(academyId, [studentId]);
-    expect(active.get(studentId) ?? []).toEqual([]);
+    expect(active.get(studentId)).toHaveLength(1);
   });
 
-  it("is a no-op when the student is already enrolled in the requested batch", async () => {
+  it("refuses a duplicate enrollment in the same batch course", async () => {
     const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
     const first = await updateStudentEnrollment(context, studentId, batchId, DEFAULT_PAYMENT_PLAN);
     expect(first.ok).toBe(true);
-    // Already-enrolled-in-this-batch short-circuits before ever needing a
-    // payment plan — omitting one here proves that.
-    const second = await updateStudentEnrollment(context, studentId, batchId);
-    expect(second.ok).toBe(true);
+    const second = await updateStudentEnrollment(context, studentId, batchId, DEFAULT_PAYMENT_PLAN);
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error.code).toBe("conflict");
 
     const active = await getActiveCoursesForStudents(academyId, [studentId]);
     expect(active.get(studentId)).toHaveLength(1);
+  });
+});
+
+describe("enrollStudentInBatch — multi-course batches", () => {
+  async function addCourseToBatch(academyId: string, batchId: string): Promise<string> {
+    const courseId = await insertProgramAndCourse(academyId);
+    await db.insert(batchCourses).values({ academyId, batchId, courseId });
+    return courseId;
+  }
+
+  it("enrolls one student in two courses of a batch, each with its own fee schedule", async () => {
+    const { academyId, branchId, courseId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const secondCourseId = await addCourseToBatch(academyId, batchId);
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, {
+      batchId,
+      studentId,
+      courseIds: [courseId, secondCourseId],
+      paymentPlan: DEFAULT_PAYMENT_PLAN,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.enrollments.map((e) => e.courseId).sort()).toEqual([courseId, secondCourseId].sort());
+
+    const schedules = await db
+      .select({ enrollmentId: enrollmentFeeSchedules.enrollmentId })
+      .from(enrollmentFeeSchedules)
+      .where(inArray(enrollmentFeeSchedules.enrollmentId, result.enrollments.map((e) => e.id)));
+    expect(schedules).toHaveLength(2);
+
+    const students = await db.select({ id: batchEnrollments.studentId }).from(batchEnrollments).where(eq(batchEnrollments.batchId, batchId));
+    expect(new Set(students.map((row) => row.id))).toEqual(new Set([studentId]));
+  });
+
+  it("requires a course choice when the batch runs several courses", async () => {
+    const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    await addCourseToBatch(academyId, batchId);
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("rejects a course that isn't part of the batch, and writes nothing", async () => {
+    const { academyId, branchId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const outsideCourseId = await insertProgramAndCourse(academyId);
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, {
+      batchId,
+      studentId,
+      courseIds: [outsideCourseId],
+      paymentPlan: DEFAULT_PAYMENT_PLAN,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    const rows = await db.select({ id: batchEnrollments.id }).from(batchEnrollments).where(eq(batchEnrollments.studentId, studentId));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("rejects another academy's course even when named explicitly", async () => {
+    const { batchId, academyId, branchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const other = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const result = await enrollStudentInBatch(context, {
+      batchId,
+      studentId,
+      courseIds: [other.courseId],
+      paymentPlan: DEFAULT_PAYMENT_PLAN,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rolls back every course when one of them is already enrolled", async () => {
+    const { academyId, branchId, courseId, batchId, creatorUserId, context } = await setupAcademy("academy_owner");
+    const secondCourseId = await addCourseToBatch(academyId, batchId);
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+
+    const first = await enrollStudentInBatch(context, { batchId, studentId, courseIds: [courseId], paymentPlan: DEFAULT_PAYMENT_PLAN });
+    expect(first.ok).toBe(true);
+    const both = await enrollStudentInBatch(context, {
+      batchId,
+      studentId,
+      courseIds: [courseId, secondCourseId],
+      paymentPlan: DEFAULT_PAYMENT_PLAN,
+    });
+    expect(both.ok).toBe(false);
+    if (!both.ok) expect(both.error.code).toBe("conflict");
+
+    const rows = await db
+      .select({ courseId: batchEnrollments.courseId })
+      .from(batchEnrollments)
+      .where(and(eq(batchEnrollments.studentId, studentId), eq(batchEnrollments.status, "active")));
+    expect(rows.map((row) => row.courseId)).toEqual([courseId]);
   });
 });
 

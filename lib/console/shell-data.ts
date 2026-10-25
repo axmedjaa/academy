@@ -69,8 +69,17 @@ async function getEmail(userId: string): Promise<string> {
   return row?.email ?? "";
 }
 
+/** The bell's preview: unread notifications first (newest first), then the
+ * newest read ones to fill the remaining slots. Showing only the newest
+ * overall hid older unread notifications (and their Mark as read) behind
+ * newer read ones while the badge still counted them. */
 async function getNotificationPreview(context: AuthContext) {
-  const latest = await listNotificationsForUser(context, { limit: NOTIFICATION_PREVIEW_LIMIT });
+  const [unread, recent] = await Promise.all([
+    listNotificationsForUser(context, { unreadOnly: true, limit: NOTIFICATION_PREVIEW_LIMIT }),
+    listNotificationsForUser(context, { limit: NOTIFICATION_PREVIEW_LIMIT }),
+  ]);
+  const unreadIds = new Set(unread.map((item) => item.id));
+  const latest = [...unread, ...recent.filter((item) => !unreadIds.has(item.id))].slice(0, NOTIFICATION_PREVIEW_LIMIT);
   return latest.map((item) => ({
     id: item.id,
     label: humanizeNotificationLabel(item.templateId),
@@ -156,5 +165,44 @@ export async function getPlatformConsoleShellData(context: AuthContext): Promise
     notifications: { unreadCount: unread.length, latest, viewAllHref: null },
     search: canSearchAcademies || canSearchPayments ? { placeholder, label: placeholder } : null,
     contextLabel: null,
+  };
+}
+
+export interface AccountIdentity {
+  console: "academy" | "platform" | null;
+  name: string;
+  email: string;
+  roleLabel: string | null;
+  /** The phone on the caller's own academy staff record, if any. */
+  phone: string | null;
+}
+
+/**
+ * The signed-in user's own name, email, role and phone for the shared
+ * account pages (S01). Same sources as the console shell's account menu:
+ * the caller's staff record in their academy (name, phone), else a name
+ * derived from the email; platform staff get their platform role. Reads
+ * only the caller's own rows.
+ */
+export async function getAccountIdentity(
+  context: AuthContext,
+  academy: { academyId: string; role: AcademyRole } | null,
+): Promise<AccountIdentity> {
+  const email = await getEmail(context.userId);
+  if (context.platformRole) {
+    return { console: "platform", name: nameFromEmail(email), email, roleLabel: PLATFORM_ROLE_LABELS[context.platformRole], phone: null };
+  }
+  if (!academy) return { console: null, name: nameFromEmail(email), email, roleLabel: null, phone: null };
+  const [profile] = await db
+    .select({ fullName: staffProfiles.fullName, phone: staffProfiles.phone })
+    .from(staffProfiles)
+    .where(and(eq(staffProfiles.academyId, academy.academyId), eq(staffProfiles.userId, context.userId)))
+    .limit(1);
+  return {
+    console: "academy",
+    name: profile?.fullName ?? nameFromEmail(email),
+    email,
+    roleLabel: ACADEMY_ROLE_LABELS[academy.role],
+    phone: profile?.phone ?? null,
   };
 }

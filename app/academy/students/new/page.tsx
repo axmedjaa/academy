@@ -3,10 +3,9 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { ACADEMY_STUDENTS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { listBranches } from "@/lib/academies/branches";
-import { listBatches } from "@/lib/academies/batches";
-import { listCourses } from "@/lib/academies/courses";
-import { StudentForm } from "./student-form";
-import { BackLink, PageHeader, PageMessage, Section } from "@/app/academy/_shell/ui";
+import { getEnrollBatchOptions } from "@/lib/academies/enroll-options";
+import { RegisterStudentCard } from "../register-student-form";
+import { BackLink, PageMessage, Section } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 38 — `/academy/students/new`. Same gating shape as
@@ -52,38 +51,26 @@ export default async function NewStudentPage() {
   const branchesResult = await listBranches(context);
   const branches = branchesResult.ok ? branchesResult.branches : [];
 
-  // Course selection at registration time is really a batch selection (see
-  // student-form.tsx's module comment on why) — best-effort, same
-  // "non-fatal if the caller can't list them" convention as branches
-  // above: joined here, in the page, rather than teaching batches.ts or
-  // courses.ts about each other, since this is presentation-only.
-  const [batchesResult, coursesResult] = await Promise.all([listBatches(context), listCourses(context)]);
-  const courseNameById = new Map((coursesResult.ok ? coursesResult.courses : []).map((c) => [c.id, c.name]));
-  const courseOptions = (batchesResult.ok ? batchesResult.batches : [])
-    .filter((batch) => batch.status !== "archived")
-    .map((batch) => ({
-      batchId: batch.id,
-      label: `${courseNameById.get(batch.courseId) ?? "Unknown course"} — ${batch.name}`,
-    }));
+  // Optional enroll step: planned and active batches with their courses,
+  // from the same scoped reads the batch pages use (non-fatal if empty).
+  const { batches: enrollBatches } = await getEnrollBatchOptions(context);
 
   return (
-    <div className="mx-auto w-full max-w-xl px-4 py-8 sm:px-6">
-      <BackLink href="/academy/students" label="Back to students" />
-      <PageHeader title="Register student" description="Create a new student record for this academy." />
+    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
+      <div className="mx-auto max-w-[560px]">
+        <BackLink href="/academy/students" label="Back to students" />
+      </div>
       {branches.length === 0 ? (
         <Section>
           <p className="text-sm text-muted">
-            No branch is available to register a student into yet. Ask an Owner/Admin to create or
-            assign one first.
+            No branch is available to register a student into yet. Ask an Owner/Admin to create or assign one first.
           </p>
         </Section>
       ) : (
-        <Section>
-          <StudentForm
-            branches={branches.map((branch) => ({ id: branch.id, name: branch.name }))}
-            courseOptions={courseOptions}
-          />
-        </Section>
+        <RegisterStudentCard
+          branches={branches.map((branch) => ({ id: branch.id, name: branch.name }))}
+          enrollBatches={enrollBatches}
+        />
       )}
     </div>
   );

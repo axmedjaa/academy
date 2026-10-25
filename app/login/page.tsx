@@ -52,7 +52,7 @@ export default function LoginPage() {
   }
 
   return (
-    <AuthCard title="Sign in" subtitle="Sign in to your Afoogy account">
+    <AuthCard title="Sign in" subtitle="Sign in to your Dardar School System account">
       <form action={formAction} onSubmit={handleSubmit} style={formColumnStyle}>
         <label style={fieldLabelStyle}>
           Email

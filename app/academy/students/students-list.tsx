@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, type ReactNode } from "react";
+import { useActionState, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   deleteStudent,
@@ -8,12 +8,9 @@ import {
   updateStudentStatus,
   type StudentFormState,
 } from "@/lib/academies/students-actions";
-import {
-  updateStudentEnrollment,
-  type BatchAssignmentFormState,
-} from "@/lib/academies/batch-assignments-actions";
 import type { StudentDeletionEligibilitySummary, StudentRecord } from "@/lib/academies/students";
 import type { StudentActiveCourse } from "@/lib/academies/batch-assignments";
+import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
 import type { FeePeriodRecord, StudentPaymentSummaryRow } from "@/lib/academies/fee-periods";
 import { recordFeePeriodPaymentAction } from "@/lib/academies/fee-periods-actions";
 import { StudentPhotoField } from "./student-photo-field";
@@ -26,13 +23,14 @@ import {
   Field,
   FormDialog,
   LinkButton,
+  humanizeStatus,
   inputClass,
-  td,
-  th,
   trHover,
 } from "@/app/academy/_shell/ui";
+import { DataTable, FeeProgress, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import { EnrollCoursesDialog } from "@/app/academy/_shell/enroll-courses-dialog";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -54,34 +52,19 @@ import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
 import Link from "next/link";
 
 const initialState: StudentFormState = { ok: false };
-const initialEnrollmentState: BatchAssignmentFormState = { ok: false };
 
-/** Mirrors lib/db/schema.ts's FEE_INTERVAL_MONTHS_OPTIONS — same list as
- * app/academy/batches/[batchId]/roster-panel.tsx's enroll form and
- * app/academy/students/new/student-form.tsx's registration-time form. */
-const PAYMENT_PLAN_INTERVAL_OPTIONS: { value: number; label: string }[] = [
-  { value: 1, label: "Monthly" },
-  { value: 2, label: "Every 2 Months" },
-  { value: 3, label: "Every 3 Months" },
-  { value: 4, label: "Every 4 Months" },
-  { value: 6, label: "Every 6 Months" },
-  { value: 12, label: "Yearly" },
-];
-
-interface CourseOption {
-  batchId: string;
-  label: string;
-}
+/** Design table row buttons: 40px, 13px semibold; primary is burgundy. */
+const ROW_BTN =
+  "inline-flex h-10 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold !text-ink no-underline transition-colors duration-150 hover:bg-app hover:no-underline";
+const ROW_BTN_PRIMARY =
+  "inline-flex h-10 items-center gap-1.5 whitespace-nowrap rounded-lg border-0 bg-brand px-3.5 text-[13px] font-semibold !text-white no-underline transition-colors duration-150 hover:bg-brand-hover hover:no-underline";
 
 interface Props {
   students: (StudentRecord & { deletionEligibility: StudentDeletionEligibilitySummary })[];
-  /** Server-rendered filter form + active-filter chips (built by
-   * page.tsx, which owns `searchParams`) — rendered as the top strip of
-   * this component's own bordered list surface, with a hairline divider
-   * below it, instead of a second separately-boxed section. Plain GET
-   * form + plain links, no interactivity of its own, so passing it down
-   * as a prop from the server component is safe. */
-  filterBar: ReactNode;
+  /** Overdue fee-period remainder per student (students-overview.ts);
+   * drives the design's "Collect $X" row action. Empty when the caller
+   * can't see fees. */
+  overdueByStudent: Record<string, { currency: string; amountCents: number }[]>;
   /** Whether any search/status/branch filter is currently active — drives
    * which empty-state copy renders (DESIGN.md §3.1 distinguishes a
    * genuinely empty academy from a filtered search with no results). */
@@ -118,10 +101,11 @@ interface Props {
    * active enrollment (or no fee schedule set yet) and shows "—" in every
    * payment column instead of a false UNPAID reading. */
   paymentSummaries: Map<string, StudentPaymentSummaryRow>;
-  /** Every non-archived batch, labeled with its course name, for the
-   * "change course" select — same shape as the registration form's course
-   * picker (app/academy/students/new/student-form.tsx). */
-  courseOptions: CourseOption[];
+  /** Planned and active batches with their courses, for the Enroll dialog
+   * (empty when the caller can't enroll). */
+  enrollBatches: EnrollBatchOption[];
+  /** ACADEMY_COURSES_BATCHES_ACTION's manage gate (enrollStudentInBatch's own). */
+  canEnroll: boolean;
   /** Each student-with-a-photo's own short-lived signed R2 GET url,
    * pre-resolved server-side (page.tsx, via students.ts's
    * `getStudentPhotoUrl`) — a student absent from this map either has no
@@ -132,7 +116,7 @@ interface Props {
 
 export function StudentsList({
   students,
-  filterBar,
+  overdueByStudent,
   hasActiveFilters,
   canManage,
   canDelete,
@@ -141,14 +125,13 @@ export function StudentsList({
   coursesByStudent,
   photoUrlByStudentId,
   paymentSummaries,
-  courseOptions,
+  enrollBatches,
+  canEnroll,
 }: Props) {
   const router = useRouter();
   const [updateState, updateFormAction, updating] = useActionState(updateStudent, initialState);
-  const [enrollmentState, enrollmentFormAction, updatingEnrollment] = useActionState(
-    updateStudentEnrollment,
-    initialEnrollmentState,
-  );
+  // Which student's Enroll dialog is open (adds courses; never replaces).
+  const [enrollingId, setEnrollingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   // Which row's Archive/Restore or Delete confirmation is open — the
   // dropdown menu item opens it externally (ConfirmButton's controlled
@@ -166,37 +149,19 @@ export function StudentsList({
   const editingStudent = students.find((student) => student.id === editingId) ?? null;
   const previewStudent = students.find((student) => student.id === previewRowId) ?? null;
   const editingStudentCourses = editingStudent ? (coursesByStudent.get(editingStudent.id) ?? []) : [];
-  const currentCourseBatchId = editingStudentCourses[0]?.batchId ?? "";
-
-  const [selectedBatchId, setSelectedBatchId] = useState(currentCourseBatchId);
-  // Adjust state during render (see fee-periods-manager.tsx's identical
-  // pattern) — resets the course selection whenever a different student's
-  // row is opened for editing, without an effect.
-  const [prevEditingId, setPrevEditingId] = useState(editingId);
-  if (editingId !== prevEditingId) {
-    setPrevEditingId(editingId);
-    setSelectedBatchId(currentCourseBatchId);
+  const enrollingStudent = students.find((student) => student.id === enrollingId) ?? null;
+  const enrolledPairs: Record<string, string[]> = {};
+  for (const [studentId, courses] of coursesByStudent) {
+    enrolledPairs[studentId] = courses.map((course) => `${course.batchId}:${course.courseId}`);
   }
-  const changingCourse = selectedBatchId !== "" && selectedBatchId !== currentCourseBatchId;
 
-  // Auto-close the edit dialog once its work is actually done, instead of
-  // leaving the user stuck looking at a saved form — the functional
-  // equivalent of "redirect back to the list" (see branches-list.tsx's
-  // identical derived-state pattern). This dialog holds two independent
-  // forms (fields, course), so "done" isn't just the main form succeeding:
-  // if the user is mid-way through a course change (`changingCourse`),
-  // saving the main fields alone keeps the dialog open so they can still
-  // save the course; saving the course (on its own, or after the fields)
-  // always closes it.
+  // Auto-close the edit dialog once its update succeeds (see
+  // branches-list.tsx's identical derived-state pattern). Courses are
+  // managed on the student's own page or through Enroll, not here.
   const [prevUpdateOk, setPrevUpdateOk] = useState(updateState.ok);
   if (updateState.ok !== prevUpdateOk) {
     setPrevUpdateOk(updateState.ok);
-    if (updateState.ok && !changingCourse) setEditingId(null);
-  }
-  const [prevEnrollmentOk, setPrevEnrollmentOk] = useState(enrollmentState.ok);
-  if (enrollmentState.ok !== prevEnrollmentOk) {
-    setPrevEnrollmentOk(enrollmentState.ok);
-    if (enrollmentState.ok) setEditingId(null);
+    if (updateState.ok) setEditingId(null);
   }
 
   /** Resubmits the row's own current field values alongside the flipped
@@ -218,251 +183,228 @@ export function StudentsList({
     });
   }
 
+  const showActions = canManage || canManagePayments;
+
   return (
-    <section className="flex flex-col gap-6">
-      {/* One bordered surface for the filter row + dataset, instead of two
-          separately-boxed sections — a hairline border (filterBar's own
-          border-b) replaces a second shadow/card gap. */}
-      <div className="overflow-hidden rounded-card border border-border bg-surface shadow-card">
-        {filterBar}
-        {students.length === 0 ? (
-          <div className="p-5">
-            <EmptyState
-              message={
-                hasActiveFilters
-                  ? "No students match your current filters."
-                  : "No students yet — register your academy's first student to get started."
-              }
-              icon={<Icon name="group" />}
-              action={
-                hasActiveFilters ? (
-                  <LinkButton href="/academy/students" variant="secondary">
-                    Clear filters
-                  </LinkButton>
-                ) : canManage ? (
-                  <LinkButton href="/academy/students/new">Register student</LinkButton>
-                ) : undefined
-              }
-            />
-          </div>
-        ) : (
-          <div className="relative">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[640px] border-collapse text-sm">
-                <thead>
-                  <tr>
-                    <th className={th}>Student</th>
-                    <th className={th}>Status</th>
-                    <th className={`${th} hidden md:table-cell`}>Course / Batch</th>
-                    <th className={`${th} hidden xl:table-cell`}>Payment Plan</th>
-                    <th className={`${th} hidden lg:table-cell text-right`}>Paid / Expected</th>
-                    <th className={`${th} text-right`}>Remaining</th>
-                    <th className={th}>Payment Status</th>
-                    <th className={`${th} hidden xl:table-cell`}>Phone</th>
-                    <th className={`${th} hidden xl:table-cell`}>Email</th>
-                    <th className={`${th} hidden xl:table-cell`}>Guardian</th>
-                    {(canManage || canManagePayments) && <th className={`${th} text-right`}>Actions</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {students.map((student) => {
-                    const summary = paymentSummaries.get(student.id);
-                    const courses = coursesByStudent.get(student.id) ?? [];
-                    return (
-                      <tr key={student.id} className={trHover}>
-                        <td className={td}>
-                          <div className="flex items-center gap-3">
-                            <StudentAvatar
-                              fullName={student.fullName}
-                              photoUrl={photoUrlByStudentId.get(student.id) ?? null}
-                              onPreview={() => setPreviewRowId(student.id)}
-                            />
-                            <div className="min-w-0">
-                              <Link
-                                href={`/academy/students/${student.id}`}
-                                className="block truncate font-semibold text-ink hover:text-brand hover:underline"
+    <section className="flex flex-col">
+      {students.length === 0 ? (
+        <div className="mb-8 rounded-card border border-border bg-surface p-5 shadow-card">
+          <EmptyState
+            message={
+              hasActiveFilters
+                ? "No students match your current filters."
+                : "No students yet — register your academy's first student to get started."
+            }
+            icon={<Icon name="group" />}
+            action={
+              hasActiveFilters ? (
+                <LinkButton href="/academy/students" variant="secondary">
+                  Clear filters
+                </LinkButton>
+              ) : canManage ? (
+                <LinkButton href="/academy/students/new">Register student</LinkButton>
+              ) : undefined
+            }
+          />
+        </div>
+      ) : (
+        <DataTable stackBelow={1040}>
+          <thead>
+            <tr>
+              <th className={rtTh}>Student</th>
+              <th className={rtTh}>Batch and plan</th>
+              <th className={rtTh}>Fees paid</th>
+              <th className={rtTh}>Payment</th>
+              {showActions && <th className={`${rtTh} text-right`}>Actions</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {students.map((student) => {
+              const summary = paymentSummaries.get(student.id);
+              const courses = coursesByStudent.get(student.id) ?? [];
+              const overdue = (overdueByStudent[student.id] ?? []).find((row) => row.amountCents > 0);
+              const percent =
+                summary && summary.expectedCents > 0 ? (summary.paidCents / summary.expectedCents) * 100 : 0;
+              const canPay =
+                canManagePayments && Boolean(summary?.nextOutstandingPeriod) && student.status === "active";
+              return (
+                <tr key={student.id} className={trHover}>
+                  <td className={rtTd} data-label="Student">
+                    <span className="flex min-w-0 items-center gap-3">
+                      <StudentAvatar
+                        fullName={student.fullName}
+                        photoUrl={photoUrlByStudentId.get(student.id) ?? null}
+                        onPreview={() => setPreviewRowId(student.id)}
+                        sizeClassName="h-10 w-10 ring-2 ring-white shadow-[0_0_0_1px_#E2E5EA]"
+                      />
+                      <Link
+                        href={`/academy/students/${student.id}`}
+                        className="flex min-h-11 min-w-0 flex-col justify-center no-underline hover:no-underline"
+                      >
+                        <span className="font-semibold leading-snug !text-brand [overflow-wrap:anywhere] hover:underline">
+                          {student.fullName}
+                        </span>
+                        <span className="text-xs text-muted">
+                          {student.studentNumber}
+                          {student.status !== "active" && ` · ${humanizeStatus(student.status)}`}
+                        </span>
+                      </Link>
+                    </span>
+                  </td>
+                  <td className={rtTd} data-label="Batch and plan">
+                    {courses.length > 0 ? (
+                      <span>
+                        {courses.map((c) => c.batchName).join(", ")}
+                        {summary &&
+                          ` · ${summary.intervalMonths} x ${formatMoney(summary.monthlyInstallmentCents, summary.currency)}`}
+                      </span>
+                    ) : (
+                      <span className="text-muted">Not enrolled</span>
+                    )}
+                  </td>
+                  <td className={rtTd} data-label="Fees paid" data-empty={summary ? undefined : ""}>
+                    {summary ? (
+                      <FeeProgress
+                        percent={percent}
+                        caption={
+                          <>
+                            {formatMoney(summary.paidCents, summary.currency)} of{" "}
+                            {formatMoney(summary.expectedCents, summary.currency)}
+                            {summary.remainingCents > 0 &&
+                              ` · ${formatMoney(summary.remainingCents, summary.currency)} left`}
+                          </>
+                        }
+                      />
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </td>
+                  <td className={rtTd} data-label="Payment" data-empty={summary ? undefined : ""}>
+                    {summary ? (
+                      <Badge label={summary.status} tone={getStatusTone(summary.status)} />
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </td>
+                  {showActions && (
+                    <td className={`${rtTd} text-right`} data-actions="">
+                      <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                        {canPay && overdue ? (
+                          <Link href={`/academy/students/${student.id}?tab=fees`} className={ROW_BTN_PRIMARY}>
+                            Collect {formatMoney(overdue.amountCents, overdue.currency)}
+                          </Link>
+                        ) : canPay ? (
+                          <button type="button" onClick={() => setPaymentRowId(student.id)} className={ROW_BTN_PRIMARY}>
+                            Record payment
+                          </button>
+                        ) : null}
+                        {canEnroll && enrollBatches.length > 0 && student.status === "active" && courses.length === 0 && (
+                          <button type="button" onClick={() => setEnrollingId(student.id)} className={ROW_BTN}>
+                            Enroll
+                          </button>
+                        )}
+                        {canManage && (
+                          <button type="button" onClick={() => setArchiveRowId(student.id)} className={ROW_BTN}>
+                            {student.status === "active" ? "Archive" : "Restore"}
+                          </button>
+                        )}
+                        {canManage && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                aria-label={`More actions for ${student.fullName}`}
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-app hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                               >
-                                {student.fullName}
-                              </Link>
-                              <span className="block text-xs text-muted">{student.studentNumber}</span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className={td}>
-                          <Badge label={student.status} tone={getStatusTone(student.status)} />
-                        </td>
-                        <td className={`${td} hidden md:table-cell`}>
-                          {courses.length > 0
-                            ? courses.map((c) => `${c.courseName} — ${c.batchName}`).join(", ")
-                            : "—"}
-                        </td>
-                        <td className={`${td} hidden xl:table-cell text-muted`}>
-                          {/* "6 months · $6.00/mo" — never the schedule's
-                              TOTAL fee next to its duration unlabeled (that
-                              reads as one lump payment, not an installment
-                              plan — see fee-periods.ts's own module comment,
-                              "Payment schedule model"). */}
-                          {summary
-                            ? `${summary.intervalMonths} mo${summary.intervalMonths === 1 ? "" : "s"} · ${formatMoney(summary.monthlyInstallmentCents, summary.currency)}/mo`
-                            : "—"}
-                        </td>
-                        <td className={`${td} hidden lg:table-cell text-right tabular-nums text-muted`}>
-                          {summary
-                            ? `${formatMoney(summary.paidCents, summary.currency)} / ${formatMoney(summary.expectedCents, summary.currency)}`
-                            : "—"}
-                        </td>
-                        <td className={`${td} text-right font-medium tabular-nums`}>
-                          {summary ? formatMoney(summary.remainingCents, summary.currency) : "—"}
-                        </td>
-                        <td className={td}>
-                          {summary ? (
-                            <Badge label={summary.status.replace("_", " ")} tone={getStatusTone(summary.status)} />
-                          ) : (
-                            <span className="text-muted">—</span>
-                          )}
-                        </td>
-                        <td className={`${td} hidden xl:table-cell text-muted`}>{student.phone ?? "—"}</td>
-                        <td className={`${td} hidden xl:table-cell text-muted`}>{student.email ?? "—"}</td>
-                        <td className={`${td} hidden xl:table-cell text-muted`}>{student.guardianName ?? "—"}</td>
-                        {(canManage || canManagePayments) && (
-                        <td className={`${td} text-right`}>
-                          {/* Record Payment targets summary.nextOutstandingPeriod
-                              — the oldest period, among the same "relevant"
-                              window the Expected/Paid/Remaining/Payment Status
-                              columns above are themselves derived from, that
-                              still has remainingCents > 0. `null` there means
-                              "nothing currently outstanding" (including the
-                              "only a future period exists" case — see that
-                              field's own doc comment in fee-periods.ts), so no
-                              payment action is offered at all — never merely
-                              disabled, there is simply nothing to render. */}
-                          {canManage || (canManagePayments && summary?.nextOutstandingPeriod) ? (
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <button
-                                  type="button"
-                                  aria-label={`Actions for ${student.fullName}`}
-                                  className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
-                                >
-                                  <Icon name="more" />
-                                </button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                {canManagePayments && summary?.nextOutstandingPeriod && (
-                                  <>
-                                    <DropdownMenuItem onClick={() => setPaymentRowId(student.id)}>
-                                      Record Payment
+                                <Icon name="more" />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => setEditingId(student.id)}>Edit</DropdownMenuItem>
+                              {canDelete && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  {student.deletionEligibility.eligible ? (
+                                    <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(student.id)}>
+                                      Delete
                                     </DropdownMenuItem>
-                                    {canManage && <DropdownMenuSeparator />}
-                                  </>
-                                )}
-                                {canManage && (
-                                  <>
-                                    <DropdownMenuItem onClick={() => setEditingId(student.id)}>Edit</DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setArchiveRowId(student.id)}>
-                                      {student.status === "active" ? "Archive" : "Restore"}
-                                    </DropdownMenuItem>
-                                    {canDelete && (
-                                      <>
-                                        <DropdownMenuSeparator />
-                                        {student.deletionEligibility.eligible ? (
-                                          <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(student.id)}>
-                                            Delete
-                                          </DropdownMenuItem>
-                                        ) : (
-                                          <DropdownMenuItem
-                                            disabled
-                                            title={`This student cannot be permanently deleted because ${student.deletionEligibility.reasons.join("; ")}. Use Archive instead.`}
-                                          >
-                                            Delete
-                                          </DropdownMenuItem>
-                                        )}
-                                      </>
-                                    )}
-                                  </>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          ) : (
-                            <span className="text-muted">—</span>
-                          )}
-
-                          {canManage && (
-                            <>
-                              <ConfirmButton
-                                label={student.status === "active" ? "Archive" : "Restore"}
-                                variant={student.status === "active" ? "danger" : "success"}
-                                icon={student.status === "active" ? "archive" : "autorenew"}
-                                open={archiveRowId === student.id}
-                                onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? student.id : null)}
-                                title={
-                                  student.status === "active"
-                                    ? `Archive ${student.fullName}?`
-                                    : `Restore ${student.fullName}?`
-                                }
-                                description={
-                                  student.status === "active" ? (
-                                    <>
-                                      Archived students are hidden from active rosters and enrollment, but their
-                                      record and history (results, payments, certificates) are kept and can be
-                                      restored at any time.
-                                    </>
                                   ) : (
-                                    <>This student will be marked active again and reappear in active rosters.</>
-                                  )
-                                }
-                                onConfirm={() => toggleStudentStatus(student)}
-                              />
-                              {canDelete && student.deletionEligibility.eligible && (
-                                <ConfirmButton
-                                  label="Delete"
-                                  variant="dangerSolid"
-                                  open={deleteRowId === student.id}
-                                  onOpenChange={(nextOpen) => setDeleteRowId(nextOpen ? student.id : null)}
-                                  title={`Delete "${student.fullName}" permanently?`}
-                                  description={<>This cannot be undone.</>}
-                                  confirmInput={{ label: `Type "${student.fullName}" to confirm`, requiredValue: student.fullName }}
-                                  onConfirm={() => deleteStudent(student.id, student.fullName)}
-                                />
+                                    <DropdownMenuItem
+                                      disabled
+                                      title={`This student cannot be permanently deleted because ${student.deletionEligibility.reasons.join("; ")}. Use Archive instead.`}
+                                    >
+                                      Delete
+                                    </DropdownMenuItem>
+                                  )}
+                                </>
                               )}
-                            </>
-                          )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      </span>
 
-                          {canManagePayments && summary?.nextOutstandingPeriod && (
-                            <RecordPaymentDialog
-                              open={paymentRowId === student.id}
-                              onOpenChange={(nextOpen) => setPaymentRowId(nextOpen ? student.id : null)}
-                              studentId={student.id}
-                              studentName={student.fullName}
-                              period={summary.nextOutstandingPeriod}
-                              onRecorded={() => {
-                                setPaymentRowId(null);
-                                router.refresh();
+                      {canManage && (
+                        <>
+                          <ConfirmButton
+                            label={student.status === "active" ? "Archive" : "Restore"}
+                            variant={student.status === "active" ? "danger" : "success"}
+                            icon={student.status === "active" ? "archive" : "autorenew"}
+                            open={archiveRowId === student.id}
+                            onOpenChange={(nextOpen) => setArchiveRowId(nextOpen ? student.id : null)}
+                            title={
+                              student.status === "active" ? `Archive ${student.fullName}?` : `Restore ${student.fullName}?`
+                            }
+                            description={
+                              student.status === "active" ? (
+                                <>
+                                  Archived students are hidden from active rosters and enrollment, but their record and
+                                  history (results, payments, certificates) are kept and can be restored at any time.
+                                </>
+                              ) : (
+                                <>This student will be marked active again and reappear in active rosters.</>
+                              )
+                            }
+                            onConfirm={() => toggleStudentStatus(student)}
+                          />
+                          {canDelete && student.deletionEligibility.eligible && (
+                            <ConfirmButton
+                              label="Delete"
+                              variant="dangerSolid"
+                              open={deleteRowId === student.id}
+                              onOpenChange={(nextOpen) => setDeleteRowId(nextOpen ? student.id : null)}
+                              title={`Delete "${student.fullName}" permanently?`}
+                              description={<>This cannot be undone.</>}
+                              confirmInput={{
+                                label: `Type "${student.fullName}" to confirm`,
+                                requiredValue: student.fullName,
                               }}
+                              onConfirm={() => deleteStudent(student.id, student.fullName)}
                             />
                           )}
-                        </td>
+                        </>
                       )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {/* Below `lg`, several columns are hidden and the table still
-                needs horizontal scroll (min-w-[640px] above) — this fade
-                makes that scroll intentional-looking rather than an
-                accidental edge cutoff. Static CSS gradient, no scroll
-                listener: it doesn't know whether content is actually
-                overflowing, but on a non-overflowing table the fade simply
-                sits over already-empty space and is not misleading. */}
-            <div
-              className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-surface to-transparent lg:hidden"
-              aria-hidden="true"
-            />
-          </div>
-        )}
-      </div>
+
+                      {canPay && summary?.nextOutstandingPeriod && (
+                        <RecordPaymentDialog
+                          open={paymentRowId === student.id}
+                          onOpenChange={(nextOpen) => setPaymentRowId(nextOpen ? student.id : null)}
+                          studentId={student.id}
+                          studentName={student.fullName}
+                          period={summary.nextOutstandingPeriod}
+                          onRecorded={() => {
+                            setPaymentRowId(null);
+                            router.refresh();
+                          }}
+                        />
+                      )}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </DataTable>
+      )}
 
       {previewStudent && photoUrlByStudentId.has(previewStudent.id) && (
         <FormDialog
@@ -534,6 +476,12 @@ export function StudentsList({
               <Field label="Guardian phone">
                 <input type="text" name="guardianPhone" defaultValue={editingStudent.guardianPhone ?? ""} className={inputClass} />
               </Field>
+              <Field label="Home address (optional)">
+                <input type="text" name="address" maxLength={500} defaultValue={editingStudent.address ?? ""} className={inputClass} />
+              </Field>
+              <Field label="District (optional)">
+                <input type="text" name="district" maxLength={120} defaultValue={editingStudent.district ?? ""} className={inputClass} />
+              </Field>
             </div>
             {/* No Status field here — the dedicated Archive/Restore action
                 (below, via ConfirmButton) is the single way to change a
@@ -543,9 +491,6 @@ export function StudentsList({
                 the student's current status whenever this form omits the
                 field, so leaving it out changes no backend behavior. */}
             {updateState.error && <ErrorMessage message={updateState.error.message} />}
-            {updateState.ok && changingCourse && (
-              <p className="text-sm font-medium text-success">Student updated — save the course change below too.</p>
-            )}
             <div className="mt-2 flex gap-2">
               <Button type="submit" disabled={updating}>
                 {updating ? "Saving..." : "Save changes"}
@@ -557,50 +502,35 @@ export function StudentsList({
           </form>
 
           <div className="mt-6 border-t border-border pt-5">
-            <h3 className="text-sm font-semibold text-ink">Course</h3>
+            <h3 className="text-sm font-semibold text-ink">Courses</h3>
             <p className="mt-1 text-sm text-muted">
-              Current: {editingStudentCourses.map((c) => c.courseName).join(", ") || "No course selected"}
+              {editingStudentCourses.length > 0
+                ? editingStudentCourses.map((c) => `${c.courseName} (${c.batchName})`).join(", ")
+                : "Not enrolled in a course yet."}
             </p>
-            <form action={enrollmentFormAction} className="mt-3 flex flex-wrap items-end gap-3">
-              <input type="hidden" name="studentId" value={editingStudent.id} />
-              <Field label="Change course" className="min-w-[220px] flex-1">
-                <select
-                  name="batchId"
-                  value={selectedBatchId}
-                  onChange={(event) => setSelectedBatchId(event.target.value)}
-                  className={inputClass}
-                >
-                  <option value="">No course</option>
-                  {courseOptions.map((option) => (
-                    <option key={option.batchId} value={option.batchId}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              {changingCourse && (
-                <>
-                  <Field label="Payment Plan">
-                    <select name="paymentPlanIntervalMonths" required defaultValue="1" className={inputClass}>
-                      {PAYMENT_PLAN_INTERVAL_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="Total Fee (USD)">
-                    <input type="number" name="paymentPlanAmountDollars" min={0.01} step="0.01" placeholder="0.00" required className={inputClass} />
-                  </Field>
-                </>
-              )}
-              <Button type="submit" variant="secondary" disabled={updatingEnrollment}>
-                {updatingEnrollment ? "Saving..." : "Save course"}
-              </Button>
-            </form>
-            {enrollmentState.error && <div className="mt-2"><ErrorMessage message={enrollmentState.error.message} /></div>}
+            <Link
+              href={`/academy/students/${editingStudent.id}`}
+              className="mt-2 inline-flex min-h-11 items-center text-sm font-semibold !text-brand no-underline hover:underline"
+            >
+              Enroll in more courses or withdraw on the student&apos;s page
+            </Link>
           </div>
         </FormDialog>
+      )}
+
+      {canEnroll && enrollingStudent && (
+        <EnrollCoursesDialog
+          open={enrollingId !== null}
+          onOpenChange={(open) => !open && setEnrollingId(null)}
+          student={{
+            id: enrollingStudent.id,
+            fullName: enrollingStudent.fullName,
+            studentNumber: enrollingStudent.studentNumber,
+          }}
+          batches={enrollBatches}
+          enrolledPairs={enrolledPairs}
+          onEnrolled={() => router.refresh()}
+        />
       )}
     </section>
   );

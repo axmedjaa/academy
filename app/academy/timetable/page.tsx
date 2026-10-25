@@ -6,7 +6,11 @@ import { listBranches } from "@/lib/academies/branches";
 import { listCourses } from "@/lib/academies/courses";
 import { listStaff } from "@/lib/academies/staff";
 import { TimetableList } from "./timetable-list";
-import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { db } from "@/lib/db";
+import { academies } from "@/lib/db/schema";
+import { eq } from "drizzle-orm";
 
 /**
  * PLAN.md Item 45: `/academy/timetable` — academy-wide timetable CRUD, no
@@ -50,17 +54,20 @@ export default async function AcademyTimetablePage() {
   const staffResult = await listStaff(context);
   const staffOptions = staffResult.ok ? staffResult.staff.map((s) => ({ id: s.id, fullName: s.fullName })) : [];
 
+  // Display-only: the academy name for the timetable card's eyebrow. The
+  // layout already passed the access gate; this resolves the caller's own
+  // academy id the same way every page does.
+  const access = await checkAcademyAccessForContext(context);
+  const academyRow =
+    access.level !== "blocked"
+      ? await db.select({ name: academies.name }).from(academies).where(eq(academies.id, access.academyId)).limit(1)
+      : [];
+  const academyName = academyRow[0]?.name ?? "Academy";
+
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Timetable"
-        description={
-          result.canManage
-            ? "You can create, edit, and delete timetable entries in your scope."
-            : "You can view the timetable entries in your scope."
-        }
-      />
       <TimetableList
+        academyName={academyName}
         entries={result.entries}
         branches={branchOptions}
         batches={batchOptions}

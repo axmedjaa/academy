@@ -3,6 +3,7 @@ import { eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -24,6 +25,7 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import * as academicReportsModule from "./academic-reports";
 import { getAcademicReports } from "./academic-reports";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -136,7 +138,7 @@ async function insertGradeConfigDirect(academyId: string, creatorUserId: string)
 async function insertExamDirect(academyId: string, batchId: string): Promise<string> {
   const [row] = await db
     .insert(exams)
-    .values({ academyId, batchId, name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
+    .values({ academyId, batchId, courseId: await courseOfBatch(batchId), name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
     .returning({ id: exams.id });
   return row.id;
 }
@@ -255,6 +257,7 @@ afterAll(async () => {
     await db.delete(gradeConfigurations).where(eq(gradeConfigurations.academyId, academyId));
     await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -305,11 +308,17 @@ describe("getAcademicReports — aggregation correctness", () => {
 
     expect(result.report.gradeDistribution).toEqual(
       expect.arrayContaining([
-        { gradeBandLabel: "A", count: 1 },
-        { gradeBandLabel: "B", count: 1 },
-        { gradeBandLabel: "F", count: 1 },
+        { gradeBandLabel: "A", count: 1, failing: false },
+        { gradeBandLabel: "B", count: 1, failing: false },
+        { gradeBandLabel: "F", count: 1, failing: true },
       ]),
     );
+
+    // Entered counts every status (the draft too); per-exam figures agree.
+    expect(result.report.resultsEnteredCount).toBe(4);
+    expect(result.report.resultsPassedCount).toBe(2);
+    expect(result.report.byExam).toHaveLength(1);
+    expect(result.report.byExam[0]).toMatchObject({ examId, enteredCount: 4, publishedCount: 3, passedCount: 2, averageMarks: 60 });
   });
 
   it("dateFrom/dateTo narrow published results by publishedAt, inclusive", async () => {

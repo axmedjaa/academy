@@ -53,7 +53,10 @@ function AlertDialogOverlay({
     <AlertDialogPrimitive.Overlay
       data-slot="alert-dialog-overlay"
       className={cn(
-        "fixed inset-0 z-[100] bg-navy/40 motion-safe:data-[state=open]:animate-fade-in motion-safe:data-[state=closed]:animate-fade-out",
+        // Neutral scrim, same as the design dialogs and the mobile drawer.
+        // (It used bg-navy/40, which turned burgundy when the rebrand
+        // remapped --color-navy to the brand color.)
+        "fixed inset-0 z-[100] bg-[rgba(17,24,39,0.5)] motion-safe:data-[state=open]:animate-fade-in motion-safe:data-[state=closed]:animate-fade-out",
         className
       )}
       {...props}
@@ -151,12 +154,18 @@ const ALERT_DIALOG_BUTTON_BASE =
  * (danger/dangerSolid/etc.); this default only matters without that. */
 function AlertDialogAction({
   className,
+  asChild,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Action>) {
+  // With asChild the child button brings its own variant styles. Merging the
+  // default brand look into it (Slot concatenates class lists) produced mixed
+  // results such as white text on the pale danger background, so the default
+  // applies only when this renders its own button.
   return (
     <AlertDialogPrimitive.Action
       data-slot="alert-dialog-action"
-      className={cn(ALERT_DIALOG_BUTTON_BASE, "bg-brand text-white hover:bg-brand-hover", className)}
+      asChild={asChild}
+      className={asChild ? className : cn(ALERT_DIALOG_BUTTON_BASE, "bg-brand text-white hover:bg-brand-hover", className)}
       {...props}
     />
   )
@@ -164,12 +173,15 @@ function AlertDialogAction({
 
 function AlertDialogCancel({
   className,
+  asChild,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Cancel>) {
+  // Same rule as AlertDialogAction: an asChild button keeps its own styles.
   return (
     <AlertDialogPrimitive.Cancel
       data-slot="alert-dialog-cancel"
-      className={cn(ALERT_DIALOG_BUTTON_BASE, "border border-border bg-surface text-ink hover:bg-app", className)}
+      asChild={asChild}
+      className={asChild ? className : cn(ALERT_DIALOG_BUTTON_BASE, "border border-border bg-surface text-ink hover:bg-app", className)}
       {...props}
     />
   )

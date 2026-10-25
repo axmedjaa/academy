@@ -40,7 +40,7 @@ Platform staff operate a separate surface: approving new academy registrations, 
 
 ## Brand Commitments
 
-Product/brand name: **Afoogy** (academy-facing areas are referred to as "Afoogy Academy"). The internal repository/package name (`academy-management-saas`) is a technical identifier only and must never surface as the product name in any UI, design, or document work. No logo, color palette, or typography has been confirmed as binding yet.
+Product/brand name: **Dardar School System** (compact form: **Dardar**, used where space is constrained — e.g. sidebar headers, the TOTP issuer). The internal repository/package name (`academy-management-saas`) is a technical identifier only and must never surface as the product name in any UI, design, or document work. The Dardar burgundy/gold/neutral color palette and Alexandria/JetBrains Mono typography are confirmed as binding (implemented in `app/globals.css`/`lib/ui/theme.ts`; see `DESIGN.md` §1). The Dardar "D" mark (the supplied reference image) is the confirmed logo concept; a production-ready transparent/vector asset derived from it is not yet available, so the in-app brand mark remains an abstract placeholder pending that asset — see `CLAUDE_DESIGN_PROMPT.md` §B2/§10 for current status.
 
 ## Evidence on Hand
 

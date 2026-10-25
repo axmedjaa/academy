@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, ilike, sql } from "drizzle-orm";
+import { and, eq, ilike, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { staffBranchAssignments, staffProfiles, students, studentIdCards } from "@/lib/db/schema";
@@ -491,7 +491,15 @@ export async function checkIdCardAccess(
 }
 
 export type GetIdCardResult =
-  | { ok: true; studentId: string; card: IdCardRecord | null }
+  | {
+      ok: true;
+      studentId: string;
+      /** The most recent card (the one the preview shows). */
+      card: IdCardRecord | null;
+      /** Every card issued to this student, newest first (the card history
+       * table); same tenant/branch-scoped read as `card`. */
+      cards: IdCardRecord[];
+    }
   | { ok: false; error: IdCardActionError };
 
 /**
@@ -533,7 +541,69 @@ export async function getIdCard(
     .from(studentIdCards)
     .where(and(eq(studentIdCards.studentId, student.id), eq(studentIdCards.academyId, academyId)))
     .orderBy(sql`${studentIdCards.issuedAt} desc`)
-    .limit(1);
+    .limit(50);
 
-  return { ok: true, studentId: student.id, card: rows[0] ? toRecord(rows[0]) : null };
+  const cards = rows.map(toRecord);
+  return { ok: true, studentId: student.id, card: cards[0] ?? null, cards };
+}
+
+/**
+ * The branches a branch-limited caller (Admissions Officer, Trainer) may
+ * work with on ID cards, or `null` for academy-wide roles. The ID cards
+ * list uses it so it only offers students whose card the caller can open
+ * (issue, reprint and the card lookup enforce the same rule themselves).
+ */
+export async function getIdCardBranchScope(actorContext: AuthContext): Promise<string[] | null> {
+  const resolved = await resolveIdCardAccess(actorContext);
+  if (!resolved.ok) return [];
+  const { academyId, membershipRole } = resolved.access;
+  return isBranchLimited(membershipRole) ? getAssignedBranchIds(db, academyId, actorContext.userId) : null;
+}
+
+export type ListLatestCardsResult =
+  | { ok: true; cards: Record<string, { cardNumber: string; issuedAt: Date; reprintCount: number }> }
+  | { ok: false; error: IdCardActionError };
+
+/**
+ * Each listed student's most recent card (for the ID cards page's "Card
+ * issued / No card yet" column). Read-only; limited to the caller's
+ * academy, and the student ids come from the caller's own scoped student
+ * search, so it never reveals another academy's or branch's cards.
+ */
+export async function listLatestCardsForStudents(
+  actorContext: AuthContext,
+  studentIds: string[],
+): Promise<ListLatestCardsResult> {
+  const resolved = await resolveIdCardAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole } = resolved.access;
+  const ids = studentIds.filter((id) => z.string().uuid().safeParse(id).success);
+  if (ids.length === 0) return { ok: true, cards: {} };
+  // Branch-limited roles only ever see cards of students in their branches.
+  const branchIds = isBranchLimited(membershipRole) ? await getAssignedBranchIds(db, academyId, actorContext.userId) : null;
+  if (branchIds && branchIds.length === 0) return { ok: true, cards: {} };
+
+  const rows = await db
+    .select({
+      studentId: studentIdCards.studentId,
+      cardNumber: studentIdCards.cardNumber,
+      issuedAt: studentIdCards.issuedAt,
+      reprintCount: studentIdCards.reprintCount,
+    })
+    .from(studentIdCards)
+    .innerJoin(students, eq(students.id, studentIdCards.studentId))
+    .where(
+      and(
+        eq(studentIdCards.academyId, academyId),
+        inArray(studentIdCards.studentId, ids),
+        branchIds ? inArray(students.branchId, branchIds) : undefined,
+      ),
+    )
+    .orderBy(sql`${studentIdCards.issuedAt} desc`);
+
+  const cards: Record<string, { cardNumber: string; issuedAt: Date; reprintCount: number }> = {};
+  for (const row of rows) {
+    if (!cards[row.studentId]) cards[row.studentId] = { cardNumber: row.cardNumber, issuedAt: row.issuedAt, reprintCount: row.reprintCount };
+  }
+  return { ok: true, cards };
 }

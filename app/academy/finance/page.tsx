@@ -1,83 +1,54 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { db } from "@/lib/db";
-import { students } from "@/lib/db/schema";
+import { studentCharges, students } from "@/lib/db/schema";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { listReceiptsForPayments, listStudentCharges, listStudentPayments } from "@/lib/academies/student-payments";
 import { listFeePeriodPaymentHistory } from "@/lib/academies/fee-periods";
-import { searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
+import { getStudentPhotoUrlsByIds, searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
+import { getStudentsOverview } from "@/lib/academies/students-overview";
 import { listIncomeRecords } from "@/lib/academies/income-records";
 import { listExpenseRecords } from "@/lib/academies/expense-records";
-import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
-import { FinanceChargesPayments } from "./finance-charges-payments";
-import { FinanceIncomeExpenses } from "./finance-income-expenses";
+import { resolveStaffNames } from "@/lib/academies/staff-labels";
+import {
+  ACADEMY_EXPENSES_ACTION,
+  ACADEMY_INCOME_ACTION,
+  ACADEMY_STUDENT_PAYMENTS_ACTION,
+  getAcademyPermissionLevel,
+} from "@/lib/auth/academy-permissions";
+import { formatMoney } from "@/lib/ui/money";
+import { formatDate } from "@/lib/ui/date";
+import { getStatusTone } from "@/lib/ui/status";
+import { Badge, EmptyState, PAGE_WRAP, PageHeader, PageMessage, Section, trHover } from "@/app/academy/_shell/ui";
+import { BlockTitle, DataTable, NoteBlock, PersonCell, ROW_BTN_PRIMARY, TabLinks, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { Icon } from "@/app/academy/_shell/icons";
+import { PaginationNav } from "@/components/pagination-nav";
+import { FinanceCreateAction, FinanceExportButton } from "./finance-create";
+import { ExpensesTable, IncomeTable, PaymentsTable } from "./finance-tables";
+import { categoryChip } from "./finance-chips";
 
-// Charges/Payments tables previously fetched the academy's ENTIRE charge
-// and payment history unconditionally on every page load, with no
-// pagination at all. Now server-paginated like every other list page in
-// this app (audit-logs, students, admissions) — 15/page, same GET-query-
-// param convention (?chargesPage=N / ?paymentsPage=N, distinct keys since
-// this one page paginates two independent lists at once).
 const FINANCE_PAGE_SIZE = 15;
 
+type FinanceTab = "charges" | "payments" | "income" | "expenses";
+const TAB_LABEL: Record<FinanceTab, string> = { charges: "Charges", payments: "Payments", income: "Income", expenses: "Expenses" };
+
 /**
- * PLAN.md Phase 4, Item 51 — `/academy/finance` (Charges/Payments tabs),
- * extended by Item 53 with Income/Expenses tabs. Reports remain Item 55's
- * separate page (`/academy/finance-reports`).
+ * Finance (design A13): Charges, Payments, Income and Expenses as pill
+ * tabs (`?tab=`), each table with its own create action in the header and
+ * Export CSV (the audited finance-report export).
  *
- * This is now the ADMINISTRATIVE/reporting side of student finance —
- * one-off charges, manual/unlinked payment recording, receipts, and
- * income/expenses. The normal day-to-day workflow for a recurring
- * enrollment payment lives on the student's own page
- * (`/academy/students/[id]`), not here. There is no approvals queue
- * anymore (`/academy/finance/approvals` removed) — student payments,
- * charge-linked or not, are immediately effective the instant they're
- * recorded; see lib/academies/student-payments.ts's module comment for
- * the full "no approval workflow" architecture decision.
+ * A tab appears only for a role with any access on its permission row
+ * (student payments covers Charges and Payments; income and expenses are
+ * their own rows), and only the open tab's records are read. Every list
+ * call re-checks access and academy scope itself; the extra lookups here
+ * (student names and photos, charge descriptions, staff names, receipts,
+ * courses) are display enrichment on rows those calls already returned.
  *
- * Same gating shape as app/academy/branches/page.tsx: the `/academy/*`
- * layout already ran a base subscription/membership check but has no
- * channel to hand this page the resolved academyId/role, so this page's
- * own reads repeat a checkAcademyAccessForContext-backed lookup themselves.
- *
- * ---------------------------------------------------------------------
- * Independent per-section gating
- * ---------------------------------------------------------------------
- * `academy.student_payments`/`academy.income`/`academy.expenses` are three
- * separate permission rows with different per-role cells (e.g. Trainer has
- * "view" on student payments and expenses but no entry at all on income) —
- * each section's own list call is resolved independently, and a `forbidden`
- * result on one row simply omits that section (`null` passed to
- * `FinanceIncomeExpenses`) rather than blocking the whole page, per
- * DESIGN.md §5's "nav item and every action tied to it are absent... not
- * rendered, not disabled" rule. Only when EVERY section is inaccessible
- * (e.g. Admissions Officer, who has "—" on all three rows) does this page
- * render a top-level "Access denied".
- *
- * UI-quality pass (this wave): restyled onto the shared Tailwind shell
- * (PAGE_WRAP/PageHeader/PageMessage), matching every other `/academy/*`
- * page — this page and its two client components previously predated that
- * pass and still used raw inline styles/plain `<table>`. No business logic
- * changed: same three independent reads, same ok/ownership checks, same
- * props into the two child components. The one net-new read is a
- * display-only student-name lookup (`fullName`/`studentNumber`, matching
- * the "Name (STD-XXXX)" convention already used by roster-panel.tsx/
- * exams-list.tsx/results-list.tsx) — every studentId being resolved here
- * already came from a charge/payment row that listStudentCharges/
- * listStudentPayments already tenant-scoped and authorized, so this is a
- * display-field fetch on already-authorized ids, not a fresh authorization
- * decision (same reasoning as lib/academies/id-cards-actions.ts's own
- * resolveStudentName comment).
- *
- * Student picker (this wave): `searchStudents` (already tenant/branch-scoped
- * for the caller's own role, same as everywhere else it's used — e.g.
- * app/academy/batches/[batchId]/page.tsx's own studentOptions) backs a
- * `<select>` in the Create Charge/Record Payment forms so a caller picks a
- * student by name instead of typing/pasting a raw id. Active students only
- * (creating a new charge/payment for an archived student isn't a real
- * workflow); capped at STUDENTS_MAX_PAGE_SIZE, same ceiling every other
- * "list students for a picker" call site already accepts rather than
- * building unbounded/paginated combobox UI for this.
+ * Student payments post immediately (no approval step) and are only ever
+ * reversed or adjusted, never edited; recurring fee-period payments are
+ * collected from the student's own page.
  */
 export default async function AcademyFinancePage({
   searchParams,
@@ -85,157 +56,344 @@ export default async function AcademyFinancePage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const context = await getAuthContext();
+  if (!context) redirect("/login");
 
-  if (!context) {
-    redirect("/login");
+  const access = await checkAcademyAccessForContext(context);
+  if (access.level === "blocked") {
+    return <PageMessage title="Access unavailable" message={access.message} />;
+  }
+  const { academyId, membershipRole } = access;
+
+  const tabs: FinanceTab[] = [];
+  if (getAcademyPermissionLevel(membershipRole, ACADEMY_STUDENT_PAYMENTS_ACTION) !== "none") tabs.push("charges", "payments");
+  if (getAcademyPermissionLevel(membershipRole, ACADEMY_INCOME_ACTION) !== "none") tabs.push("income");
+  if (getAcademyPermissionLevel(membershipRole, ACADEMY_EXPENSES_ACTION) !== "none") tabs.push("expenses");
+  if (tabs.length === 0) {
+    return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
   const params = await searchParams;
-  const getPage = (key: string): number => {
+  const get = (key: string) => {
     const value = params[key];
-    const raw = Array.isArray(value) ? value[0] : value;
-    const parsed = Number.parseInt(raw ?? "", 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
   };
-  const chargesPage = getPage("chargesPage");
-  const paymentsPage = getPage("paymentsPage");
+  const requested = get("tab") as FinanceTab;
+  const tab: FinanceTab = tabs.includes(requested) ? requested : tabs[0];
+  const pageParam = Number.parseInt(get("page"), 10);
+  const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
 
-  const [chargesResult, payableChargesResult, paymentsResult, incomeResult, expensesResult] = await Promise.all([
-    listStudentCharges(context, {}, { page: chargesPage, pageSize: FINANCE_PAGE_SIZE }),
-    // Separate, unpaginated, narrower read for the Record Payment form's
-    // "Charge (optional)" picker — it needs every currently-payable charge
-    // academy-wide to pick from, not just whichever page of the full
-    // history the Charges table happens to be showing. In practice this is
-    // a much smaller set than "every charge ever" (most eventually reach
-    // `paid`/`cancelled`), so it stays a real, bounded read rather than a
-    // duplicate of the unpaginated fetch this page used to do.
-    listStudentCharges(context, { status: ["open", "partially_paid"] }),
-    listStudentPayments(context, {}, { page: paymentsPage, pageSize: FINANCE_PAGE_SIZE }),
-    listIncomeRecords(context),
-    listExpenseRecords(context),
-  ]);
+  const tabLinks = tabs.map((key) => ({ key, label: TAB_LABEL[key], href: `/academy/finance?tab=${key}` }));
 
-  const chargesPaymentsAccessible = chargesResult.ok && paymentsResult.ok;
-  const incomeAccessible = incomeResult.ok;
-  const expensesAccessible = expensesResult.ok;
+  // Student names (and numbers) for any student a listed row references.
+  async function studentsById(ids: string[]) {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return { labels: {} as Record<string, { name: string; number: string }>, photos: new Map<string, string>() };
+    const [rows, photos] = await Promise.all([
+      db
+        .select({ id: students.id, fullName: students.fullName, studentNumber: students.studentNumber })
+        .from(students)
+        .where(and(eq(students.academyId, academyId), inArray(students.id, unique))),
+      getStudentPhotoUrlsByIds(context!, unique),
+    ]);
+    return { labels: Object.fromEntries(rows.map((row) => [row.id, { name: row.fullName, number: row.studentNumber }])), photos };
+  }
 
-  if (!chargesPaymentsAccessible && !incomeAccessible && !expensesAccessible) {
-    const error = !chargesResult.ok
-      ? chargesResult.error
-      : !paymentsResult.ok
-        ? paymentsResult.error
-        : !incomeResult.ok
-          ? incomeResult.error
-          : !expensesResult.ok
-            ? expensesResult.error
-            : null;
+  // Active students for the Create charge / Record payment pickers.
+  async function studentOptions() {
+    const result = await searchStudents(context!, { status: "active" }, { pageSize: STUDENTS_MAX_PAGE_SIZE });
+    return result.ok
+      ? result.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber, phone: row.phone }))
+      : [];
+  }
+
+  const header = (actions: React.ReactNode, description = "Student charges and payments, income and expenses.") => (
+    <PageHeader
+      title="Finance"
+      description={description}
+      actions={
+        <>
+          <FinanceExportButton />
+          {actions}
+        </>
+      }
+    />
+  );
+
+  /* ---------------------------------------------------------------- */
+  if (tab === "charges") {
+    const chargesResult = await listStudentCharges(context, {}, { page, pageSize: FINANCE_PAGE_SIZE });
+    if (!chargesResult.ok) return <PageMessage title="Access denied" message={chargesResult.error.message} />;
+    const canManage = chargesResult.canManage;
+
+    const overview = canManage ? await getStudentsOverview(context) : null;
+    const overdueByStudent = overview?.ok ? (overview.overview.finance?.overdueByStudent ?? {}) : {};
+    const overdueIds = Object.keys(overdueByStudent);
+
+    const [{ labels, photos }, options] = await Promise.all([
+      studentsById([...chargesResult.charges.map((charge) => charge.studentId), ...overdueIds]),
+      canManage ? studentOptions() : Promise.resolve([]),
+    ]);
+
     return (
-      <PageMessage
-        title={error?.code === "blocked" ? "Access unavailable" : "Access denied"}
-        message={error?.message ?? "You don't have permission to view this page."}
-      />
+      <div className={PAGE_WRAP}>
+        {header(canManage ? <FinanceCreateAction kind="charge" studentOptions={options} /> : null)}
+        <TabLinks tabs={tabLinks} current={tab} label="Finance sections" />
+
+        {canManage && (
+          <>
+            <BlockTitle>Overdue fees</BlockTitle>
+            {overdueIds.length === 0 ? (
+              <Section className="mb-8">
+                <EmptyState message="No student has an overdue fee period." icon={<Icon name="check_circle" />} />
+              </Section>
+            ) : (
+              <DataTable stackBelow={600}>
+                <thead>
+                  <tr>
+                    <th className={rtTh}>Student</th>
+                    <th className={`${rtTh} text-right`}>Amount overdue</th>
+                    <th className={rtTh}>
+                      <span className="sr-only">Collect</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overdueIds
+                    .sort((a, b) => (labels[a]?.name ?? "").localeCompare(labels[b]?.name ?? ""))
+                    .map((studentId) => {
+                      const amounts = overdueByStudent[studentId];
+                      const line = amounts.map((x) => formatMoney(x.amountCents, x.currency)).join(" + ");
+                      return (
+                        <tr key={studentId} className={trHover}>
+                          <td className={rtTd} data-label="Student">
+                            <PersonCell
+                              name={labels[studentId]?.name ?? "Student"}
+                              sub={labels[studentId]?.number}
+                              href={`/academy/students/${studentId}`}
+                              photoUrl={photos.get(studentId) ?? null}
+                            />
+                          </td>
+                          <td className={`${rtTd} text-right font-semibold tabular-nums`} data-label="Amount overdue">
+                            {line}
+                          </td>
+                          <td className={`${rtTd} text-right`} data-actions="">
+                            <Link href={`/academy/students/${studentId}?tab=fees`} className={ROW_BTN_PRIMARY}>
+                              <Icon name="cash" width={16} height={16} />
+                              Collect {line}
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </DataTable>
+            )}
+            <BlockTitle>Charges</BlockTitle>
+          </>
+        )}
+
+        {chargesResult.charges.length === 0 ? (
+          <Section className="mb-8">
+            <EmptyState message="No charges to show yet." icon={<Icon name="receipt_long" />} />
+          </Section>
+        ) : (
+          <DataTable
+            stackBelow={760}
+            footer={
+              <PaginationNav
+                page={page}
+                pageSize={FINANCE_PAGE_SIZE}
+                totalCount={chargesResult.totalCount ?? chargesResult.charges.length}
+                searchParams={params}
+              />
+            }
+          >
+            <thead>
+              <tr>
+                <th className={rtTh}>Student</th>
+                <th className={rtTh}>Charge</th>
+                <th className={`${rtTh} text-right`}>Amount</th>
+                <th className={rtTh}>Due</th>
+                <th className={rtTh}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {chargesResult.charges.map((charge) => (
+                <tr key={charge.id} className={trHover}>
+                  <td className={rtTd} data-label="Student">
+                    <PersonCell
+                      name={labels[charge.studentId]?.name ?? "Student"}
+                      sub={labels[charge.studentId]?.number}
+                      href={`/academy/students/${charge.studentId}`}
+                      photoUrl={photos.get(charge.studentId) ?? null}
+                    />
+                  </td>
+                  <td className={rtTd} data-label="Charge">
+                    {categoryChip(charge.description)}
+                  </td>
+                  <td className={`${rtTd} text-right tabular-nums`} data-label="Amount">
+                    {formatMoney(charge.amountCents, charge.currency)}
+                  </td>
+                  <td className={`${rtTd} whitespace-nowrap`} data-label="Due">
+                    {charge.dueDate ? formatDate(charge.dueDate) : "No due date"}
+                  </td>
+                  <td className={rtTd} data-label="Status">
+                    <Badge label={charge.status} tone={getStatusTone(charge.status)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        )}
+
+        <NoteBlock>
+          A charge is a one-off amount a student owes, such as a replacement fee. Recurring course fees are fee periods, collected
+          from the student&apos;s page. A charge&apos;s status follows the payments recorded against it.
+        </NoteBlock>
+      </div>
     );
   }
 
-  const studentIds = new Set<string>();
-  if (chargesResult.ok) {
-    for (const charge of chargesResult.charges) studentIds.add(charge.studentId);
-  }
-  if (payableChargesResult.ok) {
-    for (const charge of payableChargesResult.charges) studentIds.add(charge.studentId);
-  }
-  if (paymentsResult.ok) {
-    for (const payment of paymentsResult.payments) studentIds.add(payment.studentId);
-  }
-  const studentRows = studentIds.size
-    ? await db
-        .select({ id: students.id, fullName: students.fullName, studentNumber: students.studentNumber })
-        .from(students)
-        .where(inArray(students.id, [...studentIds]))
-    : [];
-  const studentLabels = Object.fromEntries(
-    studentRows.map((row) => [row.id, `${row.fullName} (${row.studentNumber})`]),
-  );
+  /* ---------------------------------------------------------------- */
+  if (tab === "payments") {
+    const paymentsResult = await listStudentPayments(context, {}, { page, pageSize: FINANCE_PAGE_SIZE });
+    if (!paymentsResult.ok) return <PageMessage title="Access denied" message={paymentsResult.error.message} />;
+    const payments = paymentsResult.payments;
+    const canManage = paymentsResult.canManage;
 
-  const studentPickerResult =
-    chargesResult.ok && paymentsResult.ok
-      ? await searchStudents(context, { status: "active" }, { pageSize: STUDENTS_MAX_PAGE_SIZE })
-      : null;
-  const studentOptions =
-    studentPickerResult?.ok
-      ? studentPickerResult.data.rows.map((row) => ({
-          id: row.id,
-          fullName: row.fullName,
-          studentNumber: row.studentNumber,
-          phone: row.phone,
-        }))
-      : [];
+    const chargeIds = [...new Set(payments.map((p) => p.chargeId).filter((id): id is string => Boolean(id)))];
+    const [{ labels, photos }, staffNames, receipts, history, chargeRows, payable, options] = await Promise.all([
+      studentsById(payments.map((p) => p.studentId)),
+      resolveStaffNames(academyId, payments.map((p) => p.recordedBy)),
+      listReceiptsForPayments(context, payments.map((p) => p.id)),
+      listFeePeriodPaymentHistory(context, {}),
+      chargeIds.length
+        ? db
+            .select({ id: studentCharges.id, description: studentCharges.description })
+            .from(studentCharges)
+            .where(and(eq(studentCharges.academyId, academyId), inArray(studentCharges.id, chargeIds)))
+        : Promise.resolve([]),
+      canManage ? listStudentCharges(context, { status: ["open", "partially_paid"] }) : Promise.resolve(null),
+      canManage ? studentOptions() : Promise.resolve([]),
+    ]);
+    const chargeDescription = Object.fromEntries(chargeRows.map((row) => [row.id, row.description]));
+    const courseByPayment = Object.fromEntries(
+      (history.ok ? history.rows : []).map((row) => [row.paymentId, `${row.courseName} · ${row.batchName}`]),
+    );
 
-  // Course/Program column (display-only, "where the data model safely
-  // supports it" — only a fee-period-linked payment has a course/batch at
-  // all; a charge-linked or unlinked payment simply has no entry, rendered
-  // as "—"). Re-derives from the SEPARATE academy.fee_periods permission
-  // row (see listFeePeriodPaymentHistory's own gate) — a role with no
-  // access there (e.g. Admissions Officer) just gets an empty map, and
-  // every payment row falls back to "—" rather than the page failing.
-  const feePeriodHistoryResult =
-    paymentsResult.ok ? await listFeePeriodPaymentHistory(context, {}) : null;
-  const courseByPayment = Object.fromEntries(
-    (feePeriodHistoryResult?.ok ? feePeriodHistoryResult.rows : []).map((row) => [
-      row.paymentId,
-      `${row.courseName} — ${row.batchName}`,
-    ]),
-  );
+    const rows = payments.map((payment) => ({
+      payment,
+      studentName: labels[payment.studentId]?.name ?? "Student",
+      studentNumber: labels[payment.studentId]?.number ?? "",
+      photoUrl: photos.get(payment.studentId) ?? null,
+      recordedByName: staffNames[payment.recordedBy] ?? "Staff member",
+      appliesTo:
+        (payment.chargeId ? chargeDescription[payment.chargeId] : undefined) ??
+        courseByPayment[payment.id] ??
+        (payment.reversedPaymentId ? "Reversal" : "General payment"),
+      receipt: receipts.get(payment.id) ? { id: receipts.get(payment.id)!.id, number: receipts.get(payment.id)!.receiptNumber } : null,
+    }));
 
-  const receiptsResult = paymentsResult.ok
-    ? await listReceiptsForPayments(context, paymentsResult.payments.map((payment) => payment.id))
-    : new Map();
-  const receiptsByPayment = Object.fromEntries(
-    [...receiptsResult.entries()].map(([paymentId, receipt]) => [
-      paymentId,
-      { id: receipt.id, receiptNumber: receipt.receiptNumber },
-    ]),
-  );
-
-  return (
-    <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Finance"
-        description="Student charges, one-off payments, receipts, and income/expense records. Recurring enrollment payments are recorded from each student's own page — see Students."
-      />
-
-      <div className="flex flex-col gap-8">
-        {chargesResult.ok && paymentsResult.ok && (
-          <FinanceChargesPayments
-            charges={chargesResult.charges}
-            chargesPage={chargesPage}
-            chargesPageSize={FINANCE_PAGE_SIZE}
-            chargesTotalCount={chargesResult.totalCount ?? chargesResult.charges.length}
-            payableCharges={payableChargesResult.ok ? payableChargesResult.charges : []}
-            payments={paymentsResult.payments}
-            paymentsPage={paymentsPage}
-            paymentsPageSize={FINANCE_PAGE_SIZE}
-            paymentsTotalCount={paymentsResult.totalCount ?? paymentsResult.payments.length}
-            searchParams={params}
-            studentLabels={studentLabels}
-            studentOptions={studentOptions}
-            courseByPayment={courseByPayment}
-            receiptsByPayment={receiptsByPayment}
-            canManage={chargesResult.canManage}
+    return (
+      <div className={PAGE_WRAP}>
+        {header(
+          canManage ? (
+            <FinanceCreateAction
+              kind="payment"
+              studentOptions={options}
+              payableCharges={(payable?.ok ? payable.charges : []).map((charge) => ({
+                id: charge.id,
+                studentId: charge.studentId,
+                description: charge.description,
+                amountCents: charge.amountCents,
+                currency: charge.currency,
+                status: charge.status,
+              }))}
+            />
+          ) : null,
+        )}
+        <TabLinks tabs={tabLinks} current={tab} label="Finance sections" />
+        {payments.length === 0 ? (
+          <Section className="mb-8">
+            <EmptyState message="No payments to show yet." icon={<Icon name="payments" />} />
+          </Section>
+        ) : (
+          <PaymentsTable
+            rows={rows}
+            canManage={canManage}
             canReverse={paymentsResult.canReverse}
+            currentUserId={context.userId}
+            footer={
+              <PaginationNav
+                page={page}
+                pageSize={FINANCE_PAGE_SIZE}
+                totalCount={paymentsResult.totalCount ?? payments.length}
+                searchParams={params}
+              />
+            }
+          />
+        )}
+        <NoteBlock>
+          Student payments post immediately and cannot be edited. A Manager corrects one by reversing or adjusting it; the
+          original stays on record with a linked reversal, and nobody can reverse a payment they recorded themselves.
+        </NoteBlock>
+      </div>
+    );
+  }
+
+  /* ---------------------------------------------------------------- */
+  if (tab === "income") {
+    const incomeResult = await listIncomeRecords(context);
+    if (!incomeResult.ok) return <PageMessage title="Access denied" message={incomeResult.error.message} />;
+    const records = [...incomeResult.records].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    const staffNames = await resolveStaffNames(academyId, records.map((r) => r.recordedBy));
+    return (
+      <div className={PAGE_WRAP}>
+        {header(incomeResult.canCreate ? <FinanceCreateAction kind="income" /> : null)}
+        <TabLinks tabs={tabLinks} current={tab} label="Finance sections" />
+        {records.length === 0 ? (
+          <Section className="mb-8">
+            <EmptyState message="No income recorded yet." icon={<Icon name="bank" />} />
+          </Section>
+        ) : (
+          <IncomeTable
+            rows={records.map((record) => ({ record, recordedByName: staffNames[record.recordedBy] ?? "Staff member" }))}
+            canReverse={incomeResult.canCreate}
             currentUserId={context.userId}
           />
         )}
-        <FinanceIncomeExpenses
-          income={incomeResult.ok ? incomeResult.records : null}
-          incomeCanCreate={incomeResult.ok ? incomeResult.canCreate : false}
-          expenses={expensesResult.ok ? expensesResult.records : null}
-          expenseCanCreate={expensesResult.ok ? expensesResult.canCreate : false}
-          expenseCanApprove={expensesResult.ok ? expensesResult.canApprove : false}
-          expenseCanSelfApprove={expensesResult.ok ? expensesResult.canSelfApprove : false}
+        <NoteBlock>Income posts directly with no approval step. Book sale payments appear here automatically.</NoteBlock>
+      </div>
+    );
+  }
+
+  /* ---------------------------------------------------------------- */
+  const expensesResult = await listExpenseRecords(context);
+  if (!expensesResult.ok) return <PageMessage title="Access denied" message={expensesResult.error.message} />;
+  const records = [...expensesResult.records].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const staffNames = await resolveStaffNames(academyId, records.map((r) => r.submittedBy));
+  return (
+    <div className={PAGE_WRAP}>
+      {header(expensesResult.canCreate ? <FinanceCreateAction kind="expense" /> : null)}
+      <TabLinks tabs={tabLinks} current={tab} label="Finance sections" />
+      {records.length === 0 ? (
+        <Section className="mb-8">
+          <EmptyState message="No expenses recorded yet." icon={<Icon name="receipt_long" />} />
+        </Section>
+      ) : (
+        <ExpensesTable
+          rows={records.map((record) => ({ record, submittedByName: staffNames[record.submittedBy] ?? "Staff member" }))}
+          canCreate={expensesResult.canCreate}
+          canApprove={expensesResult.canApprove}
+          canSelfApprove={expensesResult.canSelfApprove}
           currentUserId={context.userId}
         />
-      </div>
+      )}
+      <NoteBlock>
+        Expenses keep an approval workflow: a new expense is a draft until it is submitted for approval. Approved expenses
+        are corrected by reversing or adjusting them, never edited, and nobody can reverse an expense they recorded
+        themselves.
+      </NoteBlock>
     </div>
   );
 }

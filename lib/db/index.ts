@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { env } from "@/lib/env";
+import { logger } from "@/lib/logger";
 import * as schema from "./schema";
 
 /**
@@ -35,6 +36,37 @@ const pool =
 if (process.env.NODE_ENV !== "production") {
   globalThis.__dbPool = pool;
 }
+
+/**
+ * Perf investigation (Afoogy slow-dashboard task, Neon-connection step):
+ * node-postgres's own docs/issue tracker (https://github.com/brianc/node-postgres/issues/1700)
+ * are explicit that an idle pooled client is still a live socket — if its
+ * backend connection dies (Neon's free-tier compute auto-suspends after 5
+ * minutes idle, per Neon's own connection-latency docs, and drops every
+ * connection open at that moment) the client emits its own 'error' event.
+ * With no listener anywhere on the Pool, node-postgres re-emits that as the
+ * Pool's own 'error' event; Node treats an EventEmitter 'error' with zero
+ * listeners as fatal and throws it as an uncaught exception.
+ *
+ * This is the exact, repeated `⨯ uncaughtException: Error: Connection
+ * terminated unexpectedly` seen in .dev-server.log (35 occurrences, several
+ * in back-to-back bursts matching this pool's own `max: 10` right after an
+ * idle gap) — not a query-execution bottleneck, a missing required
+ * listener. The same `lib/db` module is imported by Vitest's integration
+ * tests against this same Neon database, so the identical gap is also a
+ * plausible cause of a test *process* dying mid-suite before its own
+ * `afterAll` cleanup runs — one route to the leaked test-fixture rows
+ * found in the test-isolation step of this investigation.
+ *
+ * The fix is exactly what node-postgres's own maintainers recommend on that
+ * issue: attach a listener so the error is logged and the dead client is
+ * dropped, instead of propagating. This is not a retry/keep-alive policy —
+ * Postgres's `pg.Pool` already removes an errored client from its internal
+ * set on its own; the only gap was that nothing was listening.
+ */
+pool.on("error", (err) => {
+  logger.error("Postgres pool client error", { error: err.message });
+});
 
 export const db = drizzle(pool, { schema });
 

@@ -60,6 +60,8 @@ function parseRegisterStudentFormData(formData: FormData): RegisterStudentInput 
     email: String(formData.get("email") ?? ""),
     guardianName: String(formData.get("guardianName") ?? ""),
     guardianPhone: String(formData.get("guardianPhone") ?? ""),
+    address: String(formData.get("address") ?? ""),
+    district: String(formData.get("district") ?? ""),
     profileImageRef: String(formData.get("profileImageRef") ?? ""),
   };
 }
@@ -117,6 +119,8 @@ export async function registerStudent(
     const enrollResult = await enrollStudentInBatch(context, {
       batchId,
       studentId: result.student.id,
+      // The batch courses chosen on the form (one or more).
+      courseIds: formData.getAll("courseIds").map(String).filter(Boolean),
       paymentPlan: {
         intervalMonths: Number(formData.get("paymentPlanIntervalMonths") ?? 0),
         // Entered in dollars, not cents — see lib/ui/money.ts's dollarsToCents.
@@ -131,7 +135,7 @@ export async function registerStudent(
       // reason to report the whole registration as failed.
       return {
         ok: true,
-        enrollmentWarning: `Student registered, but could not be enrolled in the selected course: ${enrollResult.error.message}`,
+        enrollmentWarning: `Student registered, but could not be enrolled in the selected courses: ${enrollResult.error.message}`,
         studentId: result.student.id,
       };
     }

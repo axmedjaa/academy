@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listGradeConfigurations } from "@/lib/academies/grade-configurations";
 import { GradeConfigurationsList } from "./grade-configurations-list";
-import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
+import { listStaff } from "@/lib/academies/staff";
+import { resolveStaffLabels } from "@/lib/academies/staff-labels";
 
 /**
  * PLAN.md Item 47: `/academy/grades` — the grade-configuration approval
@@ -35,23 +37,30 @@ export default async function AcademyGradesPage() {
     );
   }
 
+  // "Created by": staff names for the creators (display only, from the
+  // scoped staff list; anyone not on it shows as "Staff member").
+  const staffResult = await listStaff(context);
+  const creatorNames: Record<string, string> = Object.fromEntries(
+    (staffResult.ok ? staffResult.staff : []).map((member) => [member.userId, member.fullName]),
+  );
+  // Creators without a staff profile (e.g. the academy owner) fall back to
+  // their role in this academy, or their email, as payment history does.
+  const missing = [...new Set(result.configurations.flatMap((c) => [c.createdBy, c.approvedBy ?? c.createdBy]))].filter((id) => !creatorNames[id]);
+  if (missing.length > 0 && result.configurations[0]) {
+    const labels = await resolveStaffLabels(result.configurations[0].academyId, missing);
+    for (const id of missing) {
+      const label = labels.get(id);
+      if (label) creatorNames[id] = label;
+    }
+  }
+
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Grade configurations"
-        description={
-          result.canApprove
-            ? "You can create, submit, approve, reject, and activate grade configurations."
-            : result.canManage
-              ? "You can create, edit, submit, and activate grade configurations. Approving or rejecting a submission requires Manager or Owner authority."
-              : "You don't have access to grade configurations for this academy."
-        }
-      />
       <GradeConfigurationsList
         configurations={result.configurations}
+        creatorNames={creatorNames}
         canManage={result.canManage}
         canApprove={result.canApprove}
-        currentUserId={context.userId}
       />
     </div>
   );

@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
+  batchCourses,
   batchEnrollments,
   batches,
   examResults,
@@ -250,6 +251,14 @@ async function getActiveGradeConfigurationId(
 
 export const createExamSchema = z.object({
   batchId: z.string().uuid("Select a batch"),
+  /** The batch course this exam is for. May be omitted only when the batch
+   * runs exactly one course. */
+  courseId: z
+    .string()
+    .uuid("Select a course")
+    .optional()
+    .or(z.literal(""))
+    .transform((value) => (value ? value : undefined)),
   name: z.string().trim().min(1, "Exam name is required").max(200),
   // PLAN.md states only "NOT NULL" for max_marks (no explicit minimum
   // beyond the DB's own nonnegativity check) — a positive-number
@@ -276,6 +285,8 @@ export interface ExamRecord {
   id: string;
   academyId: string;
   batchId: string;
+  /** The batch course this exam is for. */
+  courseId: string;
   name: string;
   maxMarks: number;
   examDate: string | null;
@@ -289,6 +300,7 @@ function toExamRecord(row: typeof exams.$inferSelect): ExamRecord {
     id: row.id,
     academyId: row.academyId,
     batchId: row.batchId,
+    courseId: row.courseId,
     name: row.name,
     maxMarks: Number(row.maxMarks),
     examDate: row.examDate,
@@ -383,6 +395,18 @@ export async function createExam(
       .limit(1);
     if (!batch) return { outcome: "batch_not_found" as const };
 
+    // The exam's course must be one of the batch's courses; a batch with a
+    // single course needs no choice.
+    const batchCourseIds = (
+      await tx
+        .select({ courseId: batchCourses.courseId })
+        .from(batchCourses)
+        .where(and(eq(batchCourses.batchId, data.batchId), eq(batchCourses.academyId, academyId)))
+    ).map((row) => row.courseId);
+    const courseId = data.courseId ?? (batchCourseIds.length === 1 ? batchCourseIds[0] : undefined);
+    if (!courseId) return { outcome: "course_required" as const };
+    if (!batchCourseIds.includes(courseId)) return { outcome: "course_not_in_batch" as const };
+
     const activeGradeConfigurationId = await getActiveGradeConfigurationId(tx, academyId);
     if (!activeGradeConfigurationId) {
       return { outcome: "no_active_grade_config" as const };
@@ -393,6 +417,7 @@ export async function createExam(
       .values({
         academyId,
         batchId: data.batchId,
+        courseId,
         name: data.name,
         maxMarks: String(data.maxMarks),
         examDate: data.examDate,
@@ -402,7 +427,13 @@ export async function createExam(
     const enrollments = await tx
       .select({ studentId: batchEnrollments.studentId })
       .from(batchEnrollments)
-      .where(and(eq(batchEnrollments.batchId, data.batchId), eq(batchEnrollments.status, "active")));
+      .where(
+        and(
+          eq(batchEnrollments.batchId, data.batchId),
+          eq(batchEnrollments.courseId, courseId),
+          eq(batchEnrollments.status, "active"),
+        ),
+      );
 
     const resultRows =
       enrollments.length === 0
@@ -439,6 +470,12 @@ export async function createExam(
   });
 
   if (result.outcome === "batch_not_found") return { ok: false, error: BATCH_NOT_FOUND };
+  if (result.outcome === "course_required") {
+    return { ok: false, error: { code: "validation", message: "Choose which of the batch's courses this exam is for." } };
+  }
+  if (result.outcome === "course_not_in_batch") {
+    return { ok: false, error: { code: "validation", message: "That course isn't part of this batch." } };
+  }
   if (result.outcome === "no_active_grade_config") return { ok: false, error: NO_ACTIVE_GRADE_CONFIG };
   return { ok: true, exam: toExamRecord(result.exam), resultCount: result.resultCount };
 }
@@ -579,6 +616,7 @@ export async function enterMarks(
           .where(
             and(
               eq(batchEnrollments.batchId, exam.batchId),
+              eq(batchEnrollments.courseId, exam.courseId),
               eq(batchEnrollments.studentId, entry.studentId),
               eq(batchEnrollments.status, "active"),
             ),

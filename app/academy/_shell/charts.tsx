@@ -429,10 +429,10 @@ export function BarChart({
   );
 }
 
-/** Dark navy pill + white text, anchored by its bottom-center point — the
- * one tooltip treatment shared by both chart types above. Navy already
- * means "surface/chrome" in this product's palette (§1), so reusing it here
- * reads as "a floating label," never as a status color. The pill's CENTER
+/** Dark ink pill + white text, anchored by its bottom-center point — the
+ * one tooltip treatment shared by both chart types above (#111827, the
+ * design's tooltip color; the old navy token is now the brand burgundy, so
+ * it no longer reads as neutral chrome). The pill's CENTER
  * clamps to stay fully inside the viewBox — an edge point's tooltip would
  * otherwise spill past x=0 or x=VIEW_WIDTH and get clipped by the `<svg>`'s
  * own bounds. */
@@ -452,7 +452,7 @@ function TooltipPill({ x, y, text }: { x: number; y: number; text: string }) {
         width={width}
         height={20}
         rx={5}
-        fill={color.primaryNavy}
+        fill={color.text}
       />
       <text
         x={clampedX}

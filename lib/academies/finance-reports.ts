@@ -197,6 +197,11 @@ export interface OutstandingChargesSection {
 export interface PaymentsReceivedSection {
   count: number;
   totalsByCurrency: AmountByCurrency[];
+  /** The same payments grouped by method (per currency). */
+  byMethod: (AmountByCurrency & { method: StudentPaymentMethod })[];
+  /** The same payments grouped by the UTC month of `receivedAt`
+   * ("YYYY-MM", per currency), oldest first. */
+  byMonth: (AmountByCurrency & { month: string })[];
 }
 
 export type StudentPaymentsReportSection =
@@ -305,18 +310,39 @@ async function computePaymentsReceived(
   if (filters.dateTo) conditions.push(lte(studentPayments.receivedAt, filters.dateTo));
   if (filters.branchId) conditions.push(eq(students.branchId, filters.branchId));
 
-  const rows = await db
-    .select({
-      currency: studentPayments.currency,
-      amountCents: sql<number>`coalesce(sum(${studentPayments.amountCents}), 0)::int`,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(studentPayments)
-    .innerJoin(students, eq(studentPayments.studentId, students.id))
-    .where(and(...conditions))
-    .groupBy(studentPayments.currency);
+  const amount = sql<number>`coalesce(sum(${studentPayments.amountCents}), 0)::int`;
+  const count = sql<number>`count(*)::int`;
+  const month = sql<string>`to_char(${studentPayments.receivedAt} at time zone 'UTC', 'YYYY-MM')`;
+  // One set of conditions for all three reads, so the breakdowns always add
+  // up to the totals.
+  const [rows, methodRows, monthRows] = await Promise.all([
+    db
+      .select({ currency: studentPayments.currency, amountCents: amount, count })
+      .from(studentPayments)
+      .innerJoin(students, eq(studentPayments.studentId, students.id))
+      .where(and(...conditions))
+      .groupBy(studentPayments.currency),
+    db
+      .select({ method: studentPayments.method, currency: studentPayments.currency, amountCents: amount, count })
+      .from(studentPayments)
+      .innerJoin(students, eq(studentPayments.studentId, students.id))
+      .where(and(...conditions))
+      .groupBy(studentPayments.method, studentPayments.currency),
+    db
+      .select({ month, currency: studentPayments.currency, amountCents: amount, count })
+      .from(studentPayments)
+      .innerJoin(students, eq(studentPayments.studentId, students.id))
+      .where(and(...conditions))
+      .groupBy(month, studentPayments.currency)
+      .orderBy(month),
+  ]);
 
-  return { count: totalCount(rows), totalsByCurrency: toAmountsByCurrency(rows) };
+  return {
+    count: totalCount(rows),
+    totalsByCurrency: toAmountsByCurrency(rows),
+    byMethod: methodRows.map((row) => ({ method: row.method, currency: row.currency, amountCents: row.amountCents, count: row.count })),
+    byMonth: monthRows.map((row) => ({ month: row.month, currency: row.currency, amountCents: row.amountCents, count: row.count })),
+  };
 }
 
 /** Income: defaults to `status = "posted"` (excludes `reversed`) unless the

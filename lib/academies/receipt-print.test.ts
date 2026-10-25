@@ -3,6 +3,7 @@ import { eq, or } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -41,6 +42,7 @@ vi.mock("@/lib/storage/client", () => ({
   headObject: vi.fn(),
 }));
 import { getDownloadUrl } from "@/lib/storage/client";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 const getDownloadUrlMock = vi.mocked(getDownloadUrl);
 
 beforeEach(() => {
@@ -173,6 +175,7 @@ afterAll(async () => {
     await db.delete(feePeriods).where(eq(feePeriods.academyId, academyId));
     await db.delete(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.academyId, academyId));
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -348,7 +351,7 @@ describe("getReceiptPrintData — fee-period-linked payment", () => {
       .returning({ id: batches.id });
     const [enrollment] = await db
       .insert(batchEnrollments)
-      .values({ academyId, batchId: batch.id, studentId })
+      .values({ academyId, batchId: batch.id, courseId: await courseOfBatch(batch.id), studentId })
       .returning({ id: batchEnrollments.id });
 
     const scheduleResult = await setEnrollmentFeeSchedule(context, {

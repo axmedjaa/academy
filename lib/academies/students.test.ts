@@ -3,6 +3,7 @@ import { and, eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -39,6 +40,7 @@ import {
   updateStudent,
 } from "./students";
 import { enrollStudentInBatch, type PaymentPlanInput } from "./batch-assignments";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -258,11 +260,13 @@ async function insertBatchDirect(academyId: string, branchId: string, courseId: 
       startDate: "2026-01-01",
     })
     .returning({ id: batches.id });
+  // Link the batch's course, as createBatch does (enrollment reads batch_courses).
+  await courseOfBatch(row.id);
   return row.id;
 }
 
 async function enrollStudentDirect(academyId: string, batchId: string, studentId: string): Promise<void> {
-  await db.insert(batchEnrollments).values({ academyId, batchId, studentId, status: "active" });
+  await db.insert(batchEnrollments).values({ academyId, batchId, courseId: await courseOfBatch(batchId), studentId, status: "active" });
 }
 
 async function insertGradeConfigDirect(academyId: string, creatorUserId: string): Promise<string> {
@@ -281,7 +285,7 @@ async function insertExamResultDirect(
 ): Promise<void> {
   const [exam] = await db
     .insert(exams)
-    .values({ academyId, batchId, name: `Exam ${randomUUID()}`, maxMarks: "100" })
+    .values({ academyId, batchId, courseId: await courseOfBatch(batchId), name: `Exam ${randomUUID()}`, maxMarks: "100" })
     .returning({ id: exams.id });
   const gradeConfigurationId = await insertGradeConfigDirect(academyId, creatorUserId);
   await db.insert(examResults).values({
@@ -327,6 +331,7 @@ async function insertCertificateDirect(
     academyId,
     studentId,
     batchId,
+    courseId: await courseOfBatch(batchId),
     certificateCode: `CERT-${randomUUID()}`,
     issuedBy,
   });
@@ -358,6 +363,7 @@ afterAll(async () => {
     await db.delete(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.academyId, academyId));
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
     await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -1186,6 +1192,7 @@ describe("getAdmissionsView — applied (not-yet-enrolled) candidates", () => {
     await db.insert(batchEnrollments).values({
       academyId,
       batchId,
+      courseId: await courseOfBatch(batchId),
       studentId: withdrawn.id,
       status: "withdrawn",
     });

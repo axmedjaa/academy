@@ -64,6 +64,11 @@ export interface PlatformDashboardData {
    * `activeAcademyTrend` itself is present. */
   activeAcademyTrend: ActiveAcademyTrendPoint[] | null;
   revenue: RevenueBreakdownResult | null;
+  /** Whether the actor may act on the rows shown (open an academy to
+   * approve it, renew a subscription). Purely presentational — every target
+   * page re-checks its own capability server-side. */
+  canOpenAcademies: boolean;
+  canRenewSubscriptions: boolean;
 }
 
 const PENDING_APPROVALS_CAPABILITY = "approveAcademy";
@@ -73,18 +78,20 @@ const PENDING_APPROVALS_CAPABILITY = "approveAcademy";
  * link to `/platform/academies`. `academyCounts`'s own total/byStatus
  * numbers (from the separate `getAcademyStatusCounts` query) are
  * unaffected by this cap — they're never derived from this list. */
-const PENDING_APPROVALS_PREVIEW_LIMIT = 10;
+const PENDING_APPROVALS_PREVIEW_LIMIT = 5;
 const RECENT_PAYMENTS_CAPABILITY = "recordSubscriptionPayment";
+const RENEW_SUBSCRIPTIONS_CAPABILITY = "renewSubscription";
 /** Previously fetched every subscription payment the platform has ever
  * recorded and sorted/sliced to 5 in JS; now pushed down to a DB-level
  * ORDER BY/LIMIT via `listSubscriptionPayments`'s own `limit` argument. */
-const RECENT_PAYMENTS_LIMIT = 10;
+const RECENT_PAYMENTS_LIMIT = 4;
 export async function getPlatformDashboardData(
   actorContext: AuthContext,
 ): Promise<PlatformDashboardData> {
-  const [canSeeApprovals, canSeePayments] = await Promise.all([
+  const [canSeeApprovals, canSeePayments, canRenewSubscriptions] = await Promise.all([
     hasPermission(actorContext, PENDING_APPROVALS_CAPABILITY),
     hasPermission(actorContext, RECENT_PAYMENTS_CAPABILITY),
+    hasPermission(actorContext, RENEW_SUBSCRIPTIONS_CAPABILITY),
   ]);
 
   const [pendingApprovalAcademies, academyStatusCounts, reportsResult, recentPaymentRows] = await Promise.all([
@@ -133,5 +140,7 @@ export async function getPlatformDashboardData(
     academyCounts,
     activeAcademyTrend,
     revenue,
+    canOpenAcademies: canSeeApprovals,
+    canRenewSubscriptions,
   };
 }

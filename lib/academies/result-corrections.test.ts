@@ -3,6 +3,7 @@ import { eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -30,6 +31,7 @@ import {
   rejectResultCorrection,
   requestResultCorrection,
 } from "./result-corrections";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -134,7 +136,7 @@ async function insertStudentDirect(academyId: string, branchId: string, creatorU
 }
 
 async function enrollStudentDirect(academyId: string, batchId: string, studentId: string): Promise<void> {
-  await db.insert(batchEnrollments).values({ academyId, batchId, studentId, status: "active" });
+  await db.insert(batchEnrollments).values({ academyId, batchId, courseId: await courseOfBatch(batchId), studentId, status: "active" });
 }
 
 async function insertGradeConfigDirect(
@@ -168,7 +170,7 @@ async function insertGradeBandsDirect(
 async function insertExamDirect(academyId: string, batchId: string): Promise<string> {
   const [row] = await db
     .insert(exams)
-    .values({ academyId, batchId, name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
+    .values({ academyId, batchId, courseId: await courseOfBatch(batchId), name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
     .returning({ id: exams.id });
   return row.id;
 }
@@ -301,6 +303,7 @@ afterAll(async () => {
     await db.delete(gradeConfigurations).where(eq(gradeConfigurations.academyId, academyId));
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));

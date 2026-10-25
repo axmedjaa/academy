@@ -60,7 +60,7 @@ let userId: string;
  */
 function currentCodeFor(secretBase32: string, timestamp?: number): string {
   return new OTPAuth.TOTP({
-    issuer: "Academy Management SaaS",
+    issuer: "Dardar",
     label: "test",
     algorithm: "SHA1",
     digits: 6,

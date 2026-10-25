@@ -1,41 +1,38 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { TabLinks } from "@/app/academy/_shell/page-blocks";
+import { AddBookButton } from "./books-client";
 
-/**
- * Books, Stock and Book sales as tabs of one section (Screen Inventory A16;
- * the sidebar carries a single "Books" entry per the design). All three
- * routes share the same `academy.books` permission row, so any user who
- * reaches one of these pages can open the other two.
- */
-const TABS = [
-  { href: "/academy/books", label: "Catalogue" },
-  { href: "/academy/books/stock", label: "Stock" },
-  { href: "/academy/books/sales", label: "Sales" },
-];
+type BooksTab = "catalogue" | "stock" | "sales";
 
-export function BooksTabs() {
+/** The open tab, from the URL (the shared layout doesn't re-render on navigation). */
+function useBooksTab(): BooksTab {
   const pathname = usePathname();
-  const active =
-    [...TABS].sort((a, b) => b.href.length - a.href.length).find((tab) => pathname === tab.href || pathname.startsWith(`${tab.href}/`))?.href ?? TABS[0].href;
+  if (pathname.startsWith("/academy/books/stock")) return "stock";
+  if (pathname.startsWith("/academy/books/sales")) return "sales";
+  return "catalogue";
+}
+
+/** Catalogue / Stock / Sales: links to the tab routes, so the URL, refresh and
+ * the back button keep working while the shared header stays mounted. */
+export function BooksTabBar() {
+  const current = useBooksTab();
   return (
-    <nav aria-label="Books sections" className="mb-6 flex gap-1 overflow-x-auto border-b border-border">
-      {TABS.map((tab) => {
-        const current = tab.href === active;
-        return (
-          <Link
-            key={tab.href}
-            href={tab.href}
-            aria-current={current ? "page" : undefined}
-            className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2.5 text-sm no-underline transition-colors duration-150 hover:no-underline ${
-              current ? "border-brand font-semibold !text-brand" : "border-transparent font-medium !text-muted hover:!text-ink"
-            }`}
-          >
-            {tab.label}
-          </Link>
-        );
-      })}
-    </nav>
+    <TabLinks
+      label="Books sections"
+      current={current}
+      tabs={[
+        { key: "catalogue", label: "Catalogue", href: "/academy/books" },
+        { key: "stock", label: "Stock", href: "/academy/books/stock" },
+        { key: "sales", label: "Sales", href: "/academy/books/sales" },
+      ]}
+    />
   );
+}
+
+/** The header action of the open tab: Add book on the Catalogue (design A16). */
+export function BooksHeaderAction({ canManage }: { canManage: boolean }) {
+  const current = useBooksTab();
+  return canManage && current === "catalogue" ? <AddBookButton /> : null;
 }

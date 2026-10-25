@@ -18,16 +18,24 @@
  * shadow — not a full design-system abstraction.
  */
 export const color = {
-  // DESIGN.md §1 palette (authoritative — takes precedence over Stitch's
-  // own drifted tokens, e.g. Stitch's primary #004ac6/#2563eb vs. this).
-  primaryNavy: "#1B2A4A",
-  primaryBlue: "#2F5FE0",
-  primaryBlueHover: "#24499f",
-  // Phase 1 addition — mirrors app/globals.css's `--color-brand-tint`. A
-  // light brand-blue surface for "selected/active" and subtle highlight
-  // backgrounds, kept in sync with the Tailwind side rather than each
-  // system inventing its own value.
-  primaryBlueTint: "#EEF2FF",
+  // DESIGN.md §1 palette (authoritative). Dardar School System rebrand:
+  // the brand is a single primary hue (burgundy) rather than a separate
+  // navy + blue pair, so primaryNavy and primaryBlue now share the same
+  // value — kept as two keys (not merged) because call sites across the
+  // app reference them by name for two different former roles
+  // (surfaces/headers vs. interactive elements); renaming would touch
+  // every call site, out of scope for a color-only rebrand.
+  primaryNavy: "#850019",
+  primaryBlue: "#850019",
+  primaryBlueHover: "#6B0014",
+  // Mirrors app/globals.css's `--color-brand-tint`. A light brand surface
+  // for "selected/active" and subtle highlight backgrounds, kept in sync
+  // with the Tailwind side rather than each system inventing its own value.
+  primaryBlueTint: "#F9E8EC",
+  // Dardar School System accent gold — sparing use only (highlights,
+  // accents). Never pair with white/light text, and never put small text
+  // directly on it without dark ink: see DESIGN.md §1's contrast note.
+  accentGold: "#F5B638",
   bg: "#F7F8FA",
   card: "#FFFFFF",
   border: "#E2E5EA",

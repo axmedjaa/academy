@@ -420,10 +420,15 @@ describe("getFinanceReports — outstanding charges / pending approvals aggregat
     const result = await getFinanceReports(context);
     expect(result.ok).toBe(true);
     if (!result.ok || !result.report.studentPayments.visible) return;
-    expect(result.report.studentPayments.paymentsReceived).toEqual({
+    expect(result.report.studentPayments.paymentsReceived).toMatchObject({
       count: 1,
       totalsByCurrency: [{ currency: "USD", amountCents: 3_000, count: 1 }],
     });
+    // The breakdowns use the same conditions, so they add up to the total.
+    const received = result.report.studentPayments.paymentsReceived;
+    expect(received.byMethod.reduce((sum, row) => sum + row.amountCents, 0)).toBe(3_000);
+    expect(received.byMonth.reduce((sum, row) => sum + row.amountCents, 0)).toBe(3_000);
+    expect(received.byMonth.every((row) => /^\d{4}-\d{2}$/.test(row.month))).toBe(true);
   });
 
   it("income defaults to 'posted' status only, excluding 'reversed'", async () => {
@@ -473,7 +478,7 @@ describe("getFinanceReports — filter correctness", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok || !result.report.studentPayments.visible) return;
-    expect(result.report.studentPayments.paymentsReceived).toEqual({
+    expect(result.report.studentPayments.paymentsReceived).toMatchObject({
       count: 1,
       totalsByCurrency: [{ currency: "USD", amountCents: 1_000, count: 1 }],
     });
@@ -522,7 +527,7 @@ describe("getFinanceReports — filter correctness", () => {
     const result = await getFinanceReports(context, { status: "rejected" });
     expect(result.ok).toBe(true);
     if (!result.ok || !result.report.studentPayments.visible) return;
-    expect(result.report.studentPayments.paymentsReceived).toEqual({
+    expect(result.report.studentPayments.paymentsReceived).toMatchObject({
       count: 1,
       totalsByCurrency: [{ currency: "USD", amountCents: 7_000, count: 1 }],
     });
@@ -546,7 +551,7 @@ describe("getFinanceReports — filter correctness", () => {
     const result = await getFinanceReports(context, { method: "bank_transfer" });
     expect(result.ok).toBe(true);
     if (!result.ok || !result.report.studentPayments.visible) return;
-    expect(result.report.studentPayments.paymentsReceived).toEqual({
+    expect(result.report.studentPayments.paymentsReceived).toMatchObject({
       count: 1,
       totalsByCurrency: [{ currency: "USD", amountCents: 2_000, count: 1 }],
     });
@@ -576,7 +581,8 @@ describe("getFinanceReports — cross-academy tenant isolation", () => {
     expect(result.report.studentPayments).toEqual({
       visible: true,
       outstandingCharges: { count: 0, totalsByCurrency: [] },
-      paymentsReceived: { count: 0, totalsByCurrency: [] },
+      // Nothing from the other academy in the totals or the month/method breakdowns.
+      paymentsReceived: { count: 0, totalsByCurrency: [], byMethod: [], byMonth: [] },
     });
     expect(result.report.income).toEqual({ visible: true, count: 0, totalsByCurrency: [] });
     expect(result.report.expenses).toEqual({

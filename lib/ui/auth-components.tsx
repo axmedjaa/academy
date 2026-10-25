@@ -39,26 +39,24 @@ export function AuthShell({ children, maxWidth = 420 }: { children: ReactNode; m
   );
 }
 
-/** Small brand mark, adapted from the Stitch export's own
- * `afoogy_logo/code.html` asset (a rounded-square monogram + wordmark) —
- * inline SVG, no image request, no new dependency. */
+/** The real Dardar School System logo (`public/dardar-logo.png`, supplied
+ * source asset — not redrawn or approximated), used on every spacious
+ * pre-auth/account screen (`AuthCard`'s full card layout). Confirmed via
+ * direct pixel inspection to have genuine alpha transparency and clean
+ * edges on a light/white surface — every usage of this component sits on
+ * `color.bg` (near-white), so no backdrop plate is needed here the way
+ * `app/academy/_shell/icons.tsx`'s `BrandMark` needs one on the Platform
+ * shell's dark sidebar. `alt` carries the full brand name since nothing
+ * else on these screens announces it (unlike the shell headers, which sit
+ * next to a visible "Dardar" text label). */
 export function AuthLogo() {
+  const LOGO_ASPECT_RATIO = 1150 / 848;
+  const width = 200;
+  const height = Math.round(width / LOGO_ASPECT_RATIO);
   return (
     <div style={{ display: "flex", justifyContent: "center", marginBottom: spacing.lg }}>
-      <svg width="140" height="34" viewBox="0 0 240 60" fill="none" role="img" aria-label="Afoogy">
-        <rect x="6" y="10" width="40" height="40" rx="10" fill={color.primaryBlue} />
-        <path
-          d="M26 18L37 26V38L26 42L15 38V26L26 18Z"
-          stroke="#FFFFFF"
-          strokeWidth="2.5"
-          strokeLinejoin="round"
-        />
-        <path d="M26 27V42M26 27L37 26M26 27L15 26" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" />
-        <circle cx="26" cy="18" r="2.5" fill="#93C5FD" />
-        <text x="58" y="38" fontFamily="Inter, -apple-system, sans-serif" fontSize="24" fontWeight="700" fill={color.text} letterSpacing="-0.5">
-          Afoogy
-        </text>
-      </svg>
+      {/* eslint-disable-next-line @next/next/no-img-element -- this codebase renders every image via a plain <img> (see student-avatar.tsx), no next/image usage anywhere */}
+      <img src="/dardar-logo.png" alt="Dardar School System" width={width} height={height} style={{ display: "block" }} />
     </div>
   );
 }

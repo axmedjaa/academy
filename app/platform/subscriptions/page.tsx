@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
-import { listPlatformSubscriptions } from "@/lib/subscriptions/renew";
+import { listPlatformSubscriptionsPage } from "@/lib/subscriptions/renew";
 import { SubscriptionsManager } from "./subscriptions-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
@@ -42,17 +42,17 @@ export default async function PlatformSubscriptionsPage({
     return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
-  // `listPlatformSubscriptions()` is also used by
-  // lib/subscriptions/expiry-reminder-job.ts, a background job that must
-  // process every subscription, never one page of them — sliced here
-  // instead, after fetching, same "still fully server-side" reasoning as
-  // app/platform/academies/page.tsx.
+  // Perf investigation (Afoogy slow-dashboard task): previously called
+  // listPlatformSubscriptions() (every row, plus its own eligible-payment
+  // lookup for every one of them) and sliced the already-fetched array in
+  // JS. listPlatformSubscriptionsPage() pushes LIMIT/OFFSET and the
+  // page-nav total down to Postgres, and scopes the eligible-payment
+  // lookup to just this page's rows. listPlatformSubscriptions() itself
+  // is untouched — lib/subscriptions/expiry-reminder-job.ts still needs
+  // every row, never one page of them.
   const params = await searchParams;
   const page = parsePageParam(params);
-  const allSubscriptions = await listPlatformSubscriptions();
-  const totalCount = allSubscriptions.length;
-  const offset = (page - 1) * PAGE_SIZE;
-  const subscriptions = allSubscriptions.slice(offset, offset + PAGE_SIZE);
+  const { subscriptions, totalCount } = await listPlatformSubscriptionsPage(page, PAGE_SIZE);
 
   return (
     <div className={PAGE_WRAP}>

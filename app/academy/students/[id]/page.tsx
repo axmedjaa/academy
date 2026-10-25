@@ -10,7 +10,11 @@ import {
 } from "@/lib/academies/fee-periods";
 import { listReceiptsForPayments, listStudentCharges, listStudentPayments } from "@/lib/academies/student-payments";
 import { resolveStaffLabels } from "@/lib/academies/staff-labels";
-import { BackLink, PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
+import { listBranches } from "@/lib/academies/branches";
+import { getEnrollBatchOptions } from "@/lib/academies/enroll-options";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { ACADEMY_STUDENTS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { StudentDetail, type PaymentHistoryRow } from "./student-detail";
 
 /**
@@ -31,7 +35,13 @@ import { StudentDetail, type PaymentHistoryRow } from "./student-detail";
  * student at all, or the id doesn't resolve/belongs to another academy)
  * blocks the page outright.
  */
-export default async function StudentDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function StudentDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const context = await getAuthContext();
   if (!context) {
     redirect("/login");
@@ -126,13 +136,28 @@ export default async function StudentDetailPage({ params }: { params: Promise<{ 
     })
     .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
 
+  // Header and tab data: branch name, edit rights (same gate updateStudent
+  // checks) and the enroll options (scoped batches with their courses).
+  const [branchesResult, enrollOptions, access] = await Promise.all([
+    listBranches(context),
+    getEnrollBatchOptions(context),
+    checkAcademyAccessForContext(context),
+  ]);
+  const branchName =
+    (branchesResult.ok ? branchesResult.branches.find((b) => b.id === student.branchId)?.name : undefined) ?? "Branch";
+  const studentsLevel = access.level === "blocked" ? "none" : getAcademyPermissionLevel(access.membershipRole, ACADEMY_STUDENTS_ACTION);
+  const canEditStudent = studentsLevel === "full" || studentsLevel === "manage";
+
   return (
     <div className={PAGE_WRAP}>
-      <BackLink href="/academy/students" label="Back to students" />
-      <PageHeader title={student.fullName} description={`Student # ${student.studentNumber}`} />
       <StudentDetail
+        initialTab={(await searchParams).tab === "fees" ? "fees" : (await searchParams).tab === "payments" ? "payments" : "overview"}
         student={student}
         photoUrl={photoUrl}
+        branchName={branchName}
+        canEditStudent={canEditStudent}
+        canEnroll={enrollOptions.canEnroll}
+        enrollBatches={enrollOptions.batches}
         enrollments={enrollments}
         enrollmentSummaries={enrollmentSummaries}
         charges={charges}

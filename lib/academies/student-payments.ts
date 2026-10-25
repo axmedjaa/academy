@@ -459,7 +459,7 @@ export async function listStudentPayments(
    * fetching every payment the academy has ever recorded and slicing in
    * JS, which is what the dashboard used to do. Omit it (the default) for
    * every other existing caller — behavior there is unchanged. */
-  filters: { studentId?: string; limit?: number } = {},
+  filters: { studentId?: string; limit?: number; branchId?: string } = {},
   /** Full page/pageSize pagination (distinct from `limit` above, which has
    * no `totalCount`/offset concept) — for `/academy/finance`'s own
    * Payments table, which previously fetched every payment the academy has
@@ -473,6 +473,19 @@ export async function listStudentPayments(
   const conditions = [eq(studentPayments.academyId, academyId)];
   if (filters.studentId) {
     conditions.push(eq(studentPayments.studentId, filters.studentId));
+  }
+  // student_payments has no branch column — narrowed through the paying
+  // student's own branch, tenant-scoped on both sides.
+  if (filters.branchId) {
+    conditions.push(
+      inArray(
+        studentPayments.studentId,
+        db
+          .select({ id: students.id })
+          .from(students)
+          .where(and(eq(students.academyId, academyId), eq(students.branchId, filters.branchId))),
+      ),
+    );
   }
   const where = and(...conditions);
 

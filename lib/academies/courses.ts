@@ -1,7 +1,15 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { batchEnrollments, batches, courses, programs, staffProfiles, students } from "@/lib/db/schema";
+import {
+  batchCourses,
+  batchEnrollments,
+  batches,
+  courses,
+  programs,
+  staffProfiles,
+  students,
+} from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_COURSES_BATCHES_ACTION,
@@ -370,10 +378,10 @@ export type ListCoursesResult =
 async function countBatchesByCourseIds(courseIds: string[]): Promise<Map<string, number>> {
   if (courseIds.length === 0) return new Map();
   const rows = await db
-    .select({ courseId: batches.courseId, count: sql<number>`count(*)::int` })
-    .from(batches)
-    .where(inArray(batches.courseId, courseIds))
-    .groupBy(batches.courseId);
+    .select({ courseId: batchCourses.courseId, count: sql<number>`count(*)::int` })
+    .from(batchCourses)
+    .where(inArray(batchCourses.courseId, courseIds))
+    .groupBy(batchCourses.courseId);
   return new Map(rows.map((row) => [row.courseId, row.count]));
 }
 
@@ -482,7 +490,7 @@ export async function listCourseEnrollments(
     .from(batchEnrollments)
     .innerJoin(batches, eq(batches.id, batchEnrollments.batchId))
     .innerJoin(students, eq(students.id, batchEnrollments.studentId))
-    .where(and(eq(batches.courseId, courseId), eq(batches.academyId, academyId)));
+    .where(and(eq(batchEnrollments.courseId, courseId), eq(batchEnrollments.academyId, academyId)));
 
   return { ok: true, enrollments: rows };
 }
@@ -968,8 +976,8 @@ export type GetCourseDeletionEligibilityResult =
 async function countCourseBatches(executor: DbClient, courseId: string): Promise<number> {
   const [row] = await executor
     .select({ count: sql<number>`count(*)::int` })
-    .from(batches)
-    .where(eq(batches.courseId, courseId));
+    .from(batchCourses)
+    .where(eq(batchCourses.courseId, courseId));
   return row?.count ?? 0;
 }
 

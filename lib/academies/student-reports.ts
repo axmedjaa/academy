@@ -1,7 +1,7 @@
-import { and, eq, gte, lte, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { batchEnrollments, branches, students } from "@/lib/db/schema";
+import { batchCourses, batchEnrollments, batches, branches, courses, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getAssignedBranchIds, resolveScope } from "@/lib/academies/students";
 import { ACADEMY_STUDENTS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
@@ -125,6 +125,26 @@ export interface EnrollmentStatusCount {
   count: number;
 }
 
+/** Students in view split three ways (design "Student status"):
+ * enrolled = not archived with an active enrollment; applied = active with
+ * no active enrollment (the Admissions list); archived. */
+export interface StudentStatusSummary {
+  enrolled: number;
+  applied: number;
+  archived: number;
+}
+
+/** One batch (design "Enrollment by batch"): students in view with an
+ * active enrollment in it. */
+export interface EnrollmentByBatchRow {
+  batchId: string;
+  batchCode: string;
+  batchName: string;
+  branchName: string;
+  courseNames: string[];
+  activeStudents: number;
+}
+
 export interface StudentReportsData {
   academyId: string;
   generatedAt: Date;
@@ -138,6 +158,8 @@ export interface StudentReportsData {
   branchDistribution: BranchDistributionRow[];
   enrollmentTrend: EnrollmentTrendPoint[];
   enrollmentStatusBreakdown: EnrollmentStatusCount[];
+  studentStatus: StudentStatusSummary;
+  enrollmentByBatch: EnrollmentByBatchRow[];
 }
 
 export type GetStudentReportsResult =
@@ -161,6 +183,8 @@ function emptyReport(academyId: string, filters: ParsedStudentReportFilters): St
     branchDistribution: [],
     enrollmentTrend: [],
     enrollmentStatusBreakdown: ENROLLMENT_STATUSES.map((status) => ({ status, count: 0 })),
+    studentStatus: { enrolled: 0, applied: 0, archived: 0 },
+    enrollmentByBatch: [],
   };
 }
 
@@ -208,7 +232,9 @@ export async function getStudentReports(
   if (filters.dateTo) enrollmentConditions.push(lte(batchEnrollments.enrolledAt, filters.dateTo));
   const enrollmentsWhere = and(...enrollmentConditions);
 
-  const [statusRows, branchRows, trendRows, enrollmentStatusRows] = await Promise.all([
+  const hasActiveEnrollment = sql`exists (select 1 from ${batchEnrollments} where ${batchEnrollments.studentId} = ${students.id} and ${batchEnrollments.status} = 'active')`;
+
+  const [statusRows, branchRows, trendRows, enrollmentStatusRows, [splitRow], batchRows] = await Promise.all([
     db
       .select({ status: students.status, count: sql<number>`count(*)::int` })
       .from(students)
@@ -240,7 +266,61 @@ export async function getStudentReports(
       .innerJoin(students, eq(batchEnrollments.studentId, students.id))
       .where(enrollmentsWhere)
       .groupBy(batchEnrollments.status),
+    db
+      .select({
+        enrolled: sql<number>`count(*) filter (where ${students.status} <> 'archived' and ${hasActiveEnrollment})::int`,
+        applied: sql<number>`count(*) filter (where ${students.status} = 'active' and not ${hasActiveEnrollment})::int`,
+        archived: sql<number>`count(*) filter (where ${students.status} = 'archived')::int`,
+      })
+      .from(students)
+      .where(studentsWhere),
+    // Active enrollments of the students in view, per batch.
+    db
+      .select({
+        batchId: batches.id,
+        batchCode: batches.code,
+        batchName: batches.name,
+        branchName: branches.name,
+        activeStudents: sql<number>`count(distinct ${students.id})::int`,
+      })
+      .from(batchEnrollments)
+      .innerJoin(students, eq(batchEnrollments.studentId, students.id))
+      .innerJoin(batches, eq(batches.id, batchEnrollments.batchId))
+      .innerJoin(branches, eq(branches.id, batches.branchId))
+      .where(and(studentsWhere, eq(batchEnrollments.status, "active")))
+      .groupBy(batches.id, batches.code, batches.name, branches.name),
   ]);
+
+  // Every batch is listed, also with nobody enrolled now (as 0), as the
+  // design does; trainers only see batches their own students are in.
+  const emptyBatches =
+    membershipRole === "trainer"
+      ? []
+      : await db
+          .select({ batchId: batches.id, batchCode: batches.code, batchName: batches.name, branchName: branches.name })
+          .from(batches)
+          .innerJoin(branches, eq(branches.id, batches.branchId))
+          .where(
+            and(
+              eq(batches.academyId, academyId),
+              filters.branchId ? eq(batches.branchId, filters.branchId) : undefined,
+            ),
+          );
+  const batchMap = new Map<string, Omit<EnrollmentByBatchRow, "courseNames">>();
+  for (const row of batchRows) batchMap.set(row.batchId, row);
+  for (const row of emptyBatches) if (!batchMap.has(row.batchId)) batchMap.set(row.batchId, { ...row, activeStudents: 0 });
+  const batchIds = [...batchMap.keys()];
+  const courseRows = batchIds.length
+    ? await db
+        .select({ batchId: batchCourses.batchId, courseName: courses.name })
+        .from(batchCourses)
+        .innerJoin(courses, eq(courses.id, batchCourses.courseId))
+        .where(and(eq(batchCourses.academyId, academyId), inArray(batchCourses.batchId, batchIds)))
+        .orderBy(asc(courses.name))
+    : [];
+  const enrollmentByBatch: EnrollmentByBatchRow[] = [...batchMap.values()]
+    .map((row) => ({ ...row, courseNames: courseRows.filter((c) => c.batchId === row.batchId).map((c) => c.courseName) }))
+    .sort((a, b) => b.activeStudents - a.activeStudents || a.batchCode.localeCompare(b.batchCode));
 
   const statusBreakdown: StatusCount[] = STUDENT_STATUSES.map((status) => ({
     status,
@@ -270,6 +350,8 @@ export async function getStudentReports(
       })),
       enrollmentTrend: trendRows.map((row) => ({ period: row.period, count: row.count })),
       enrollmentStatusBreakdown,
+      studentStatus: { enrolled: splitRow?.enrolled ?? 0, applied: splitRow?.applied ?? 0, archived: splitRow?.archived ?? 0 },
+      enrollmentByBatch,
     },
   };
 }

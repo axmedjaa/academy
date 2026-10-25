@@ -9,7 +9,9 @@ import {
 } from "@/lib/academies/staff-actions";
 import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
 import type { StaffDeletionEligibilitySummary, StaffListRow } from "@/lib/academies/staff";
-import { Badge, EmptyState, ErrorMessage, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, EmptyState, ErrorMessage, PhoneLink, Section, inputClass, trHover } from "@/app/academy/_shell/ui";
+import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
@@ -95,98 +97,116 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {error && <ErrorMessage message={error} />}
+    <div className="flex flex-col">
+      {error && (
+        <div className="mb-4">
+          <ErrorMessage message={error} />
+        </div>
+      )}
       {staff.length === 0 ? (
         <Section>
           <EmptyState message="No staff members to show." icon={<Icon name="badge" />} />
         </Section>
       ) : (
-        <TableWrap>
+        <DataTable stackBelow={1040}>
           <thead>
             <tr>
-              <th className={th}>Name</th>
-              <th className={th}>Employee #</th>
-              <th className={th}>Phone</th>
-              <th className={th}>Login email</th>
-              <th className={th}>Role</th>
-              <th className={th}>Status</th>
-              {canManage && <th className={`${th} text-right`}>Actions</th>}
+              <th className={rtTh}>Name</th>
+              <th className={rtTh}>Employee #</th>
+              <th className={rtTh}>Phone</th>
+              <th className={rtTh}>Login email</th>
+              <th className={rtTh}>Role</th>
+              <th className={rtTh}>Status</th>
+              {canManage && <th className={`${rtTh} text-right`}>Actions</th>}
             </tr>
           </thead>
           <tbody>
             {staff.map((row) => (
               <tr key={row.id} className={trHover}>
-                <td className={td}>
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-tint text-xs font-semibold text-brand">
+                <td className={rtTd} data-label="Name">
+                  <span className="flex items-center gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-tint text-[13px] font-bold text-brand">
                       {getInitials(row.fullName)}
                     </span>
-                    <span className="font-medium text-ink">{row.fullName}</span>
-                  </div>
+                    <span className="font-semibold text-ink">{row.fullName}</span>
+                  </span>
                 </td>
-                <td className={`${td} text-muted`}>{row.employeeNumber ?? "—"}</td>
-                <td className={`${td} text-muted`}>{row.phone}</td>
-                <td className={`${td} text-muted`}>{row.loginEmail}</td>
-                <td className={td}>
+                <td className={`${rtTd} tabular-nums`} data-label="Employee #">
+                  {row.employeeNumber ?? <span className="text-muted">—</span>}
+                </td>
+                <td className={rtTd} data-label="Phone">
+                  <PhoneLink phone={row.phone} who={row.fullName} />
+                </td>
+                <td className={`${rtTd} [overflow-wrap:anywhere]`} data-label="Login email">
+                  {row.loginEmail}
+                </td>
+                <td className={rtTd} data-label="Role">
                   {row.role === null ? (
                     <Badge label="No access" tone="gray" />
                   ) : canManage ? (
                     <select
                       value={row.role}
                       disabled={isPending}
+                      aria-label={`Role for ${row.fullName}`}
                       onChange={(event) => onRoleChange(row.userId, event.target.value as AcademyRole)}
-                      className={`${inputClass} w-auto py-1.5 text-xs`}
+                      className={`${inputClass} h-10 !w-auto max-w-full py-1.5 text-[13px]`}
                     >
                       {ACADEMY_ROLES.map((role) => (
                         <option key={role} value={role}>
-                          {role}
+                          {ACADEMY_ROLE_LABELS[role]}
                         </option>
                       ))}
                     </select>
                   ) : (
-                    row.role
+                    ACADEMY_ROLE_LABELS[row.role]
                   )}
                 </td>
-                <td className={td}>
+                <td className={rtTd} data-label="Status">
                   <Badge label={row.status} tone={row.status === "active" ? "green" : "gray"} />
                 </td>
                 {canManage && (
-                  <td className={`${td} text-right`}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          aria-label={`Actions for ${row.fullName}`}
-                          className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
-                        >
-                          <Icon name="more" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem disabled={isPending} onClick={() => onToggleStatus(row)}>
-                          {row.status === "active" ? "Archive" : "Restore"}
-                        </DropdownMenuItem>
-                        {row.role !== null && (
-                          <DropdownMenuItem onClick={() => setRemoveAccessRowId(row.id)}>
-                            Remove access
-                          </DropdownMenuItem>
-                        )}
-                        {canDelete &&
-                          (row.deletionEligibility.eligible ? (
-                            <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(row.id)}>
-                              Delete
-                            </DropdownMenuItem>
-                          ) : (
-                            <DropdownMenuItem
-                              disabled
-                              title={`This staff member cannot be permanently deleted because ${row.deletionEligibility.reasons.join("; ")}. Use Archive instead.`}
+                  <td className={`${rtTd} text-right`} data-actions="">
+                    <span className="inline-flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        disabled={isPending}
+                        onClick={() => onToggleStatus(row)}
+                        className="inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app disabled:opacity-50"
+                      >
+                        {row.status === "active" ? "Archive" : "Restore"}
+                      </button>
+                      {(row.role !== null || canDelete) && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={`More actions for ${row.fullName}`}
+                              className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-app hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                             >
-                              Delete
-                            </DropdownMenuItem>
-                          ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                              <Icon name="more" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {row.role !== null && (
+                              <DropdownMenuItem onClick={() => setRemoveAccessRowId(row.id)}>Remove access</DropdownMenuItem>
+                            )}
+                            {canDelete &&
+                              (row.deletionEligibility.eligible ? (
+                                <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(row.id)}>
+                                  Delete
+                                </DropdownMenuItem>
+                              ) : (
+                                <DropdownMenuItem
+                                  disabled
+                                  title={`This staff member cannot be permanently deleted because ${row.deletionEligibility.reasons.join("; ")}. Use Archive instead.`}
+                                >
+                                  Delete
+                                </DropdownMenuItem>
+                              ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </span>
 
                     {row.role !== null && (
                       <ConfirmButton
@@ -221,7 +241,7 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
               </tr>
             ))}
           </tbody>
-        </TableWrap>
+        </DataTable>
       )}
     </div>
   );

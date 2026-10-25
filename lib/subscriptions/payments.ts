@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from "drizzle-orm";
+import { count, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import {
@@ -189,6 +189,42 @@ export async function listSubscriptionPayments(
     .orderBy(subscriptionPayments.createdAt);
 
   return rows.map(toRecord).reverse();
+}
+
+export interface SubscriptionPaymentsPage {
+  payments: SubscriptionPaymentRecord[];
+  totalCount: number;
+}
+
+/**
+ * Perf investigation (Afoogy slow-dashboard task, query-performance step):
+ * same rows, same newest-first ordering `listSubscriptionPayments()`'s
+ * no-limit overload already produces (there via fetch-all + `.reverse()`
+ * in JS) — but for /platform/payments (app/platform/payments/page.tsx),
+ * which only ever renders one `pageSize`-row slice and previously fetched
+ * every payment row to get there. `ORDER BY createdAt DESC` expressed
+ * directly (no JS reverse needed) plus `LIMIT`/`OFFSET` and a separate
+ * `count(*)` for the page-nav total. Leaves `listSubscriptionPayments()`
+ * itself untouched — its no-limit overload still has its own caller
+ * (this file's own test) relying on the full, unpaginated list.
+ */
+export async function listSubscriptionPaymentsPage(
+  page: number,
+  pageSize: number,
+): Promise<SubscriptionPaymentsPage> {
+  const offset = Math.max(0, page - 1) * pageSize;
+
+  const [rows, [{ value: totalCount }]] = await Promise.all([
+    db
+      .select()
+      .from(subscriptionPayments)
+      .orderBy(desc(subscriptionPayments.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ value: count() }).from(subscriptionPayments),
+  ]);
+
+  return { payments: rows.map(toRecord), totalCount };
 }
 
 export interface AcademySubscriptionOption {

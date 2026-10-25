@@ -14,7 +14,7 @@ A companion file, `DESIGN_PROMPT.md`, is a separate artifact — a copy-paste pr
 
 Concise reference — full token rationale lives in `DESIGN_PROMPT.md` §3; restated here so this document is self-contained for implementation.
 
-- **Palette**: primary `#1B2A4A` (navy, surfaces/headers) / `#2F5FE0` (interactive blue); neutrals `#F7F8FA` (bg) / `#FFFFFF` (card) / `#E2E5EA` (border) / `#6B7280` (muted text) / `#111827` (text).
+- **Palette** (Dardar School System rebrand): primary burgundy `#850019` (used for surfaces/headers, navigation emphasis, and interactive elements — the brand has one primary hue, not a separate navy/blue pair; hover/pressed state `#6B0014`, light brand tint `#F9E8EC`); accent gold `#F5B638` (sparing use for highlights/accents only — never as a background behind white/light text, and never as small text on a light surface; pairs with dark ink text or sits on the dark burgundy surface); neutrals `#F7F8FA` (bg) / `#FFFFFF` (card) / `#E2E5EA` (border) / `#6B7280` (muted text) / `#111827` (text).
 - **Status colors** (one meaning each, used identically everywhere): gray = draft/neutral; amber = pending/awaiting approval; green = approved/active/verified/paid; red = rejected/suspended/overdue/error/at-limit; deep teal/violet = published/final/locked; **muted slate** = closed/archived (deliberately duller than every other state — reads as permanently inert, never confused with "suspended" red); blue = informational.
 - **Type**: one sans-serif family (e.g. Inter), tabular numerals for money/IDs, clear size hierarchy (page title > section header > table header > body > caption).
 - **Spacing**: 8px base scale (4/8/12/16/24/32/48); card padding 24px desktop / 16px mobile.

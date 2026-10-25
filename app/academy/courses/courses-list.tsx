@@ -1,32 +1,14 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import {
-  createCourse,
-  deleteCourse,
-  requestCourseImageUploadUrlAction,
-  setCourseStatus,
-  updateCourse,
-  type CourseFormState,
-} from "@/lib/academies/courses-actions";
+import { useRouter } from "next/navigation";
+import { deleteCourse, setCourseStatus } from "@/lib/academies/courses-actions";
 import type { CourseDeletionEligibilitySummary, CourseWithInstructor } from "@/lib/academies/courses";
 import type { ProgramRecord } from "@/lib/academies/programs";
-import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
-import {
-  Badge,
-  Button,
-  EmptyState,
-  ErrorMessage,
-  Field,
-  FormDialog,
-  Section,
-  TableWrap,
-  inputClass,
-  td,
-  th,
-  trHover,
-} from "@/app/academy/_shell/ui";
+import { Badge, Button, EmptyState, FormDialog, PageHeader, Section, trHover } from "@/app/academy/_shell/ui";
+import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { formatDate } from "@/lib/ui/date";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import {
@@ -36,16 +18,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { MAX_RASTER_IMAGE_SIZE_BYTES, RASTER_IMAGE_ACCEPT_ATTRIBUTE, isRasterImageContentType } from "@/lib/storage/upload-policy";
+import { CourseFormDialog, type InstructorOption } from "./course-form";
 
-const initialState: CourseFormState = { ok: false };
-
-const MAX_COURSE_IMAGE_SIZE_BYTES = MAX_RASTER_IMAGE_SIZE_BYTES;
-
-interface InstructorOption {
-  id: string;
-  fullName: string;
-}
+/**
+ * Courses (design A07): header with New course, the Course / Program /
+ * Instructor / Starts / Ends / Status table (picture or initials, name
+ * linking to the course page), Archive or Restore per row. New and Edit use
+ * the design form dialog in course-form.tsx.
+ */
 
 interface Props {
   courses: (CourseWithInstructor & { deletionEligibility: CourseDeletionEligibilitySummary })[];
@@ -54,24 +34,21 @@ interface Props {
   canManage: boolean;
 }
 
-function formatDate(value: string | null): string {
-  if (!value) return "—";
-  return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+const ROW_BTN =
+  "inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app disabled:opacity-50";
+
+function courseInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
 }
 
 function statusTone(status: string): "green" | "gray" {
   return status === "archived" ? "gray" : "green";
 }
 
-function uploadCourseImageFile(url: string, file: File): Promise<void> {
-  return fetch(url, { method: "PUT", headers: { "Content-Type": file.type }, body: file }).then((response) => {
-    if (!response.ok) throw new Error(`The image upload was rejected by storage (HTTP ${response.status}).`);
-  });
-}
-
 export function CoursesList({ courses, programs, instructors, canManage }: Props) {
-  const [createState, createFormAction, creating] = useActionState(createCourse, initialState);
-  const [updateState, updateFormAction, updating] = useActionState(updateCourse, initialState);
+  const router = useRouter();
+  const [createOpen, setCreateOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   // Which row's Archive/Restore or Delete confirmation is open — the
   // dropdown menu item opens it externally (ConfirmButton's controlled
@@ -80,181 +57,126 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
   const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
   const [previewImageId, setPreviewImageId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (createState.ok) showSuccessToast("Course created.");
-    else if (createState.error) showErrorToast(createState.error.message);
-  }, [createState]);
-  useEffect(() => {
-    if (updateState.ok) showSuccessToast("Course updated.");
-    else if (updateState.error) showErrorToast(updateState.error.message);
-  }, [updateState]);
-
-  // New course's image is uploaded to R2 as soon as a file is chosen (same
-  // "upload before the row exists" convention as books-manager.tsx's new
-  // book cover), then carried into the create form as a hidden field —
-  // unlike a book cover this is optional, so there's nothing gating
-  // "Create course" on it.
-  const newImageInputRef = useRef<HTMLInputElement>(null);
-  const [newImageKey, setNewImageKey] = useState<string | null>(null);
-  const [newImagePreviewUrl, setNewImagePreviewUrl] = useState<string | null>(null);
-  const [newImageUploading, setNewImageUploading] = useState(false);
-  const [newImageError, setNewImageError] = useState<string | null>(null);
-
   const editingCourse = courses.find((c) => c.id === editingId) ?? null;
   const previewImageCourse = courses.find((c) => c.id === previewImageId) ?? null;
-
-  // Auto-close the edit dialog once its own update succeeds — see
-  // branches-list.tsx's identical pattern/comment.
-  const [prevUpdateOk, setPrevUpdateOk] = useState(updateState.ok);
-  if (updateState.ok !== prevUpdateOk) {
-    setPrevUpdateOk(updateState.ok);
-    if (updateState.ok) setEditingId(null);
-  }
-
-  // Reset the new-course image picker once creation succeeds — React 19's
-  // action-bound form already resets every other (uncontrolled) field
-  // natively, but this hidden field's value is controlled by this
-  // component's own state, so it needs the same explicit reset.
-  const [prevCreateOk, setPrevCreateOk] = useState(createState.ok);
-  if (createState.ok !== prevCreateOk) {
-    setPrevCreateOk(createState.ok);
-    if (createState.ok) {
-      setNewImageKey(null);
-      setNewImagePreviewUrl(null);
-      setNewImageError(null);
-    }
-  }
-
-  // Clearing the native file input's value (so the same file can be chosen
-  // again later) is a DOM-ref side effect, not a render-time state
-  // adjustment — it has to happen in an effect, not inline above.
-  useEffect(() => {
-    if (newImageKey === null && newImageInputRef.current) {
-      newImageInputRef.current.value = "";
-    }
-  }, [newImageKey]);
-
-  async function handleNewImageChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setNewImageError(null);
-    if (!isRasterImageContentType(file.type)) {
-      setNewImageError("Image must be JPEG, PNG, WebP, or AVIF.");
-      return;
-    }
-    if (file.size > MAX_COURSE_IMAGE_SIZE_BYTES) {
-      setNewImageError("Image must be 10 MB or smaller.");
-      return;
-    }
-    setNewImageUploading(true);
-    setNewImageKey(null);
-    const requested = await requestCourseImageUploadUrlAction({ contentType: file.type, fileSizeBytes: file.size });
-    if (!requested.ok || !requested.uploadUrl || !requested.key) {
-      setNewImageUploading(false);
-      setNewImageError(requested.error?.message ?? "Failed to start image upload.");
-      return;
-    }
-    try {
-      await uploadCourseImageFile(requested.uploadUrl, file);
-    } catch (err) {
-      setNewImageUploading(false);
-      setNewImageError(err instanceof Error ? err.message : "Image upload failed.");
-      return;
-    }
-    setNewImageUploading(false);
-    setNewImageKey(requested.key);
-    setNewImagePreviewUrl(URL.createObjectURL(file));
-  }
 
   function toggleCourseStatus(course: CourseWithInstructor) {
     return setCourseStatus(course.id, course.status === "active" ? "archived" : "active");
   }
 
+  const programNameById = new Map(programs.map((program) => [program.id, program.name]));
+
   return (
-    <section className="flex flex-col gap-6">
+    <section className="flex flex-col">
+      <PageHeader
+        title="Courses"
+        description="Courses belong to a program."
+        actions={
+          canManage ? (
+            <Button type="button" onClick={() => setCreateOpen(true)}>
+              New course
+            </Button>
+          ) : undefined
+        }
+      />
+
       {courses.length === 0 ? (
         <Section>
-          <EmptyState message="No courses to show yet." icon={<Icon name="menu_book" />} />
+          <EmptyState message={canManage ? "No courses yet. Create one under a program." : "No courses to show yet."} icon={<Icon name="menu_book" />} />
         </Section>
       ) : (
-      <TableWrap>
-        <thead>
-          <tr>
-            <th className={th}>Image</th>
-            <th className={th}>Name</th>
-            <th className={th}>Instructor</th>
-            <th className={th}>Starts</th>
-            <th className={th}>Ends</th>
-            <th className={th}>Status</th>
-            {canManage && <th className={th}>Actions</th>}
-          </tr>
-        </thead>
-        <tbody>
+        <DataTable stackBelow={900}>
+          <thead>
+            <tr>
+              <th className={rtTh}>Course</th>
+              <th className={rtTh}>Program</th>
+              <th className={rtTh}>Instructor</th>
+              <th className={rtTh}>Starts</th>
+              <th className={rtTh}>Ends</th>
+              <th className={rtTh}>Status</th>
+              {canManage && <th className={rtTh}><span className="sr-only">Actions</span></th>}
+            </tr>
+          </thead>
+          <tbody>
             {courses.map((course) => (
               <tr key={course.id} className={trHover}>
-                <td className={td}>
-                  {course.imageUrl ? (
-                    <button
-                      type="button"
-                      onClick={() => setPreviewImageId(course.id)}
-                      aria-label={`View ${course.name}'s image`}
-                      className="block h-12 w-12 overflow-hidden rounded-md transition-opacity duration-150 hover:opacity-90 motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                <td className={rtTd} data-label="Course">
+                  <span className="flex min-w-0 items-center gap-3">
+                    {course.imageUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => setPreviewImageId(course.id)}
+                        aria-label={`View ${course.name}'s image`}
+                        className="h-10 w-10 shrink-0 overflow-hidden rounded-full border-2 border-white shadow-[0_0_0_1px_#E2E5EA] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element -- signed storage URL; this codebase renders images with plain <img> */}
+                        <img src={course.imageUrl} alt="" className="h-full w-full object-cover" />
+                      </button>
+                    ) : (
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-tint text-[13px] font-bold text-brand">
+                        {courseInitials(course.name)}
+                      </span>
+                    )}
+                    <Link
+                      href={`/academy/courses/${course.id}`}
+                      className="flex min-h-11 min-w-0 flex-col justify-center no-underline hover:no-underline"
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element -- this codebase renders every course/academy image via a plain <img> (see app/academy/id-cards/id-card-visual.tsx), no next/image usage anywhere */}
-                      <img
-                        src={course.imageUrl}
-                        alt={`${course.name} course thumbnail`}
-                        className="h-full w-full object-cover"
-                      />
-                    </button>
-                  ) : (
-                    <span className="text-muted">—</span>
-                  )}
+                      <span className="font-semibold leading-snug !text-brand [overflow-wrap:anywhere] hover:underline">
+                        {course.name}
+                      </span>
+                      {course.code && <span className="text-xs text-muted">{course.code}</span>}
+                    </Link>
+                  </span>
                 </td>
-                <td className={td}>
-                  <Link href={`/academy/courses/${course.id}`} className="font-medium text-brand hover:underline">
-                    {course.name}
-                  </Link>
-                  {course.code && <span className="text-muted"> ({course.code})</span>}
+                <td className={rtTd} data-label="Program">
+                  {programNameById.get(course.programId) ?? <span className="text-muted">—</span>}
                 </td>
-                <td className={td}>{course.instructorName ?? "—"}</td>
-                <td className={td}>{formatDate(course.startDate)}</td>
-                <td className={td}>{formatDate(course.endDate)}</td>
-                <td className={td}>
+                <td className={rtTd} data-label="Instructor">
+                  {course.instructorName ?? <span className="text-muted">Not assigned</span>}
+                </td>
+                <td className={`${rtTd} tabular-nums`} data-label="Starts">
+                  {formatDate(course.startDate)}
+                </td>
+                <td className={`${rtTd} tabular-nums`} data-label="Ends">
+                  {formatDate(course.endDate)}
+                </td>
+                <td className={rtTd} data-label="Status">
                   <Badge label={course.status} tone={statusTone(course.status)} />
                 </td>
                 {canManage && (
-                  <td className={td}>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          aria-label={`Actions for ${course.name}`}
-                          className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
-                        >
-                          <Icon name="more" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setEditingId(course.id)}>Edit</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setArchiveRowId(course.id)}>
-                          {course.status === "active" ? "Archive" : "Restore"}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        {course.deletionEligibility.eligible ? (
-                          <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(course.id)}>
-                            Delete
-                          </DropdownMenuItem>
-                        ) : (
-                          <DropdownMenuItem
-                            disabled
-                            title={`This course cannot be permanently deleted because ${course.deletionEligibility.reasons.join("; ")}. Use Archive instead.`}
+                  <td className={rtTd} data-actions="">
+                    <span className="inline-flex items-center gap-2">
+                      <button type="button" onClick={() => setArchiveRowId(course.id)} className={ROW_BTN}>
+                        {course.status === "active" ? "Archive" : "Restore"}
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label={`More actions for ${course.name}`}
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-app hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                           >
-                            Delete
-                          </DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                            <Icon name="more" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => setEditingId(course.id)}>Edit</DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {course.deletionEligibility.eligible ? (
+                            <DropdownMenuItem variant="destructive" onClick={() => setDeleteRowId(course.id)}>
+                              Delete
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem
+                              disabled
+                              title={`This course cannot be permanently deleted because ${course.deletionEligibility.reasons.join("; ")}. Use Archive instead.`}
+                            >
+                              Delete
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </span>
 
                     <ConfirmButton
                       label={course.status === "active" ? "Archive" : "Restore"}
@@ -266,17 +188,15 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                       description={
                         course.status === "active" ? (
                           <>
-                            Archived courses are hidden from new batch creation and free up this
-                            academy&apos;s plan course allowance, but every batch and student history is
-                            kept and can be restored at any time.
+                            Archived courses are hidden from new batch creation and free up this academy&apos;s plan
+                            course allowance, but every batch and student history is kept and can be restored at any
+                            time.
                           </>
                         ) : (
-                          <>
-                            This course will be marked active again and count against this academy&apos;s
-                            plan course allowance.
-                          </>
+                          <>This course will be marked active again and count against this academy&apos;s plan course allowance.</>
                         )
                       }
+                      successMessage={course.status === "active" ? "Course archived." : "Course restored."}
                       onConfirm={() => toggleCourseStatus(course)}
                     />
                     {course.deletionEligibility.eligible && (
@@ -288,6 +208,7 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                         title={`Delete "${course.name}" permanently?`}
                         description={<>This cannot be undone.</>}
                         confirmInput={{ label: `Type "${course.name}" to confirm`, requiredValue: course.name }}
+                        successMessage="Course deleted."
                         onConfirm={() => deleteCourse(course.id, course.name)}
                       />
                     )}
@@ -295,8 +216,8 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
                 )}
               </tr>
             ))}
-        </tbody>
-      </TableWrap>
+          </tbody>
+        </DataTable>
       )}
 
       {previewImageCourse && (
@@ -305,7 +226,7 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
           onOpenChange={(nextOpen) => !nextOpen && setPreviewImageId(null)}
           title={`${previewImageCourse.name}'s image`}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element -- see the thumbnail's own suppression above */}
+          {/* eslint-disable-next-line @next/next/no-img-element -- signed storage URL; this codebase renders images with plain <img> */}
           <img
             src={previewImageCourse.imageUrl ?? ""}
             alt={`${previewImageCourse.name} course image`}
@@ -319,252 +240,26 @@ export function CoursesList({ courses, programs, instructors, canManage }: Props
         </FormDialog>
       )}
 
-      {canManage && editingCourse && (
-        <FormDialog
-          open={editingCourse !== null}
-          onOpenChange={(nextOpen) => !nextOpen && setEditingId(null)}
-          title={`Edit course — ${editingCourse.name}`}
-        >
-          <EditCourseForm
-            key={editingCourse.id}
+      {canManage && (
+        <>
+          <CourseFormDialog
+            open={createOpen}
+            onOpenChange={setCreateOpen}
+            course={null}
+            programs={programs}
+            instructors={instructors}
+            onSaved={() => router.refresh()}
+          />
+          <CourseFormDialog
+            open={editingCourse !== null}
+            onOpenChange={(next) => !next && setEditingId(null)}
             course={editingCourse}
             programs={programs}
             instructors={instructors}
-            updateFormAction={updateFormAction}
-            updateState={updateState}
-            updating={updating}
-            onCancel={() => setEditingId(null)}
+            onSaved={() => router.refresh()}
           />
-        </FormDialog>
-      )}
-
-      {canManage && (
-        <Section>
-          <h2 className="text-base font-semibold text-ink">Add course</h2>
-          <form action={createFormAction} className="mt-4 flex max-w-lg flex-col gap-3">
-            <Field label="Program">
-              <select name="programId" required className={inputClass}>
-                {programs.map((program) => (
-                  <option key={program.id} value={program.id}>
-                    {program.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Name">
-              <input type="text" name="name" required className={inputClass} />
-            </Field>
-            <Field label="Code">
-              <input type="text" name="code" className={inputClass} />
-            </Field>
-            <Field label="Description">
-              <textarea name="description" rows={3} className={inputClass} />
-            </Field>
-            <Field label="Duration (weeks)">
-              <input type="number" name="durationWeeks" min={0} className={inputClass} />
-            </Field>
-            <Field label="Course image (optional)">
-              <div className="flex items-center gap-3">
-                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md border border-border bg-surface">
-                  {newImagePreviewUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- local object URL preview, never uploaded anywhere else.
-                    <img src={newImagePreviewUrl} alt="Course image preview" className="h-full w-full object-cover" />
-                  ) : (
-                    <span className="text-[10px] text-muted">No image</span>
-                  )}
-                </div>
-                <div>
-                  <label className="cursor-pointer text-sm text-brand hover:underline">
-                    {newImageUploading ? "Uploading..." : newImageKey ? "Change image" : "Choose image"}
-                    <input
-                      ref={newImageInputRef}
-                      type="file"
-                      accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
-                      className="hidden"
-                      disabled={newImageUploading}
-                      onChange={handleNewImageChange}
-                    />
-                  </label>
-                  <p className="mt-1 text-xs text-muted">JPEG, PNG, WebP, or AVIF, up to 10 MB.</p>
-                  {newImageError && <p className="mt-1 text-xs text-danger">{newImageError}</p>}
-                </div>
-              </div>
-            </Field>
-            <input type="hidden" name="imageRef" value={newImageKey ?? ""} />
-            <Field label="Instructor">
-              <select name="instructorId" defaultValue="" className={inputClass}>
-                <option value="">No instructor assigned</option>
-                {instructors.map((instructor) => (
-                  <option key={instructor.id} value={instructor.id}>
-                    {instructor.fullName}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Start date">
-                <input type="date" name="startDate" className={inputClass} />
-              </Field>
-              <Field label="End date">
-                <input type="date" name="endDate" className={inputClass} />
-              </Field>
-            </div>
-            {createState.error && <ErrorMessage message={createState.error.message} />}
-            {createState.ok && <p className="text-sm font-medium text-success">Course created.</p>}
-            <Button type="submit" disabled={creating} className="self-start">
-              {creating ? "Creating..." : "Create course"}
-            </Button>
-          </form>
-        </Section>
+        </>
       )}
     </section>
-  );
-}
-
-/**
- * Pulled out of CoursesList's inline JSX and keyed by `course.id` where
- * it's rendered — this is what gives the image-upload state (below) a
- * clean reset for free whenever a different row's Edit dialog opens,
- * rather than needing manual "if editingId changed, reset..." bookkeeping.
- */
-function EditCourseForm({
-  course,
-  programs,
-  instructors,
-  updateFormAction,
-  updateState,
-  updating,
-  onCancel,
-}: {
-  course: CourseWithInstructor;
-  programs: ProgramRecord[];
-  instructors: InstructorOption[];
-  updateFormAction: (formData: FormData) => void;
-  updateState: CourseFormState;
-  updating: boolean;
-  onCancel: () => void;
-}) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  // `null` until a NEW image is uploaded in this dialog — the hidden
-  // `imageRef` field below falls back to the course's existing raw
-  // `imageRef` (legacy URL or R2 key, whichever it already is) so an edit
-  // that doesn't touch the image leaves it completely unchanged.
-  const [imageKey, setImageKey] = useState<string | null>(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(course.imageUrl);
-  const [imageUploading, setImageUploading] = useState(false);
-  const [imageError, setImageError] = useState<string | null>(null);
-
-  async function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setImageError(null);
-    if (!isRasterImageContentType(file.type)) {
-      setImageError("Image must be JPEG, PNG, WebP, or AVIF.");
-      return;
-    }
-    if (file.size > MAX_COURSE_IMAGE_SIZE_BYTES) {
-      setImageError("Image must be 10 MB or smaller.");
-      return;
-    }
-    setImageUploading(true);
-    setImageKey(null);
-    const requested = await requestCourseImageUploadUrlAction({ contentType: file.type, fileSizeBytes: file.size });
-    if (!requested.ok || !requested.uploadUrl || !requested.key) {
-      setImageUploading(false);
-      setImageError(requested.error?.message ?? "Failed to start image upload.");
-      return;
-    }
-    try {
-      await uploadCourseImageFile(requested.uploadUrl, file);
-    } catch (err) {
-      setImageUploading(false);
-      setImageError(err instanceof Error ? err.message : "Image upload failed.");
-      return;
-    }
-    setImageUploading(false);
-    setImageKey(requested.key);
-    setImagePreviewUrl(URL.createObjectURL(file));
-  }
-
-  return (
-    <form action={updateFormAction} className="flex flex-col gap-3">
-      <input type="hidden" name="courseId" value={course.id} />
-      <Field label="Program">
-        <select name="programId" required defaultValue={course.programId} className={inputClass}>
-          {programs.map((program) => (
-            <option key={program.id} value={program.id}>
-              {program.name}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <Field label="Name">
-        <input type="text" name="name" required defaultValue={course.name} className={inputClass} />
-      </Field>
-      <Field label="Code">
-        <input type="text" name="code" defaultValue={course.code ?? ""} className={inputClass} />
-      </Field>
-      <Field label="Description">
-        <textarea name="description" defaultValue={course.description ?? ""} rows={3} className={inputClass} />
-      </Field>
-      <Field label="Duration (weeks)">
-        <input type="number" name="durationWeeks" min={0} defaultValue={course.durationWeeks ?? ""} className={inputClass} />
-      </Field>
-      <Field label="Course image (optional)">
-        <div className="flex items-center gap-3">
-          <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md border border-border bg-surface">
-            {imagePreviewUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element -- short-lived signed R2 URL or local object URL preview, same convention as books-manager.tsx.
-              <img src={imagePreviewUrl} alt="Course image preview" className="h-full w-full object-cover" />
-            ) : (
-              <span className="text-[10px] text-muted">No image</span>
-            )}
-          </div>
-          <div>
-            <label className="cursor-pointer text-sm text-brand hover:underline">
-              {imageUploading ? "Uploading..." : "Change image"}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
-                className="hidden"
-                disabled={imageUploading}
-                onChange={handleImageChange}
-              />
-            </label>
-            <p className="mt-1 text-xs text-muted">JPEG, PNG, WebP, or AVIF, up to 10 MB.</p>
-            {imageError && <p className="mt-1 text-xs text-danger">{imageError}</p>}
-          </div>
-        </div>
-      </Field>
-      <input type="hidden" name="imageRef" value={imageKey ?? course.imageRef ?? ""} />
-      <Field label="Instructor">
-        <select name="instructorId" defaultValue={course.instructorId ?? ""} className={inputClass}>
-          <option value="">No instructor assigned</option>
-          {instructors.map((instructor) => (
-            <option key={instructor.id} value={instructor.id}>
-              {instructor.fullName}
-            </option>
-          ))}
-        </select>
-      </Field>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Start date">
-          <input type="date" name="startDate" defaultValue={course.startDate ?? ""} className={inputClass} />
-        </Field>
-        <Field label="End date">
-          <input type="date" name="endDate" defaultValue={course.endDate ?? ""} className={inputClass} />
-        </Field>
-      </div>
-      {updateState.error && <ErrorMessage message={updateState.error.message} />}
-      <div className="mt-2 flex gap-2">
-        <Button type="submit" disabled={updating}>
-          {updating ? "Saving..." : "Save changes"}
-        </Button>
-        <Button type="button" variant="secondary" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </form>
   );
 }

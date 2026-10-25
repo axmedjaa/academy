@@ -151,7 +151,7 @@ export interface ProgramDeletionEligibilitySummary {
 }
 
 export type ListProgramsResult =
-  | { ok: true; programs: (ProgramRecord & { deletionEligibility: ProgramDeletionEligibilitySummary })[]; canManage: boolean }
+  | { ok: true; programs: (ProgramRecord & { courseCount: number; deletionEligibility: ProgramDeletionEligibilitySummary })[]; canManage: boolean }
   | { ok: false; error: ProgramActionError };
 
 /** Bulk course-count-by-program, for the programs list's Delete button —
@@ -182,8 +182,9 @@ export async function listPrograms(actorContext: AuthContext): Promise<ListProgr
   return {
     ok: true,
     programs: rows.map((row) => {
-      const reasons = buildProgramDeletionReasons(courseCountByProgramId.get(row.id) ?? 0);
-      return { ...toRecord(row), deletionEligibility: { eligible: reasons.length === 0, reasons } };
+      const courseCount = courseCountByProgramId.get(row.id) ?? 0;
+      const reasons = buildProgramDeletionReasons(courseCount);
+      return { ...toRecord(row), courseCount, deletionEligibility: { eligible: reasons.length === 0, reasons } };
     }),
     canManage: canManagePrograms(membershipRole, permissionLevel),
   };

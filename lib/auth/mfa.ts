@@ -8,7 +8,7 @@ import { decryptSecret, encryptSecret } from "@/lib/auth/mfa-encryption";
 import { verifyMfaEmailOtp } from "@/lib/auth/mfa-email-otp";
 import { recordAudit } from "@/lib/audit";
 
-const ISSUER = "Academy Management SaaS";
+const ISSUER = "Dardar";
 const RECOVERY_CODE_COUNT = 10;
 // Shared with the replay-prevention step math in `validateTotpChallenge`
 // below — must stay the same value `buildTotp` configures the TOTP

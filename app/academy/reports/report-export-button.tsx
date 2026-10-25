@@ -1,55 +1,50 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import {
   exportAcademicReportAction,
+  exportFinanceReportAction,
   exportStudentReportAction,
 } from "@/lib/export/export-data-actions";
 import { downloadExportContent } from "@/lib/export/download-file";
-import { Button, ErrorMessage } from "@/app/academy/_shell/ui";
+import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
+import { showErrorToast } from "@/lib/ui/toast";
+import { Button } from "@/app/academy/_shell/ui";
 
 /**
- * PLAN.md Phase 5, Item 60 — Export button for `/academy/reports`'
- * Student and Academic tabs (the Finance tab gets its own export button for
- * free: it renders `FinanceReportsView`, which now has one built in — see
- * that component's own module comment).
- *
- * A small client island next to each server-rendered tab body, same
- * "GET-query-param page, one client button" shape this hub's own module
- * comment describes for its filter forms — this button sends the SAME
- * filters currently reflected in the URL (passed down as a plain prop from
- * the server-rendered tab) to the matching `exportData` action, so the
- * export always matches what's on screen.
+ * Export CSV for the open Reports tab. Sends the same filters the page is
+ * showing (from the URL) to the matching audited export action, so the
+ * file always matches what is on screen and every export is logged.
  */
 export function ReportExportButton({
   kind,
   filters,
 }: {
-  kind: "student" | "academic";
+  kind: "student" | "academic" | "finance";
   filters: Record<string, string | undefined>;
 }) {
-  const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
 
   function handleExport() {
-    setError(null);
     startTransition(async () => {
-      const action = kind === "student" ? exportStudentReportAction : exportAcademicReportAction;
-      const result = await action(filters, "csv");
-      if (!result.ok) {
-        setError(result.error.message);
-        return;
+      try {
+        const action =
+          kind === "student" ? exportStudentReportAction : kind === "academic" ? exportAcademicReportAction : exportFinanceReportAction;
+        const result = await action(filters, "csv");
+        if (!result.ok) {
+          showErrorToast(result.error.message);
+          return;
+        }
+        downloadExportContent(result.content, result.filename, result.format);
+      } catch {
+        showErrorToast(NETWORK_ERROR_MESSAGE);
       }
-      downloadExportContent(result.content, result.filename, result.format);
     });
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      {error && <ErrorMessage message={error} />}
-      <Button type="button" variant="secondary" className="self-start" onClick={handleExport} disabled={isPending}>
-        {isPending ? "Exporting..." : "Export CSV"}
-      </Button>
-    </div>
+    <Button type="button" variant="secondary" onClick={handleExport} disabled={pending}>
+      {pending ? "Exporting…" : "Export CSV"}
+    </Button>
   );
 }

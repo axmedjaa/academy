@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, notExists, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, notExists, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import {
@@ -568,22 +568,142 @@ const NO_PAYMENT_TOOLTIP =
  * does not re-check, matching every other `list*` helper's convention in
  * this codebase.
  */
+function platformSubscriptionsSelect() {
+  return {
+    subscriptionId: academySubscriptions.id,
+    academyId: academySubscriptions.academyId,
+    academyName: academies.name,
+    planName: subscriptionPlans.name,
+    billingPeriod: subscriptionPlans.billingPeriod,
+    status: academySubscriptions.status,
+    startsAt: academySubscriptions.startsAt,
+    endsAt: academySubscriptions.endsAt,
+    trialEndsAt: academySubscriptions.trialEndsAt,
+    renewedAt: academySubscriptions.renewedAt,
+  };
+}
+
+// Matches `platformSubscriptionsSelect()`'s own column list exactly —
+// both listPlatformSubscriptions() and listPlatformSubscriptionsPage()
+// select this same shape, so buildPlatformSubscriptionRow() below takes
+// one named type instead of fighting Drizzle's inferred select type.
+interface PlatformSubscriptionRawRow {
+  subscriptionId: string;
+  academyId: string;
+  academyName: string;
+  planName: string;
+  billingPeriod: string;
+  status: string;
+  startsAt: Date;
+  endsAt: Date | null;
+  trialEndsAt: Date | null;
+  renewedAt: Date | null;
+}
+
+// Eligible-payment lookup, batched (one query for every subscription
+// rather than N) — same reasoning as lib/subscriptions/usage.ts's
+// listAcademyUsageOverview comment: "not a tenant-facing hot path", fine
+// to reduce in memory rather than chase a single clean query builder
+// expression for "latest per group" style joins. `subscriptionIds`,
+// when given, scopes the lookup to just those rows (the paginated path
+// below) — same WHERE conditions either way, just one more AND.
+async function fetchEligibleSubscriptionIds(
+  subscriptionIds?: string[],
+): Promise<Set<string>> {
+  if (subscriptionIds && subscriptionIds.length === 0) return new Set();
+
+  const conditions = [
+    eq(subscriptionPayments.status, "verified"),
+    notExists(
+      db
+        .select({ one: sql`1` })
+        .from(subscriptionPaymentConsumptions)
+        .where(
+          eq(
+            subscriptionPaymentConsumptions.subscriptionPaymentId,
+            subscriptionPayments.id,
+          ),
+        ),
+    ),
+  ];
+  if (subscriptionIds) {
+    conditions.push(inArray(subscriptionPayments.subscriptionId, subscriptionIds));
+  }
+
+  const eligiblePaymentRows = await db
+    .select({ subscriptionId: subscriptionPayments.subscriptionId })
+    .from(subscriptionPayments)
+    .where(and(...conditions));
+
+  return new Set(eligiblePaymentRows.map((row) => row.subscriptionId));
+}
+
+function buildPlatformSubscriptionRow(
+  row: PlatformSubscriptionRawRow,
+  eligibleSubscriptionIds: Set<string>,
+  now: Date,
+): PlatformSubscriptionRow {
+  const rawStatus = row.status as SubscriptionStatus;
+  const effectiveStatus = computeLazySubscriptionStatus(
+    { status: rawStatus, trialEndsAt: row.trialEndsAt, endsAt: row.endsAt },
+    now,
+  );
+  const hasEligiblePayment = eligibleSubscriptionIds.has(row.subscriptionId);
+
+  const msUntilEnd = row.endsAt ? row.endsAt.getTime() - now.getTime() : null;
+  // "Expiring soon" is deliberately narrower than Past Due/grace (a
+  // different, already-computed state): only a still-fully-Active
+  // subscription whose ends_at is coming up counts — once it's actually
+  // lapsed into Past Due/Suspended/Expired, the status badge itself is
+  // the more urgent signal, not this amber flag.
+  const expiringSoon =
+    effectiveStatus === "active" &&
+    msUntilEnd !== null &&
+    msUntilEnd > 0 &&
+    msUntilEnd <= EXPIRING_SOON_WINDOW_DAYS * DAY_MS;
+  const expiringSoonDaysRemaining = expiringSoon
+    ? Math.ceil((msUntilEnd as number) / DAY_MS)
+    : null;
+
+  let canRenew = false;
+  let renewDisabledReason: string | null = null;
+  if (rawStatus === "cancelled" || effectiveStatus === "cancelled") {
+    renewDisabledReason = CANCELLED_TOOLTIP;
+  } else if (!RENEWABLE_SOURCE_STATUSES.has(effectiveStatus)) {
+    renewDisabledReason = NOT_YET_ACTIVE_TOOLTIP;
+  } else if (!hasEligiblePayment) {
+    renewDisabledReason = NO_PAYMENT_TOOLTIP;
+  } else {
+    canRenew = true;
+  }
+
+  return {
+    subscriptionId: row.subscriptionId,
+    academyId: row.academyId,
+    academyName: row.academyName,
+    planName: row.planName,
+    billingPeriod: row.billingPeriod as BillingPeriod,
+    status: rawStatus,
+    effectiveStatus,
+    startsAt: row.startsAt,
+    endsAt: row.endsAt,
+    trialEndsAt: row.trialEndsAt,
+    renewedAt: row.renewedAt,
+    graceDaysRemaining:
+      effectiveStatus === "past_due" ? graceDaysRemaining(row.endsAt, now) : null,
+    expiringSoon,
+    expiringSoonDaysRemaining,
+    hasEligiblePayment,
+    canRenew,
+    renewDisabledReason,
+  };
+}
+
 export async function listPlatformSubscriptions(
   now: Date = new Date(),
 ): Promise<PlatformSubscriptionRow[]> {
   const rows = await db
-    .select({
-      subscriptionId: academySubscriptions.id,
-      academyId: academySubscriptions.academyId,
-      academyName: academies.name,
-      planName: subscriptionPlans.name,
-      billingPeriod: subscriptionPlans.billingPeriod,
-      status: academySubscriptions.status,
-      startsAt: academySubscriptions.startsAt,
-      endsAt: academySubscriptions.endsAt,
-      trialEndsAt: academySubscriptions.trialEndsAt,
-      renewedAt: academySubscriptions.renewedAt,
-    })
+    .select(platformSubscriptionsSelect())
     .from(academySubscriptions)
     .innerJoin(academies, eq(academies.id, academySubscriptions.academyId))
     .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
@@ -591,88 +711,55 @@ export async function listPlatformSubscriptions(
 
   if (rows.length === 0) return [];
 
-  // Eligible-payment lookup, batched (one query for every subscription
-  // rather than N) — same reasoning as lib/subscriptions/usage.ts's
-  // listAcademyUsageOverview comment: "not a tenant-facing hot path", fine
-  // to reduce in memory rather than chase a single clean query builder
-  // expression for "latest per group" style joins.
-  const eligiblePaymentRows = await db
-    .select({ subscriptionId: subscriptionPayments.subscriptionId })
-    .from(subscriptionPayments)
-    .where(
-      and(
-        eq(subscriptionPayments.status, "verified"),
-        notExists(
-          db
-            .select({ one: sql`1` })
-            .from(subscriptionPaymentConsumptions)
-            .where(
-              eq(
-                subscriptionPaymentConsumptions.subscriptionPaymentId,
-                subscriptionPayments.id,
-              ),
-            ),
-        ),
-      ),
-    );
-  const eligibleSubscriptionIds = new Set(
-    eligiblePaymentRows.map((row) => row.subscriptionId),
+  const eligibleSubscriptionIds = await fetchEligibleSubscriptionIds();
+  return rows.map((row) => buildPlatformSubscriptionRow(row, eligibleSubscriptionIds, now));
+}
+
+export interface PlatformSubscriptionsPage {
+  subscriptions: PlatformSubscriptionRow[];
+  totalCount: number;
+}
+
+/**
+ * Perf investigation (Afoogy slow-dashboard task, query-performance step):
+ * same rows, same newest-`starts_at`-first ordering, same enrichment
+ * (effective status, expiring-soon, canRenew/renewDisabledReason) as
+ * `listPlatformSubscriptions()` above — but for /platform/subscriptions
+ * (app/platform/subscriptions/page.tsx), which only ever renders one
+ * `pageSize`-row slice and previously fetched every subscription row (plus
+ * the full eligible-payment lookup for every one of them) to get there.
+ * `LIMIT`/`OFFSET` and a separate `count(*)` pushed down to Postgres;
+ * the eligible-payment lookup is then scoped to just the page's own
+ * subscription ids instead of the whole table. `listPlatformSubscriptions()`
+ * itself is untouched — `lib/subscriptions/expiry-reminder-job.ts` still
+ * needs every row, never one page of them.
+ */
+export async function listPlatformSubscriptionsPage(
+  page: number,
+  pageSize: number,
+  now: Date = new Date(),
+): Promise<PlatformSubscriptionsPage> {
+  const offset = Math.max(0, page - 1) * pageSize;
+
+  const [rows, [{ value: totalCount }]] = await Promise.all([
+    db
+      .select(platformSubscriptionsSelect())
+      .from(academySubscriptions)
+      .innerJoin(academies, eq(academies.id, academySubscriptions.academyId))
+      .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+      .orderBy(desc(academySubscriptions.startsAt))
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ value: count() }).from(academySubscriptions),
+  ]);
+
+  if (rows.length === 0) return { subscriptions: [], totalCount };
+
+  const eligibleSubscriptionIds = await fetchEligibleSubscriptionIds(
+    rows.map((row) => row.subscriptionId),
   );
-
-  return rows.map((row) => {
-    const rawStatus = row.status as SubscriptionStatus;
-    const effectiveStatus = computeLazySubscriptionStatus(
-      { status: rawStatus, trialEndsAt: row.trialEndsAt, endsAt: row.endsAt },
-      now,
-    );
-    const hasEligiblePayment = eligibleSubscriptionIds.has(row.subscriptionId);
-
-    const msUntilEnd = row.endsAt ? row.endsAt.getTime() - now.getTime() : null;
-    // "Expiring soon" is deliberately narrower than Past Due/grace (a
-    // different, already-computed state): only a still-fully-Active
-    // subscription whose ends_at is coming up counts — once it's actually
-    // lapsed into Past Due/Suspended/Expired, the status badge itself is
-    // the more urgent signal, not this amber flag.
-    const expiringSoon =
-      effectiveStatus === "active" &&
-      msUntilEnd !== null &&
-      msUntilEnd > 0 &&
-      msUntilEnd <= EXPIRING_SOON_WINDOW_DAYS * DAY_MS;
-    const expiringSoonDaysRemaining = expiringSoon
-      ? Math.ceil((msUntilEnd as number) / DAY_MS)
-      : null;
-
-    let canRenew = false;
-    let renewDisabledReason: string | null = null;
-    if (rawStatus === "cancelled" || effectiveStatus === "cancelled") {
-      renewDisabledReason = CANCELLED_TOOLTIP;
-    } else if (!RENEWABLE_SOURCE_STATUSES.has(effectiveStatus)) {
-      renewDisabledReason = NOT_YET_ACTIVE_TOOLTIP;
-    } else if (!hasEligiblePayment) {
-      renewDisabledReason = NO_PAYMENT_TOOLTIP;
-    } else {
-      canRenew = true;
-    }
-
-    return {
-      subscriptionId: row.subscriptionId,
-      academyId: row.academyId,
-      academyName: row.academyName,
-      planName: row.planName,
-      billingPeriod: row.billingPeriod as BillingPeriod,
-      status: rawStatus,
-      effectiveStatus,
-      startsAt: row.startsAt,
-      endsAt: row.endsAt,
-      trialEndsAt: row.trialEndsAt,
-      renewedAt: row.renewedAt,
-      graceDaysRemaining:
-        effectiveStatus === "past_due" ? graceDaysRemaining(row.endsAt, now) : null,
-      expiringSoon,
-      expiringSoonDaysRemaining,
-      hasEligiblePayment,
-      canRenew,
-      renewDisabledReason,
-    };
-  });
+  return {
+    subscriptions: rows.map((row) => buildPlatformSubscriptionRow(row, eligibleSubscriptionIds, now)),
+    totalCount,
+  };
 }

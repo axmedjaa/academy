@@ -17,6 +17,7 @@ import {
   check,
   jsonb,
   type AnyPgColumn,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 
 // Only "active"/"disabled" are used anywhere in PLAN.md (Phase 0 §6, Account &
@@ -1073,6 +1074,9 @@ export const students = pgTable(
     email: text("email"),
     guardianName: text("guardian_name"),
     guardianPhone: text("guardian_phone"),
+    // Where the student lives: street or neighbourhood, and district.
+    address: text("address"),
+    district: text("district"),
     // Added for the Student List avatar column — a real R2 OBJECT KEY
     // (e.g. "academies/<id>/student-photos/<uuid>.jpg"), never a URL —
     // signed URLs expire, so the database must never contain one. Same
@@ -1422,6 +1426,38 @@ export const batches = pgTable(
 // "removed" trainer to the same batch is modeled as reactivating the same
 // row in place (flipping status back to "active"), not inserting a second
 // row — see lib/academies/batch-assignments.ts's assignTrainerToBatch.
+// A batch runs one or more courses (Review Summary "Batches hold several
+// courses"). `batch_courses` is the authoritative list; `batches.course_id`
+// is kept as the batch's primary (first) course so existing rows and any
+// reader that still needs a single course keep working, and is kept in
+// sync by lib/academies/batches.ts. Enrollments, timetable entries and
+// exams name their course and reference (batch_id, course_id) here, so a
+// row can only name a course that belongs to its batch, and a course can't
+// be removed from a batch while anything still uses it there.
+export const batchCourses = pgTable(
+  "batch_courses",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batches.id),
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("batch_courses_batch_id_course_id_unique").on(table.batchId, table.courseId),
+    index("batch_courses_academy_id_idx").on(table.academyId),
+    index("batch_courses_course_id_idx").on(table.courseId),
+  ],
+);
+
 export const batchTrainerAssignments = pgTable(
   "batch_trainer_assignments",
   {
@@ -1494,6 +1530,11 @@ export const batchEnrollments = pgTable(
     studentId: uuid("student_id")
       .notNull()
       .references(() => students.id),
+    // The course of the batch this enrollment is for (a student enrolls in
+    // the courses they take, not the whole batch).
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id),
     enrolledAt: timestamp("enrolled_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -1503,9 +1544,14 @@ export const batchEnrollments = pgTable(
       .defaultNow(),
   },
   (table) => [
-    uniqueIndex("batch_enrollments_student_id_batch_id_active_unique")
-      .on(table.studentId, table.batchId)
+    uniqueIndex("batch_enrollments_student_batch_course_active_unique")
+      .on(table.studentId, table.batchId, table.courseId)
       .where(sql`${table.status} = 'active'`),
+    foreignKey({
+      name: "batch_enrollments_batch_course_fk",
+      columns: [table.batchId, table.courseId],
+      foreignColumns: [batchCourses.batchId, batchCourses.courseId],
+    }),
     // Phase 3 §2: "index (academy_id, student_id)".
     index("batch_enrollments_academy_id_student_id_idx").on(
       table.academyId,
@@ -1551,6 +1597,10 @@ export const timetables = pgTable(
     batchId: uuid("batch_id")
       .notNull()
       .references(() => batches.id),
+    // The batch course this class teaches.
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id),
     dayOfWeek: dayOfWeekEnum("day_of_week").notNull(),
     // PLAN.md gives these as bare `time` columns (no timezone) — a weekly
     // recurring slot ("every Monday 09:00–10:00") is wall-clock time at the
@@ -1575,6 +1625,11 @@ export const timetables = pgTable(
     index("timetables_academy_id_idx").on(table.academyId),
     index("timetables_branch_id_idx").on(table.branchId),
     index("timetables_batch_id_idx").on(table.batchId),
+    foreignKey({
+      name: "timetables_batch_course_fk",
+      columns: [table.batchId, table.courseId],
+      foreignColumns: [batchCourses.batchId, batchCourses.courseId],
+    }),
     // PLAN.md §2: "check end_time > start_time".
     check("timetables_end_time_after_start_time", sql`${table.endTime} > ${table.startTime}`),
   ],
@@ -1773,6 +1828,10 @@ export const exams = pgTable(
     batchId: uuid("batch_id")
       .notNull()
       .references(() => batches.id),
+    // The batch course this exam is for.
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id),
     name: text("name").notNull(),
     maxMarks: numeric("max_marks").notNull(),
     examDate: date("exam_date"),
@@ -1787,6 +1846,11 @@ export const exams = pgTable(
   (table) => [
     // Phase 3 §2: "index (batch_id)".
     index("exams_batch_id_idx").on(table.batchId),
+    foreignKey({
+      name: "exams_batch_course_fk",
+      columns: [table.batchId, table.courseId],
+      foreignColumns: [batchCourses.batchId, batchCourses.courseId],
+    }),
     check("exams_max_marks_nonnegative", sql`${table.maxMarks} >= 0`),
   ],
 );
@@ -2279,6 +2343,14 @@ export const certificates = pgTable(
     batchId: uuid("batch_id")
       .notNull()
       .references(() => batches.id),
+    // The course this certificate is for (one certificate per student per
+    // completed course, also when a batch runs several courses). Must be one
+    // of the batch's courses (composite FK below). Migration 0035 backfilled
+    // older rows from the student's passing course, else the batch's
+    // primary course — the course those certificates already displayed.
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id),
     certificateCode: text("certificate_code").notNull(),
     issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
     issuedBy: uuid("issued_by")
@@ -2300,11 +2372,18 @@ export const certificates = pgTable(
     // plain unique index (not a bare column-level `.unique()`) is used here,
     // same convention as e.g. `academies.slug`.
     uniqueIndex("certificates_certificate_code_unique").on(table.certificateCode),
-    // Phase 5 §2: "unique (student_id, batch_id)" — at most one certificate
-    // per completed batch, DB-enforced; this is what blocks
-    // `issueCertificate` from ever creating a second certificate for the
-    // same student in the same batch (Certificate Lifecycle table).
-    uniqueIndex("certificates_student_id_batch_id_unique").on(table.studentId, table.batchId),
+    // At most one certificate per student per course in a batch,
+    // DB-enforced; this is what blocks `issueCertificate` from creating a
+    // second certificate for the same course (Certificate Lifecycle table).
+    // One certificate per student per course in a batch (a multi-course
+    // batch can give a student several). Replaces the earlier
+    // (student_id, batch_id) unique index (migration 0035).
+    uniqueIndex("certificates_student_batch_course_unique").on(table.studentId, table.batchId, table.courseId),
+    foreignKey({
+      name: "certificates_batch_course_fk",
+      columns: [table.batchId, table.courseId],
+      foreignColumns: [batchCourses.batchId, batchCourses.courseId],
+    }),
     // Phase 5 §2: "index (academy_id, student_id)".
     index("certificates_academy_id_student_id_idx").on(table.academyId, table.studentId),
   ],

@@ -29,6 +29,24 @@
         ],
         "createdAt": "2026-10-09T16:15:49.051Z",
         "reason": "Design critique (Assessment B, this session): print.module.css stylesheets deliberately use Arial as a universal print-safe font for physical/PDF documents, intentionally decoupled from the app's on-screen brand font (Alexandria) per the file's own module comment. Confirmed false positive."
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "lib/certificates/pdf-document.tsx"
+        ],
+        "createdAt": "2026-10-15T08:52:16.411Z",
+        "reason": "react-pdf's own Image primitive (not HTML img) with dynamic src from real data (academy.logoUrl / qrCodeDataUrl), each guarded by a truthy conditional render; not modified by this task's edit (only StyleSheet color values changed for the Dardar brand rebrand)"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "app/academy/courses/[id]/course-detail-actions.tsx"
+        ],
+        "createdAt": "2026-10-23T04:55:53.907Z",
+        "reason": "Claude: img renders only when course.imageUrl (signed storage URL) is non-null; dynamic src, not a placeholder"
       }
     ]
   }

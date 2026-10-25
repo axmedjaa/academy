@@ -3,6 +3,7 @@ import { eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -27,6 +28,7 @@ import {
   listTimetableEntries,
   updateTimetableEntry,
 } from "./timetables";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -191,6 +193,7 @@ afterAll(async () => {
     );
   for (const academyId of createdAcademyIds) {
     await db.delete(timetables).where(eq(timetables.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -309,6 +312,7 @@ describe("createTimetableEntry — validation", () => {
         academyId,
         branchId,
         batchId,
+        courseId: await courseOfBatch(batchId),
         dayOfWeek: "mon",
         startTime: "10:00",
         endTime: "09:00",
@@ -405,6 +409,7 @@ describe("listTimetableEntries", () => {
       academyId,
       branchId: otherBranchId,
       batchId: otherBatchId,
+      courseId: await courseOfBatch(otherBatchId),
       dayOfWeek: "fri",
       startTime: "13:00",
       endTime: "14:00",
@@ -413,6 +418,7 @@ describe("listTimetableEntries", () => {
       academyId,
       branchId,
       batchId,
+      courseId: await courseOfBatch(batchId),
       dayOfWeek: "mon",
       startTime: "09:00",
       endTime: "10:00",

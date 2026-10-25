@@ -56,6 +56,8 @@ function parseStudentFormData(formData: FormData): UpdateStudentInput {
     guardianPhone: String(formData.get("guardianPhone") ?? ""),
     status: (formData.get("status") as "active" | "archived" | null) ?? undefined,
   };
+  if (formData.has("address")) input.address = String(formData.get("address") ?? "");
+  if (formData.has("district")) input.district = String(formData.get("district") ?? "");
   if (formData.has("branchId")) {
     input.branchId = String(formData.get("branchId") ?? "");
   }

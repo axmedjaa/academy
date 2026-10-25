@@ -33,13 +33,14 @@ export type IssueCertificateActionResult =
 export async function issueCertificateAction(
   studentId: string,
   batchId: string,
+  courseId?: string,
 ): Promise<IssueCertificateActionResult> {
   const context = await getAuthContext();
   if (!context) {
     return { ok: false, error: UNAUTHENTICATED };
   }
 
-  const result = await issueCertificateForActor(context, studentId, batchId);
+  const result = await issueCertificateForActor(context, studentId, batchId, courseId);
   if (!result.ok) {
     return { ok: false, error: result.error };
   }

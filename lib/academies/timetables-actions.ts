@@ -35,6 +35,7 @@ function parseCreateFormData(formData: FormData): CreateTimetableEntryInput {
   return {
     branchId: String(formData.get("branchId") ?? ""),
     batchId: String(formData.get("batchId") ?? ""),
+    courseId: String(formData.get("courseId") ?? "") || null,
     dayOfWeek: String(formData.get("dayOfWeek") ?? "") as CreateTimetableEntryInput["dayOfWeek"],
     startTime: String(formData.get("startTime") ?? ""),
     endTime: String(formData.get("endTime") ?? ""),
@@ -72,6 +73,7 @@ function parseWeeklyCreateFormData(formData: FormData): CreateWeeklyTimetableInp
   return {
     branchId: String(formData.get("branchId") ?? ""),
     batchId: String(formData.get("batchId") ?? ""),
+    courseId: String(formData.get("courseId") ?? "") || null,
     daysOfWeek: daysOfWeek as CreateWeeklyTimetableInput["daysOfWeek"],
     startTime: String(formData.get("startTime") ?? ""),
     endTime: String(formData.get("endTime") ?? ""),

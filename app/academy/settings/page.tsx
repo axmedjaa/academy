@@ -3,11 +3,12 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAcademySettings, getOwnAcademyUsage } from "@/lib/academies/settings";
 import { getAcademyLogoUrl } from "@/lib/academies/academy-logo";
 import { getNotificationPreferences } from "@/lib/notifications/preferences";
-import { AcademySettingsForm } from "./settings-form";
+import { EditProfileButton } from "./settings-form";
 import { AcademyLogoUpload } from "./academy-logo-upload";
 import { AcademyUsageWidget } from "./academy-usage-widget";
 import { NotificationPreferencesSection } from "./notification-preferences-section";
-import { PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageHeader, PageMessage, PhoneLink } from "@/app/academy/_shell/ui";
+import { KvCard, NoteBlock } from "@/app/academy/_shell/page-blocks";
 
 /**
  * PLAN.md Item 41: `/academy/settings` — expanded profile fields (direct
@@ -70,33 +71,54 @@ export default async function AcademySettingsPage() {
     );
   }
 
+  const academy = settingsResult.academy;
+  const orNone = (value: string | null) => value || <span className="text-muted">Not set</span>;
+
   return (
-    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
-      <PageHeader title="Academy settings" />
+    <div className={PAGE_WRAP}>
+      <PageHeader
+        title="Settings"
+        description="Academy profile, usage and notification preferences."
+        actions={<EditProfileButton academy={academy} />}
+      />
 
-      <div className="flex flex-col gap-6">
-        {usageResult.ok ? (
-          <AcademyUsageWidget
-            planName={usageResult.planName}
-            usage={usageResult.usage}
-            limits={usageResult.limits}
-          />
-        ) : null}
+      <AcademyLogoUpload currentLogoUrl={logoUrl} />
 
-        <AcademyLogoUpload currentLogoUrl={logoUrl} />
+      <KvCard
+        title="Academy profile"
+        rows={[
+          ["Name", academy.name],
+          ["Type", orNone(academy.type)],
+          ["Address", orNone(academy.address)],
+          ["Phone", academy.phone ? <PhoneLink phone={academy.phone} who={academy.name} /> : orNone(null)],
+          ["Email", orNone(academy.email)],
+          ["Website", orNone(academy.website)],
+          ["Registration number", orNone(academy.registrationNumber)],
+          [
+            "Primary contact",
+            academy.primaryContactName || academy.primaryContactPhone ? (
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {academy.primaryContactName}
+                {academy.primaryContactPhone && <PhoneLink phone={academy.primaryContactPhone} who={academy.primaryContactName ?? undefined} />}
+              </span>
+            ) : (
+              orNone(null)
+            ),
+          ],
+          ["Slug (read-only)", <span key="slug" className="font-mono text-[13px]">{academy.slug}</span>],
+          ["Default currency (read-only)", academy.defaultCurrency],
+        ]}
+      />
 
-        <AcademySettingsForm
-          academy={settingsResult.academy}
-          permissionLevel={settingsResult.permissionLevel}
-        />
+      {usageResult.ok ? (
+        <AcademyUsageWidget planName={usageResult.planName} usage={usageResult.usage} limits={usageResult.limits} />
+      ) : null}
 
-        {preferencesResult?.ok ? (
-          <NotificationPreferencesSection
-            academyId={settingsResult.academy.id}
-            preferences={preferencesResult.preferences}
-          />
-        ) : null}
-      </div>
+      {preferencesResult?.ok ? (
+        <NotificationPreferencesSection academyId={academy.id} preferences={preferencesResult.preferences} />
+      ) : null}
+
+      <NoteBlock>Profile changes save immediately; there is no approval step. Slug and default currency cannot be changed here.</NoteBlock>
     </div>
   );
 }

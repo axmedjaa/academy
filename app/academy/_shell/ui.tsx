@@ -2,9 +2,10 @@ import { forwardRef, type AnchorHTMLAttributes, type CSSProperties, type ReactNo
 import Link from "next/link";
 import { color, radius, shadow, spacing } from "@/lib/ui/theme";
 import { CountUpValue } from "./count-up-value";
-import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { Icon } from "./icons";
+import { PhoneCell } from "./chat-actions";
 
 /**
  * Small set of shared presentational primitives for `/academy/*` screens
@@ -219,6 +220,16 @@ const BADGE_TONE_ICON = {
 
 /** DESIGN.md §3 "Status badge" — one component, color + icon + label always
  * paired (never color alone, per the §1 accessibility floor). */
+/** Raw enum values ("active", "partially_paid", "pending_approval") reach
+ * badges straight from the database; the design shows them in sentence
+ * case ("Active", "Partially paid"). Only all-lowercase snake/space values
+ * are rewritten, so labels already written for humans pass through. */
+export function humanizeStatus(label: string): string {
+  if (!/^[a-z][a-z_ ]*$/.test(label)) return label;
+  const words = label.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export function StatusBadge({ label, tone }: { label: string; tone: keyof typeof BADGE_TONES }) {
   const { bg, fg } = BADGE_TONES[tone];
   return (
@@ -236,7 +247,7 @@ export function StatusBadge({ label, tone }: { label: string; tone: keyof typeof
       }}
     >
       <Icon name={BADGE_TONE_ICON[tone]} width={12} height={12} strokeWidth={2.2} />
-      {label}
+      {humanizeStatus(label)}
     </span>
   );
 }
@@ -417,13 +428,19 @@ export function PageHeader({
   description?: ReactNode;
   actions?: ReactNode;
 }) {
+  // Matches the design's Academy page header: 28px title, description
+  // capped at 68ch, bottom-aligned with 44px action buttons.
   return (
-    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div>
-        <h1 className="text-xl font-bold tracking-tight text-ink sm:text-2xl">{title}</h1>
-        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div className="min-w-0 flex-[1_1_280px]">
+        <h1 className="text-[24px] font-bold leading-[1.15] tracking-[-0.015em] text-ink sm:text-[28px]">{title}</h1>
+        {description && <p className="mt-1.5 max-w-[68ch] leading-normal text-muted">{description}</p>}
       </div>
-      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+      {actions && (
+        <div className="flex flex-wrap items-center gap-3 [&>a]:h-11 [&>button]:h-11 [&>div>a]:h-11 [&>div>button]:h-11">
+          {actions}
+        </div>
+      )}
     </div>
   );
 }
@@ -439,10 +456,24 @@ export function PageHeader({
  */
 export function BackLink({ href, label }: { href: string; label: string }) {
   return (
-    <Link href={href} className="group mb-4 inline-flex items-center gap-1 text-sm text-brand hover:underline">
-      <span aria-hidden="true" className="inline-block transition-transform duration-150 ease-out group-hover:-translate-x-0.5">
-        ←
-      </span>
+    <Link
+      href={href}
+      className="group mb-3 inline-flex min-h-11 items-center gap-1.5 text-sm font-semibold !text-brand no-underline hover:no-underline"
+    >
+      <svg
+        aria-hidden="true"
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="transition-transform duration-150 ease-out group-hover:-translate-x-0.5 motion-reduce:transition-none"
+      >
+        <path d="M15 18l-6-6 6-6" />
+      </svg>
       {label}
     </Link>
   );
@@ -640,7 +671,7 @@ export function Badge({ label, tone }: { label: string; tone: keyof typeof BADGE
       className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${BADGE_TONE_CLASS[tone]}`}
     >
       <Icon name={BADGE_TONE_ICON[tone]} width={12} height={12} strokeWidth={2.2} />
-      {label}
+      {humanizeStatus(label)}
     </span>
   );
 }
@@ -662,6 +693,12 @@ export const td = "border-b border-border px-4 py-3 text-ink";
 // background previously had no transition at all, so it snapped on/off
 // instantly rather than easing. One fix here reaches every data table.
 export const trHover = "transition-colors duration-150 hover:bg-app/60";
+
+/** A phone number with the design's WhatsApp / Telegram buttons under it.
+ * Kept under its old name for existing callers; see chat-actions.tsx. */
+export function PhoneLink({ phone, who }: { phone: string | null | undefined; who?: string }) {
+  return <PhoneCell phone={phone} who={who} />;
+}
 
 /** DESIGN.md §3 "Usage/allowance bar": label + "used / limit" + a thin
  * progress bar, green under 80%, amber 80-99%, red at/over 100% — reused
@@ -787,12 +824,27 @@ export function FormDialog({
   className?: string;
 }) {
   return (
+    // Design dialog chrome (Platform Console.dc.html form dialog): 560px,
+    // 16px radius, 18px bold title with a close button over a divider,
+    // scrolling body.
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className={cn("max-w-lg", className)}>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-        </AlertDialogHeader>
-        {children}
+      <AlertDialogContent
+        className={cn(
+          "max-h-[92vh] max-w-[560px] overflow-hidden rounded-2xl border-0 p-0 shadow-[0_24px_48px_rgba(17,24,39,0.32)]",
+          className,
+        )}
+      >
+        <div className="flex items-start gap-3 border-b border-border px-6 pb-4 pt-5">
+          <AlertDialogTitle className="min-w-0 flex-1 text-lg font-bold leading-snug text-ink">{title}</AlertDialogTitle>
+          <AlertDialogCancel
+            aria-label="Close"
+            className="-mr-2.5 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-[#374151] transition-colors duration-150 hover:bg-app"
+          >
+            <Icon name="close" />
+          </AlertDialogCancel>
+        </div>
+        {/* `relative`: see DialogBody in design-form.tsx (sr-only inputs must scroll with the body). */}
+        <div className="relative min-h-0 overflow-y-auto px-6 py-5">{children}</div>
       </AlertDialogContent>
     </AlertDialog>
   );

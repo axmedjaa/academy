@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
+  batchCourses,
   batchEnrollments,
   batchTrainerAssignments,
   batches,
@@ -97,7 +98,13 @@ const BRANCH_NOT_FOUND: BatchActionError = {
 
 export const createBatchSchema = z.object({
   branchId: z.string().uuid("Select a branch"),
-  courseId: z.string().uuid("Select a course"),
+  // One or more courses (Review Summary "Batches hold several courses").
+  // The first is kept as the batch's primary course in batches.course_id.
+  courseIds: z
+    .array(z.string().uuid("Select a course"))
+    .transform((ids) => [...new Set(ids)])
+    .refine((ids) => ids.length > 0, { message: "Pick at least one course." })
+    .refine((ids) => ids.length <= 20, { message: "A batch can hold at most 20 courses." }),
   name: z.string().trim().min(1, "Batch name is required").max(200),
   code: z.string().trim().min(1, "Batch code is required").max(50),
   // Plain "YYYY-MM-DD" strings, same convention as register-student.ts's
@@ -119,7 +126,10 @@ export interface BatchRecord {
   id: string;
   academyId: string;
   branchId: string;
+  /** The batch's primary (first) course, kept for readers that need one. */
   courseId: string;
+  /** Every course the batch runs, primary first. */
+  courseIds: string[];
   name: string;
   code: string;
   startDate: string;
@@ -128,12 +138,14 @@ export interface BatchRecord {
   createdAt: Date;
 }
 
-function toRecord(row: typeof batches.$inferSelect): BatchRecord {
+function toRecord(row: typeof batches.$inferSelect, courseIds?: string[]): BatchRecord {
+  const ids = courseIds && courseIds.length > 0 ? courseIds : [row.courseId];
   return {
     id: row.id,
     academyId: row.academyId,
     branchId: row.branchId,
     courseId: row.courseId,
+    courseIds: [row.courseId, ...ids.filter((id) => id !== row.courseId)],
     name: row.name,
     code: row.code,
     startDate: row.startDate,
@@ -156,6 +168,42 @@ function isUniqueViolation(err: unknown): boolean {
  * `getAssignedBranchIds` (read-only reference, not imported — each
  * academy-scoped action file keeps its own copy per that file's own
  * documented convention). */
+/** Course ids per batch from batch_courses, in the order they were added. */
+export async function loadBatchCourseIds(executor: DbClient, batchIds: string[]): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  if (batchIds.length === 0) return map;
+  const rows = await executor
+    .select({ batchId: batchCourses.batchId, courseId: batchCourses.courseId })
+    .from(batchCourses)
+    .where(inArray(batchCourses.batchId, batchIds))
+    .orderBy(batchCourses.createdAt);
+  for (const row of rows) map.set(row.batchId, [...(map.get(row.batchId) ?? []), row.courseId]);
+  return map;
+}
+
+/** Whether a course is in use within one batch (enrollments of any status,
+ * timetable entries or exams) — such a course can't be removed from it. */
+async function courseUsedInBatch(executor: DbClient, batchId: string, courseId: string): Promise<boolean> {
+  const [enrollment] = await executor
+    .select({ id: batchEnrollments.id })
+    .from(batchEnrollments)
+    .where(and(eq(batchEnrollments.batchId, batchId), eq(batchEnrollments.courseId, courseId)))
+    .limit(1);
+  if (enrollment) return true;
+  const [entry] = await executor
+    .select({ id: timetables.id })
+    .from(timetables)
+    .where(and(eq(timetables.batchId, batchId), eq(timetables.courseId, courseId)))
+    .limit(1);
+  if (entry) return true;
+  const [exam] = await executor
+    .select({ id: exams.id })
+    .from(exams)
+    .where(and(eq(exams.batchId, batchId), eq(exams.courseId, courseId)))
+    .limit(1);
+  return Boolean(exam);
+}
+
 async function getAssignedBranchIds(
   executor: DbClient,
   academyId: string,
@@ -282,6 +330,7 @@ export async function listBatches(actorContext: AuthContext): Promise<ListBatche
   }
 
   const countsByBatchId = await countBatchDependentsBulk(rows.map((row) => row.id));
+  const courseIdsByBatch = await loadBatchCourseIds(db, rows.map((row) => row.id));
 
   return {
     ok: true,
@@ -294,7 +343,10 @@ export async function listBatches(actorContext: AuthContext): Promise<ListBatche
         cancelledCertificateCount: 0,
       };
       const reasons = buildBatchDeletionReasons(counts);
-      return { ...toRecord(row), deletionEligibility: { eligible: reasons.length === 0, reasons } };
+      return {
+        ...toRecord(row, courseIdsByBatch.get(row.id)),
+        deletionEligibility: { eligible: reasons.length === 0, reasons },
+      };
     }),
     canManage: canManage(permissionLevel),
     canDelete: canDeleteBatch(membershipRole, permissionLevel),
@@ -338,10 +390,16 @@ export async function getBatch(
     }
   }
 
-  return { ok: true, batch: toRecord(row) };
+  const courseIds = await loadBatchCourseIds(db, [row.id]);
+  return { ok: true, batch: toRecord(row, courseIds.get(row.id)) };
 }
 
 class CourseNotFoundSignal extends Error {}
+class CourseInUseSignal extends Error {
+  constructor(public readonly courseName: string) {
+    super("Course in use.");
+  }
+}
 class BranchNotFoundSignal extends Error {}
 
 export type CreateBatchResult =
@@ -392,9 +450,10 @@ export async function createBatch(
         }
       }
 
-      const courseOk = await courseExistsInAcademy(tx, academyId, data.courseId);
-      if (!courseOk) {
-        throw new CourseNotFoundSignal();
+      for (const courseId of data.courseIds) {
+        if (!(await courseExistsInAcademy(tx, academyId, courseId))) {
+          throw new CourseNotFoundSignal();
+        }
       }
 
       const [row] = await tx
@@ -402,13 +461,17 @@ export async function createBatch(
         .values({
           academyId,
           branchId: data.branchId,
-          courseId: data.courseId,
+          courseId: data.courseIds[0],
           name: data.name,
           code: data.code,
           startDate: data.startDate,
           endDate: data.endDate,
         })
         .returning();
+
+      await tx
+        .insert(batchCourses)
+        .values(data.courseIds.map((courseId) => ({ academyId, batchId: row.id, courseId })));
 
       await recordAudit(
         {
@@ -419,7 +482,7 @@ export async function createBatch(
           entityType: "batch",
           entityId: row.id,
           branchId: row.branchId,
-          after: toRecord(row),
+          after: toRecord(row, data.courseIds),
         },
         tx,
       );
@@ -427,13 +490,22 @@ export async function createBatch(
       return row;
     });
 
-    return { ok: true, batch: toRecord(result) };
+    return { ok: true, batch: toRecord(result, data.courseIds) };
   } catch (err) {
     if (err instanceof BranchNotFoundSignal) {
       return { ok: false, error: BRANCH_NOT_FOUND };
     }
     if (err instanceof CourseNotFoundSignal) {
       return { ok: false, error: COURSE_NOT_FOUND };
+    }
+    if (err instanceof CourseInUseSignal) {
+      return {
+        ok: false,
+        error: {
+          code: "conflict",
+          message: `${err.courseName} can't be removed from this batch because students, classes or exams use it there.`,
+        },
+      };
     }
     if (isUniqueViolation(err)) {
       return {
@@ -506,16 +578,34 @@ export async function updateBatch(
         }
       }
 
-      const courseOk = await courseExistsInAcademy(tx, academyId, data.courseId);
-      if (!courseOk) {
-        throw new CourseNotFoundSignal();
+      for (const courseId of data.courseIds) {
+        if (!(await courseExistsInAcademy(tx, academyId, courseId))) {
+          throw new CourseNotFoundSignal();
+        }
       }
+
+      // Add new courses; remove dropped ones only when nothing in this batch
+      // uses them yet (enrollments, classes, exams keep their course).
+      const currentIds = (await loadBatchCourseIds(tx, [batchId])).get(batchId) ?? [existing.courseId];
+      const removed = currentIds.filter((id) => !data.courseIds.includes(id));
+      const added = data.courseIds.filter((id) => !currentIds.includes(id));
+      for (const courseId of removed) {
+        if (await courseUsedInBatch(tx, batchId, courseId)) {
+          const [course] = await tx.select({ name: courses.name }).from(courses).where(eq(courses.id, courseId)).limit(1);
+          throw new CourseInUseSignal(course?.name ?? "This course");
+        }
+      }
+      if (added.length > 0) {
+        await tx.insert(batchCourses).values(added.map((courseId) => ({ academyId, batchId, courseId })));
+      }
+      // Keep the primary course pointing at a course the batch still has.
+      const primary = data.courseIds.includes(existing.courseId) ? existing.courseId : data.courseIds[0];
 
       const [updated] = await tx
         .update(batches)
         .set({
           branchId: data.branchId,
-          courseId: data.courseId,
+          courseId: primary,
           name: data.name,
           code: data.code,
           startDate: data.startDate,
@@ -534,11 +624,17 @@ export async function updateBatch(
           entityType: "batch",
           entityId: batchId,
           branchId: updated.branchId,
-          before: toRecord(existing),
-          after: toRecord(updated),
+          before: toRecord(existing, currentIds),
+          after: toRecord(updated, data.courseIds),
         },
         tx,
       );
+
+      if (removed.length > 0) {
+        await tx
+          .delete(batchCourses)
+          .where(and(eq(batchCourses.batchId, batchId), inArray(batchCourses.courseId, removed)));
+      }
 
       return updated;
     });
@@ -546,13 +642,22 @@ export async function updateBatch(
     if (!result) {
       return { ok: false, error: NOT_FOUND };
     }
-    return { ok: true, batch: toRecord(result) };
+    return { ok: true, batch: toRecord(result, data.courseIds) };
   } catch (err) {
     if (err instanceof BranchNotFoundSignal) {
       return { ok: false, error: BRANCH_NOT_FOUND };
     }
     if (err instanceof CourseNotFoundSignal) {
       return { ok: false, error: COURSE_NOT_FOUND };
+    }
+    if (err instanceof CourseInUseSignal) {
+      return {
+        ok: false,
+        error: {
+          code: "conflict",
+          message: `${err.courseName} can't be removed from this batch because students, classes or exams use it there.`,
+        },
+      };
     }
     if (isUniqueViolation(err)) {
       return {
@@ -973,6 +1078,7 @@ export async function deleteBatch(
     // through either of these.
     await tx.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.batchId, batchId));
     await tx.delete(timetables).where(eq(timetables.batchId, batchId));
+    await tx.delete(batchCourses).where(eq(batchCourses.batchId, batchId));
     await tx.delete(batches).where(eq(batches.id, batchId));
 
     return { ok: true, batchId };

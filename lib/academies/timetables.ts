@@ -1,7 +1,15 @@
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, ne, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { batches, branches, courses, staffBranchAssignments, staffProfiles, timetables } from "@/lib/db/schema";
+import {
+  batchCourses,
+  batches,
+  branches,
+  courses,
+  staffBranchAssignments,
+  staffProfiles,
+  timetables,
+} from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { DAYS_OF_WEEK, DAY_LABELS, formatTimetableTime, type TimetableDay } from "@/lib/academies/timetable-constants";
 import {
@@ -171,6 +179,9 @@ interface ConflictCandidate {
   academyId: string;
   branchId: string;
   batchId: string;
+  /** Two courses of one batch may meet at the same time (their students
+   * differ), so the batch check is per batch course. */
+  courseId: string;
   dayOfWeek: (typeof DAYS_OF_WEEK)[number];
   startTime: string;
   endTime: string;
@@ -188,6 +199,7 @@ interface ConflictInfo {
    * 10:00–12:00." rather than a generic "Conflict" (approved review §8). */
   entry: {
     batchId: string;
+    courseId: string;
     startTime: string;
     endTime: string;
     trainerStaffProfileId: string | null;
@@ -210,7 +222,7 @@ async function findTimetableConflict(
   executor: DbClient,
   candidate: ConflictCandidate,
 ): Promise<ConflictInfo | null> {
-  function overlapScope(resourceCondition: ReturnType<typeof eq>) {
+  function overlapScope(resourceCondition: SQL | undefined) {
     const conditions = [
       eq(timetables.academyId, candidate.academyId),
       eq(timetables.dayOfWeek, candidate.dayOfWeek),
@@ -224,6 +236,7 @@ async function findTimetableConflict(
 
   const conflictColumns = {
     batchId: timetables.batchId,
+    courseId: timetables.courseId,
     startTime: timetables.startTime,
     endTime: timetables.endTime,
     trainerStaffProfileId: timetables.trainerStaffProfileId,
@@ -233,7 +246,11 @@ async function findTimetableConflict(
   const [batchConflict] = await executor
     .select(conflictColumns)
     .from(timetables)
-    .where(overlapScope(eq(timetables.batchId, candidate.batchId)))
+    .where(
+      overlapScope(
+        and(eq(timetables.batchId, candidate.batchId), eq(timetables.courseId, candidate.courseId)),
+      ),
+    )
     .limit(1);
   if (batchConflict) return { kind: "batch", entry: batchConflict };
 
@@ -289,7 +306,12 @@ async function buildConflictMessage(
   const batchName = batch?.name ?? "another batch";
 
   if (conflict.kind === "batch") {
-    return `${dayLabel} conflicts with ${batchName} from ${timeRange}.`;
+    const [course] = await executor
+      .select({ name: courses.name })
+      .from(courses)
+      .where(eq(courses.id, conflict.entry.courseId))
+      .limit(1);
+    return `${dayLabel} conflicts with ${batchName}${course ? ` (${course.name})` : ""} from ${timeRange}.`;
   }
 
   // instructor
@@ -311,6 +333,14 @@ async function buildConflictMessage(
 const timetableEntryBaseFields = {
   branchId: z.string().uuid("Select a branch"),
   batchId: z.string().uuid("Select a batch"),
+  /** The batch course this class teaches. May be omitted only when the
+   * batch runs exactly one course. */
+  courseId: z
+    .string()
+    .uuid("Select a course")
+    .optional()
+    .nullable()
+    .transform((value) => (value ? value : undefined)),
   startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, "Use HH:MM format"),
   endTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, "Use HH:MM format"),
   room: z
@@ -364,6 +394,7 @@ export interface TimetableEntryRecord {
   academyId: string;
   branchId: string;
   batchId: string;
+  courseId: string;
   dayOfWeek: (typeof DAYS_OF_WEEK)[number];
   startTime: string;
   endTime: string;
@@ -379,6 +410,7 @@ function toRecord(row: typeof timetables.$inferSelect): TimetableEntryRecord {
     academyId: row.academyId,
     branchId: row.branchId,
     batchId: row.batchId,
+    courseId: row.courseId,
     dayOfWeek: row.dayOfWeek,
     startTime: row.startTime,
     endTime: row.endTime,
@@ -449,6 +481,17 @@ export async function createWeeklyTimetableEntries(
     // but that says nothing about which branch the batch itself belongs to.
     if (batch.branchId !== data.branchId) return { outcome: "batch_not_found" as const };
 
+    // The class's course must be one of the batch's courses.
+    const batchCourseIds = (
+      await tx
+        .select({ courseId: batchCourses.courseId })
+        .from(batchCourses)
+        .where(and(eq(batchCourses.batchId, data.batchId), eq(batchCourses.academyId, academyId)))
+    ).map((row) => row.courseId);
+    const courseId = data.courseId ?? (batchCourseIds.length === 1 ? batchCourseIds[0] : undefined);
+    if (!courseId) return { outcome: "course_required" as const };
+    if (!batchCourseIds.includes(courseId)) return { outcome: "course_not_in_batch" as const };
+
     // Previously-missing tenant check (approved review §9/§A): a staff
     // profile id was only ever validated as "a UUID" — never that it
     // belongs to THIS academy. Fixed here, once, for every day in the batch.
@@ -468,6 +511,7 @@ export async function createWeeklyTimetableEntries(
         academyId,
         branchId: data.branchId,
         batchId: data.batchId,
+        courseId,
         dayOfWeek: day,
         startTime: data.startTime,
         endTime: data.endTime,
@@ -487,6 +531,7 @@ export async function createWeeklyTimetableEntries(
           academyId,
           branchId: data.branchId,
           batchId: data.batchId,
+          courseId,
           dayOfWeek: day,
           startTime: data.startTime,
           endTime: data.endTime,
@@ -516,6 +561,12 @@ export async function createWeeklyTimetableEntries(
   });
 
   if (result.outcome === "batch_not_found") return { ok: false, error: BATCH_NOT_FOUND };
+  if (result.outcome === "course_required") {
+    return { ok: false, error: { code: "validation", message: "Choose which of the batch's courses this class teaches." } };
+  }
+  if (result.outcome === "course_not_in_batch") {
+    return { ok: false, error: { code: "validation", message: "That course isn't part of this batch." } };
+  }
   if (result.outcome === "instructor_not_found") {
     return { ok: false, error: { code: "validation", message: "Selected instructor not found." } };
   }
@@ -597,7 +648,7 @@ export async function listAcademyTimetable(
     })
     .from(timetables)
     .innerJoin(batches, eq(batches.id, timetables.batchId))
-    .innerJoin(courses, eq(courses.id, batches.courseId))
+    .innerJoin(courses, eq(courses.id, timetables.courseId))
     .innerJoin(branches, eq(branches.id, timetables.branchId))
     .leftJoin(staffProfiles, eq(staffProfiles.id, timetables.trainerStaffProfileId))
     .where(eq(timetables.academyId, academyId));
@@ -770,6 +821,7 @@ export async function updateTimetableEntry(
       academyId,
       branchId: existing.branchId,
       batchId: existing.batchId,
+      courseId: existing.courseId,
       dayOfWeek: nextDayOfWeek,
       startTime: nextStart,
       endTime: nextEnd,

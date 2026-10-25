@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { redis } from "@/lib/redis";
 import { getCertificatePrintData } from "./certificate-print";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -36,6 +37,7 @@ import {
   verifyCertificate,
   type PublicCertificateVerification,
 } from "./certificates";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -130,6 +132,8 @@ async function insertBatchDirect(academyId: string, branchId: string, courseId: 
       startDate: "2026-01-01",
     })
     .returning({ id: batches.id });
+  // Link the batch's course, as createBatch does (certificates are per course).
+  await courseOfBatch(row.id);
   return row.id;
 }
 
@@ -181,7 +185,7 @@ async function insertGradeBandsDirect(
 async function insertExamDirect(academyId: string, batchId: string): Promise<string> {
   const [row] = await db
     .insert(exams)
-    .values({ academyId, batchId, name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
+    .values({ academyId, batchId, courseId: await courseOfBatch(batchId), name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
     .returning({ id: exams.id });
   return row.id;
 }
@@ -324,6 +328,7 @@ afterAll(async () => {
     }
     await db.delete(gradeConfigurations).where(eq(gradeConfigurations.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -718,7 +723,7 @@ describe("notification wiring — issueCertificate / cancelCertificate", () => {
 // verifyCertificate — public lookup
 // ---------------------------------------------------------------------------
 describe("verifyCertificate", () => {
-  it("returns exactly the four documented public fields for a valid certificate, nothing else", async () => {
+  it("returns exactly the five documented public fields for a valid certificate, nothing else", async () => {
     const setup = await setupAcademy("academy_owner", "Verify Program Alpha");
     const { studentId, batchId } = await createEligibleStudentAndBatch(setup, "Alice Verifyworthy");
     const issued = await issueCertificate(setup.context, studentId, batchId);
@@ -730,7 +735,7 @@ describe("verifyCertificate", () => {
     if (!result.ok) return;
 
     expect(Object.keys(result.certificate).sort()).toEqual(
-      ["issuedAt", "programName", "status", "studentName"].sort(),
+      ["courseName", "issuedAt", "programName", "status", "studentName"].sort(),
     );
     expect(result.certificate.studentName).toBe("Alice Verifyworthy");
     expect(result.certificate.programName).toBe("Verify Program Alpha");
@@ -745,13 +750,14 @@ describe("verifyCertificate", () => {
       issued.certificate.id,
       studentId,
       batchId,
+      issued.certificate.courseId,
       setup.academyId,
       issued.certificate.issuedBy,
     ]) {
       expect(serialized).not.toContain(forbiddenId);
     }
     const keys = Object.keys(result.certificate as unknown as Record<string, unknown>);
-    for (const forbiddenKey of ["id", "studentId", "batchId", "academyId", "issuedBy", "cancelledBy"]) {
+    for (const forbiddenKey of ["id", "studentId", "batchId", "courseId", "academyId", "issuedBy", "cancelledBy"]) {
       expect(keys).not.toContain(forbiddenKey);
     }
   });
@@ -1057,3 +1063,251 @@ describe("getCertificatePrintData", () => {
 // stays exercised by the TypeScript compiler across this test file.
 type _AssertPublicShape = PublicCertificateVerification;
 void (0 as unknown as _AssertPublicShape);
+
+// ---------------------------------------------------------------------------
+// Course-based certificates (one per student per completed course, also in a
+// multi-course batch).
+// ---------------------------------------------------------------------------
+
+/** A second course (own program) added to `batchId`, in the same academy. */
+async function addCourseToBatch(setup: AcademySetup, batchId: string, courseName: string): Promise<{ courseId: string; programName: string }> {
+  const programName = `Program ${courseName} ${randomUUID().slice(0, 6)}`;
+  const [program] = await db.insert(programs).values({ academyId: setup.academyId, name: programName }).returning({ id: programs.id });
+  const [course] = await db
+    .insert(courses)
+    .values({ academyId: setup.academyId, programId: program.id, name: courseName })
+    .returning({ id: courses.id });
+  await db.insert(batchCourses).values({ academyId: setup.academyId, batchId, courseId: course.id });
+  return { courseId: course.id, programName };
+}
+
+/** A published result in an exam of `courseId` in `batchId`. */
+async function addCourseResult(
+  setup: AcademySetup,
+  batchId: string,
+  courseId: string,
+  studentId: string,
+  marks: number,
+  passFail: "pass" | "fail",
+): Promise<void> {
+  const [exam] = await db
+    .insert(exams)
+    .values({ academyId: setup.academyId, batchId, courseId, name: `Exam ${randomUUID()}`, maxMarks: "100", status: "completed" })
+    .returning({ id: exams.id });
+  await insertExamResultDirect(setup.academyId, exam.id, studentId, batchId, setup.activeGradeConfigId, setup.creatorUserId, {
+    marksObtained: marks,
+    status: "published",
+    passFail,
+  });
+}
+
+/** Batch with two courses: the setup's course (A) and a new course (B). */
+async function createTwoCourseBatch(setup: AcademySetup) {
+  const studentId = await insertStudentDirect(setup.academyId, setup.branchId, setup.creatorUserId, "Multi Course Student");
+  const batchId = await insertBatchDirect(setup.academyId, setup.branchId, setup.courseId);
+  const courseA = await courseOfBatch(batchId); // the batch's primary course, linked in batch_courses
+  const courseB = await addCourseToBatch(setup, batchId, `Course B ${randomUUID().slice(0, 6)}`);
+  return { studentId, batchId, courseA, courseB: courseB.courseId, programB: courseB.programName };
+}
+
+describe("course-based certificates — multi-course batch", () => {
+  it("issues a separate certificate for each completed course in the same batch", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId, courseA, courseB } = await createTwoCourseBatch(setup);
+    await addCourseResult(setup, batchId, courseA, studentId, 80, "pass");
+    await addCourseResult(setup, batchId, courseB, studentId, 75, "pass");
+
+    const first = await issueCertificate(setup.context, studentId, batchId, courseA);
+    const second = await issueCertificate(setup.context, studentId, batchId, courseB);
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+
+    expect(first.certificate.courseId).toBe(courseA);
+    expect(second.certificate.courseId).toBe(courseB);
+    expect(first.certificate.batchId).toBe(batchId);
+    expect(second.certificate.batchId).toBe(batchId);
+    expect(first.certificate.certificateCode).not.toBe(second.certificate.certificateCode);
+
+    const listed = await listCertificates(setup.context, { studentId, batchId });
+    expect(listed.ok).toBe(true);
+    if (listed.ok) expect(listed.certificates.map((c) => c.courseId).sort()).toEqual([courseA, courseB].sort());
+  });
+
+  it("a pass in one course does not make the student eligible for another course of the batch", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId, courseA, courseB } = await createTwoCourseBatch(setup);
+    await addCourseResult(setup, batchId, courseA, studentId, 80, "pass");
+    await addCourseResult(setup, batchId, courseB, studentId, 20, "fail");
+
+    const forB = await issueCertificate(setup.context, studentId, batchId, courseB);
+    expect(forB.ok).toBe(false);
+    if (!forB.ok) expect(forB.error.code).toBe("not_eligible");
+
+    const forA = await issueCertificate(setup.context, studentId, batchId, courseA);
+    expect(forA.ok).toBe(true);
+  });
+
+  it("requires choosing the course when the batch runs several, and picks it automatically for a single-course batch", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId, courseA } = await createTwoCourseBatch(setup);
+    await addCourseResult(setup, batchId, courseA, studentId, 80, "pass");
+    const withoutCourse = await issueCertificate(setup.context, studentId, batchId);
+    expect(withoutCourse.ok).toBe(false);
+    if (!withoutCourse.ok) expect(withoutCourse.error.code).toBe("validation");
+
+    // Single-course batch, no course given: the batch's course is used.
+    const single = await createEligibleStudentAndBatch(setup);
+    const issued = await issueCertificate(setup.context, single.studentId, single.batchId);
+    expect(issued.ok).toBe(true);
+    if (issued.ok) expect(issued.certificate.courseId).toBe(await courseOfBatch(single.batchId));
+  });
+
+  it("rejects a course that is not part of the batch", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+    const otherBatch = await insertBatchDirect(setup.academyId, setup.branchId, setup.courseId);
+    const foreign = await addCourseToBatch(setup, otherBatch, "Elsewhere Course");
+    const result = await issueCertificate(setup.context, studentId, batchId, foreign.courseId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+
+    const malformed = await issueCertificate(setup.context, studentId, batchId, "not-a-uuid");
+    expect(malformed.ok).toBe(false);
+  });
+
+  it("prevents a duplicate certificate for the same student, batch and course (also after cancellation)", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId, courseA, courseB } = await createTwoCourseBatch(setup);
+    await addCourseResult(setup, batchId, courseA, studentId, 80, "pass");
+    await addCourseResult(setup, batchId, courseB, studentId, 90, "pass");
+
+    const first = await issueCertificate(setup.context, studentId, batchId, courseA);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const again = await issueCertificate(setup.context, studentId, batchId, courseA);
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.error.code).toBe("conflict");
+
+    const cancelled = await cancelCertificate(setup.context, first.certificate.id, "Printed with a typo");
+    expect(cancelled.ok).toBe(true);
+    const afterCancel = await issueCertificate(setup.context, studentId, batchId, courseA);
+    expect(afterCancel.ok).toBe(false);
+
+    // The other course of the batch is still open.
+    const otherCourse = await issueCertificate(setup.context, studentId, batchId, courseB);
+    expect(otherCourse.ok).toBe(true);
+
+    const rows = await db
+      .select({ id: certificates.id })
+      .from(certificates)
+      .where(and(eq(certificates.studentId, studentId), eq(certificates.batchId, batchId), eq(certificates.courseId, courseA)));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("the database itself rejects a second row for the same student, batch and course", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId, courseA, courseB } = await createTwoCourseBatch(setup);
+    const values = { academyId: setup.academyId, studentId, batchId, issuedBy: setup.creatorUserId };
+    await db.insert(certificates).values({ ...values, courseId: courseA, certificateCode: `CERT-${randomUUID()}` });
+    await expect(
+      db.insert(certificates).values({ ...values, courseId: courseA, certificateCode: `CERT-${randomUUID()}` }),
+    ).rejects.toThrow();
+    // A different course of the same batch is allowed.
+    await db.insert(certificates).values({ ...values, courseId: courseB, certificateCode: `CERT-${randomUUID()}` });
+  });
+
+  it("the database rejects a certificate whose course is not one of the batch's courses", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
+    const otherBatch = await insertBatchDirect(setup.academyId, setup.branchId, setup.courseId);
+    const foreign = await addCourseToBatch(setup, otherBatch, "Not In This Batch");
+    await expect(
+      db.insert(certificates).values({
+        academyId: setup.academyId,
+        studentId,
+        batchId,
+        courseId: foreign.courseId,
+        certificateCode: `CERT-${randomUUID()}`,
+        issuedBy: setup.creatorUserId,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("public verification and the printout show each certificate's own course and program, and its grade in that course", async () => {
+    const setup = await setupAcademy("academy_owner", "Primary Program");
+    const { studentId, batchId, courseA, courseB, programB } = await createTwoCourseBatch(setup);
+    await addCourseResult(setup, batchId, courseA, studentId, 60, "pass");
+    await addCourseResult(setup, batchId, courseB, studentId, 95, "pass");
+    const [courseBRow] = await db.select({ name: courses.name }).from(courses).where(eq(courses.id, courseB));
+    const [courseARow] = await db.select({ name: courses.name }).from(courses).where(eq(courses.id, courseA));
+
+    const certA = await issueCertificate(setup.context, studentId, batchId, courseA);
+    const certB = await issueCertificate(setup.context, studentId, batchId, courseB);
+    expect(certA.ok && certB.ok).toBe(true);
+    if (!certA.ok || !certB.ok) return;
+
+    const verifyA = await verifyCertificate(certA.certificate.certificateCode, `test-ip-${randomUUID()}`);
+    const verifyB = await verifyCertificate(certB.certificate.certificateCode, `test-ip-${randomUUID()}`);
+    expect(verifyA.ok && verifyB.ok).toBe(true);
+    if (!verifyA.ok || !verifyB.ok) return;
+    expect(verifyA.certificate.courseName).toBe(courseARow.name);
+    expect(verifyA.certificate.programName).toBe("Primary Program");
+    expect(verifyB.certificate.courseName).toBe(courseBRow.name);
+    expect(verifyB.certificate.programName).toBe(programB);
+
+    const printB = await getCertificatePrintData(setup.context, certB.certificate.id, "https://app.example.com");
+    expect(printB.ok).toBe(true);
+    if (!printB.ok) return;
+    expect(printB.data.course?.name).toBe(courseBRow.name);
+    expect(printB.data.program?.name).toBe(programB);
+    // The grade comes from course B's result (95), not course A's (60).
+    expect(printB.data.grade?.marksObtained).toBe(95);
+
+    const printA = await getCertificatePrintData(setup.context, certA.certificate.id, "https://app.example.com");
+    expect(printA.ok && printA.data.grade?.marksObtained).toBe(60);
+  });
+
+  it("records the course in the issue audit entry", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const { studentId, batchId, courseB } = await createTwoCourseBatch(setup);
+    await addCourseResult(setup, batchId, courseB, studentId, 88, "pass");
+    const issued = await issueCertificate(setup.context, studentId, batchId, courseB);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+    const [audit] = await db
+      .select({ after: auditLogs.after })
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, issued.certificate.id), eq(auditLogs.action, "issueCertificate")))
+      .limit(1);
+    expect((audit?.after as { courseId?: string } | null)?.courseId).toBe(courseB);
+  });
+
+  it("cannot issue for another academy's batch course, nor read its course certificates", async () => {
+    const academyA = await setupAcademy("academy_owner");
+    const academyB = await setupAcademy("academy_owner");
+    const { studentId, batchId, courseB } = await createTwoCourseBatch(academyA);
+    await addCourseResult(academyA, batchId, courseB, studentId, 80, "pass");
+
+    // Academy B's owner, academy A's student/batch/course: generic not_found.
+    const crossIssue = await issueCertificate(academyB.context, studentId, batchId, courseB);
+    expect(crossIssue.ok).toBe(false);
+    if (!crossIssue.ok) expect(crossIssue.error.code).toBe("not_found");
+
+    // A course of academy B offered for academy A's batch is rejected too.
+    const bBatch = await insertBatchDirect(academyB.academyId, academyB.branchId, academyB.courseId);
+    const bCourse = await courseOfBatch(bBatch);
+    const foreignCourse = await issueCertificate(academyA.context, studentId, batchId, bCourse);
+    expect(foreignCourse.ok).toBe(false);
+    if (!foreignCourse.ok) expect(foreignCourse.error.code).toBe("not_found");
+
+    const issued = await issueCertificate(academyA.context, studentId, batchId, courseB);
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+    const fromB = await getCertificate(academyB.context, issued.certificate.id);
+    expect(fromB.ok).toBe(false);
+    const listB = await listCertificates(academyB.context, { courseId: courseB });
+    expect(listB.ok && listB.certificates.length).toBe(0);
+    const printFromB = await getCertificatePrintData(academyB.context, issued.certificate.id);
+    expect(printFromB.ok).toBe(false);
+  });
+});

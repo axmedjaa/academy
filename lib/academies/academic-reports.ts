@@ -1,7 +1,7 @@
 import { and, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { batches, courses, examResults } from "@/lib/db/schema";
+import { batches, courses, examResults, exams } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getAssignedBatchIds } from "@/lib/academies/batch-assignments";
 import {
@@ -137,6 +137,25 @@ export interface PassFailByBatchRow {
 export interface GradeDistributionRow {
   gradeBandLabel: string;
   count: number;
+  /** Every result with this grade failed (the design greys failing grades). */
+  failing: boolean;
+}
+
+/** One exam (design "Detail by exam"): results entered (any status, by
+ * entry date), published (by publish date), the average published mark and
+ * how many published results passed. */
+export interface ExamSummaryRow {
+  examId: string;
+  examName: string;
+  batchName: string;
+  batchCode: string;
+  courseName: string;
+  maxMarks: number;
+  enteredCount: number;
+  publishedCount: number;
+  /** Average `marksObtained` over published results; null when none. */
+  averageMarks: number | null;
+  passedCount: number;
 }
 
 export interface AcademicReportsData {
@@ -149,8 +168,13 @@ export interface AcademicReportsData {
     courseId: string | null;
   };
   resultsPublishedCount: number;
+  /** Results entered in scope, any status (draft, submitted, published...). */
+  resultsEnteredCount: number;
+  /** Published results that passed. */
+  resultsPassedCount: number;
   passFailByBatch: PassFailByBatchRow[];
   gradeDistribution: GradeDistributionRow[];
+  byExam: ExamSummaryRow[];
 }
 
 export type GetAcademicReportsResult =
@@ -168,8 +192,11 @@ function emptyReport(academyId: string, filters: ParsedAcademicReportFilters): A
       courseId: filters.courseId ?? null,
     },
     resultsPublishedCount: 0,
+    resultsEnteredCount: 0,
+    resultsPassedCount: 0,
     passFailByBatch: [],
     gradeDistribution: [],
+    byExam: [],
   };
 }
 
@@ -220,45 +247,89 @@ export async function getAcademicReports(
   ];
   if (allowedBatchIds) conditions.push(inArray(examResults.batchId, allowedBatchIds));
   if (filters.batchId) conditions.push(eq(examResults.batchId, filters.batchId));
-  if (filters.courseId) conditions.push(eq(batches.courseId, filters.courseId));
+  // Each exam names its course (a batch can run several).
+  if (filters.courseId) conditions.push(eq(exams.courseId, filters.courseId));
   if (filters.dateFrom) conditions.push(gte(examResults.publishedAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(examResults.publishedAt, filters.dateTo));
   const where = and(...conditions);
 
-  const [byBatchRows, gradeRows, [publishedCountRow]] = await Promise.all([
+  // Per exam: every exam in scope (also those without results yet), with
+  // results counted under the same batch/course scope. "Published" figures
+  // use the publish date and "entered" the entry date, as the totals do.
+  const examConditions: SQL[] = [eq(exams.academyId, academyId)];
+  if (allowedBatchIds) examConditions.push(inArray(exams.batchId, allowedBatchIds));
+  if (filters.batchId) examConditions.push(eq(exams.batchId, filters.batchId));
+  if (filters.courseId) examConditions.push(eq(exams.courseId, filters.courseId));
+  const publishedCond = and(
+    eq(examResults.status, "published"),
+    filters.dateFrom ? gte(examResults.publishedAt, filters.dateFrom) : undefined,
+    filters.dateTo ? lte(examResults.publishedAt, filters.dateTo) : undefined,
+  );
+  const enteredCond = and(
+    sql`${examResults.id} is not null`,
+    filters.dateFrom ? gte(examResults.createdAt, filters.dateFrom) : undefined,
+    filters.dateTo ? lte(examResults.createdAt, filters.dateTo) : undefined,
+  );
+
+  const [byBatchRows, gradeRows, [publishedCountRow], examRows] = await Promise.all([
     db
       .select({
         batchId: examResults.batchId,
         batchName: batches.name,
-        courseId: batches.courseId,
+        courseId: exams.courseId,
         courseName: courses.name,
         passFail: examResults.passFail,
         count: sql<number>`count(*)::int`,
       })
       .from(examResults)
       .innerJoin(batches, eq(batches.id, examResults.batchId))
-      .innerJoin(courses, eq(courses.id, batches.courseId))
+      .innerJoin(exams, eq(exams.id, examResults.examId))
+      .innerJoin(courses, eq(courses.id, exams.courseId))
       .where(where)
-      .groupBy(examResults.batchId, batches.name, batches.courseId, courses.name, examResults.passFail),
+      .groupBy(examResults.batchId, batches.name, exams.courseId, courses.name, examResults.passFail),
     db
       .select({
         gradeBandLabel: examResults.gradeBandLabel,
         count: sql<number>`count(*)::int`,
+        failing: sql<boolean>`bool_and(${examResults.passFail} = 'fail')`,
       })
       .from(examResults)
       .innerJoin(batches, eq(batches.id, examResults.batchId))
+      .innerJoin(exams, eq(exams.id, examResults.examId))
       .where(where)
       .groupBy(examResults.gradeBandLabel),
     db
       .select({ count: sql<number>`count(*)::int` })
       .from(examResults)
       .innerJoin(batches, eq(batches.id, examResults.batchId))
+      .innerJoin(exams, eq(exams.id, examResults.examId))
       .where(where),
+    db
+      .select({
+        examId: exams.id,
+        examName: exams.name,
+        maxMarks: exams.maxMarks,
+        batchName: batches.name,
+        batchCode: batches.code,
+        courseName: courses.name,
+        enteredCount: sql<number>`count(${examResults.id}) filter (where ${enteredCond})::int`,
+        publishedCount: sql<number>`count(${examResults.id}) filter (where ${publishedCond})::int`,
+        averageMarks: sql<number | null>`(avg(${examResults.marksObtained}) filter (where ${publishedCond}))::float8`,
+        passedCount: sql<number>`count(${examResults.id}) filter (where ${publishedCond} and ${examResults.passFail} = 'pass')::int`,
+      })
+      .from(exams)
+      .innerJoin(batches, eq(batches.id, exams.batchId))
+      .innerJoin(courses, eq(courses.id, exams.courseId))
+      .leftJoin(examResults, and(eq(examResults.examId, exams.id), eq(examResults.academyId, academyId)))
+      .where(and(...examConditions))
+      .groupBy(exams.id, exams.name, exams.maxMarks, batches.name, batches.code, courses.name)
+      .orderBy(batches.name, exams.name),
   ]);
 
   const byBatch = new Map<string, PassFailByBatchRow>();
   for (const row of byBatchRows) {
-    const key = row.batchId;
+    // One row per batch course.
+    const key = `${row.batchId}:${row.courseId}`;
     if (!byBatch.has(key)) {
       byBatch.set(key, {
         batchId: row.batchId,
@@ -293,10 +364,24 @@ export async function getAcademicReports(
         courseId: filters.courseId ?? null,
       },
       resultsPublishedCount: publishedCountRow?.count ?? 0,
+      resultsEnteredCount: examRows.reduce((sum, row) => sum + row.enteredCount, 0),
+      resultsPassedCount: [...byBatch.values()].reduce((sum, row) => sum + row.passCount, 0),
       passFailByBatch: [...byBatch.values()],
+      byExam: examRows.map((row) => ({
+        examId: row.examId,
+        examName: row.examName,
+        batchName: row.batchName,
+        batchCode: row.batchCode,
+        courseName: row.courseName,
+        maxMarks: Number(row.maxMarks),
+        enteredCount: row.enteredCount,
+        publishedCount: row.publishedCount,
+        averageMarks: row.averageMarks === null ? null : Number(row.averageMarks),
+        passedCount: row.passedCount,
+      })),
       gradeDistribution: gradeRows
-        .filter((row): row is { gradeBandLabel: string; count: number } => row.gradeBandLabel !== null)
-        .map((row) => ({ gradeBandLabel: row.gradeBandLabel, count: row.count })),
+        .filter((row): row is { gradeBandLabel: string; count: number; failing: boolean } => row.gradeBandLabel !== null)
+        .map((row) => ({ gradeBandLabel: row.gradeBandLabel, count: row.count, failing: Boolean(row.failing) })),
     },
   };
 }

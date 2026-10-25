@@ -14,8 +14,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Academy Management SaaS",
-  description: "Multi-tenant academy management platform (in development).",
+  title: "Dardar School System",
+  description: "Dardar School System — multi-tenant academy management platform (in development).",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

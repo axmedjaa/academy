@@ -4,7 +4,6 @@ import { useActionState, useEffect, useState, useTransition } from "react";
 import type { StudentRecord } from "@/lib/academies/students";
 import type {
   EnrollmentFeeScheduleRecord,
-  EnrollmentPaymentSummary,
   FeePeriodRecord,
   StudentEnrollmentOption,
 } from "@/lib/academies/fee-periods";
@@ -22,24 +21,21 @@ import {
   type StudentPaymentsFormState,
 } from "@/lib/academies/student-payments-actions";
 import { adjustStudentPaymentAction, reverseStudentPaymentAction } from "@/lib/academies/finance-reversals-actions";
-import { Badge, Button, ErrorMessage, Field, LinkButton, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
-import { StudentAvatar } from "@/app/academy/students/student-avatar";
+import { BackLink, Badge, Button, ErrorMessage, Field, LinkButton, PageHeader, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
+import { PAYMENT_PLAN_OPTIONS } from "@/lib/ui/payment-plan";
+import { StudentHeaderActions, StudentOverview, type EnrollmentSummaryEntry } from "./student-overview";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
 import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
+import { Bone } from "@/app/academy/_shell/skeletons";
 
 const initialState: StudentPaymentsFormState = { ok: false };
 
 const SELF_REVERSAL_TOOLTIP = "You can't reverse or adjust a payment you recorded yourself.";
 
-const INTERVAL_OPTIONS: { value: number; label: string }[] = [
-  { value: 1, label: "Monthly" },
-  { value: 2, label: "Every 2 Months" },
-  { value: 3, label: "Every 3 Months" },
-  { value: 4, label: "Every 4 Months" },
-  { value: 6, label: "Every 6 Months" },
-  { value: 12, label: "Yearly" },
-];
+// The plan value is the number of monthly installments (see lib/ui/payment-plan.ts).
+const INTERVAL_OPTIONS = PAYMENT_PLAN_OPTIONS;
 
 /** A period that hasn't started yet is "future," never "currently due" —
  * same helper/rationale as fee-periods-manager.tsx's identical copy (no new
@@ -92,18 +88,15 @@ export interface PaymentHistoryRow {
   receiptNumber: string | null;
 }
 
-interface EnrollmentSummaryEntry {
-  enrollment: StudentEnrollmentOption;
-  schedule: EnrollmentFeeScheduleRecord | null;
-  summary: EnrollmentPaymentSummary | null;
-}
-
 interface Props {
+  /** Opens on this tab (`?tab=fees` from a Collect link). */
+  initialTab?: Tab;
   student: StudentRecord;
   /** This student's own short-lived signed R2 GET url, pre-resolved
    * server-side (page.tsx, via students.ts's `getStudentPhotoUrl`) —
    * null if they have no photo, or it couldn't be resolved. */
   photoUrl: string | null;
+  branchName: string;
   enrollments: StudentEnrollmentOption[];
   enrollmentSummaries: EnrollmentSummaryEntry[];
   charges: StudentChargeRecord[];
@@ -119,6 +112,11 @@ interface Props {
    * Not an approval gate: there is no approval workflow for student
    * payments anymore, only the reversal/adjustment correction path. */
   canReversePayments: boolean;
+  /** Student edit rights (ACADEMY_STUDENTS_ACTION full/manage). */
+  canEditStudent: boolean;
+  /** Enroll / withdraw rights (ACADEMY_COURSES_BATCHES_ACTION full/manage). */
+  canEnroll: boolean;
+  enrollBatches: EnrollBatchOption[];
   currentUserId: string;
   /** "Today," server-computed in the academy's own Somalia-local calendar
    * (see lib/academies/fee-periods.ts's `todayDateOnlyInAcademyTimezone`) —
@@ -128,9 +126,30 @@ interface Props {
   today: string;
 }
 
+type Tab = "overview" | "fees" | "payments";
+
+const TAB_CLASS = (on: boolean) =>
+  `inline-flex min-h-11 items-center rounded-full px-4 text-[15px] font-semibold transition-colors duration-150 ${
+    on ? "bg-brand-tint text-brand" : "text-[#374151] hover:bg-app"
+  }`;
+const SUBTAB_CLASS = (on: boolean) =>
+  `inline-flex min-h-10 items-center whitespace-nowrap rounded-full border px-3.5 text-sm font-semibold transition-colors duration-150 ${
+    on ? "border-brand bg-brand text-white" : "border-border-strong bg-surface text-ink hover:bg-app"
+  }`;
+
+/**
+ * Student detail (design A02 detail): back link, name with student number
+ * and branch, Enroll / Edit actions, then the Overview, Fees and Payments
+ * tabs. Fees has one sub-tab per active enrollment (each course has its
+ * own fee plan and periods) plus One-off charges. The finance panels below
+ * are the existing, unchanged workflows (fee schedules, per-period and
+ * catch-up payments, charges, reversals and adjustments, receipts).
+ */
 export function StudentDetail({
+  initialTab = "overview",
   student,
   photoUrl,
+  branchName,
   enrollments,
   enrollmentSummaries,
   charges,
@@ -138,90 +157,136 @@ export function StudentDetail({
   paymentsSectionVisible,
   canManagePayments,
   canReversePayments,
+  canEditStudent,
+  canEnroll,
+  enrollBatches,
   currentUserId,
   today,
 }: Props) {
-  return (
-    <div className="flex flex-col gap-6">
-      <StudentInfoCard student={student} photoUrl={photoUrl} />
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [enrollOpen, setEnrollOpen] = useState(false);
+  const feeTabs = enrollmentSummaries.map((entry) => ({
+    key: entry.enrollment.id,
+    label: `${entry.enrollment.batchCode} · ${entry.enrollment.courseName}`,
+  }));
+  const [feeTab, setFeeTab] = useState<string>(feeTabs[0]?.key ?? "charges");
+  const feeEntry = enrollmentSummaries.find((entry) => entry.enrollment.id === feeTab) ?? null;
 
-      {enrollmentSummaries.length === 0 ? (
-        <Section>
-          <p className="text-sm text-muted">
-            {enrollments.length === 0
-              ? "This student has no course enrollment yet."
-              : "This student has no active course enrollment."}
-          </p>
-        </Section>
-      ) : (
-        enrollmentSummaries.map((entry) => (
-          <EnrollmentPaymentPanel
-            key={entry.enrollment.id}
-            studentId={student.id}
-            entry={entry}
-            canManagePayments={canManagePayments}
-            today={today}
+  return (
+    <>
+      <BackLink href="/academy/students" label="All students" />
+      <PageHeader
+        title={student.fullName}
+        description={`${student.studentNumber} · ${branchName}`}
+        actions={
+          <StudentHeaderActions
+            student={student}
+            enrollments={enrollments}
+            enrollBatches={enrollBatches}
+            canEnroll={canEnroll}
+            canEdit={canEditStudent}
+            enrollOpen={enrollOpen}
+            onEnrollOpenChange={setEnrollOpen}
           />
-        ))
-      )}
+        }
+      />
 
-      {paymentsSectionVisible && (
-        <ChargesPanel
-          studentId={student.id}
-          charges={charges}
-          canManagePayments={canManagePayments}
-        />
-      )}
+      <div role="tablist" aria-label="Student sections" className="mb-6 flex flex-wrap gap-2">
+        {(
+          [
+            ["overview", "Overview"],
+            ["fees", "Fees"],
+            ["payments", "Payments"],
+          ] as [Tab, string][]
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={TAB_CLASS(tab === key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {paymentsSectionVisible && (
-        <PaymentHistoryPanel
-          rows={historyRows}
-          canManagePayments={canManagePayments}
-          canReversePayments={canReversePayments}
-          currentUserId={currentUserId}
-        />
-      )}
-    </div>
-  );
-}
-
-function StudentInfoCard({ student, photoUrl }: { student: StudentRecord; photoUrl: string | null }) {
-  return (
-    <Section>
-      <div className="flex items-center gap-4">
-        <StudentAvatar
-          fullName={student.fullName}
+      {tab === "overview" && (
+        <StudentOverview
+          student={student}
           photoUrl={photoUrl}
-          sizeClassName="h-14 w-14"
-          textClassName="text-lg"
+          branchName={branchName}
+          enrollments={enrollments}
+          enrollmentSummaries={enrollmentSummaries}
+          canEditPhoto={canEditStudent}
+          canWithdraw={canEnroll}
+          canEnroll={canEnroll && enrollBatches.length > 0}
+          onEnroll={() => setEnrollOpen(true)}
         />
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold text-ink">{student.fullName}</h2>
-            <Badge label={student.status} tone={student.status === "active" ? "green" : "gray"} />
-          </div>
-          <p className="text-sm text-muted">Student # {student.studentNumber}</p>
-        </div>
-      </div>
-      <div className="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 border-t border-border pt-5 sm:grid-cols-3">
-        <InfoField label="Phone">{student.phone ?? "—"}</InfoField>
-        <InfoField label="Email">{student.email ?? "—"}</InfoField>
-        <InfoField label="Date of birth">{student.dateOfBirth ?? "—"}</InfoField>
-        <InfoField label="Gender">{student.gender ?? "—"}</InfoField>
-        <InfoField label="Guardian">
-          {student.guardianName ? `${student.guardianName} (${student.guardianPhone ?? "no phone"})` : "—"}
-        </InfoField>
-      </div>
-    </Section>
-  );
-}
+      )}
 
-function InfoField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <p className="text-xs font-medium uppercase tracking-wide text-muted">{label}</p>
-      <div className="mt-1 text-sm text-ink">{children}</div>
-    </div>
+      {tab === "fees" && (
+        <div className="flex flex-col gap-6">
+          <div role="tablist" aria-label="Fee plans" className="flex gap-2 overflow-x-auto pb-1">
+            {feeTabs.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="tab"
+                aria-selected={feeTab === item.key}
+                onClick={() => setFeeTab(item.key)}
+                className={SUBTAB_CLASS(feeTab === item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+            {paymentsSectionVisible && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={feeTab === "charges"}
+                onClick={() => setFeeTab("charges")}
+                className={SUBTAB_CLASS(feeTab === "charges")}
+              >
+                One-off charges
+              </button>
+            )}
+          </div>
+          {feeEntry ? (
+            <EnrollmentPaymentPanel
+              key={feeEntry.enrollment.id}
+              studentId={student.id}
+              entry={feeEntry}
+              canManagePayments={canManagePayments}
+              today={today}
+            />
+          ) : feeTab === "charges" && paymentsSectionVisible ? (
+            <ChargesPanel studentId={student.id} charges={charges} canManagePayments={canManagePayments} />
+          ) : (
+            <Section>
+              <p className="text-sm text-muted">
+                {enrollments.length === 0 ? "This student has no course enrollment yet." : "This student has no active course enrollment."}
+              </p>
+            </Section>
+          )}
+        </div>
+      )}
+
+      {tab === "payments" &&
+        (paymentsSectionVisible ? (
+          <PaymentHistoryPanel
+            rows={historyRows}
+            canManagePayments={canManagePayments}
+            canReversePayments={canReversePayments}
+            currentUserId={currentUserId}
+          />
+        ) : (
+          <Section>
+            <p className="text-sm text-muted">Payments aren&apos;t available to your role.</p>
+          </Section>
+        ))}
+    </>
   );
 }
 
@@ -340,6 +405,7 @@ function EnrollmentPaymentPanel({
       {schedule && (
         <div className="mt-6">
           <h3 className="text-sm font-semibold text-ink">Fee periods</h3>
+          {loadingPeriods && <span className="sr-only" role="status">Loading fee periods…</span>}
           <TableWrap>
             <thead>
               <tr>
@@ -353,10 +419,21 @@ function EnrollmentPaymentPanel({
               </tr>
             </thead>
             <tbody>
-              {visiblePeriods.length === 0 ? (
+              {visiblePeriods.length === 0 && loadingPeriods ? (
+                // Placeholder rows while this enrollment's periods load.
+                Array.from({ length: 3 }).map((_, row) => (
+                  <tr key={`loading-${row}`} aria-hidden="true">
+                    {Array.from({ length: canManagePayments ? 7 : 6 }).map((__, cell) => (
+                      <td key={cell} className={td}>
+                        <Bone className={`h-3.5 ${cell === 0 ? "w-28" : "w-16"}`} />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : visiblePeriods.length === 0 ? (
                 <tr>
                   <td colSpan={canManagePayments ? 7 : 6} className={`${td} text-center text-muted`}>
-                    {loadingPeriods ? "Loading…" : "No fee periods due yet."}
+                    No fee periods due yet.
                   </td>
                 </tr>
               ) : (

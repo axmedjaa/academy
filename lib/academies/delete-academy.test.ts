@@ -9,6 +9,7 @@ import { db } from "@/lib/db";
 // network call, same convention as lib/academies/academy-logo.test.ts.
 vi.mock("@/lib/storage/client", () => ({ deleteObject: vi.fn() }));
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -34,6 +35,7 @@ import {
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { deleteObject } from "@/lib/storage/client";
 import { deleteAcademy, getAcademyDeletionEligibility } from "./delete-academy";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const deleteObjectMock = vi.mocked(deleteObject);
 
@@ -160,6 +162,7 @@ afterAll(async () => {
     await db.delete(subscriptionPayments).where(eq(subscriptionPayments.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -300,6 +303,7 @@ describe("deleteAcademy — eligibility blockers", () => {
       academyId,
       studentId: student.id,
       batchId: batch.id,
+      courseId: await courseOfBatch(batch.id),
       certificateCode: `CERT-${randomUUID().slice(0, 10)}`,
       issuedBy: creatorId,
     });
@@ -326,7 +330,7 @@ describe("deleteAcademy — eligibility blockers", () => {
       .returning({ id: students.id });
     const [exam] = await db
       .insert(exams)
-      .values({ academyId, batchId: batch.id, name: "Final", maxMarks: "100" })
+      .values({ academyId, batchId: batch.id, courseId: await courseOfBatch(batch.id), name: "Final", maxMarks: "100" })
       .returning({ id: exams.id });
     const [gradeConfig] = await db
       .insert(gradeConfigurations)

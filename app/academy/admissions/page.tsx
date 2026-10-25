@@ -2,10 +2,10 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAdmissionsView, getStudentPhotoUrl } from "@/lib/academies/students";
 import { listBranches } from "@/lib/academies/branches";
-import { listBatches } from "@/lib/academies/batches";
-import { listCourses } from "@/lib/academies/courses";
+import { getEnrollBatchOptions } from "@/lib/academies/enroll-options";
 import { AdmissionsList } from "./admissions-list";
-import { Button, LinkButton, PAGE_WRAP, PageHeader, PageMessage, Toolbar, inputClass } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
+import { ClearFilters, FilterBar, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
 import { PaginationNav } from "@/components/pagination-nav";
 
 /**
@@ -44,10 +44,15 @@ export default async function AcademyAdmissionsPage({
   };
 
   const branchId = get("branchId");
+  const searchTerm = get("q");
   const pageParam = Number.parseInt(get("page"), 10);
   const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
 
-  const result = await getAdmissionsView(context, { branchId: branchId || undefined }, { page });
+  const result = await getAdmissionsView(
+    context,
+    { branchId: branchId || undefined, searchTerm: searchTerm || undefined },
+    { page },
+  );
 
   if (!result.ok) {
     return (
@@ -65,7 +70,6 @@ export default async function AcademyAdmissionsPage({
   // resolveScope — Admissions Officer sees the whole academy, Trainer sees
   // only students enrolled in courses/batches they teach. `branchLimited`
   // is left as-is for the (unrelated) Branch filter field below.
-  const isTrainer = membershipRole === "trainer";
 
   // Branch options for the filter select below — same already-established
   // convention as app/academy/batches/page.tsx's own branch dropdown.
@@ -97,61 +101,33 @@ export default async function AcademyAdmissionsPage({
   // BATCHES_ACTION's "full"/"manage" gate — the exact permission
   // enrollStudentInBatch itself checks), rather than re-deriving a second
   // copy of that permission decision here.
-  const [batchesResult, coursesResult] = await Promise.all([listBatches(context), listCourses(context)]);
-  const courseNameById = new Map((coursesResult.ok ? coursesResult.courses : []).map((c) => [c.id, c.name]));
-  const courseOptions = (batchesResult.ok ? batchesResult.batches : [])
-    .filter((batch) => batch.status !== "archived")
-    .map((batch) => ({
-      batchId: batch.id,
-      label: `${courseNameById.get(batch.courseId) ?? "Unknown course"} — ${batch.name}`,
-    }));
-  const canEnroll = batchesResult.ok && batchesResult.canManage;
+  const { canEnroll, batches: enrollBatches } = await getEnrollBatchOptions(context);
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Admissions"
-        description={
-          isTrainer
-            ? "Applied students not yet enrolled in the courses or batches you teach."
-            : "Applied students across this academy who are not yet enrolled in a batch."
-        }
-      />
-
-      {!branchLimited && (
-        <form method="get">
-          <Toolbar>
-            <label className="min-w-[200px]">
-              <span className="mb-1 block text-xs font-medium text-muted">Branch</span>
-              <select name="branchId" defaultValue={branchId} className={inputClass}>
-                <option value="">All branches</option>
-                {branchOptions.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="flex gap-2">
-              <Button type="submit" variant="secondary">
-                Filter
-              </Button>
-              {branchId && (
-                <LinkButton href="/academy/admissions" variant="ghost">
-                  Clear
-                </LinkButton>
-              )}
-            </div>
-          </Toolbar>
-        </form>
-      )}
-
       <AdmissionsList
         admissions={data.rows}
         canManage={canManage}
         canEnroll={canEnroll}
-        courseOptions={courseOptions}
+        enrollBatches={enrollBatches}
         photoUrlByStudentId={photoUrlByStudentId}
+        filters={
+          <FilterBar>
+            <SearchField placeholder="Search students" />
+            {!branchLimited && branchOptions.length > 1 && (
+              <FilterDropdown
+                param="branchId"
+                label="Branch"
+                icon="apartment"
+                options={[
+                  { value: "", label: "All branches" },
+                  ...branchOptions.map((branch) => ({ value: branch.id, label: branch.name })),
+                ]}
+              />
+            )}
+            <ClearFilters params={["q", "branchId"]} />
+          </FilterBar>
+        }
       />
 
       <PaginationNav page={data.page} pageSize={data.pageSize} totalCount={data.totalCount} searchParams={params} />

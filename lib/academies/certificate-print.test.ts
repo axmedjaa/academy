@@ -3,6 +3,7 @@ import { eq, or } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -44,6 +45,7 @@ vi.mock("@/lib/storage/client", () => ({
   headObject: vi.fn(),
 }));
 import { getDownloadUrl } from "@/lib/storage/client";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 const getDownloadUrlMock = vi.mocked(getDownloadUrl);
 
 beforeEach(() => {
@@ -118,7 +120,7 @@ async function setupCertificateFixture(): Promise<{ academyId: string; certifica
   // is entirely unrelated to this file's own logo-resolution focus.
   const [certificate] = await db
     .insert(certificates)
-    .values({ academyId, studentId: student.id, batchId: batch.id, certificateCode: `CERT-${randomUUID().slice(0, 8)}`, issuedBy: creatorUserId })
+    .values({ academyId, studentId: student.id, batchId: batch.id, courseId: await courseOfBatch(batch.id), certificateCode: `CERT-${randomUUID().slice(0, 8)}`, issuedBy: creatorUserId })
     .returning({ id: certificates.id });
 
   const ownerUserId = await createUser();
@@ -132,6 +134,7 @@ afterAll(async () => {
   for (const academyId of createdAcademyIds) {
     await db.delete(certificates).where(eq(certificates.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));

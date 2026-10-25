@@ -2,7 +2,8 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listStaff } from "@/lib/academies/staff";
 import { StaffTable } from "./staff-table";
-import { LinkButton, PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { RegisterStaffButton } from "./register-staff-form";
 
 /**
  * PLAN.md Item 35 — `/academy/staff`. Same gating shape as
@@ -37,7 +38,8 @@ export default async function StaffPage() {
     <div className={PAGE_WRAP}>
       <PageHeader
         title="Staff"
-        actions={canManage ? <LinkButton href="/academy/staff/new">Add staff member</LinkButton> : undefined}
+        description="People who work at this academy. Roles and status are edited on the row; there is no staff detail page."
+        actions={canManage ? <RegisterStaffButton /> : undefined}
       />
       <StaffTable staff={result.staff} canManage={canManage} canDelete={result.canDelete} />
     </div>

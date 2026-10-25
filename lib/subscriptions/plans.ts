@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { subscriptionPlans } from "@/lib/db/schema";
@@ -138,6 +138,45 @@ export async function listSubscriptionPlans(): Promise<
     .orderBy(subscriptionPlans.createdAt);
 
   return rows.map(toRecord);
+}
+
+export interface SubscriptionPlansPage {
+  plans: SubscriptionPlanRecord[];
+  totalCount: number;
+}
+
+/**
+ * Perf investigation (Afoogy slow-dashboard task, query-performance step):
+ * same list, same ordering, same "caller already checked plans.manage"
+ * contract as `listSubscriptionPlans()` above — but for /platform/plans
+ * (app/platform/plans/page.tsx), which only ever renders one `pageSize`-
+ * row slice. That page previously called the unbounded function above and
+ * sliced the already-fetched array in JS, which means every load shipped
+ * the *entire* table across the wire first — currently thousands of rows
+ * (see this task's test-data-isolation findings), not the tiny table
+ * PLAN.md's seed data implies. `LIMIT`/`OFFSET` pushed into the query and
+ * a separate `count(*)` for the page-nav total fixes that without touching
+ * `listSubscriptionPlans()` itself, which other callers (the academy
+ * registration plan picker, this file's own test) still rely on returning
+ * every row.
+ */
+export async function listSubscriptionPlansPage(
+  page: number,
+  pageSize: number,
+): Promise<SubscriptionPlansPage> {
+  const offset = Math.max(0, page - 1) * pageSize;
+
+  const [rows, [{ value: totalCount }]] = await Promise.all([
+    db
+      .select()
+      .from(subscriptionPlans)
+      .orderBy(subscriptionPlans.createdAt)
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ value: count() }).from(subscriptionPlans),
+  ]);
+
+  return { plans: rows.map(toRecord), totalCount };
 }
 
 export type CreateSubscriptionPlanResult =

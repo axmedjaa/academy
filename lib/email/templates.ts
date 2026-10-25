@@ -1,6 +1,8 @@
-const APP_NAME = "Academy Management SaaS";
+import { color } from "@/lib/ui/theme";
 
-const BRAND_BLUE = "#2F5FE0";
+const APP_NAME = "Dardar School System";
+
+const BRAND_BLUE = color.primaryBlue;
 const TEXT_COLOR = "#111827";
 const MUTED_COLOR = "#6B7280";
 const BORDER_COLOR = "#E2E5EA";

@@ -1,18 +1,11 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { academyMemberships, users } from "@/lib/db/schema";
-import type { AcademyRole } from "@/lib/auth/roles";
+import { academyMemberships, staffProfiles, users } from "@/lib/db/schema";
+import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
 
-/** Display labels for academy roles — shared with the console shell's
- * account menu (lib/console/shell-data.ts). */
-export const ROLE_LABELS: Record<AcademyRole, string> = {
-  academy_owner: "Academy Owner",
-  academy_admin: "Academy Administrator",
-  manager: "Manager",
-  admissions_officer: "Admissions Officer",
-  finance_officer: "Finance Officer",
-  trainer: "Trainer",
-};
+/** Display labels for academy roles (re-exported from the pure
+ * lib/auth/role-labels.ts so client components can share them). */
+export const ROLE_LABELS = ACADEMY_ROLE_LABELS;
 
 /**
  * Batched "who recorded this" display label — resolves to the user's
@@ -47,4 +40,27 @@ export async function resolveStaffLabels(academyId: string, userIds: string[]): 
     result.set(userId, role ? ROLE_LABELS[role] : (emailByUser.get(userId) ?? userId));
   }
   return result;
+}
+
+/**
+ * "Recorded by" names for list pages: the person's staff-profile name in
+ * this academy, falling back to `resolveStaffLabels` (role, then email) for
+ * anyone without a profile, such as the owner. Display-only, same contract
+ * as above: every id comes from a record the caller already read, and the
+ * lookup is pinned to `academyId`.
+ */
+export async function resolveStaffNames(academyId: string, userIds: string[]): Promise<Record<string, string>> {
+  const uniqueIds = [...new Set(userIds)];
+  if (uniqueIds.length === 0) return {};
+  const rows = await db
+    .select({ userId: staffProfiles.userId, fullName: staffProfiles.fullName })
+    .from(staffProfiles)
+    .where(and(eq(staffProfiles.academyId, academyId), inArray(staffProfiles.userId, uniqueIds)));
+  const names: Record<string, string> = Object.fromEntries(rows.map((row) => [row.userId, row.fullName]));
+  const missing = uniqueIds.filter((id) => !names[id]);
+  if (missing.length > 0) {
+    const labels = await resolveStaffLabels(academyId, missing);
+    for (const id of missing) names[id] = labels.get(id) ?? "Staff member";
+  }
+  return names;
 }

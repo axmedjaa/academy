@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { setNotificationPreferenceAction } from "@/lib/notifications/preferences-actions";
 import { humanizeNotificationLabel } from "@/lib/notifications/humanize-template-id";
 import type { NotificationPreferenceView } from "@/lib/notifications/preferences";
-import { ErrorMessage, Section } from "@/app/academy/_shell/ui";
+import { ErrorMessage } from "@/app/academy/_shell/ui";
 
 interface Props {
   academyId: string;
@@ -52,11 +52,11 @@ export function NotificationPreferencesSection({ academyId, preferences }: Props
   }
 
   return (
-    <Section>
-      <h2 className="text-base font-semibold text-ink">Notification settings</h2>
-      <p className="mt-1 text-sm text-muted">
-        Choose which academy events you receive notifications for. Changes save immediately.
-      </p>
+    <section className="mb-8 rounded-card border border-border bg-surface p-5 shadow-card" aria-labelledby="prefs-title">
+      <h2 id="prefs-title" className="text-[15px] font-semibold text-ink">
+        Notification preferences
+      </h2>
+      <p className="mt-0.5 text-[13px] text-muted">Choose which academy events notify you. Changes save immediately.</p>
 
       {error && (
         <div className="mt-3">
@@ -64,47 +64,39 @@ export function NotificationPreferencesSection({ academyId, preferences }: Props
         </div>
       )}
 
-      <ul className="mt-4 flex max-w-lg flex-col gap-2">
+      <ul role="list" className="mt-3 divide-y divide-border">
         {preferences.map((preference) => {
-          const enabled = localEnabled[preference.templateId] ?? preference.enabled;
+          const label = humanizeNotificationLabel(preference.templateId);
+          const on = preference.mandatory || (localEnabled[preference.templateId] ?? preference.enabled);
           return (
-            <li
-              key={preference.templateId}
-              // Mobile responsiveness fix: a long humanized label (e.g.
-              // "Expense Approval Requested") next to the equally long
-              // "Required — cannot be turned off" mandatory caption had no
-              // way to wrap — on a narrow phone the two together easily
-              // exceeded the available width and overflowed horizontally.
-              // `flex-wrap` lets the toggle/caption drop to its own line
-              // instead.
-              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-control border border-border bg-app/40 px-3 py-2.5"
-            >
-              <span className="text-sm text-ink">{humanizeNotificationLabel(preference.templateId)}</span>
-              {preference.mandatory ? (
-                <label
-                  title="Required — cannot be turned off"
-                  className="flex items-center gap-2 text-xs text-muted"
+            <li key={preference.templateId} className="flex min-h-14 flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2.5">
+              <span className="min-w-0 text-sm text-ink">
+                {label}
+                {preference.mandatory && <span className="block text-xs text-muted">Always on. Required notifications cannot be turned off.</span>}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={on}
+                aria-label={label}
+                disabled={preference.mandatory || isPending}
+                onClick={() => handleToggle(preference.templateId, !on)}
+                className="group inline-flex min-h-11 shrink-0 items-center gap-2.5 text-[13px] font-semibold text-[#374151] disabled:cursor-not-allowed"
+              >
+                {on ? "On" : "Off"}
+                <span
+                  aria-hidden="true"
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors duration-150 ${on ? "bg-brand" : "bg-[#CBD5E1]"} ${preference.mandatory ? "opacity-60" : ""}`}
                 >
-                  <input type="checkbox" checked disabled aria-label={`${preference.templateId} (required)`} />
-                  Required — cannot be turned off
-                </label>
-              ) : (
-                <label className="flex items-center gap-2 text-sm text-ink">
-                  <input
-                    type="checkbox"
-                    checked={enabled}
-                    disabled={isPending}
-                    onChange={(event) => handleToggle(preference.templateId, event.target.checked)}
-                    aria-label={preference.templateId}
-                    className="h-4 w-4 accent-brand"
+                  <span
+                    className={`absolute left-0 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-150 motion-reduce:transition-none ${on ? "translate-x-[22px]" : "translate-x-0.5"}`}
                   />
-                  {enabled ? "On" : "Off"}
-                </label>
-              )}
+                </span>
+              </button>
             </li>
           );
         })}
       </ul>
-    </Section>
+    </section>
   );
 }

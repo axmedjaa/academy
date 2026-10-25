@@ -1,105 +1,84 @@
-import { PAGE_WRAP, Section, TableWrap, td, th } from "@/app/academy/_shell/ui";
+import { Bone, SkeletonHeader, SkeletonPage } from "@/app/academy/_shell/skeletons";
 
-/** Shape-matched skeleton mirroring the real page's actual sections (stat
- * grid, Recent Payments table, Usage bars) — same `Pulse` convention as
- * app/academy/students/loading.tsx, which superseded the older generic
- * `SkeletonBlock` stack this file used before (a flat row of same-size
- * blocks that didn't resemble the real layout, so the page visibly jumped
- * once real data replaced it). The exact stat-card count and alert banners
- * are role/data-dependent and not worth guessing at — this approximates
- * the common case (no alerts, 4-5 cards) closely enough that nothing
- * reflows dramatically once the real content streams in. */
-function Pulse({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse motion-reduce:animate-none rounded-control bg-app ${className}`} />;
-}
+const PANEL = "rounded-[20px] border border-[#E5E7EB] bg-surface p-6";
 
+/** Dashboard: the real title, then the KPI bento, the payments strip, the
+ * two activity panels and the two chart panels, in neutral placeholders. */
 export default function DashboardLoading() {
   return (
-    <div className={PAGE_WRAP}>
-      <div className="mb-6 flex flex-col gap-2">
-        <Pulse className="h-7 w-32" />
-        <Pulse className="h-4 w-64" />
-      </div>
+    <SkeletonPage label="dashboard" wrap="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+      <SkeletonHeader title="Dashboard" description actions={1} />
 
-      <div className="flex flex-col gap-6">
-        <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-4">
-          {Array.from({ length: 5 }).map((_, index) => (
-            <div key={index} className="flex flex-col gap-2 rounded-card border border-border bg-surface p-5 shadow-card">
-              <div className="flex items-center justify-between">
-                <Pulse className="h-3.5 w-24" />
-                <Pulse className="h-9 w-9 rounded-[10px]" />
+      <div className="@container" aria-hidden="true">
+        <div className="mb-8 grid grid-cols-1 gap-6 @[480px]:grid-cols-2 @[860px]:grid-cols-3">
+          <div className="flex min-h-[200px] flex-col justify-between rounded-[20px] border border-[#E5E7EB] bg-surface p-7 @[480px]:col-span-2 @[860px]:col-span-1 @[860px]:row-span-2">
+            <span className="flex items-center gap-3">
+              <Bone className="h-12 w-12 rounded-[14px]" />
+              <Bone className="h-4 w-28" />
+            </span>
+            <span>
+              <Bone className="h-16 w-32" />
+              <Bone className="mt-3 h-4 w-20" />
+            </span>
+          </div>
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="flex min-h-[196px] flex-col justify-between rounded-[20px] border border-[#E5E7EB] bg-surface p-[22px]">
+              <Bone className="h-[46px] w-[46px] rounded-[14px]" />
+              <span className="flex flex-col gap-2">
+                <Bone className="h-9 w-20" />
+                <Bone className="h-3.5 w-28" />
+                <Bone className="h-3 w-32" />
+              </span>
+            </div>
+          ))}
+          <div className="flex min-h-[140px] items-center gap-4 rounded-2xl border border-[#E5E7EB] bg-surface px-6 @[480px]:col-span-2 @[480px]:min-h-[96px] @[860px]:col-span-3">
+            <Bone className="h-12 w-12 rounded-xl" />
+            <span className="flex flex-1 flex-col gap-2">
+              <Bone className="h-4 w-40" />
+              <Bone className="h-3 w-28" />
+            </span>
+            <Bone className="h-9 w-28" />
+          </div>
+        </div>
+
+        <div className="mb-6 grid grid-cols-1 gap-6 @[760px]:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+          {[3, 4].map((rows, panel) => (
+            <div key={panel} className={PANEL}>
+              <Bone className="mb-5 h-5 w-40" />
+              <div className="flex flex-col gap-5">
+                {Array.from({ length: rows }).map((_, index) => (
+                  <span key={index} className="flex items-center gap-3">
+                    <Bone className="h-10 w-10 shrink-0 rounded-full" />
+                    <span className="flex flex-1 flex-col gap-1.5">
+                      <Bone className="h-3.5 w-1/2" />
+                      <Bone className="h-3 w-1/3" />
+                    </span>
+                    <Bone className="h-8 w-20 rounded-lg" />
+                  </span>
+                ))}
               </div>
-              <Pulse className="h-8 w-16" />
             </div>
           ))}
         </div>
 
-        <Section>
-          <Pulse className="h-5 w-40" />
-          <div className="mt-4">
-            <Pulse className="h-56 w-full" />
+        <div className="grid grid-cols-1 gap-6 @[700px]:grid-cols-2">
+          <div className={PANEL}>
+            <Bone className="mb-4 h-5 w-32" />
+            <Bone className="h-[240px] w-full rounded-lg" />
           </div>
-        </Section>
-
-        <Section>
-          <div className="flex items-center justify-between">
-            <Pulse className="h-5 w-32" />
-            <Pulse className="h-9 w-20" />
+          <div className={PANEL}>
+            <Bone className="mb-5 h-5 w-44" />
+            <div className="flex flex-col gap-5">
+              {Array.from({ length: 5 }).map((_, index) => (
+                <span key={index} className="flex flex-col gap-2">
+                  <Bone className="h-3 w-24" />
+                  <Bone className="h-1.5 w-full rounded-full" />
+                </span>
+              ))}
+            </div>
           </div>
-          <div className="mt-4">
-            <TableWrap>
-              <thead>
-                <tr>
-                  <th className={th}>Student</th>
-                  <th className={th}>Amount</th>
-                  <th className={th}>Date</th>
-                  <th className={th}>Method</th>
-                  <th className={th}>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({ length: 5 }).map((_, index) => (
-                  <tr key={index}>
-                    <td className={td}>
-                      <div className="flex items-center gap-3">
-                        <Pulse className="h-8 w-8 shrink-0 rounded-full" />
-                        <Pulse className="h-3.5 w-28" />
-                      </div>
-                    </td>
-                    <td className={td}>
-                      <Pulse className="h-3.5 w-16" />
-                    </td>
-                    <td className={td}>
-                      <Pulse className="h-3.5 w-20" />
-                    </td>
-                    <td className={td}>
-                      <Pulse className="h-3.5 w-20" />
-                    </td>
-                    <td className={td}>
-                      <Pulse className="h-5 w-20 rounded-full" />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </TableWrap>
-          </div>
-        </Section>
-
-        <Section>
-          <Pulse className="h-5 w-20" />
-          <div className="mt-4 flex flex-col gap-3">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <div key={index} className="flex flex-col gap-1.5">
-                <div className="flex justify-between">
-                  <Pulse className="h-3 w-16" />
-                  <Pulse className="h-3 w-10" />
-                </div>
-                <Pulse className="h-1.5 w-full rounded-full" />
-              </div>
-            ))}
-          </div>
-        </Section>
+        </div>
       </div>
-    </div>
+    </SkeletonPage>
   );
 }

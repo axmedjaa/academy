@@ -158,6 +158,17 @@ function optionalEmail(maxLength = 200) {
  * transfer a student between branches; see `updateStudent`'s own comment
  * for the judgment call restricting this field for branch-limited callers.
  */
+/** Optional text that can be cleared: absent keeps the stored value
+ * (undefined), empty clears it (null), anything else is trimmed. */
+function clearableText(maxLength: number, label: string) {
+  return z
+    .string()
+    .trim()
+    .max(maxLength, `${label} must be ${maxLength} characters or fewer.`)
+    .optional()
+    .transform((value) => (value === undefined ? undefined : value === "" ? null : value));
+}
+
 export const updateStudentSchema = z.object({
   branchId: z.string().uuid().optional(),
   fullName: z.string().trim().min(1, "Full name is required").max(200),
@@ -167,6 +178,10 @@ export const updateStudentSchema = z.object({
   email: optionalEmail(),
   guardianName: optionalText(200),
   guardianPhone: optionalText(50),
+  // Absent keeps the stored value, so callers that don't send these (e.g.
+  // a status-only resubmit) never erase them.
+  address: clearableText(500, "Address"),
+  district: clearableText(120, "District"),
   // No `profileImageRef` field here, deliberately — that column is a real
   // R2 object key, exclusively managed by confirmStudentPhotoUpload/
   // removeStudentPhoto below (each independently validating the key
@@ -192,6 +207,8 @@ export interface StudentRecord {
   email: string | null;
   guardianName: string | null;
   guardianPhone: string | null;
+  address: string | null;
+  district: string | null;
   /** A real R2 object key, never a URL — see this column's own
    * schema.ts comment. Resolve to a short-lived signed GET URL via
    * `getStudentPhotoUrl` before ever handing it to the browser. */
@@ -215,6 +232,8 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
     email: row.email,
     guardianName: row.guardianName,
     guardianPhone: row.guardianPhone,
+    address: row.address,
+    district: row.district,
     profileImageRef: row.profileImageRef,
     status: row.status,
     createdBy: row.createdBy,
@@ -337,6 +356,18 @@ export interface StudentSearchFilters {
    * mismatch elsewhere in this codebase) rather than widening their view. */
   branchId?: string;
   status?: "active" | "archived";
+  /** Only students with an ACTIVE enrollment in this batch (same academy). */
+  batchId?: string;
+  /** Only active students with no active enrollment ("Needs enrollment"). */
+  needsEnrollment?: boolean;
+  /** Restrict to these ids (e.g. a payment-status filter resolved from the
+   * students overview). Intersected with the caller's scope, never widening
+   * it; an empty array matches nothing. */
+  studentIds?: string[];
+  /** Restrict to students in these branches (e.g. the ID cards page for a
+   * branch-limited role). Intersected with the caller's scope, never
+   * widening it; an empty array matches nothing. */
+  branchIds?: string[];
 }
 
 export interface StudentSearchPagination {
@@ -504,6 +535,26 @@ export async function searchStudents(
   const conditions = [...scope.conditions];
   if (filters.status) {
     conditions.push(eq(students.status, filters.status));
+  }
+  if (filters.batchId) {
+    const parsedBatch = z.string().uuid().safeParse(filters.batchId);
+    conditions.push(
+      parsedBatch.success
+        ? sql`exists (select 1 from ${batchEnrollments} where ${batchEnrollments.studentId} = ${students.id} and ${batchEnrollments.academyId} = ${academyId} and ${batchEnrollments.batchId} = ${parsedBatch.data} and ${batchEnrollments.status} = 'active')`
+        : sql`false`,
+    );
+  }
+  if (filters.needsEnrollment) {
+    conditions.push(eq(students.status, "active"));
+    conditions.push(
+      sql`not exists (select 1 from ${batchEnrollments} where ${batchEnrollments.studentId} = ${students.id} and ${batchEnrollments.academyId} = ${academyId} and ${batchEnrollments.status} = 'active')`,
+    );
+  }
+  if (filters.studentIds) {
+    conditions.push(filters.studentIds.length ? inArray(students.id, filters.studentIds) : sql`false`);
+  }
+  if (filters.branchIds) {
+    conditions.push(filters.branchIds.length ? inArray(students.branchId, filters.branchIds) : sql`false`);
   }
   const term = filters.searchTerm?.trim();
   if (term) {
@@ -710,6 +761,8 @@ export async function updateStudent(
         email: data.email,
         guardianName: data.guardianName,
         guardianPhone: data.guardianPhone,
+        address: data.address === undefined ? existing.address : data.address,
+        district: data.district === undefined ? existing.district : data.district,
         status: data.status ?? existing.status,
         updatedAt: new Date(),
       })
@@ -1214,7 +1267,7 @@ export type GetAdmissionsViewResult =
 
 export async function getAdmissionsView(
   actorContext: AuthContext,
-  filters: Pick<StudentSearchFilters, "branchId"> = {},
+  filters: Pick<StudentSearchFilters, "branchId" | "searchTerm"> = {},
   pagination: StudentSearchPagination = {},
   now: Date = new Date(),
 ): Promise<GetAdmissionsViewResult> {
@@ -1241,7 +1294,13 @@ export async function getAdmissionsView(
     };
   }
 
-  const where = and(...scope.conditions, eq(students.status, "active"));
+  const admissionsConditions = [...scope.conditions, eq(students.status, "active")];
+  const term = filters.searchTerm?.trim();
+  if (term) {
+    const pattern = `%${term}%`;
+    admissionsConditions.push(or(ilike(students.fullName, pattern), ilike(students.studentNumber, pattern))!);
+  }
+  const where = and(...admissionsConditions);
 
   // Left join + per-student ACTIVE-enrollment count, grouped, so "has an
   // active enrollment" is computable in one tenant-scoped query rather

@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
-import { listAcademyUsageOverview, USAGE_VIEW_CAPABILITY } from "@/lib/subscriptions/usage";
+import { listAcademyUsageOverviewPage, USAGE_VIEW_CAPABILITY } from "@/lib/subscriptions/usage";
 import { UsageManager } from "./usage-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
@@ -37,16 +37,15 @@ export default async function PlatformUsagePage({
     return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
-  // `listAcademyUsageOverview()` is also used internally (approve.ts,
-  // settings.ts) to compute a single academy's own usage — sliced here
-  // instead, after fetching, same "still fully server-side" reasoning as
-  // app/platform/academies/page.tsx.
+  // Perf investigation (Afoogy slow-dashboard task): previously called
+  // listAcademyUsageOverview() (every academy plus every subscription/
+  // usage row platform-wide, reduced to "latest per academy" in JS) and
+  // sliced the already-fetched array in JS. listAcademyUsageOverviewPage()
+  // paginates the driving academies query in SQL and scopes the
+  // subscription/usage lookups to just this page's academies.
   const params = await searchParams;
   const page = parsePageParam(params);
-  const allRows = await listAcademyUsageOverview();
-  const totalCount = allRows.length;
-  const offset = (page - 1) * PAGE_SIZE;
-  const rows = allRows.slice(offset, offset + PAGE_SIZE);
+  const { rows, totalCount } = await listAcademyUsageOverviewPage(page, PAGE_SIZE);
 
   return (
     <div className={PAGE_WRAP}>

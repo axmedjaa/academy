@@ -1,5 +1,14 @@
-import { ListPageSkeleton } from "@/app/academy/_shell/ui";
+import {
+  SkeletonHeader,
+  SkeletonPage,
+  SkeletonTable,
+} from "@/app/academy/_shell/skeletons";
 
 export default function ProgramsLoading() {
-  return <ListPageSkeleton columns={4} />;
+  return (
+    <SkeletonPage label="programs">
+      <SkeletonHeader title="Programs" description="Groups of related courses." actions={1} />
+      <SkeletonTable headers={["Program", "Description", "Courses", "Status"]} stackBelow={760} rows={6} actions />
+    </SkeletonPage>
+  );
 }

@@ -3,6 +3,7 @@ import { and, eq, or, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -31,6 +32,7 @@ import {
   computeFeePeriodStatus,
   generateFeePeriodsForEnrollment,
   getEnrollmentPaymentSummary,
+  getOverdueFeeSummary,
   getStudentPaymentSummaries,
   listEnrollmentsForStudent,
   listFeePeriodPaymentHistory,
@@ -40,6 +42,7 @@ import {
   setEnrollmentFeeSchedule,
   todayDateOnlyInAcademyTimezone,
 } from "./fee-periods";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -126,7 +129,7 @@ async function insertStudentDirect(academyId: string, branchId: string, creatorU
 }
 
 async function insertEnrollmentDirect(academyId: string, batchId: string, studentId: string): Promise<string> {
-  const [row] = await db.insert(batchEnrollments).values({ academyId, batchId, studentId }).returning({ id: batchEnrollments.id });
+  const [row] = await db.insert(batchEnrollments).values({ academyId, batchId, courseId: await courseOfBatch(batchId), studentId }).returning({ id: batchEnrollments.id });
   return row.id;
 }
 
@@ -140,15 +143,47 @@ interface Fixture {
   creatorUserId: string;
 }
 
+/**
+ * Perf investigation (Afoogy slow-dashboard task, Neon round-trip step):
+ * none of these inserts run inside a shared `db.transaction()` (unlike
+ * the production code in lib/academies/fee-periods.ts), so independent
+ * top-level `db.insert(...)` calls each check out their own connection
+ * from the pool and genuinely run concurrently against Neon — real
+ * wall-clock parallelism, not just batched awaits. Phased strictly by
+ * FK dependency (never by convenience):
+ *  1. createUser/createPlan — provably independent of each other.
+ *  2. createAcademy — needs creatorUserId only.
+ *  3. academySubscriptions insert (needs academyId+planId),
+ *     insertBranchDirect (needs academyId), insertProgramAndCourse
+ *     (needs academyId) — none of these three depends on either of the
+ *     other two's result.
+ *  4. insertStudentDirect (needs academyId+branchId+creatorUserId) and
+ *     insertBatchDirect (needs academyId+branchId+courseId) — neither
+ *     needs the other's result (student doesn't need courseId/batchId;
+ *     batch doesn't need studentId).
+ *  5. insertEnrollmentDirect — needs both batchId and studentId, so it
+ *     alone must wait for all of phase 4.
+ * Every dependency edge in the original sequential version is preserved
+ * exactly; only provably-independent steps moved into the same phase.
+ */
 async function setupFixture(): Promise<Fixture> {
-  const creatorUserId = await createUser();
+  const [creatorUserId, planId] = await Promise.all([createUser(), createPlan()]);
   const academyId = await createAcademy(creatorUserId);
-  const planId = await createPlan();
-  await db.insert(academySubscriptions).values({ academyId, planId, status: "active", endsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), createdBy: creatorUserId });
-  const branchId = await insertBranchDirect(academyId);
-  const courseId = await insertProgramAndCourse(academyId);
-  const batchId = await insertBatchDirect(academyId, branchId, courseId);
-  const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+  const [, branchId, courseId] = await Promise.all([
+    db.insert(academySubscriptions).values({
+      academyId,
+      planId,
+      status: "active",
+      endsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      createdBy: creatorUserId,
+    }),
+    insertBranchDirect(academyId),
+    insertProgramAndCourse(academyId),
+  ]);
+  const [studentId, batchId] = await Promise.all([
+    insertStudentDirect(academyId, branchId, creatorUserId),
+    insertBatchDirect(academyId, branchId, courseId),
+  ]);
   const enrollmentId = await insertEnrollmentDirect(academyId, batchId, studentId);
   return { academyId, branchId, courseId, batchId, studentId, enrollmentId, creatorUserId };
 }
@@ -175,6 +210,7 @@ afterAll(async () => {
     await db.delete(feePeriods).where(eq(feePeriods.academyId, academyId));
     await db.delete(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.academyId, academyId));
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
@@ -3120,5 +3156,45 @@ describe("fee-period visibility for the normal display view (student-detail.tsx 
     const currentPeriod = result.periods.find((period) => period.periodStart === today);
     expect(currentPeriod).toBeDefined();
     expect(isVisibleForDisplay(currentPeriod!.periodStart, today)).toBe(true);
+  });
+});
+
+describe("getOverdueFeeSummary (dashboard Requires attention)", () => {
+  it("sums only the unpaid remainder of past-due periods, per currency, scoped to one academy and optionally one branch", async () => {
+    const fixture = await setupFixture();
+    const other = await setupFixture();
+    const { context: managerContext } = await addActingUser(fixture.academyId, "manager");
+    const { context: otherManager } = await addActingUser(other.academyId, "manager");
+
+    // Anchored in the past: both $50 installments are already overdue.
+    await setEnrollmentFeeSchedule(managerContext, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 10000, anchorDate: "2020-01-01" });
+    await setEnrollmentFeeSchedule(otherManager, { enrollmentId: other.enrollmentId, intervalMonths: 1, amountCents: 7000, anchorDate: "2020-01-01" });
+    const listed = await listFeePeriodsForEnrollment(managerContext, fixture.enrollmentId);
+    if (!listed.ok) throw new Error("failed to list periods");
+    expect(listed.periods.every((period) => period.status === "overdue")).toBe(true);
+
+    await recordFeePeriodPayment(managerContext, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      allocations: [{ feePeriodId: listed.periods[0].id, amountCents: 2000 }],
+      method: "cash",
+      receivedAt: new Date(),
+    });
+
+    const summary = await getOverdueFeeSummary(fixture.academyId);
+    expect(summary.studentCount).toBe(1);
+    expect(summary.periodCount).toBe(2);
+    expect(summary.totalsByCurrency).toHaveLength(1);
+    expect(summary.totalsByCurrency[0].amountCents).toBe(10000 - 2000);
+
+    const sameBranch = await getOverdueFeeSummary(fixture.academyId, fixture.branchId);
+    expect(sameBranch.totalsByCurrency[0]?.amountCents).toBe(8000);
+    // Another academy's branch id never reaches this academy's rows.
+    const foreignBranch = await getOverdueFeeSummary(fixture.academyId, other.branchId);
+    expect(foreignBranch).toEqual({ studentCount: 0, periodCount: 0, totalsByCurrency: [], byStudent: {} });
+    // Per-student breakdown and an explicit student restriction.
+    expect(summary.byStudent[fixture.studentId]).toEqual([{ currency: summary.totalsByCurrency[0].currency, amountCents: 8000 }]);
+    const restricted = await getOverdueFeeSummary(fixture.academyId, null, [other.studentId]);
+    expect(restricted.studentCount).toBe(0);
   });
 });

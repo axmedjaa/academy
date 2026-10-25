@@ -290,11 +290,48 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
       <path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19v-3" />
     </Base>
   ),
+  cash: (props) => (
+    <Base {...props}>
+      <rect x="2.5" y="6" width="19" height="12" rx="2" />
+      <circle cx="12" cy="12" r="2.5" />
+      <path d="M6 9.5v5M18 9.5v5" />
+    </Base>
+  ),
+  phone: (props) => (
+    <Base {...props}>
+      <rect x="6.5" y="2.5" width="11" height="19" rx="2" />
+      <path d="M11 18h2" />
+    </Base>
+  ),
+  bank: (props) => (
+    <Base {...props}>
+      <path d="M3 9.5 12 4l9 5.5M4.5 20h15M6 10.5v7M10 10.5v7M14 10.5v7M18 10.5v7" />
+    </Base>
+  ),
   idcard: (props) => (
     <Base {...props}>
       <rect x="2.5" y="5" width="19" height="14" rx="2" />
       <circle cx="8.5" cy="11" r="2" />
       <path d="M5.5 16c.5-1.5 1.6-2.3 3-2.3s2.5.8 3 2.3M14 10h4.5M14 13.5h3" />
+    </Base>
+  ),
+  send: (props) => (
+    <Base {...props}>
+      <path d="M21 3 10.5 13.5" />
+      <path d="M21 3 14.5 21l-4-7.5L3 9.5 21 3Z" />
+    </Base>
+  ),
+  upload: (props) => (
+    <Base {...props}>
+      <path d="M12 15V4" />
+      <path d="m7.5 8.5 4.5-4.5 4.5 4.5" />
+      <path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" />
+    </Base>
+  ),
+  lock: (props) => (
+    <Base {...props}>
+      <rect x="5" y="10.5" width="14" height="10" rx="2" />
+      <path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3" />
     </Base>
   ),
   info: (props) => (
@@ -314,6 +351,11 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
   circle: (props) => (
     <Base {...props}>
       <circle cx="12" cy="12" r="5" fill="currentColor" stroke="none" />
+    </Base>
+  ),
+  chat: (props) => (
+    <Base {...props}>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8A2.5 2.5 0 0 1 17.5 16H10l-4.5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5v-8Z" />
     </Base>
   ),
 };

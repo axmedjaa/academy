@@ -1,136 +1,163 @@
-"use client";
-
-import { color, radius } from "@/lib/ui/theme";
-import { PrimaryButton } from "@/app/academy/_shell/ui";
 import type { IdCardRecord } from "@/lib/academies/id-cards";
+import { formatDate } from "@/lib/ui/date";
 
-interface Props {
-  card: IdCardRecord;
+export interface IdCardFaceProps {
+  card: IdCardRecord | null;
   studentName: string;
-  academyName: string;
+  studentNumber: string;
+  /** Batch names the student is actively enrolled in ("Not enrolled" when none). */
+  batch: string;
+  branch: string;
+  academy: { name: string; address: string | null; phone: string | null; logoUrl: string | null };
+  /** The student's current profile photo (signed URL, display only). */
+  photoUrl: string | null;
+  /** Server-rendered QR image (data URL) of the printed card identifier. */
+  qrDataUrl: string | null;
 }
 
-/**
- * DESIGN.md §9.7 `/academy/id-cards`: "Visual card layout matching real
- * ID-card proportions (photo, name, ID, branding, issue/expiry);
- * Generate/Print/Reprint actions; reprint-count/history note." This is the
- * card itself — a fixed-aspect-ratio (CR80, ~1.586:1, the standard
- * physical ID-card proportion) panel with the academy name as branding,
- * the student's photo (or an initials placeholder — no file-storage system
- * exists in this codebase, confirmed by grep before this file was added, so
- * `photoFileRef` is treated as a plain externally-hosted image URL rather
- * than an upload), name, card number, and issue date.
- *
- * No expiry date is rendered: `lib/academies/id-cards.ts`'s `IdCardRecord`
- * (and the underlying `student_id_cards` table) has no expiry column at
- * all — DESIGN.md's "issue/expiry" wording is not backed by the existing
- * schema, and per this task's explicit instruction not to add a migration
- * without proving the gap, this is a documented, deliberate omission rather
- * than an invented value.
- *
- * Printing uses the browser's native `window.print()` plus a scoped
- * `@media print` rule (below) that hides everything except the card itself
- * — no PDF library, per this task's explicit constraint.
- */
-export function IdCardVisual({ card, studentName, academyName }: Props) {
-  const initials = studentName
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
-    .join("");
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? (parts[1]?.[0] ?? "") : "")).toUpperCase() || "?";
+}
 
+/** Decorative bar pattern derived from the student number, as the design
+ * draws it. It is not a scannable barcode, so it is hidden from assistive
+ * technology. */
+function bars(seed: string) {
+  const out: { w: number; on: boolean }[] = [];
+  seed.split("").forEach((ch, i) => {
+    const v = (ch.charCodeAt(0) * 37 + i * 11) % 32;
+    for (let k = 0; k < 5; k++) {
+      const wide = (v >> k) & 1;
+      out.push({ w: wide ? 2.3 : 1.1, on: true });
+      out.push({ w: wide ? 1.1 : 1.9, on: false });
+    }
+  });
+  return out;
+}
+
+function LogoTile({ academy, size }: { academy: IdCardFaceProps["academy"]; size: number }) {
+  return academy.logoUrl ? (
+    // eslint-disable-next-line @next/next/no-img-element -- signed storage URL; this codebase renders images with plain <img>
+    <img src={academy.logoUrl} alt="" style={{ width: size, height: size }} className="shrink-0 rounded-md bg-white object-contain p-0.5" />
+  ) : (
+    <span
+      aria-hidden="true"
+      style={{ width: size, height: size, fontSize: size * 0.36 }}
+      className="flex shrink-0 items-center justify-center rounded-md bg-white font-bold text-brand"
+    >
+      {initialsOf(academy.name)}
+    </span>
+  );
+}
+
+const CARD = "relative aspect-[1.586/1] w-full max-w-[340px] overflow-hidden rounded-xl bg-white shadow-[0_4px_16px_rgba(17,24,39,0.16)] ring-1 ring-border";
+const LABEL = "block text-[6.5px] font-semibold uppercase tracking-[0.08em] text-muted";
+
+/** ID card front (design A18 `idcard`): academy band, photo, name, student
+ * number, batch, branch, bar pattern and issue date. */
+export function IdCardFront({ card, studentName, studentNumber, batch, branch, academy, photoUrl }: IdCardFaceProps) {
   return (
-    <div>
-      <div
-        id="id-card-printable"
-        style={{
-          width: "340px",
-          maxWidth: "100%",
-          aspectRatio: "1.586 / 1",
-          borderRadius: radius.card,
-          border: `1px solid ${color.border}`,
-          background: `linear-gradient(135deg, ${color.primaryNavy} 0%, ${color.primaryBlue} 100%)`,
-          color: "#fff",
-          padding: "1rem",
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "space-between",
-          boxShadow: "0 4px 16px rgba(15, 23, 42, 0.18)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span style={{ fontWeight: 700, fontSize: "0.85rem", letterSpacing: "0.02em" }}>{academyName}</span>
-          <span style={{ fontSize: "0.65rem", opacity: 0.85, textTransform: "uppercase" }}>Student ID</span>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-          {card.photoFileRef ? (
-            // eslint-disable-next-line @next/next/no-img-element -- externally-hosted URL, not a Next-optimizable local asset.
-            <img
-              src={card.photoFileRef}
-              alt={`${studentName}'s photo`}
-              style={{
-                width: 56,
-                height: 56,
-                borderRadius: "50%",
-                objectFit: "cover",
-                border: "2px solid rgba(255,255,255,0.7)",
-              }}
-            />
-          ) : (
-            <div
-              aria-hidden="true"
-              style={{
-                width: 56,
-                height: 56,
-                borderRadius: "50%",
-                backgroundColor: "rgba(255,255,255,0.2)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontWeight: 700,
-                fontSize: "1.1rem",
-                border: "2px solid rgba(255,255,255,0.7)",
-              }}
-            >
-              {initials || "?"}
-            </div>
-          )}
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: "1.05rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {studentName}
-            </div>
-            <div style={{ fontSize: "0.75rem", opacity: 0.85 }}>Status: {card.status}</div>
-          </div>
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", opacity: 0.9 }}>
-          <span style={{ fontFamily: "monospace" }}>{card.cardNumber}</span>
-          <span>Issued {new Date(card.issuedAt).toLocaleDateString()}</span>
+    <div className={CARD} role="img" aria-label={`ID card front for ${studentName}, ${studentNumber}`}>
+      <div className="flex h-[22%] items-center gap-2.5 bg-brand px-3.5">
+        <LogoTile academy={academy} size={28} />
+        <div className="min-w-0 leading-tight text-white">
+          <div className="truncate text-[11.5px] font-bold">{academy.name}</div>
+          <div className="text-[6.5px] font-semibold uppercase tracking-[0.14em] opacity-90">Student identity card</div>
         </div>
       </div>
-
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }} className="id-card-actions">
-        <PrimaryButton type="button" onClick={() => window.print()}>
-          Print
-        </PrimaryButton>
-        {card.reprintCount > 0 && (
-          <span style={{ fontSize: "0.75rem", color: color.textMuted }}>Reprinted {card.reprintCount}×</span>
+      <div className="h-[3px] bg-[#F5B638]" />
+      <span aria-hidden="true" className="absolute -bottom-[18%] right-[-6%] h-[62%] w-[42%] rounded-full bg-brand-tint" />
+      <span aria-hidden="true" className="absolute -bottom-[28%] right-[10%] h-[52%] w-[34%] rounded-full bg-[rgba(245,182,56,0.28)]" />
+      <div className="relative flex gap-3 px-3.5 pt-2.5">
+        {photoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- signed storage URL
+          <img src={photoUrl} alt="" className="h-[78px] w-[64px] shrink-0 rounded-md border-[1.5px] border-brand object-cover" />
+        ) : (
+          <span
+            aria-hidden="true"
+            className="flex h-[78px] w-[64px] shrink-0 items-center justify-center rounded-md border-[1.5px] border-brand bg-brand-tint text-[22px] font-bold text-brand"
+          >
+            {initialsOf(studentName)}
+          </span>
         )}
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="truncate text-[12.5px] font-bold text-ink">{studentName}</div>
+          <span className={`${LABEL} mt-1`}>Student no.</span>
+          <span className="block font-mono text-[10px] font-semibold text-brand">{studentNumber}</span>
+          <span className={`${LABEL} mt-1`}>Batch</span>
+          <span className="block truncate text-[9px] font-medium text-ink">{batch}</span>
+          <span className={`${LABEL} mt-1`}>Branch</span>
+          <span className="block truncate text-[9px] font-medium text-ink">{branch}</span>
+        </div>
       </div>
+      <div className="absolute inset-x-3.5 bottom-2 flex items-end justify-between gap-3">
+        <span aria-hidden="true" className="flex h-[18px] min-w-0 overflow-hidden">
+          {bars(studentNumber).map((bar, i) => (
+            <span key={i} style={{ width: bar.w }} className={`h-full shrink-0 ${bar.on ? "bg-ink" : ""}`} />
+          ))}
+        </span>
+        <span className="shrink-0 text-right leading-tight">
+          <span className="block text-[6.5px] text-muted">Issued</span>
+          <span className="block text-[8px] font-semibold text-ink">{card ? formatDate(card.issuedAt) : "Not issued yet"}</span>
+        </span>
+      </div>
+    </div>
+  );
+}
 
+/** ID card back: academy contact details, the return notice, a signature
+ * line and the card number with its QR. */
+export function IdCardBack({ card, academy, qrDataUrl }: IdCardFaceProps) {
+  return (
+    <div className={`${CARD} border-b-[3px] border-[#F5B638]`} role="img" aria-label={`ID card back${card ? `, card ${card.cardNumber}` : ""}`}>
+      <div className="mt-[4.5%] h-[11%] bg-ink" />
+      <div className="flex items-start gap-2.5 px-3.5 pt-2.5">
+        <span className="rounded-md ring-1 ring-border">
+          <LogoTile academy={academy} size={30} />
+        </span>
+        <div className="min-w-0 leading-tight">
+          <div className="truncate text-[10.5px] font-bold text-brand">{academy.name}</div>
+          {academy.address && <div className="truncate text-[7px] text-muted">{academy.address}</div>}
+          {academy.phone && <div className="text-[7px] text-muted">{academy.phone}</div>}
+        </div>
+      </div>
+      <p className="px-3.5 pt-2 text-[6.5px] leading-snug text-[#374151]">
+        This card is the property of the academy and must be carried on campus. It is not transferable. If found, please return it to the
+        academy office.
+      </p>
+      <div className="absolute inset-x-3.5 bottom-2 flex items-end justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="border-t border-ink" />
+          <div className="mt-0.5 text-[5.5px] font-semibold uppercase tracking-[0.08em] text-muted">Authorized signature</div>
+        </div>
+        <div className="flex shrink-0 flex-col items-center gap-0.5">
+          {qrDataUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- server-generated data URL
+            <img src={qrDataUrl} alt="" className="h-[46px] w-[46px]" />
+          ) : (
+            <span className="h-[46px] w-[46px] rounded bg-app" />
+          )}
+          <span className="font-mono text-[6.5px] font-semibold text-ink">{card ? card.cardNumber : "Not issued"}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Front and back side by side (stacked on phones). `#id-card-printable`
+ * is the only thing the print stylesheet keeps. */
+export function IdCardPreview(props: IdCardFaceProps) {
+  return (
+    <div id="id-card-printable" className="mb-6 grid gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),340px))]">
+      <IdCardFront {...props} />
+      <IdCardBack {...props} />
       <style>{`
         @media print {
           body * { visibility: hidden; }
           #id-card-printable, #id-card-printable * { visibility: visible; }
-          #id-card-printable {
-            position: fixed;
-            top: 2rem;
-            left: 50%;
-            transform: translateX(-50%);
-            box-shadow: none !important;
-          }
+          #id-card-printable { position: fixed; top: 1.5rem; left: 1.5rem; right: 1.5rem; }
+          #id-card-printable [role=img] { box-shadow: none !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
       `}</style>
     </div>

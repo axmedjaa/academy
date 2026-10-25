@@ -31,6 +31,7 @@ function parseCreateExamFormData(formData: FormData): CreateExamInput {
   const examDate = String(formData.get("examDate") ?? "");
   return {
     batchId: String(formData.get("batchId") ?? ""),
+    courseId: String(formData.get("courseId") ?? ""),
     name: String(formData.get("name") ?? ""),
     maxMarks: String(formData.get("maxMarks") ?? ""),
     examDate: examDate || null,

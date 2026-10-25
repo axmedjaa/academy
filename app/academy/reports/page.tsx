@@ -1,93 +1,59 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
-import { getStudentReports, type StudentReportsData } from "@/lib/academies/student-reports";
-import { getAcademicReports, type AcademicReportsData } from "@/lib/academies/academic-reports";
-import { getFinanceReports } from "@/lib/academies/finance-reports";
-import { FinanceReportsView } from "@/app/academy/finance-reports/finance-reports-view";
-import { ReportExportButton } from "./report-export-button";
-import { BarChart, TrendAreaChart } from "@/app/academy/_shell/charts";
-import { color } from "@/lib/ui/theme";
+import type { AuthContext } from "@/lib/auth/auth-context";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { getStudentReports } from "@/lib/academies/student-reports";
+import { getAcademicReports } from "@/lib/academies/academic-reports";
+import { getFinanceReports, type AmountByCurrency } from "@/lib/academies/finance-reports";
+import { getFeeCollectionSummary } from "@/lib/academies/fee-period-overview";
+import { listBranches } from "@/lib/academies/branches";
+import { listBatches } from "@/lib/academies/batches";
+import { listCourses } from "@/lib/academies/courses";
 import {
-  Button,
-  EmptyState,
-  ErrorMessage,
-  Field,
-  PAGE_WRAP,
-  PageHeader,
-  Section,
-  StatCard,
-  TableWrap,
-  inputClass,
-  td,
-  th,
-  trHover,
-} from "@/app/academy/_shell/ui";
-import { Icon } from "@/app/academy/_shell/icons";
+  ACADEMY_EXAMS_ACTION,
+  ACADEMY_EXPENSES_ACTION,
+  ACADEMY_INCOME_ACTION,
+  ACADEMY_RESULTS_ACTION,
+  ACADEMY_STUDENTS_ACTION,
+  ACADEMY_STUDENT_PAYMENTS_ACTION,
+  getAcademyPermissionLevel,
+} from "@/lib/auth/academy-permissions";
+import { formatMoney } from "@/lib/ui/money";
+import { PAGE_WRAP, PageHeader, PageMessage, trHover } from "@/app/academy/_shell/ui";
+import { BarList, BlockTitle, DataTable, NoteBlock, StackBar, StatRow, TabLinks, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { ClearFilters, DateParamField, FilterBar, FilterDropdown } from "@/app/academy/_shell/filter-controls";
+import { ReportExportButton } from "./report-export-button";
 
-/** `enrollmentTrend`'s period is stored as a plain "YYYY-MM" string (see
- * student-reports.ts) — fine for a table cell, but a raw "2025-03" reads
- * worse as a chart axis label than a short month name. Display-only; the
- * table above keeps the raw string unchanged. */
-function formatMonthPeriod(period: string): string {
-  const [year, month] = period.split("-");
-  const parsed = new Date(Number(year), Number(month) - 1, 1);
-  if (Number.isNaN(parsed.getTime())) return period;
-  return parsed.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+type ReportTab = "student" | "academic" | "finance";
+const TAB_LABEL: Record<ReportTab, string> = { student: "Student", academic: "Academic", finance: "Finance" };
+
+/** "2026-03" -> "Mar 2026" for a chart label. */
+function monthLabel(period: string): string {
+  const [year, month] = period.split("-").map(Number);
+  const date = new Date(year, (month || 1) - 1, 1);
+  return Number.isNaN(date.getTime()) ? period : date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
 }
 
-/**
- * PLAN.md Phase 5, Item 61a — `/academy/reports` hub (DESIGN.md §9.9: "hub
- * with Student/Academic/Finance sub-views, each: filter bar + table + a
- * simple chart only where the data is genuinely aggregate/trend... chart
- * never replaces the table. Export button (§11.6 scope)").
- *
- * ---------------------------------------------------------------------
- * Export button (PLAN.md Item 60)
- * ---------------------------------------------------------------------
- * Each tab renders a real Export CSV button, wired through
- * `lib/export/export-data-actions.ts` -> `lib/export/export-data.ts`'s
- * `exportData`, reusing this SAME tab's already-fetched filters (never a
- * second, separately-filtered query) — see `ReportExportButton`
- * (./report-export-button.tsx) for the Student/Academic tabs. The Finance
- * tab gets its export button for free: it renders `FinanceReportsView`
- * verbatim, and that component now has one built in.
- *
+/** 78 -> "78", 77.5 -> "77.5" (one decimal at most). */
+const formatMark = (value: number) => String(Math.round(value * 10) / 10);
 
- * ---------------------------------------------------------------------
- * Finance tab — the canonical finance-reports destination
- * ---------------------------------------------------------------------
- * This tab imports and calls `getFinanceReports` directly (Item 55's own
- * aggregation, lib/academies/finance-reports.ts — untouched) and reuses
- * that item's own `FinanceReportsView` client component verbatim.
- * Navigation-audit Phase 1 made this (`?tab=finance`) the single canonical
- * place finance reports live — `/academy/finance-reports` is now a
- * compatibility redirect here (app/academy/finance-reports/page.tsx),
- * kept only so old links/bookmarks don't 404. No aggregation/query logic
- * or UI changed as part of that — only the second route pointing at it.
- *
- * ---------------------------------------------------------------------
- * Tabs, filters, pagination: plain GET-query-param navigation
- * ---------------------------------------------------------------------
- * Same convention as app/academy/audit-logs/page.tsx and
- * app/platform/audit-logs/page.tsx: a `<form method="get">` re-navigates
- * the whole page with new query params, server-rendered from scratch each
- * time — no client component needed for the Student/Academic tabs' own
- * filter bars. The Finance tab is the one exception, since it reuses
- * `FinanceReportsView` verbatim and that component already manages its own
- * client-side filter state via `getFinanceReportsAction` — mixing filter
- * mechanisms across tabs is an accepted, documented tradeoff of the "reuse,
- * don't duplicate" instruction for that tab specifically.
- *
- * ---------------------------------------------------------------------
- * Charts: shared primitives, no new dependency
- * ---------------------------------------------------------------------
- * `TrendAreaChart`/`BarChart` (app/academy/_shell/charts.tsx) are plain
- * inline-SVG, server-rendered like the rest of this page — no charting
- * library (none exists in package.json). Enrollment trend (a genuine time
- * series) uses the smooth gradient-area line chart; pass rate by batch
- * (categorical) uses the bar chart. Both sit next to (never instead of) the
- * full data table for their section, per DESIGN.md's "chart never replaces
- * the table" rule.
+/** Per-currency totals as one line ("$120.00 + SOS 5,000"); never summed across currencies. */
+const moneyLine = (totals: AmountByCurrency[]) =>
+  totals.length ? totals.map((t) => formatMoney(t.amountCents, t.currency)).join(" + ") : formatMoney(0, "USD");
+const STUDENT_PAYMENT_METHOD_ORDER = ["cash", "mobile_money", "bank_transfer"] as const;
+const METHOD_LABEL: Record<(typeof STUDENT_PAYMENT_METHOD_ORDER)[number], string> = {
+  cash: "Cash",
+  mobile_money: "Mobile money",
+  bank_transfer: "Bank transfer",
+};
+const centsOf = (totals: AmountByCurrency[], currency: string) => totals.find((t) => t.currency === currency)?.amountCents ?? 0;
+
+/**
+ * Reports (design A15): Student, Academic and Finance summaries as pill
+ * tabs (`?tab=`), each with summary cards, charts, a detail table and URL
+ * filters, and Export CSV in the header (the audited export for the open
+ * tab, with the same filters). A tab appears only for roles that can read
+ * that report — the same rules the report functions enforce themselves.
  */
 export default async function AcademyReportsPage({
   searchParams,
@@ -95,379 +61,417 @@ export default async function AcademyReportsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const context = await getAuthContext();
+  if (!context) redirect("/login");
 
-  if (!context) {
-    redirect("/login");
-  }
+  const access = await checkAcademyAccessForContext(context);
+  if (access.level === "blocked") return <PageMessage title="Access unavailable" message={access.message} />;
+  const role = access.membershipRole;
+  const level = (action: string) => getAcademyPermissionLevel(role, action);
+
+  const tabs: ReportTab[] = [];
+  if (level(ACADEMY_STUDENTS_ACTION) !== "none") tabs.push("student");
+  const exams = level(ACADEMY_EXAMS_ACTION);
+  if (exams === "full" || exams === "manage" || exams === "enter_marks" || level(ACADEMY_RESULTS_ACTION) === "approve") tabs.push("academic");
+  if ([ACADEMY_STUDENT_PAYMENTS_ACTION, ACADEMY_INCOME_ACTION, ACADEMY_EXPENSES_ACTION].some((a) => level(a) !== "none")) tabs.push("finance");
+  if (tabs.length === 0) return <PageMessage title="Access denied" message="You don't have permission to view reports." />;
 
   const params = await searchParams;
-  const get = (key: string): string => {
+  const get = (key: string) => {
     const value = params[key];
-    return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
+    return (Array.isArray(value) ? value[0] : value)?.trim() ?? "";
   };
+  const tab: ReportTab = tabs.includes(get("tab") as ReportTab) ? (get("tab") as ReportTab) : tabs[0];
+  const dateFrom = get("dateFrom") || undefined;
+  const dateTo = get("dateTo") || undefined;
 
-  const tabParam = get("tab");
-  const tab: "student" | "academic" | "finance" =
-    tabParam === "academic" || tabParam === "finance" ? tabParam : "student";
-
-  const dateFrom = get("dateFrom");
-  const dateTo = get("dateTo");
-  const branchId = get("branchId");
-  const batchId = get("batchId");
-  const courseId = get("courseId");
+  const filters =
+    tab === "student"
+      ? { dateFrom, dateTo, branchId: get("branchId") || undefined }
+      : tab === "academic"
+        ? { dateFrom, dateTo, batchId: get("batchId") || undefined, courseId: get("courseId") || undefined }
+        : { dateFrom, dateTo, method: get("method") || undefined };
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader title="Reports" description="Student, academic, and finance reporting for this academy." />
-
-      <nav className="mb-5 inline-flex gap-1 rounded-control border border-border bg-surface p-1">
-        <TabLink label="Student" href="?tab=student" active={tab === "student"} />
-        <TabLink label="Academic" href="?tab=academic" active={tab === "academic"} />
-        <TabLink label="Finance" href="?tab=finance" active={tab === "finance"} />
-      </nav>
-
-      {tab === "student" && (
-        <StudentTab
-          context={context}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          branchId={branchId}
-        />
-      )}
+      <PageHeader
+        title="Reports"
+        description="Summaries built from the records in this academy. Every export is logged."
+        actions={<ReportExportButton kind={tab} filters={filters} />}
+      />
+      <TabLinks
+        label="Report sections"
+        current={tab}
+        tabs={tabs.map((key) => ({ key, label: TAB_LABEL[key], href: `/academy/reports?tab=${key}` }))}
+      />
+      {tab === "student" && <StudentReport context={context} filters={filters as { dateFrom?: string; dateTo?: string; branchId?: string }} />}
       {tab === "academic" && (
-        <AcademicTab
-          context={context}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-          batchId={batchId}
-          courseId={courseId}
-        />
+        <AcademicReport context={context} filters={filters as { dateFrom?: string; dateTo?: string; batchId?: string; courseId?: string }} />
       )}
-      {tab === "finance" && <FinanceTab context={context} />}
+      {tab === "finance" && <FinanceReport context={context} filters={filters as { dateFrom?: string; dateTo?: string; method?: string }} />}
     </div>
   );
 }
 
-function TabLink({ label, href, active }: { label: string; href: string; active: boolean }) {
+function DateFilters({ extra, params }: { extra?: React.ReactNode; params: string[] }) {
   return (
-    <a
-      href={href}
-      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-[color,background-color,transform] duration-150 ease-out motion-safe:active:scale-[0.98] ${
-        active ? "bg-brand text-white" : "text-muted hover:bg-app hover:text-ink"
-      }`}
-    >
-      {label}
-    </a>
+    <FilterBar>
+      {extra}
+      <DateParamField param="dateFrom" label="From" />
+      <DateParamField param="dateTo" label="To" />
+      <ClearFilters params={["dateFrom", "dateTo", ...params]} />
+    </FilterBar>
   );
 }
 
-// ---------------------------------------------------------------------
-// Student tab
-// ---------------------------------------------------------------------
+/* ------------------------------------------------------------------ */
 
-async function StudentTab({
-  context,
-  dateFrom,
-  dateTo,
-  branchId,
-}: {
-  context: NonNullable<Awaited<ReturnType<typeof getAuthContext>>>;
-  dateFrom: string;
-  dateTo: string;
-  branchId: string;
-}) {
-  const result = await getStudentReports(context, {
-    dateFrom: dateFrom || undefined,
-    dateTo: dateTo || undefined,
-    branchId: branchId || undefined,
-  });
-
-  if (!result.ok) {
-    return <ErrorMessage message={result.error.message} />;
-  }
-
-  const report: StudentReportsData = result.report;
+async function StudentReport({ context, filters }: { context: AuthContext; filters: { dateFrom?: string; dateTo?: string; branchId?: string } }) {
+  const [result, branchesResult] = await Promise.all([getStudentReports(context, filters), listBranches(context)]);
+  if (!result.ok) return <PageMessage title="Report unavailable" message={result.error.message} />;
+  const report = result.report;
+  const branches = branchesResult.ok ? branchesResult.branches : [];
+  const statusCount = (status: string) => report.statusBreakdown.find((row) => row.status === status)?.count ?? 0;
 
   return (
-    <div className="flex flex-col gap-6">
-      <FilterForm tab="student" dateFrom={dateFrom} dateTo={dateTo} branchId={branchId} />
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCard label="Total students (matching filters)" value={report.totalStudents} />
-        {report.statusBreakdown.map((row) => (
-          <StatCard key={row.status} label={`Status: ${row.status}`} value={row.count} />
-        ))}
-      </div>
-
-      <div>
-        <h3 className="mb-2 text-base font-semibold text-ink">Enrollment trend</h3>
-        {/* Genuinely aggregate/trend data — chart alongside the table, never instead of it. */}
-        <Section className="mb-3">
-          <TrendAreaChart
-            id="enrollment-trend"
-            points={report.enrollmentTrend.map((p) => ({
-              label: formatMonthPeriod(p.period),
-              value: p.count,
-            }))}
-            ariaLabel="New enrollments per month"
-            emptyMessage="No enrollments in the selected period."
-          />
-        </Section>
-        <SimpleTable
-          columns={["Month", "New enrollments"]}
-          rows={report.enrollmentTrend.map((p) => [p.period, String(p.count)])}
-          emptyMessage="No enrollments in the selected period."
-        />
-      </div>
-
-      <div>
-        <h3 className="mb-2 text-base font-semibold text-ink">Enrollment status breakdown</h3>
-        <SimpleTable
-          columns={["Status", "Count"]}
-          rows={report.enrollmentStatusBreakdown.map((row) => [row.status, String(row.count)])}
-          emptyMessage="No enrollments recorded."
-        />
-      </div>
-
-      <div>
-        <h3 className="mb-2 text-base font-semibold text-ink">Branch distribution</h3>
-        <SimpleTable
-          columns={["Branch", "Students"]}
-          rows={report.branchDistribution.map((row) => [row.branchName, String(row.count)])}
-          emptyMessage="No students match these filters."
-        />
-      </div>
-
-      <ReportExportButton
-        kind="student"
-        filters={{ dateFrom: dateFrom || undefined, dateTo: dateTo || undefined, branchId: branchId || undefined }}
+    <>
+      <DateFilters
+        params={["branchId"]}
+        extra={
+          branches.length > 1 ? (
+            <FilterDropdown
+              param="branchId"
+              label="Branch"
+              icon="apartment"
+              options={[{ value: "", label: "All branches" }, ...branches.map((b) => ({ value: b.id, label: b.name }))]}
+            />
+          ) : null
+        }
       />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------
-// Academic tab
-// ---------------------------------------------------------------------
-
-async function AcademicTab({
-  context,
-  dateFrom,
-  dateTo,
-  batchId,
-  courseId,
-}: {
-  context: NonNullable<Awaited<ReturnType<typeof getAuthContext>>>;
-  dateFrom: string;
-  dateTo: string;
-  batchId: string;
-  courseId: string;
-}) {
-  const result = await getAcademicReports(context, {
-    dateFrom: dateFrom || undefined,
-    dateTo: dateTo || undefined,
-    batchId: batchId || undefined,
-    courseId: courseId || undefined,
-  });
-
-  if (!result.ok) {
-    return <ErrorMessage message={result.error.message} />;
-  }
-
-  const report: AcademicReportsData = result.report;
-
-  return (
-    <div className="flex flex-col gap-6">
-      <FilterForm tab="academic" dateFrom={dateFrom} dateTo={dateTo} batchId={batchId} courseId={courseId} />
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCard label="Results published" value={report.resultsPublishedCount} />
-      </div>
-
-      <div>
-        <h3 className="mb-2 text-base font-semibold text-ink">Pass rate by batch</h3>
-        {/* Genuinely aggregate/trend data (pass/fail rate) — chart alongside the table. */}
-        <Section className="mb-3">
-          <BarChart
-            id="pass-rate-by-batch"
-            series={[{ name: "Pass rate", color: color.primaryBlue }]}
-            groups={report.passFailByBatch.map((row) => ({
-              label: row.batchName,
-              values: [
-                {
-                  label: row.batchName,
-                  value: row.passRate === null ? 0 : Math.round(row.passRate * 100),
-                  display: row.passRate === null ? "—" : `${Math.round(row.passRate * 100)}%`,
-                },
-              ],
-            }))}
-            ariaLabel="Pass rate by batch"
-            emptyMessage="No published results in the selected batches."
-            formatAxisValue={(value) => `${value}%`}
-          />
-        </Section>
-        <SimpleTable
-          columns={["Batch", "Course", "Pass", "Fail", "Pending", "Pass rate"]}
-          rows={report.passFailByBatch.map((row) => [
-            row.batchName,
-            row.courseName,
-            String(row.passCount),
-            String(row.failCount),
-            String(row.pendingCount),
-            row.passRate === null ? "—" : `${Math.round(row.passRate * 100)}%`,
-          ])}
-          emptyMessage="No published results match these filters."
-        />
-      </div>
-
-      <div>
-        <h3 className="mb-2 text-base font-semibold text-ink">Grade distribution</h3>
-        <SimpleTable
-          columns={["Grade band", "Count"]}
-          rows={report.gradeDistribution.map((row) => [row.gradeBandLabel, String(row.count)])}
-          emptyMessage="No published, graded results match these filters."
-        />
-      </div>
-
-      <ReportExportButton
-        kind="academic"
-        filters={{
-          dateFrom: dateFrom || undefined,
-          dateTo: dateTo || undefined,
-          batchId: batchId || undefined,
-          courseId: courseId || undefined,
-        }}
+      <StatRow
+        items={[
+          { label: "Total students", value: report.totalStudents, hint: `${statusCount("active")} active, ${statusCount("archived")} archived`, icon: "group" },
+          { label: "Applied", value: report.studentStatus.applied, hint: "no active enrollment", icon: "badge" },
+          { label: "Enrolled", value: report.studentStatus.enrolled, hint: "in at least one course now", icon: "school" },
+        ]}
       />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------
-// Finance tab — reuses Item 55's getFinanceReports + FinanceReportsView
-// verbatim (see this file's top comment for the duplication-vs-redirect
-// judgment call).
-// ---------------------------------------------------------------------
-
-async function FinanceTab({
-  context,
-}: {
-  context: NonNullable<Awaited<ReturnType<typeof getAuthContext>>>;
-}) {
-  const result = await getFinanceReports(context, {});
-
-  if (!result.ok) {
-    return <ErrorMessage message={result.error.message} />;
-  }
-
-  return (
-    <div className="flex flex-col gap-4">
-      <p className="text-sm text-muted">
-        Outstanding charges, payments received, income vs. expenses. Never
-        includes platform subscription billing (§9.6).
-      </p>
-      <FinanceReportsView initialReport={result.report} />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------
-// Shared filter form (Student/Academic tabs only — Finance reuses its own
-// client-side filter bar via FinanceReportsView).
-// ---------------------------------------------------------------------
-
-function FilterForm({
-  tab,
-  dateFrom,
-  dateTo,
-  branchId,
-  batchId,
-  courseId,
-}: {
-  tab: "student" | "academic";
-  dateFrom: string;
-  dateTo: string;
-  branchId?: string;
-  batchId?: string;
-  courseId?: string;
-}) {
-  return (
-    <Section>
-      {/* Mobile-first: each field is full-width and stacks on a narrow
-       * phone (a 140-160px min-width field left a wide blank gap to its
-       * right at that size) — reverting to the original fixed widths,
-       * laid out in a row, once there's room to spare at `sm:`. */}
-      <form method="get" className="flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-        <input type="hidden" name="tab" value={tab} />
-        <Field label="From" className="w-full sm:w-auto sm:min-w-[140px]">
-          <input type="date" name="dateFrom" defaultValue={dateFrom} className={inputClass} />
-        </Field>
-        <Field label="To" className="w-full sm:w-auto sm:min-w-[140px]">
-          <input type="date" name="dateTo" defaultValue={dateTo} className={inputClass} />
-        </Field>
-        {tab === "student" && (
-          <Field label="Branch ID" className="w-full sm:w-auto sm:min-w-[160px]">
-            <input type="text" name="branchId" defaultValue={branchId} placeholder="(optional)" className={inputClass} />
-          </Field>
-        )}
-        {tab === "academic" && (
-          <>
-            <Field label="Batch ID" className="w-full sm:w-auto sm:min-w-[160px]">
-              <input type="text" name="batchId" defaultValue={batchId} placeholder="(optional)" className={inputClass} />
-            </Field>
-            <Field label="Course ID" className="w-full sm:w-auto sm:min-w-[160px]">
-              <input type="text" name="courseId" defaultValue={courseId} placeholder="(optional)" className={inputClass} />
-            </Field>
-          </>
-        )}
-        <div className="flex items-center gap-4 sm:gap-3">
-          <Button type="submit" variant="secondary" className="w-full sm:w-auto">
-            Filter
-          </Button>
-          <a href={`?tab=${tab}`} className="shrink-0 text-sm text-brand hover:underline">
-            Reset
-          </a>
-        </div>
-      </form>
-    </Section>
-  );
-}
-
-function SimpleTable({
-  columns,
-  rows,
-  emptyMessage,
-}: {
-  columns: string[];
-  rows: string[][];
-  emptyMessage: string;
-}) {
-  if (rows.length === 0) {
-    return <EmptyState message={emptyMessage} icon={<Icon name="bar_chart" />} />;
-  }
-
-  return (
-    <TableWrap>
-      <thead>
-        <tr>
-          {columns.map((col) => (
-            <th key={col} className={th}>
-              {col}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, i) => (
-          <tr key={i} className={trHover}>
-            {row.map((cell, j) => (
-              <td key={j} className={td}>
-                {cell}
-              </td>
-            ))}
+      <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <BarList
+          title="Enrollment by batch"
+          sub={`Students with an active enrollment${report.enrollmentByBatch.length > 10 ? ", top 10 batches" : ""}`}
+          rows={report.enrollmentByBatch.slice(0, 10).map((row) => ({ label: row.batchCode, value: row.activeStudents, text: String(row.activeStudents) }))}
+          empty="No batches in view."
+        />
+        <StackBar
+          title="Student status"
+          sub="All students in view"
+          segments={[
+            { label: "Enrolled", value: report.studentStatus.enrolled, text: String(report.studentStatus.enrolled) },
+            { label: "Applied", value: report.studentStatus.applied, text: String(report.studentStatus.applied) },
+            { label: "Archived", value: report.studentStatus.archived, text: String(report.studentStatus.archived) },
+          ]}
+          empty="No students match these filters."
+        />
+      </div>
+      <BlockTitle>Detail by batch</BlockTitle>
+      <DataTable stackBelow={600}>
+        <thead>
+          <tr>
+            <th className={rtTh}>Batch</th>
+            <th className={rtTh}>Branch</th>
+            <th className={`${rtTh} text-right`}>Enrolled</th>
           </tr>
-        ))}
-      </tbody>
-    </TableWrap>
+        </thead>
+        <tbody>
+          {report.enrollmentByBatch.length === 0 ? (
+            <tr>
+              <td colSpan={3} className={`${rtTd} text-center text-muted`}>
+                No batches in view.
+              </td>
+            </tr>
+          ) : (
+            report.enrollmentByBatch.map((row) => (
+              <tr key={row.batchId} className={trHover}>
+                <td className={`${rtTd} font-semibold`} data-label="Batch">
+                  {row.batchCode}
+                  {row.courseNames.length ? `, ${row.courseNames[0]}${row.courseNames.length > 1 ? ` +${row.courseNames.length - 1}` : ""}` : ""}
+                </td>
+                <td className={rtTd} data-label="Branch">
+                  {row.branchName}
+                </td>
+                <td className={`${rtTd} text-right tabular-nums`} data-label="Enrolled">
+                  {row.activeStudents}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </DataTable>
+      <NoteBlock>Dates filter by registration date. Enrolled means at least one active enrollment; applied means active with none yet. Counts include only students you can see.</NoteBlock>
+    </>
   );
 }
 
+/* ------------------------------------------------------------------ */
+
+async function AcademicReport({
+  context,
+  filters,
+}: {
+  context: AuthContext;
+  filters: { dateFrom?: string; dateTo?: string; batchId?: string; courseId?: string };
+}) {
+  const [result, batchesResult, coursesResult] = await Promise.all([
+    getAcademicReports(context, filters),
+    listBatches(context),
+    listCourses(context),
+  ]);
+  if (!result.ok) return <PageMessage title="Report unavailable" message={result.error.message} />;
+  const report = result.report;
+
+  return (
+    <>
+      <DateFilters
+        params={["batchId", "courseId"]}
+        extra={
+          <>
+            <FilterDropdown
+              param="batchId"
+              label="Batch"
+              icon="layers"
+              options={[
+                { value: "", label: "All batches" },
+                ...(batchesResult.ok ? batchesResult.batches : []).map((b) => ({ value: b.id, label: `${b.code} · ${b.name}` })),
+              ]}
+            />
+            <FilterDropdown
+              param="courseId"
+              label="Course"
+              icon="menu_book"
+              options={[{ value: "", label: "All courses" }, ...(coursesResult.ok ? coursesResult.courses : []).map((c) => ({ value: c.id, label: c.name }))]}
+            />
+          </>
+        }
+      />
+      <StatRow
+        items={[
+          { label: "Results entered", value: report.resultsEnteredCount, hint: "any status", icon: "fact_check" },
+          { label: "Published", value: report.resultsPublishedCount, icon: "fact_check" },
+          {
+            label: "Passed",
+            value: report.resultsPassedCount,
+            hint: report.resultsPublishedCount
+              ? `${Math.round((report.resultsPassedCount / report.resultsPublishedCount) * 100)}% of published`
+              : "none published",
+            icon: "workspace_premium",
+          },
+        ]}
+      />
+      <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <BarList
+          title="Grade distribution"
+          sub="Published results by grade"
+          rows={report.gradeDistribution.map((row) => ({ label: row.gradeBandLabel, value: row.count, text: String(row.count), muted: row.failing }))}
+          empty="No published, graded results match these filters."
+        />
+        <BarList
+          title="Average mark by exam"
+          sub="Published results only, out of the maximum"
+          rows={report.byExam.map((row) => ({
+            label: `${row.examName}, ${row.batchCode}`,
+            value: row.averageMarks === null || row.maxMarks <= 0 ? 0 : (row.averageMarks / row.maxMarks) * 100,
+            text: row.averageMarks === null ? "No published results" : `${formatMark(row.averageMarks)} / ${formatMark(row.maxMarks)}`,
+          }))}
+          empty="No exams match these filters."
+        />
+      </div>
+      <BlockTitle>Detail by exam</BlockTitle>
+      <DataTable stackBelow={760}>
+        <thead>
+          <tr>
+            <th className={rtTh}>Exam</th>
+            <th className={`${rtTh} text-right`}>Results</th>
+            <th className={`${rtTh} text-right`}>Published</th>
+            <th className={`${rtTh} text-right`}>Average</th>
+            <th className={`${rtTh} text-right`}>Passed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {report.byExam.length === 0 ? (
+            <tr>
+              <td colSpan={5} className={`${rtTd} text-center text-muted`}>
+                No exams match these filters.
+              </td>
+            </tr>
+          ) : (
+            report.byExam.map((row) => (
+              <tr key={row.examId} className={trHover}>
+                <td className={rtTd} data-label="Exam">
+                  <span className="block font-semibold">
+                    {row.examName}, {row.batchCode}
+                  </span>
+                  <span className="block text-xs text-muted">{row.courseName}</span>
+                </td>
+                <td className={`${rtTd} text-right tabular-nums`} data-label="Results">
+                  {row.enteredCount}
+                </td>
+                <td className={`${rtTd} text-right tabular-nums`} data-label="Published">
+                  {row.publishedCount}
+                </td>
+                <td className={`${rtTd} text-right tabular-nums`} data-label="Average">
+                  {row.averageMarks === null ? "-" : formatMark(row.averageMarks)}
+                </td>
+                <td className={`${rtTd} text-right tabular-nums`} data-label="Passed">
+                  {row.passedCount}
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </DataTable>
+      <NoteBlock>Results entered counts every result in any status. Published figures and grades count published results only, graded with the configuration each was published with.</NoteBlock>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+async function FinanceReport({ context, filters }: { context: AuthContext; filters: { dateFrom?: string; dateTo?: string; method?: string } }) {
+  const method = STUDENT_PAYMENT_METHOD_ORDER.find((m) => m === filters.method);
+  const [result, feeCollection] = await Promise.all([
+    getFinanceReports(context, { dateFrom: filters.dateFrom, dateTo: filters.dateTo, method }),
+    getFeeCollectionSummary(context),
+  ]);
+  if (!result.ok) return <PageMessage title="Report unavailable" message={result.error.message} />;
+  const { studentPayments, income, expenses } = result.report;
+  const currencies = [
+    ...new Set([
+      ...(studentPayments.visible ? [...studentPayments.paymentsReceived.totalsByCurrency, ...studentPayments.outstandingCharges.totalsByCurrency] : []),
+      ...(income.visible ? income.totalsByCurrency : []),
+      ...(expenses.visible ? expenses.totalsByCurrency : []),
+    ].map((t) => t.currency)),
+  ];
+  const main = currencies[0] ?? "USD";
+  const inMain = currencies.length > 1 ? `, in ${main}` : "";
+  // Shown whenever fee periods are readable (empty when nothing is scheduled).
+  const fee = feeCollection.ok
+    ? (feeCollection.totals.find((t) => t.currency === main) ??
+      feeCollection.totals[0] ?? { currency: main, collectedCents: 0, overdueCents: 0, notYetDueCents: 0 })
+    : null;
+  const byMonth = studentPayments.visible ? studentPayments.paymentsReceived.byMonth.filter((row) => row.currency === main) : [];
+  const byMethod = studentPayments.visible
+    ? STUDENT_PAYMENT_METHOD_ORDER.map((m) => ({
+        method: m,
+        amountCents: studentPayments.paymentsReceived.byMethod.find((row) => row.method === m && row.currency === main)?.amountCents ?? 0,
+      }))
+    : [];
+
+  return (
+    <>
+      <DateFilters
+        params={["method"]}
+        extra={
+          studentPayments.visible ? (
+            <FilterDropdown
+              param="method"
+              label="Payment method"
+              icon="payments"
+              options={[
+                { value: "", label: "Any method" },
+                { value: "cash", label: "Cash" },
+                { value: "mobile_money", label: "Mobile money" },
+                { value: "bank_transfer", label: "Bank transfer" },
+              ]}
+            />
+          ) : null
+        }
+      />
+      <StatRow
+        items={[
+          ...(studentPayments.visible
+            ? [
+                {
+                  label: "Student payments",
+                  value: moneyLine(studentPayments.paymentsReceived.totalsByCurrency),
+                  hint: `${studentPayments.paymentsReceived.count} posted`,
+                  icon: "payments",
+                },
+              ]
+            : []),
+          ...(income.visible
+            ? [{ label: "Income", value: moneyLine(income.totalsByCurrency), hint: "posted, including book sales", icon: "bank" }]
+            : []),
+          ...(expenses.visible
+            ? [
+                { label: "Expenses", value: moneyLine(expenses.totalsByCurrency), hint: "approved only", icon: "receipt_long" },
+                { label: "Pending expense approvals", value: expenses.pendingApprovalsCount, icon: "pending" },
+              ]
+            : []),
+        ]}
+      />
+      <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {fee ? (
+          <StackBar
+            title="Fee collection"
+            sub={`Collected, overdue and not yet due on active enrollments, as of today${inMain}`}
+            segments={[
+              { label: "Collected", value: fee.collectedCents, text: formatMoney(fee.collectedCents, fee.currency) },
+              { label: "Overdue", value: fee.overdueCents, text: formatMoney(fee.overdueCents, fee.currency) },
+              { label: "Not yet due", value: fee.notYetDueCents, text: formatMoney(fee.notYetDueCents, fee.currency) },
+            ]}
+            empty="No fee schedules on active enrollments yet."
+          />
+        ) : studentPayments.visible ? (
+          <StackBar
+            title="Student charges"
+            sub={`Payments received against what is still owed on open charges${inMain}`}
+            segments={[
+              {
+                label: "Payments received",
+                value: centsOf(studentPayments.paymentsReceived.totalsByCurrency, main),
+                text: formatMoney(centsOf(studentPayments.paymentsReceived.totalsByCurrency, main), main),
+              },
+              {
+                label: `Outstanding charges (${studentPayments.outstandingCharges.count} open)`,
+                value: centsOf(studentPayments.outstandingCharges.totalsByCurrency, main),
+                text: formatMoney(centsOf(studentPayments.outstandingCharges.totalsByCurrency, main), main),
+              },
+            ]}
+            empty="No payments or open charges in this period."
+          />
+        ) : null}
+        {studentPayments.visible && (
+          <BarList
+            title="Collections by month"
+            sub={`Student payments received${inMain}`}
+            rows={byMonth.map((row) => ({ label: monthLabel(row.month), value: row.amountCents, text: formatMoney(row.amountCents, main) }))}
+            empty="No payments received in this period."
+          />
+        )}
+        {studentPayments.visible && (
+          <BarList
+            title="Student payments by method"
+            sub={`Posted payments${inMain}`}
+            rows={byMethod.every((row) => row.amountCents === 0) ? [] : byMethod.map((row) => ({ label: METHOD_LABEL[row.method], value: row.amountCents, text: formatMoney(row.amountCents, main) }))}
+            empty="No payments received in this period."
+          />
+        )}
+        {(income.visible || expenses.visible) && (
+          <BarList
+            title="Income and expenses"
+            sub={`Posted income and approved expenses${inMain}`}
+            rows={[
+              ...(income.visible ? [{ label: "Income", value: centsOf(income.totalsByCurrency, main), text: formatMoney(centsOf(income.totalsByCurrency, main), main) }] : []),
+              ...(expenses.visible
+                ? [{ label: "Expenses", value: centsOf(expenses.totalsByCurrency, main), text: formatMoney(centsOf(expenses.totalsByCurrency, main), main), muted: true }]
+                : []),
+            ]}
+          />
+        )}
+      </div>
+      <NoteBlock>
+        {fee ? "Fee collection covers every fee period of active enrollments as of today and ignores the dates above. " : ""}Collections by month use the date each payment was received (UTC). Totals are kept per currency and never added
+        across currencies. Platform subscription billing is not included.
+      </NoteBlock>
+    </>
+  );
+}

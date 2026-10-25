@@ -2,6 +2,7 @@ import { eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -374,6 +375,9 @@ export async function deleteAcademy(
     }
     await tx.delete(gradeConfigurations).where(eq(gradeConfigurations.academyId, academy.id));
 
+    // batch_courses references batches and courses; every row that used it
+    // (enrollments, timetable entries, exams) is already gone above.
+    await tx.delete(batchCourses).where(eq(batchCourses.academyId, academy.id));
     await tx.delete(batches).where(eq(batches.academyId, academy.id));
     await tx.delete(courses).where(eq(courses.academyId, academy.id));
     await tx.delete(programs).where(eq(programs.academyId, academy.id));

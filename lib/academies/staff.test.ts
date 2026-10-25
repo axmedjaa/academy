@@ -3,6 +3,7 @@ import { and, eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -33,6 +34,7 @@ import {
   updateStaff,
   type CreateStaffInput,
 } from "./staff";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 // Same "one top-level cleanup, every test builds its own fully isolated
 // fixture set" convention as lib/academies/settings.test.ts, plus the same
@@ -239,6 +241,7 @@ async function insertTimetableEntry(
     academyId,
     branchId,
     batchId,
+    courseId: await courseOfBatch(batchId),
     dayOfWeek: "mon",
     startTime: "09:00",
     endTime: "10:00",
@@ -293,6 +296,7 @@ afterAll(async () => {
     // requires staff_branch_assignments before staff_profiles/branches.
     await db.delete(timetables).where(eq(timetables.academyId, academyId));
     await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));

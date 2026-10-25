@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import * as OTPAuth from "otpauth";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -30,6 +31,7 @@ import {
 import { hashPassword } from "@/lib/auth/password";
 import { enrollMfaForUser, verifyMfaEnrollmentForUser } from "@/lib/auth/mfa";
 import type { AcademyRole } from "@/lib/auth/roles";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 // PLAN.md "Seed & Demonstration Data": guarded, refuses to run in
 // production. This is the Phase 0 seed — just the one MFA-enrolled
@@ -73,7 +75,7 @@ async function main() {
     // guaranteed consistent with what a real enrollment produces.
     const { secretBase32 } = await enrollMfaForUser(user.id);
     const currentCode = new OTPAuth.TOTP({
-      issuer: "Academy Management SaaS",
+      issuer: "Dardar",
       label: email,
       algorithm: "SHA1",
       digits: 6,
@@ -404,7 +406,14 @@ async function getOrCreateBatch(
       status: "completed",
     })
     .returning({ id: batches.id });
+  await db.insert(batchCourses).values({ academyId, batchId: created.id, courseId });
   return created.id;
+}
+
+/** The batch's primary course (the seed's batches each run one course). */
+async function primaryCourseOf(batchId: string): Promise<string> {
+  const [row] = await db.select({ courseId: batches.courseId }).from(batches).where(eq(batches.id, batchId)).limit(1);
+  return row.courseId;
 }
 
 async function ensureBatchTrainerAssignment(
@@ -472,6 +481,7 @@ async function ensureBatchEnrollment(
   await db.insert(batchEnrollments).values({
     academyId,
     batchId,
+    courseId: await primaryCourseOf(batchId),
     studentId,
     status: "completed",
   });
@@ -527,6 +537,7 @@ async function getOrCreateExam(
     .values({
       academyId,
       batchId,
+      courseId: await primaryCourseOf(batchId),
       name,
       maxMarks: "100",
       examDate: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
@@ -698,10 +709,12 @@ async function ensureCertificate(
     .limit(1);
   if (existingCertificate) return;
 
+  // The batch's primary course (certificates are per course).
   await db.insert(certificates).values({
     academyId,
     studentId,
     batchId,
+    courseId: await courseOfBatch(batchId),
     certificateCode: "DEMO0-SEED-0001-CERT",
     issuedBy,
   });

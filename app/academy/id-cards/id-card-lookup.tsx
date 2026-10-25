@@ -1,105 +1,85 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { runIdCardAction, type IdCardFormState } from "@/lib/academies/id-cards-actions";
-import { Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
-import { IdCardVisual } from "./id-card-visual";
-
-const initialState: IdCardFormState = { ok: false };
-
-interface Props {
-  academyName: string;
-}
+import { useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { runIdCardAction } from "@/lib/academies/id-cards-actions";
+import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import { Button } from "@/app/academy/_shell/ui";
+import { ROW_BTN } from "@/app/academy/_shell/page-blocks";
+import { StudentPhotoField } from "@/app/academy/students/student-photo-field";
 
 /**
- * `/academy/id-cards`'s only UI: paste a student id, see whether they
- * already have a card, and issue or reprint one. Kept deliberately simple
- * (no student search/autocomplete) since Items 38/39 own
- * `/academy/students`'s search UI and this item doesn't depend on it being
- * built — see app/academy/id-cards/page.tsx's module comment.
- *
- * All three forms (lookup/issue/reprint) share a single `useActionState`
- * bound to `runIdCardAction`, keyed by a hidden `intent` field — see that
- * function's own doc comment for why three separate hooks would show stale
- * results.
- *
- * Phase D addition (this wave): once a card is found or issued, the actual
- * visual card (app/academy/id-cards/id-card-visual.tsx) renders instead of
- * a plain `<dl>` — see that file's module comment for the card-layout/print
- * details. Restyled onto the shared Tailwind shell (Section/Field/Button)
- * to match every other `/academy/*` page; the card visual itself is left
- * untouched (a deliberately distinct physical-card mockup, not a page).
+ * Issue and reprint (design A18) go through the existing `runIdCardAction`
+ * (keyed by `intent`), which re-checks access, tenant and branch scope on
+ * the server and writes the audit entry. The page re-reads the cards after
+ * a success.
  */
-export function IdCardLookup({ academyName }: Props) {
-  const [state, formAction, pending] = useActionState(runIdCardAction, initialState);
-  const [studentId, setStudentId] = useState("");
+function useIdCardAction() {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  function run(fields: Record<string, string>, success: string) {
+    const data = new FormData();
+    for (const [key, value] of Object.entries(fields)) data.set(key, value);
+    startTransition(async () => {
+      try {
+        const result = await runIdCardAction({ ok: false }, data);
+        if (!result.ok) {
+          showErrorToast(result.error?.message ?? "Something went wrong. Try again.");
+          return;
+        }
+        showSuccessToast(success);
+        router.refresh();
+      } catch {
+        showErrorToast(NETWORK_ERROR_MESSAGE);
+      }
+    });
+  }
+  return { pending, run };
+}
 
-  const card = state.card;
-  const shownStudentId = state.studentId ?? studentId;
-
+/** Header actions: Print card (when a card exists) and Issue new card. */
+export function IdCardHeaderActions({ studentId, hasCard, canManage }: { studentId: string; hasCard: boolean; canManage: boolean }) {
+  const { pending, run } = useIdCardAction();
   return (
-    <Section>
-      <form action={formAction} className="flex flex-wrap items-end gap-3">
-        <input type="hidden" name="intent" value="lookup" />
-        {/* Mobile responsiveness fix: a fixed `min-w-[300px]` here could
-         * exceed the actual available width on a narrow phone (320px
-         * viewport minus PAGE_WRAP's and Section's own padding leaves
-         * under 300px), forcing horizontal overflow. Full-width below
-         * `sm:` (640px), reverting to the original comfortable fixed
-         * width once there's room to spare. */}
-        <Field label="Student # or ID" className="w-full sm:w-auto sm:min-w-[300px]">
-          <input
-            type="text"
-            name="studentId"
-            value={studentId}
-            onChange={(event) => setStudentId(event.target.value)}
-            placeholder="e.g. STD-E2E-A-001"
-            required
-            className={inputClass}
-          />
-        </Field>
-        <Button type="submit" disabled={pending}>
-          {pending ? "Working..." : "Look up"}
+    <>
+      {hasCard && (
+        <Button type="button" variant="secondary" onClick={() => window.print()}>
+          Print card
         </Button>
-      </form>
-
-      {state.error && (
-        <div className="mt-3">
-          <ErrorMessage message={state.error.message} />
-        </div>
       )}
-
-      {shownStudentId && !state.error && (
-        <div className="mt-6 border-t border-border pt-5">
-          {card ? (
-            <>
-              <IdCardVisual card={card} studentName={state.studentName ?? shownStudentId} academyName={academyName} />
-              <form action={formAction} className="mt-3">
-                <input type="hidden" name="intent" value="reprint" />
-                <input type="hidden" name="studentId" value={shownStudentId} />
-                <input type="hidden" name="cardId" value={card.id} />
-                <Button type="submit" disabled={pending}>
-                  {pending ? "Working..." : "Reprint this card"}
-                </Button>
-              </form>
-            </>
-          ) : (
-            <>
-              <p className="text-sm text-muted">No card issued yet for this student.</p>
-              <form action={formAction} className="mt-3 flex max-w-md flex-col gap-3">
-                <input type="hidden" name="intent" value="issue" />
-                <input type="hidden" name="studentId" value={shownStudentId} />
-                <Field label="Photo URL (optional)">
-                  <input type="text" name="photoFileRef" placeholder="https://…" className={inputClass} />
-                </Field>
-                <Button type="submit" disabled={pending} className="self-start">
-                  {pending ? "Working..." : "Issue card"}
-                </Button>
-              </form>
-            </>
-          )}
-        </div>
+      {canManage && (
+        <Button
+          type="button"
+          disabled={pending}
+          onClick={() => run({ intent: "issue", studentId }, hasCard ? "New card issued." : "Card issued.")}
+        >
+          {pending ? "Issuing…" : hasCard ? "Issue new card" : "Issue card"}
+        </Button>
       )}
-    </Section>
+    </>
   );
+}
+
+/** Row action: counts one more print of this card; its number does not change. */
+export function ReprintButton({ studentId, cardId, cardNumber }: { studentId: string; cardId: string; cardNumber: string }) {
+  const { pending, run } = useIdCardAction();
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      aria-label={`Reprint card ${cardNumber}`}
+      onClick={() => run({ intent: "reprint", studentId, cardId }, "Reprint recorded. The card number does not change.")}
+      className={ROW_BTN}
+    >
+      {pending ? "Saving…" : "Reprint"}
+    </button>
+  );
+}
+
+/** The student's photo, printed on the card front: the same upload the
+ * student page uses (its own server-side permission check and audit). */
+export function IdCardPhotoField({ studentId, photoUrl }: { studentId: string; photoUrl: string | null }) {
+  const router = useRouter();
+  return <StudentPhotoField mode="edit" studentId={studentId} currentPhotoUrl={photoUrl} onChanged={() => router.refresh()} />;
 }

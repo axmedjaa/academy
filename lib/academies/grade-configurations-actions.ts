@@ -5,6 +5,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   activateGradeConfiguration as activateGradeConfigurationForActor,
   approveGradeConfig as approveGradeConfigForActor,
+  copyGradeConfigurationAsDraft as copyGradeConfigurationAsDraftForActor,
   createGradeConfiguration as createGradeConfigurationForActor,
   rejectGradeConfig as rejectGradeConfigForActor,
   submitGradeConfigForApproval as submitGradeConfigForApprovalForActor,
@@ -172,6 +173,20 @@ export async function activateGradeConfigurationAction(
     return { ok: false, error: result.error };
   }
 
+  revalidatePath("/academy/grades");
+  return { ok: true };
+}
+
+/** "Copy as draft": a new draft with the same bands (see copyGradeConfigurationAsDraft). */
+export async function copyGradeConfigAction(gradeConfigurationId: string): Promise<GradeConfigLifecycleActionResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  const result = await copyGradeConfigurationAsDraftForActor(context, gradeConfigurationId);
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
   revalidatePath("/academy/grades");
   return { ok: true };
 }

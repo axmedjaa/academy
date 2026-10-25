@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import QRCode from "qrcode";
 import { db } from "@/lib/db";
-import { academies, batches, courses, examResults, gradeBands, programs, students } from "@/lib/db/schema";
+import { academies, batches, courses, examResults, exams, gradeBands, programs, students } from "@/lib/db/schema";
 import { env } from "@/lib/env";
 import { evaluateGradeBand } from "@/lib/academies/results";
 import { getCertificate, type CertificateActionError, type CertificateRecord } from "@/lib/academies/certificates";
@@ -72,15 +72,19 @@ async function getCertificateGradeInfo(
   academyId: string,
   studentId: string,
   batchId: string,
+  courseId: string,
 ): Promise<{ marksObtained: number; gradeLabel: string } | null> {
+  // Only results in exams of the certificate's own course.
   const rows = await db
     .select({ marksObtained: examResults.marksObtained, gradeConfigurationId: examResults.gradeConfigurationId })
     .from(examResults)
+    .innerJoin(exams, eq(exams.id, examResults.examId))
     .where(
       and(
         eq(examResults.academyId, academyId),
         eq(examResults.studentId, studentId),
         eq(examResults.batchId, batchId),
+        eq(exams.courseId, courseId),
         eq(examResults.status, "published"),
       ),
     );
@@ -164,12 +168,14 @@ export async function getCertificatePrintData(
       programName: programs.name,
     })
     .from(batches)
-    .innerJoin(courses, eq(courses.id, batches.courseId))
+    // The certificate's own course (one certificate per completed course),
+    // not the batch's primary course.
+    .innerJoin(courses, eq(courses.id, certificate.courseId))
     .innerJoin(programs, eq(programs.id, courses.programId))
     .where(eq(batches.id, certificate.batchId))
     .limit(1);
 
-  const grade = await getCertificateGradeInfo(certificate.academyId, certificate.studentId, certificate.batchId);
+  const grade = await getCertificateGradeInfo(certificate.academyId, certificate.studentId, certificate.batchId, certificate.courseId);
 
   const verificationUrl = buildVerificationUrl(certificate.certificateCode, requestOrigin);
   // A QR code is only meaningful with an absolute URL a different device can

@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
+  batchCourses,
   batchEnrollments,
   batchTrainerAssignments,
   batches,
@@ -655,6 +656,13 @@ export type PaymentPlanInput = z.input<typeof paymentPlanSchema>;
 export const enrollStudentSchema = z.object({
   batchId: z.string().uuid("Select a batch"),
   studentId: z.string().uuid("Select a student"),
+  /** The batch courses to enroll in, each with its own enrollment and fee
+   * plan. May be omitted only when the batch runs exactly one course. */
+  courseIds: z
+    .array(z.string().uuid("Select a course"))
+    .optional()
+    .transform((ids) => [...new Set(ids ?? [])]),
+  /** Applied to each course: the total fee per course and its installments. */
   paymentPlan: paymentPlanSchema,
 });
 
@@ -664,6 +672,8 @@ export interface BatchEnrollmentRecord {
   id: string;
   academyId: string;
   batchId: string;
+  /** The batch course this enrollment is for. */
+  courseId: string;
   studentId: string;
   enrolledAt: Date;
   status: "active" | "withdrawn" | "completed";
@@ -675,6 +685,7 @@ function toEnrollmentRecord(row: typeof batchEnrollments.$inferSelect): BatchEnr
     id: row.id,
     academyId: row.academyId,
     batchId: row.batchId,
+    courseId: row.courseId,
     studentId: row.studentId,
     enrolledAt: row.enrolledAt,
     status: row.status,
@@ -683,7 +694,8 @@ function toEnrollmentRecord(row: typeof batchEnrollments.$inferSelect): BatchEnr
 }
 
 export type EnrollStudentResult =
-  | { ok: true; enrollment: BatchEnrollmentRecord }
+  /** `enrollment` is the first of `enrollments` (one per course). */
+  | { ok: true; enrollment: BatchEnrollmentRecord; enrollments: BatchEnrollmentRecord[] }
   | { ok: false; error: BatchAssignmentActionError };
 
 /**
@@ -741,97 +753,130 @@ export async function enrollStudentInBatch(
         return { outcome: "student_not_found" as const };
       }
 
-      const [existingActive] = await tx
-        .select({ id: batchEnrollments.id })
+      // The courses must belong to this batch (validated here, and by the
+      // (batch_id, course_id) foreign key). With no course named, a batch
+      // that runs exactly one course enrolls in that course.
+      const batchCourseRows = await tx
+        .select({ courseId: batchCourses.courseId, name: courses.name })
+        .from(batchCourses)
+        .innerJoin(courses, eq(courses.id, batchCourses.courseId))
+        .where(and(eq(batchCourses.batchId, data.batchId), eq(batchCourses.academyId, academyId)));
+      const courseIds =
+        data.courseIds.length > 0 ? data.courseIds : batchCourseRows.length === 1 ? [batchCourseRows[0].courseId] : [];
+      if (courseIds.length === 0) {
+        return { outcome: "course_required" as const };
+      }
+      const courseName = new Map(batchCourseRows.map((row) => [row.courseId, row.name]));
+      if (courseIds.some((id) => !courseName.has(id))) {
+        return { outcome: "course_not_in_batch" as const };
+      }
+
+      // One active enrollment per student, batch and course.
+      const existingActive = await tx
+        .select({ courseId: batchEnrollments.courseId })
         .from(batchEnrollments)
         .where(
           and(
             eq(batchEnrollments.batchId, data.batchId),
             eq(batchEnrollments.studentId, data.studentId),
             eq(batchEnrollments.status, "active"),
+            inArray(batchEnrollments.courseId, courseIds),
           ),
         )
         .for("update");
-      if (existingActive) {
-        return { outcome: "conflict" as const };
+      if (existingActive.length > 0) {
+        return {
+          outcome: "conflict" as const,
+          courses: existingActive.map((row) => courseName.get(row.courseId) ?? "this course"),
+        };
       }
 
-      const [row] = await tx
-        .insert(batchEnrollments)
-        .values({
-          academyId,
-          batchId: data.batchId,
-          studentId: data.studentId,
-        })
-        .returning();
-
-      // Atomically create the enrollment's initial payment plan in the SAME
-      // transaction — approved architecture decision: "There must never be
-      // a successful enrollment without its required initial payment
-      // plan." If this insert fails for any reason, the whole transaction
-      // (including the batch_enrollments row just above) rolls back with
-      // it. This is a bare, permission-agnostic insert — see
-      // createInitialEnrollmentFeeSchedule's own module comment for why it
-      // deliberately does NOT go through setEnrollmentFeeSchedule's
-      // ACADEMY_FEE_PERIODS_ACTION gate: authorization for this step is
-      // this file's own ACADEMY_COURSES_BATCHES_ACTION check above, already
-      // passed. This does not grant the enroller any standing ability to
-      // modify the schedule afterward.
       const currency = await resolveCurrency(tx, academyId, data.paymentPlan.currency);
-      const schedule = await createInitialEnrollmentFeeSchedule(tx, {
-        academyId,
-        enrollmentId: row.id,
-        intervalMonths: data.paymentPlan.intervalMonths,
-        amountCents: data.paymentPlan.amountCents,
-        currency,
-        // Defaults to today — Somalia-local calendar date, not the
-        // server's own (likely UTC) timezone, so this never lands on the
-        // wrong day for a few hours around each Somalia midnight — see
-        // todayDateOnlyInAcademyTimezone's own doc comment. The first fee
-        // period is generated from this anchor immediately below, so it
-        // always starts on the enrollment date and is due right away.
-        anchorDate: data.paymentPlan.anchorDate ?? todayDateOnlyInAcademyTimezone(),
-        createdBy: actorContext.userId,
-      });
+      const created: (typeof batchEnrollments.$inferSelect)[] = [];
+      for (const courseId of courseIds) {
+        const [row] = await tx
+          .insert(batchEnrollments)
+          .values({
+            academyId,
+            batchId: data.batchId,
+            courseId,
+            studentId: data.studentId,
+          })
+          .returning();
 
-      // Eagerly generate the first fee period (not left purely lazy) so
-      // reading the enrollment's payment summary immediately after this
-      // transaction commits already sees `expected > 0` — the approved
-      // "Initial state: Expected > 0, Paid = 0, Status = UNPAID" contract,
-      // never a fake payment, just the real, already-owed first period.
-      await generateFeePeriodsForEnrollment(tx, row.id, academyId);
-
-      await recordAudit(
-        {
-          actorUserId: actorContext.userId,
-          actorRole: membershipRole,
+        // Atomically create the enrollment's initial payment plan in the SAME
+        // transaction — approved architecture decision: "There must never be
+        // a successful enrollment without its required initial payment
+        // plan." If any insert fails, the whole transaction (every course's
+        // enrollment included) rolls back. This is a bare,
+        // permission-agnostic insert — see
+        // createInitialEnrollmentFeeSchedule's own module comment for why it
+        // deliberately does NOT go through setEnrollmentFeeSchedule's
+        // ACADEMY_FEE_PERIODS_ACTION gate: authorization for this step is
+        // this file's own ACADEMY_COURSES_BATCHES_ACTION check above, already
+        // passed. Each course gets its own schedule (fees are per course).
+        const schedule = await createInitialEnrollmentFeeSchedule(tx, {
           academyId,
-          action: "enrollStudentInBatch",
-          entityType: "batch_enrollment",
-          entityId: row.id,
-          branchId: batch.branchId,
-          after: { ...toEnrollmentRecord(row), paymentPlan: { intervalMonths: schedule.intervalMonths, amountCents: schedule.amountCents, currency: schedule.currency, anchorDate: schedule.anchorDate } },
-        },
-        tx,
-      );
+          enrollmentId: row.id,
+          intervalMonths: data.paymentPlan.intervalMonths,
+          amountCents: data.paymentPlan.amountCents,
+          currency,
+          // Defaults to today — Somalia-local calendar date, not the
+          // server's own (likely UTC) timezone — see
+          // todayDateOnlyInAcademyTimezone's own doc comment. The first fee
+          // period is generated from this anchor immediately below.
+          anchorDate: data.paymentPlan.anchorDate ?? todayDateOnlyInAcademyTimezone(),
+          createdBy: actorContext.userId,
+        });
 
-      return { outcome: "ok" as const, row };
+        // Eagerly generate the first fee period so the enrollment's payment
+        // summary already sees `expected > 0` right after commit — the real,
+        // already-owed first period, never a fake payment.
+        await generateFeePeriodsForEnrollment(tx, row.id, academyId);
+
+        await recordAudit(
+          {
+            actorUserId: actorContext.userId,
+            actorRole: membershipRole,
+            academyId,
+            action: "enrollStudentInBatch",
+            entityType: "batch_enrollment",
+            entityId: row.id,
+            branchId: batch.branchId,
+            after: { ...toEnrollmentRecord(row), paymentPlan: { intervalMonths: schedule.intervalMonths, amountCents: schedule.amountCents, currency: schedule.currency, anchorDate: schedule.anchorDate } },
+          },
+          tx,
+        );
+        created.push(row);
+      }
+
+      return { outcome: "ok" as const, rows: created };
     });
 
     if (result.outcome === "batch_not_found") return { ok: false, error: BATCH_NOT_FOUND };
     if (result.outcome === "student_not_found") return { ok: false, error: STUDENT_NOT_FOUND };
+    if (result.outcome === "course_required") {
+      return { ok: false, error: { code: "validation", message: "Pick at least one course from this batch." } };
+    }
+    if (result.outcome === "course_not_in_batch") {
+      return { ok: false, error: { code: "validation", message: "That course isn't part of this batch." } };
+    }
     if (result.outcome === "conflict") {
       return {
         ok: false,
-        error: { code: "conflict", message: "This student is already actively enrolled in this batch." },
+        error: {
+          code: "conflict",
+          message: `This student is already enrolled in ${result.courses.join(", ")} in this batch.`,
+        },
       };
     }
-    return { ok: true, enrollment: toEnrollmentRecord(result.row) };
+    const enrollments = result.rows.map(toEnrollmentRecord);
+    return { ok: true, enrollment: enrollments[0], enrollments };
   } catch (err) {
     if (isUniqueViolation(err)) {
       return {
         ok: false,
-        error: { code: "conflict", message: "This student is already actively enrolled in this batch." },
+        error: { code: "conflict", message: "This student is already enrolled in that course in this batch." },
       };
     }
     throw err;
@@ -1277,6 +1322,7 @@ export async function listMyAssignedBatches(
 export interface StudentActiveCourse {
   batchId: string;
   batchName: string;
+  courseId: string;
   courseName: string;
 }
 
@@ -1302,11 +1348,12 @@ export async function getActiveCoursesForStudents(
       studentId: batchEnrollments.studentId,
       batchId: batches.id,
       batchName: batches.name,
+      courseId: batchEnrollments.courseId,
       courseName: courses.name,
     })
     .from(batchEnrollments)
     .innerJoin(batches, eq(batches.id, batchEnrollments.batchId))
-    .innerJoin(courses, eq(courses.id, batches.courseId))
+    .innerJoin(courses, eq(courses.id, batchEnrollments.courseId))
     .where(
       and(
         eq(batchEnrollments.academyId, academyId),
@@ -1317,7 +1364,7 @@ export async function getActiveCoursesForStudents(
 
   for (const row of rows) {
     const existing = result.get(row.studentId) ?? [];
-    existing.push({ batchId: row.batchId, batchName: row.batchName, courseName: row.courseName });
+    existing.push({ batchId: row.batchId, batchName: row.batchName, courseId: row.courseId, courseName: row.courseName });
     result.set(row.studentId, existing);
   }
   return result;
@@ -1326,53 +1373,27 @@ export async function getActiveCoursesForStudents(
 export type UpdateStudentEnrollmentResult = { ok: true } | { ok: false; error: BatchAssignmentActionError };
 
 /**
- * "Change this student's course" — the admin-facing edit action referenced
- * by PLAN's "update a student's enrollment if the existing system supports
- * editing students." Reuses `enrollStudentInBatch`/`withdrawStudentFromBatch`
- * unmodified: withdraws every currently-active enrollment for the student,
- * then (if a new batch was chosen) enrolls into it — plain orchestration of
- * two already-existing, already-tested actions, no new enrollment logic.
- * Passing an empty/undefined `newBatchId` just withdraws, leaving the
- * student with no active course (this action's own access/scope checks are
- * inherited entirely from the two functions it calls).
+ * Enroll an existing student in one or more courses of a batch — used by
+ * Admissions, the Students list and Student detail. A student can hold
+ * several enrollments (different courses, different batches), so this
+ * only ever ADDS: it never withdraws the student's other enrollments
+ * (withdrawal is per enrollment, via `withdrawStudentFromBatch`). It is
+ * plain orchestration of `enrollStudentInBatch`, whose permission, scope,
+ * duplicate and payment-plan rules all apply unchanged.
  */
 export async function updateStudentEnrollment(
   actorContext: AuthContext,
   studentId: string,
   newBatchId: string | undefined,
   paymentPlan?: PaymentPlanInput,
+  courseIds: string[] = [],
 ): Promise<UpdateStudentEnrollmentResult> {
-  const resolved = await resolveScopeAccess(actorContext);
-  if (!resolved.ok) return resolved;
-  const { academyId } = resolved.access;
-
   const parsedStudentId = z.string().uuid().safeParse(studentId);
   if (!parsedStudentId.success) return { ok: false, error: STUDENT_NOT_FOUND };
 
-  const activeEnrollments = await db
-    .select({ id: batchEnrollments.id, batchId: batchEnrollments.batchId })
-    .from(batchEnrollments)
-    .where(
-      and(
-        eq(batchEnrollments.studentId, studentId),
-        eq(batchEnrollments.academyId, academyId),
-        eq(batchEnrollments.status, "active"),
-      ),
-    );
-
-  for (const enrollment of activeEnrollments) {
-    if (enrollment.batchId === newBatchId) {
-      // Already enrolled in the requested batch — nothing to change.
-      return { ok: true };
-    }
-    const withdrawResult = await withdrawStudentFromBatch(actorContext, enrollment.id);
-    if (!withdrawResult.ok) return withdrawResult;
-  }
-
   if (!newBatchId) {
-    return { ok: true };
+    return { ok: false, error: { code: "validation", message: "Choose a batch to enroll in." } };
   }
-
   if (!paymentPlan) {
     return {
       ok: false,
@@ -1380,7 +1401,7 @@ export async function updateStudentEnrollment(
     };
   }
 
-  const enrollResult = await enrollStudentInBatch(actorContext, { batchId: newBatchId, studentId, paymentPlan });
+  const enrollResult = await enrollStudentInBatch(actorContext, { batchId: newBatchId, studentId, paymentPlan, courseIds });
   if (!enrollResult.ok) return enrollResult;
 
   return { ok: true };

@@ -3,8 +3,9 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { listBatches } from "@/lib/academies/batches";
 import { listBranches } from "@/lib/academies/branches";
 import { listCourses } from "@/lib/academies/courses";
+import { listPrograms } from "@/lib/academies/programs";
 import { BatchesList } from "./batches-list";
-import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 43: `/academy/batches` — batch CRUD, the one entity in this
@@ -35,22 +36,22 @@ export default async function AcademyBatchesPage() {
   // assigned branch(es) here too.
   const branchesResult = await listBranches(context);
   const branchOptions = branchesResult.ok ? branchesResult.branches : [];
-  const coursesResult = await listCourses(context);
-  const courseOptions = coursesResult.ok ? coursesResult.courses : [];
+  const [coursesResult, programsResult] = await Promise.all([listCourses(context), listPrograms(context)]);
+  const programName = new Map((programsResult.ok ? programsResult.programs : []).map((p) => [p.id, p.name]));
+  const courseOptions = (coursesResult.ok ? coursesResult.courses : []).map((course) => ({
+    id: course.id,
+    name: course.name,
+    code: course.code,
+    programName: programName.get(course.programId) ?? null,
+    durationWeeks: course.durationWeeks,
+    status: course.status,
+  }));
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Batches"
-        description={
-          result.canManage
-            ? "You can create, edit, and archive batches in your scope."
-            : "You can view the batch(es) in your scope."
-        }
-      />
       <BatchesList
         batches={result.batches}
-        branches={branchOptions}
+        branches={branchOptions.map((b) => ({ id: b.id, name: b.name, status: b.status }))}
         courses={courseOptions}
         canManage={result.canManage}
         canDelete={result.canDelete}

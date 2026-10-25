@@ -72,14 +72,43 @@ export function centsToDollars(cents: number): string {
 }
 
 /**
- * The one centralized money DISPLAY formatter — `"${currency} ${amount}"`
- * (e.g. "USD 6.00"), ISO-code-prefixed rather than a `$` glyph since this
- * app is multi-currency-aware per academy (`academies.default_currency`),
- * where a bare `$` would be ambiguous. Previously hand-copied verbatim
- * across 14 files; one of those 14 (app/platform/academies/[id]/page.tsx)
- * had silently reversed the argument order to `"${amount} ${currency}"` —
- * fixed by centralizing here instead of patching that file in isolation.
+ * The one centralized money DISPLAY formatter, matching the design's
+ * "$1,250.00": Intl's en-US currency style with two decimals. The app is
+ * multi-currency-aware per academy (`academies.default_currency`), and Intl
+ * keeps that unambiguous — only USD renders as a bare `$` ("CA$", "A$"
+ * for other dollars; "SOS 1,000.00" for codes without an en-US symbol).
+ * A code Intl rejects falls back to the plain `"${currency} ${amount}"`
+ * form, so an unusual stored currency never throws. Display only — CSV
+ * exports never use this.
  */
 export function formatMoney(amountCents: number, currency: string): string {
-  return `${currency} ${(amountCents / 100).toFixed(2)}`;
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amountCents / 100);
+  } catch {
+    return `${currency} ${(amountCents / 100).toFixed(2)}`;
+  }
+}
+
+/**
+ * Display-only headline money format for dashboard figures ("$1,240",
+ * "$1,240.50"): the currency's own symbol where Intl knows the code, whole
+ * amounts without trailing ".00". Falls back to `formatMoney` for a code Intl
+ * rejects, so an unusual stored currency never throws.
+ */
+export function formatMoneyHeadline(amountCents: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: amountCents % 100 === 0 ? 0 : 2,
+      maximumFractionDigits: 2,
+    }).format(amountCents / 100);
+  } catch {
+    return formatMoney(amountCents, currency);
+  }
 }

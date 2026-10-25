@@ -2,8 +2,9 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listExams } from "@/lib/academies/exams";
 import { listBatches } from "@/lib/academies/batches";
+import { listCourses } from "@/lib/academies/courses";
 import { ExamsList } from "./exams-list";
-import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 48: `/academy/exams` — minimal UI, logic+tests are this
@@ -35,23 +36,24 @@ export default async function AcademyExamsPage() {
   // Best-effort: populates the "Batch" select on the create form — already
   // applies the caller's own batch-scoping.
   const batchesResult = await listBatches(context);
-  const batchOptions = batchesResult.ok ? batchesResult.batches : [];
+  const coursesResult = await listCourses(context);
+  const courseNames = Object.fromEntries((coursesResult.ok ? coursesResult.courses : []).map((c) => [c.id, c.name]));
+
+  // Batch options for Create exam (scoped by listBatches), each with its courses.
+  const batchOptions = (batchesResult.ok ? batchesResult.batches : []).map((batch) => ({
+    id: batch.id,
+    code: batch.code,
+    name: batch.name,
+    status: batch.status,
+    courses: batch.courseIds.map((id) => ({ id, name: courseNames[id] ?? "Unavailable course" })),
+  }));
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Exams"
-        description={
-          result.canManage
-            ? "You can create exams and enter marks in your scope."
-            : result.canEnterMarks
-              ? "You can enter marks for exams on your assigned batches."
-              : "You can view exams in your scope."
-        }
-      />
       <ExamsList
         exams={result.exams}
         batches={batchOptions}
+        courseNames={courseNames}
         canManage={result.canManage}
         canEnterMarks={result.canEnterMarks}
       />

@@ -8,8 +8,7 @@ import {
 } from "@/lib/academies/students-actions";
 import { requestNewStudentPhotoUploadUrlAction } from "@/lib/academies/register-student-actions";
 import { ConfirmButton, type ConfirmActionResult } from "@/app/academy/_shell/confirm-dialog";
-import { Button, ErrorMessage } from "@/app/academy/_shell/ui";
-import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import { showSuccessToast } from "@/lib/ui/toast";
 import { MAX_RASTER_IMAGE_SIZE_BYTES, RASTER_IMAGE_ACCEPT_ATTRIBUTE, isRasterImageContentType } from "@/lib/storage/upload-policy";
 
 const MAX_SIZE_BYTES = MAX_RASTER_IMAGE_SIZE_BYTES;
@@ -55,20 +54,21 @@ type Props =
 
 export function StudentPhotoField(props: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [uploadedKey, setUploadedKey] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
   function resetSelection() {
-    setSelectedFile(null);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+  // Choosing a file uploads it straight away (design: "Choose image" with
+  // no separate upload step). Validation, the signed upload, and — for an
+  // existing student — the server-side confirmation are unchanged.
+  async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     setError(null);
     setStatus("idle");
@@ -85,67 +85,66 @@ export function StudentPhotoField(props: Props) {
       return;
     }
 
-    setSelectedFile(file);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setPreviewUrl(URL.createObjectURL(file));
+    const localPreview = URL.createObjectURL(file);
+    setPreviewUrl(localPreview);
+    await upload(file);
   }
 
-  async function handleUpload() {
-    if (!selectedFile) return;
+  async function upload(file: File) {
     setError(null);
     setStatus("uploading");
 
     const requested =
       props.mode === "new"
-        ? await requestNewStudentPhotoUploadUrlAction({ contentType: selectedFile.type, fileSizeBytes: selectedFile.size })
+        ? await requestNewStudentPhotoUploadUrlAction({ contentType: file.type, fileSizeBytes: file.size })
         : await requestStudentPhotoUploadUrlAction(props.studentId, {
-            contentType: selectedFile.type,
-            fileSizeBytes: selectedFile.size,
+            contentType: file.type,
+            fileSizeBytes: file.size,
           });
     if (!requested.ok) {
       const message = requested.error?.message ?? "The photo could not be uploaded. Please try again.";
       setError(message);
       setStatus("error");
-      showErrorToast(message);
+      resetSelection();
       return;
     }
 
     try {
-      await uploadPhotoFile(requested.uploadUrl, selectedFile);
+      await uploadPhotoFile(requested.uploadUrl, file);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "The photo could not be uploaded. Please try again.";
-      setError(message);
+      setError(err instanceof Error ? err.message : "The photo could not be uploaded. Please try again.");
       setStatus("error");
-      showErrorToast(message);
+      resetSelection();
       return;
     }
 
     if (props.mode === "new") {
-      // Nothing to confirm yet — no student row exists. The key is held
-      // here and submitted (via the hidden input below) alongside the
-      // rest of the registration form; registerStudent does the real
-      // verification when the form is actually submitted.
+      // No student row exists yet; the key is submitted with the form and
+      // registerStudent verifies it.
       setUploadedKey(requested.key);
       setStatus("idle");
-      resetSelection();
-      showSuccessToast("Photo uploaded. It will be attached when you register this student.");
       return;
     }
 
     setStatus("confirming");
     const confirmed = await confirmStudentPhotoUploadAction(props.studentId, requested.key);
     if (!confirmed.ok) {
-      const message = confirmed.error?.message ?? "The photo upload could not be verified.";
-      setError(message);
+      setError(confirmed.error?.message ?? "The photo upload could not be verified.");
       setStatus("error");
-      showErrorToast(message);
+      resetSelection();
       return;
     }
 
     setStatus("idle");
     resetSelection();
-    showSuccessToast("Photo uploaded successfully.");
+    showSuccessToast("Photo updated.");
     props.onChanged();
+  }
+
+  function clearNewPhoto() {
+    setUploadedKey(null);
+    resetSelection();
   }
 
   async function handleRemove(): Promise<ConfirmActionResult> {
@@ -160,52 +159,58 @@ export function StudentPhotoField(props: Props) {
   const displayedPreviewUrl = previewUrl ?? (props.mode === "edit" ? props.currentPhotoUrl : null);
   const hasCurrentPhoto = props.mode === "edit" && Boolean(props.currentPhotoUrl) && !previewUrl;
   const busy = status === "uploading" || status === "confirming";
+  const hasNewPhoto = props.mode === "new" && (Boolean(uploadedKey) || Boolean(previewUrl));
 
   return (
-    <div className="flex flex-wrap items-start gap-4">
-      <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-app">
-        {displayedPreviewUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element -- a local blob: preview or a short-lived signed R2 URL, same convention as academy-logo-upload.tsx.
-          <img src={displayedPreviewUrl} alt="Student photo preview" className="h-full w-full object-cover" />
-        ) : (
-          <span className="text-xs text-muted">No photo</span>
-        )}
-      </div>
-
-      <div className="flex flex-1 flex-col gap-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
-          onChange={handleFileChange}
-          disabled={busy}
-          className="text-sm text-ink file:mr-3 file:rounded-control file:border file:border-border file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-ink hover:file:bg-app"
-        />
-
-        {error && <ErrorMessage message={error} />}
-        {status === "uploading" && <p className="text-sm text-muted">Uploading...</p>}
-        {status === "confirming" && <p className="text-sm text-muted">Verifying...</p>}
-        {props.mode === "new" && uploadedKey && status === "idle" && (
-          <p className="text-sm font-medium text-success">Photo ready — will be attached on registration.</p>
-        )}
-
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="secondary" disabled={!selectedFile || busy} onClick={handleUpload}>
-            {busy ? "Uploading..." : "Upload photo"}
-          </Button>
-          {props.mode === "edit" && hasCurrentPhoto && (
-            <ConfirmButton
-              label="Remove photo"
-              title="Remove this student's photo?"
-              description="This permanently deletes the current photo. This cannot be undone."
-              successMessage="Photo removed."
-              onConfirm={handleRemove}
-              onSuccess={props.onChanged}
-            />
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-[10px] border border-dashed border-border-strong bg-[#FAFBFC] text-[11px] font-medium text-muted">
+          {displayedPreviewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- a local blob: preview or a short-lived signed R2 URL.
+            <img src={displayedPreviewUrl} alt="Preview" className="h-full w-full object-cover" />
+          ) : (
+            "None"
           )}
         </div>
+        <label
+          className={`relative inline-flex min-h-11 cursor-pointer items-center justify-center rounded-lg border border-brand px-4 text-sm font-semibold text-brand transition-colors duration-150 hover:bg-brand-tint ${busy ? "pointer-events-none opacity-60" : ""}`}
+        >
+          {busy ? (status === "confirming" ? "Verifying…" : "Uploading…") : displayedPreviewUrl ? "Change image" : "Choose image"}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
+            onChange={handleFileChange}
+            disabled={busy}
+            className="absolute h-px w-px opacity-0"
+          />
+        </label>
+        {hasNewPhoto && !busy && (
+          <button
+            type="button"
+            onClick={clearNewPhoto}
+            className="min-h-11 rounded-lg border border-border-strong bg-surface px-3.5 text-sm font-medium text-ink hover:bg-app"
+          >
+            Remove
+          </button>
+        )}
+        {props.mode === "edit" && hasCurrentPhoto && !busy && (
+          <ConfirmButton
+            label="Remove"
+            title="Remove this student's photo?"
+            description="This permanently deletes the current photo. This cannot be undone."
+            successMessage="Photo removed."
+            onConfirm={handleRemove}
+            onSuccess={props.onChanged}
+          />
+        )}
+        <span className="text-xs font-normal text-muted">JPEG, PNG, WebP or AVIF, up to {MAX_SIZE_LABEL}</span>
       </div>
-
+      {error && (
+        <span role="alert" className="text-xs font-medium text-[#B91C1C]">
+          {error}
+        </span>
+      )}
       {props.mode === "new" && <input type="hidden" name={props.hiddenFieldName} value={uploadedKey ?? ""} />}
     </div>
   );

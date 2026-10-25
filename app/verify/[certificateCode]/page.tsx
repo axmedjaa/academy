@@ -28,7 +28,7 @@ import { VerifyLookupForm } from "../lookup-form";
  * amount of fictional content (QR code, SHA-256 "ledger hash", cohort/grade
  * percentage, signatory names, Print/PDF/Share buttons) that has no backing
  * field anywhere in `verifyCertificate`'s real return type
- * (`PublicCertificateVerification`: studentName/programName/issuedAt/status
+ * (`PublicCertificateVerification`: studentName/programName/courseName/issuedAt/status
  * only). None of that fictional content is reproduced — DESIGN.md's exact,
  * minimal field list wins per this task's "DESIGN.md is authoritative on
  * conflict" rule. No print/PDF/download functionality is added, per this
@@ -104,6 +104,7 @@ export default async function VerifyCertificatePage({
             <VerificationResult
               studentName={result.certificate.studentName}
               programName={result.certificate.programName}
+              courseName={result.certificate.courseName}
               issuedAt={result.certificate.issuedAt}
               status={result.certificate.status}
               certificateCode={decodedCode}
@@ -118,12 +119,14 @@ export default async function VerifyCertificatePage({
 function VerificationResult({
   studentName,
   programName,
+  courseName,
   issuedAt,
   status,
   certificateCode,
 }: {
   studentName: string;
   programName: string;
+  courseName: string;
   issuedAt: Date;
   status: "valid" | "cancelled";
   certificateCode: string;
@@ -186,6 +189,12 @@ function VerificationResult({
             Program
           </dt>
           <dd style={{ margin: 0, marginTop: "0.2rem", fontSize: "1rem", color: color.text }}>{programName}</dd>
+        </div>
+        <div>
+          <dt style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.04em", color: color.textMuted }}>
+            Course
+          </dt>
+          <dd style={{ margin: 0, marginTop: "0.2rem", fontSize: "1rem", color: color.text }}>{courseName}</dd>
         </div>
         <div style={{ display: "flex", gap: spacing.xl }}>
           <div>

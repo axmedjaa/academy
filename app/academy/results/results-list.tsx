@@ -1,456 +1,621 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
-import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
-import {
-  approveResult,
-  publishResults,
-  rejectResult,
-  submitResults,
-} from "@/lib/academies/results-actions";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { approveResult, publishResults, rejectResult, submitResults } from "@/lib/academies/results-actions";
 import {
   approveResultCorrection,
-  getResultCorrectionsList,
   rejectResultCorrection,
   requestResultCorrection,
 } from "@/lib/academies/result-corrections-actions";
-import type { ResultRosterRow } from "@/lib/academies/results";
 import type { ResultCorrectionRecord } from "@/lib/academies/result-corrections";
-import { Badge, Button, EmptyState, ErrorMessage, Field, FormDialog, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import type { ResultRecord } from "@/lib/academies/results";
+import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import { Badge, EmptyState, PageHeader, Section, humanizeStatus, trHover } from "@/app/academy/_shell/ui";
+import { BlockTitle, DataTable, NoteBlock, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { Icon } from "@/app/academy/_shell/icons";
-import { StudentAvatar } from "@/app/academy/students/student-avatar";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import {
+  DField,
+  DesignDialog,
+  DialogBody,
+  DialogFooter,
+  FieldGrid,
+  FormErrorBanner,
+  controlClass,
+  fieldControlArea,
+  invalidProps,
+} from "@/app/academy/_shell/design-form";
 
-interface Props {
-  results: ResultRosterRow[];
-  /** examId -> exam name, resolved in page.tsx via the same `listExams`
-   * read app/academy/exams/page.tsx itself uses — display-only, so the
-   * "Exam {id}" section headings below show a real name instead of the
-   * raw database id. */
-  examNames: Record<string, string>;
-  /** Each photo-having row's own short-lived signed R2 GET url,
-   * pre-resolved server-side (page.tsx, via students.ts's
-   * `getStudentPhotoUrlsByIds`) — see StudentAvatar's own doc comment. */
-  photoUrlByStudentId: Map<string, string>;
+/**
+ * Results (design A12): search and status chips (with counts) across every
+ * exam, then one section per exam with "Submit marks for review" and
+ * "Publish approved results", its results table (Approve on a result under
+ * review, Request correction on a published one), "Reject a result under
+ * review", and the Corrections table. All transitions are the existing
+ * server actions; grades are fixed from the active configuration when
+ * published, and published results change only through a correction.
+ */
+
+export interface ResultsExam {
+  id: string;
+  title: string;
+  maxMarks: number;
+  examDate: string | null;
+}
+
+export interface ResultsRow {
+  id: string;
+  examId: string;
+  studentId: string;
+  studentName: string;
+  studentNumber: string;
+  marks: number | null;
+  status: ResultRecord["status"];
+  grade: string | null;
+  passFail: ResultRecord["passFail"];
+}
+
+const CHIPS: { key: string; label: string; statuses: ResultRecord["status"][] }[] = [
+  { key: "draft", label: "Draft", statuses: ["draft", "rejected"] },
+  { key: "marks_entered", label: "Marks entered", statuses: ["marks_entered"] },
+  { key: "under_review", label: "Under review", statuses: ["submitted", "under_review"] },
+  { key: "approved", label: "Approved", statuses: ["approved"] },
+  { key: "published", label: "Published", statuses: ["published"] },
+];
+
+const TONE: Record<ResultRecord["status"], "gray" | "blue" | "amber" | "green" | "red"> = {
+  draft: "gray",
+  rejected: "gray",
+  marks_entered: "blue",
+  submitted: "amber",
+  under_review: "amber",
+  approved: "green",
+  published: "green",
+};
+
+const ROW_BTN =
+  "inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app disabled:cursor-not-allowed disabled:opacity-50";
+const HEAD_BTN =
+  "inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app disabled:cursor-not-allowed disabled:opacity-50";
+
+/** "B (pass)"; just "Pass" when the band name already says it. */
+function gradeText(grade: string, passFail: ResultRecord["passFail"]) {
+  const verdict = passFail === "pass" ? "pass" : passFail === "fail" ? "fail" : null;
+  return verdict && grade.trim().toLowerCase() !== verdict ? `${grade} (${verdict})` : grade;
+}
+
+type Outcome = { ok: true } | { ok: false; error: { message: string } };
+
+export function ResultsList({
+  exams,
+  results,
+  corrections,
+  canSubmit,
+  canApprove,
+}: {
+  exams: ResultsExam[];
+  results: ResultsRow[];
+  /** null when the caller can't see corrections. */
+  corrections: ResultCorrectionRecord[] | null;
   canSubmit: boolean;
   canApprove: boolean;
-}
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [query, setQuery] = useState("");
+  const [chip, setChip] = useState("all");
+  const [publishFor, setPublishFor] = useState<ResultsExam | null>(null);
+  const [rejectFor, setRejectFor] = useState<ResultsExam | null>(null);
+  const [correctFor, setCorrectFor] = useState<ResultsRow | null>(null);
 
-function statusTone(status: string): "green" | "amber" | "gray" | "blue" | "red" {
-  if (status === "published" || status === "approved") return "green";
-  if (status === "under_review" || status === "requested") return "amber";
-  if (status === "marks_entered" || status === "draft") return "blue";
-  if (status === "rejected") return "red";
-  return "gray";
-}
-
-/**
- * Minimal UI, grouped by exam. `submitResults`/`publishResults` are
- * bulk, per-exam actions (see lib/academies/results.ts's module comment
- * on the plural-vs-singular naming) — one button per exam moves every
- * eligible result in that exam forward at once. `approveResult`/
- * `rejectResult` are per-result decisions, so they get one button per row.
- */
-export function ResultsList({ results, examNames, photoUrlByStudentId, canSubmit, canApprove }: Props) {
-  const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [rejectingId, setRejectingId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState("");
-  const [correctingId, setCorrectingId] = useState<string | null>(null);
-  const [correctionReason, setCorrectionReason] = useState("");
-  const [proposedMarks, setProposedMarks] = useState("");
-  const rejectingRow = results.find((row) => row.id === rejectingId) ?? null;
-  const correctingRow = results.find((row) => row.id === correctingId) ?? null;
-
-  function cancelReject() {
-    setRejectingId(null);
-    setRejectReason("");
-  }
-
-  function cancelCorrection() {
-    setCorrectingId(null);
-    setCorrectionReason("");
-    setProposedMarks("");
-  }
-
-  const byExam = new Map<string, ResultRosterRow[]>();
-  for (const row of results) {
-    const list = byExam.get(row.examId) ?? [];
-    list.push(row);
-    byExam.set(row.examId, list);
-  }
-
-  // Display-only lookup for CorrectionsPanel below — a correction's
-  // `originalResultId` is a raw id with nothing human-readable of its own;
-  // every result it can reference is already in `results` (corrections are
-  // only ever requested against a `published` result, which `listResults`
-  // still returns), so this is a free label resolution on data already on
-  // the page, not a new query.
-  const resultLabelById = new Map(
-    results.map((row) => [row.id, `${row.studentFullName} (${row.studentNumber}) — ${examNames[row.examId] ?? "Unknown exam"}`]),
+  const counts = useMemo(
+    () => Object.fromEntries(CHIPS.map((c) => [c.key, results.filter((r) => c.statuses.includes(r.status)).length])),
+    [results],
   );
+  const needle = query.trim().toLowerCase();
+  const chipStatuses = CHIPS.find((c) => c.key === chip)?.statuses;
+  const visible = (row: ResultsRow) =>
+    (!chipStatuses || chipStatuses.includes(row.status)) &&
+    (!needle || row.studentName.toLowerCase().includes(needle) || row.studentNumber.toLowerCase().includes(needle));
+  const filtering = Boolean(needle) || chip !== "all";
+  const resultById = new Map(results.map((r) => [r.id, r]));
+  const examById = new Map(exams.map((e) => [e.id, e]));
 
-  function run(action: () => Promise<{ ok: true } | { ok: false; error: { message: string } }>, successMessage: string) {
-    setError(null);
-    startTransition(async () => {
-      const result = await action();
-      if (!result.ok) {
-        setError(result.error.message);
-        showErrorToast(result.error.message);
-        return;
+  function run(action: () => Promise<Outcome>, success: string) {
+    start(async () => {
+      try {
+        const outcome = await action();
+        if (!outcome.ok) {
+          showErrorToast(outcome.error.message);
+          return;
+        }
+        showSuccessToast(success);
+        router.refresh();
+      } catch {
+        showErrorToast(NETWORK_ERROR_MESSAGE);
       }
-      showSuccessToast(successMessage);
     });
   }
 
+  const shownExams = exams.filter((exam) => !filtering || results.some((r) => r.examId === exam.id && visible(r)));
+
   return (
-    <div className="flex flex-col gap-6">
-      {error && <ErrorMessage message={error} />}
+    <section className="flex flex-col">
+      <PageHeader title="Results" description="Marks by exam. Review, approve and publish here." />
 
-      {correctingRow && (
-        <FormDialog
-          open={correctingId !== null}
-          onOpenChange={(nextOpen) => !nextOpen && cancelCorrection()}
-          title={`Request correction — ${correctingRow.studentFullName} (${correctingRow.studentNumber})`}
-        >
-          <div className="flex flex-col gap-3">
-            <Field label="Proposed marks">
-              <input
-                type="number"
-                value={proposedMarks}
-                onChange={(event) => setProposedMarks(event.target.value)}
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Reason">
-              <input
-                type="text"
-                value={correctionReason}
-                onChange={(event) => setCorrectionReason(event.target.value)}
-                className={inputClass}
-              />
-            </Field>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={isPending || correctionReason.trim() === "" || proposedMarks.trim() === ""}
-                onClick={() =>
-                  run(async () => {
-                    const result = await requestResultCorrection(correctingRow.id, {
-                      reason: correctionReason,
-                      proposedMarksObtained: Number(proposedMarks),
-                    });
-                    if (result.ok) cancelCorrection();
-                    return result;
-                  }, "Correction requested.")
-                }
-              >
-                Submit correction request
-              </Button>
-              <Button type="button" variant="secondary" onClick={cancelCorrection}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </FormDialog>
-      )}
-
-      {rejectingRow && (
-        <FormDialog
-          open={rejectingId !== null}
-          onOpenChange={(nextOpen) => !nextOpen && cancelReject()}
-          title={`Reject result — ${rejectingRow.studentFullName} (${rejectingRow.studentNumber})`}
-        >
-          <div className="flex flex-col gap-3">
-            <Field label="Reason">
-              <input
-                type="text"
-                value={rejectReason}
-                onChange={(event) => setRejectReason(event.target.value)}
-                className={inputClass}
-              />
-            </Field>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="danger"
-                disabled={isPending || rejectReason.trim() === ""}
-                onClick={() =>
-                  run(async () => {
-                    const result = await rejectResult(rejectingRow.id, rejectReason);
-                    if (result.ok) cancelReject();
-                    return result;
-                  }, "Result rejected.")
-                }
-              >
-                Confirm reject
-              </Button>
-              <Button type="button" variant="secondary" onClick={cancelReject}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </FormDialog>
-      )}
-
-      {results.length === 0 && (
+      {exams.length === 0 ? (
         <Section>
-          <EmptyState message="No results yet." icon={<Icon name="fact_check" />} />
+          <EmptyState message="No results yet. They appear here once an exam has students." icon={<Icon name="clipboard" />} />
         </Section>
-      )}
-      {[...byExam.entries()].map(([examId, rows]) => {
-        const hasMarksEntered = rows.some((row) => row.status === "marks_entered");
-        const hasApproved = rows.some((row) => row.status === "approved");
-        return (
-          <Section key={examId}>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-semibold text-ink">{examNames[examId] ?? "Exam"}</h2>
-              <div className="flex flex-wrap gap-2">
-                {canSubmit && hasMarksEntered && (
-                  <Button type="button" variant="secondary" disabled={isPending} onClick={() => run(() => submitResults(examId), "Results submitted for review.")}>
-                    Submit marks for review
-                  </Button>
-                )}
-                {canApprove && hasApproved && (
-                  <Button type="button" disabled={isPending} onClick={() => run(() => publishResults(examId), "Results published.")}>
-                    Publish approved results
-                  </Button>
-                )}
-              </div>
+      ) : (
+        <>
+          <div className="mb-6 flex flex-col gap-3">
+            <label className="relative block w-full max-w-[380px]">
+              <span className="sr-only">Search student</span>
+              <span aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted">
+                <Icon name="search" width={18} height={18} />
+              </span>
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search student"
+                className={`${controlClass(false)} pl-10`}
+              />
+            </label>
+            <div role="group" aria-label="Filter by status" className="flex w-fit max-w-full gap-1 overflow-x-auto rounded-xl bg-[#EEF0F3] p-1">
+              {[{ key: "all", label: "All" }, ...CHIPS].map((c) => {
+                const on = chip === c.key;
+                return (
+                  <button
+                    key={c.key}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setChip(c.key)}
+                    className={`inline-flex min-h-10 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3.5 text-[13px] font-semibold transition-colors duration-150 ${
+                      on ? "bg-surface text-brand shadow-card" : "text-[#374151] hover:text-ink"
+                    }`}
+                  >
+                    {c.label}
+                    {c.key !== "all" && (
+                      <span className="rounded-full bg-surface/70 px-1.5 text-xs tabular-nums text-muted">{counts[c.key]}</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
-            <div className="mt-3">
-              <TableWrap>
-                <thead>
-                  <tr>
-                    <th className={th}>Student</th>
-                    <th className={th}>Marks</th>
-                    <th className={th}>Status</th>
-                    <th className={th}>Grade</th>
-                    {canApprove && <th className={th}>Actions</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id} className={trHover}>
-                      <td className={td}>
-                        <div className="flex items-center gap-3">
-                          <StudentAvatar
-                            fullName={row.studentFullName}
-                            photoUrl={photoUrlByStudentId.get(row.studentId) ?? null}
-                            sizeClassName="h-8 w-8"
-                          />
-                          <div className="min-w-0">
-                            <span className="block truncate font-medium text-ink">{row.studentFullName}</span>
-                            <span className="block text-xs text-muted">{row.studentNumber}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className={td}>{row.marksObtained ?? "—"}</td>
-                      <td className={td}>
-                        <Badge label={row.status} tone={statusTone(row.status)} />
-                      </td>
-                      <td className={td}>{row.gradeBandLabel ?? "—"}</td>
+          </div>
+
+          {shownExams.length === 0 && (
+            <div className="mb-8 rounded-card border border-border bg-surface px-4 py-8 text-center text-sm text-muted shadow-card">
+              No results match this search.
+            </div>
+          )}
+
+          {shownExams.map((exam) => {
+            const rows = results.filter((r) => r.examId === exam.id);
+            const shown = rows.filter(visible);
+            const entered = rows.filter((r) => r.status === "marks_entered").length;
+            const approved = rows.filter((r) => r.status === "approved").length;
+            const underReview = rows.filter((r) => r.status === "under_review" || r.status === "submitted");
+            return (
+              <div key={exam.id} className="mb-2">
+                <BlockTitle
+                  actions={
+                    <span className="flex flex-wrap gap-2">
+                      {canSubmit && (
+                        <button
+                          type="button"
+                          className={HEAD_BTN}
+                          disabled={pending || entered === 0}
+                          title={entered === 0 ? "No entered marks to submit." : undefined}
+                          onClick={() => run(() => submitResults(exam.id), `Submitted ${entered} for review.`)}
+                        >
+                          Submit marks for review{entered > 0 ? ` (${entered})` : ""}
+                        </button>
+                      )}
                       {canApprove && (
-                        <td className={td}>
-                          {row.status === "published" && (
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                className="px-2.5 py-1 text-xs"
-                                disabled={isPending}
-                                onClick={() => setCorrectingId(row.id)}
-                              >
-                                Request correction
-                              </Button>
-                            </div>
-                          )}
-                          {row.status === "under_review" && (
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Button
-                                type="button"
-                                className="px-2.5 py-1 text-xs"
-                                disabled={isPending}
-                                onClick={() => run(() => approveResult(row.id), "Result approved.")}
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="danger"
-                                className="px-2.5 py-1 text-xs"
-                                disabled={isPending}
-                                onClick={() => setRejectingId(row.id)}
-                              >
-                                Reject
-                              </Button>
-                            </div>
+                        <button
+                          type="button"
+                          className={HEAD_BTN}
+                          disabled={pending || approved === 0}
+                          title={approved === 0 ? "No approved results to publish." : undefined}
+                          onClick={() => setPublishFor(exam)}
+                        >
+                          Publish approved results{approved > 0 ? ` (${approved})` : ""}
+                        </button>
+                      )}
+                    </span>
+                  }
+                >
+                  {exam.title}
+                </BlockTitle>
+                <DataTable stackBelow={760}>
+                  <thead>
+                    <tr>
+                      <th className={rtTh}>Student</th>
+                      <th className={`${rtTh} md:text-right`}>Marks</th>
+                      <th className={rtTh}>Status</th>
+                      <th className={rtTh}>Grade</th>
+                      <th className={rtTh}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shown.map((row) => (
+                      <tr key={row.id} className={trHover}>
+                        <td className={rtTd} data-label="Student">
+                          <span className="block font-semibold">{row.studentName}</span>
+                          <span className="block text-xs text-muted">{row.studentNumber}</span>
+                        </td>
+                        <td className={`${rtTd} tabular-nums md:text-right`} data-label="Marks">
+                          {row.marks === null ? <span className="text-muted">Not entered</span> : `${row.marks} / ${exam.maxMarks}`}
+                        </td>
+                        <td className={rtTd} data-label="Status">
+                          <Badge label={humanizeStatus(row.status)} tone={TONE[row.status]} />
+                        </td>
+                        <td className={rtTd} data-label="Grade">
+                          {row.status === "published" && row.grade ? (
+                            gradeText(row.grade, row.passFail)
+                          ) : (
+                            <span className="text-muted">After publishing</span>
                           )}
                         </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
-            </div>
-          </Section>
-        );
-      })}
-      {canApprove && <CorrectionsPanel resultLabelById={resultLabelById} />}
-    </div>
-  );
-}
-
-/**
- * Item 50b: lists every result_corrections row for the academy and lets an
- * approve-capable actor (Owner/Admin/Manager — same `canApprove` gate the
- * parent list already checked before rendering this) decide `requested`
- * ones. Fetched on demand rather than passed down from the server
- * component, matching lib/academies/exams-actions.ts's
- * `getExamResultsRoster` "Server Action even for a read" convention.
- */
-function CorrectionsPanel({ resultLabelById }: { resultLabelById: Map<string, string> }) {
-  const [isPending, startTransition] = useTransition();
-  const [corrections, setCorrections] = useState<ResultCorrectionRecord[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [rejectingId, setRejectingId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState("");
-  const rejectingCorrection = corrections?.find((correction) => correction.id === rejectingId) ?? null;
-
-  function cancelReject() {
-    setRejectingId(null);
-    setRejectReason("");
-  }
-
-  function refresh() {
-    startTransition(async () => {
-      const result = await getResultCorrectionsList();
-      if (result.ok) {
-        setCorrections(result.corrections);
-      } else {
-        setError(result.error.message);
-      }
-    });
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
-
-  function run(action: () => Promise<{ ok: true } | { ok: false; error: { message: string } }>, successMessage: string) {
-    setError(null);
-    startTransition(async () => {
-      const result = await action();
-      if (!result.ok) {
-        setError(result.error.message);
-        showErrorToast(result.error.message);
-        return;
-      }
-      showSuccessToast(successMessage);
-      refresh();
-    });
-  }
-
-  return (
-    <Section>
-      <h2 className="text-base font-semibold text-ink">Result correction requests</h2>
-      {error && (
-        <div className="mt-2">
-          <ErrorMessage message={error} />
-        </div>
-      )}
-      {rejectingCorrection && (
-        <FormDialog
-          open={rejectingId !== null}
-          onOpenChange={(nextOpen) => !nextOpen && cancelReject()}
-          title={`Reject correction request — ${resultLabelById.get(rejectingCorrection.originalResultId) ?? rejectingCorrection.originalResultId}`}
-        >
-          <div className="flex flex-col gap-3">
-            <Field label="Reason">
-              <input
-                type="text"
-                value={rejectReason}
-                onChange={(event) => setRejectReason(event.target.value)}
-                className={inputClass}
-              />
-            </Field>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="danger"
-                disabled={isPending || rejectReason.trim() === ""}
-                onClick={() =>
-                  run(async () => {
-                    const result = await rejectResultCorrection(rejectingCorrection.id, rejectReason);
-                    if (result.ok) cancelReject();
-                    return result;
-                  }, "Correction rejected.")
-                }
-              >
-                Confirm reject
-              </Button>
-              <Button type="button" variant="secondary" onClick={cancelReject}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </FormDialog>
+                        <td className={rtTd} data-actions="">
+                          {(row.status === "under_review" || row.status === "submitted") && canApprove ? (
+                            <button
+                              type="button"
+                              className={ROW_BTN}
+                              disabled={pending}
+                              onClick={() => run(() => approveResult(row.id), `${row.studentName}'s result approved.`)}
+                            >
+                              Approve
+                            </button>
+                          ) : row.status === "published" && corrections !== null ? (
+                            <button type="button" className={ROW_BTN} onClick={() => setCorrectFor(row)}>
+                              Request correction
+                            </button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </DataTable>
+                {canApprove && underReview.length > 0 && (
+                  <button type="button" onClick={() => setRejectFor(exam)} className={`${HEAD_BTN} -mt-4 mb-8 h-11 px-4 text-sm`}>
+                    Reject a result under review
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </>
       )}
 
-      {!corrections && <p className="mt-2 text-sm text-muted">Loading...</p>}
-      {corrections && corrections.length === 0 && <p className="mt-2 text-sm text-muted">No correction requests.</p>}
-      {corrections && corrections.length > 0 && (
-        <div className="mt-3">
-          <TableWrap>
+      {corrections !== null && corrections.length > 0 && (
+        <>
+          <BlockTitle>Corrections</BlockTitle>
+          <DataTable stackBelow={900}>
             <thead>
               <tr>
-                <th className={th}>Student / Exam</th>
-                <th className={th}>Proposed marks</th>
-                <th className={th}>Reason</th>
-                <th className={th}>Status</th>
-                <th className={th}>Actions</th>
+                <th className={rtTh}>Student</th>
+                <th className={rtTh}>Exam</th>
+                <th className={`${rtTh} md:text-right`}>Original</th>
+                <th className={`${rtTh} md:text-right`}>Proposed</th>
+                <th className={rtTh}>Reason</th>
+                <th className={rtTh}>Status</th>
+                <th className={rtTh}>
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {corrections.map((correction) => (
-                <tr key={correction.id} className={trHover}>
-                  <td className={`${td} font-medium`}>
-                    {resultLabelById.get(correction.originalResultId) ?? correction.originalResultId}
-                  </td>
-                  <td className={td}>{correction.proposedMarksObtained ?? "—"}</td>
-                  <td className={td}>{correction.reason}</td>
-                  <td className={td}>
-                    <Badge label={correction.status} tone={statusTone(correction.status)} />
-                  </td>
-                  <td className={td}>
-                    {correction.status === "requested" && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          type="button"
-                          className="px-2.5 py-1 text-xs"
-                          disabled={isPending}
-                          onClick={() => run(() => approveResultCorrection(correction.id), "Correction approved.")}
-                        >
-                          Approve
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="danger"
-                          className="px-2.5 py-1 text-xs"
-                          disabled={isPending}
-                          onClick={() => setRejectingId(correction.id)}
-                        >
-                          Reject
-                        </Button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {corrections.map((c) => {
+                const original = resultById.get(c.originalResultId);
+                return (
+                  <tr key={c.id} className={trHover}>
+                    <td className={`${rtTd} font-semibold`} data-label="Student">
+                      {original?.studentName ?? "Student"}
+                    </td>
+                    <td className={rtTd} data-label="Exam">
+                      {original ? examById.get(original.examId)?.title ?? "Exam" : "Exam"}
+                    </td>
+                    <td className={`${rtTd} tabular-nums md:text-right`} data-label="Original">
+                      {original?.marks ?? "Not available"}
+                    </td>
+                    <td className={`${rtTd} tabular-nums md:text-right`} data-label="Proposed">
+                      {c.proposedMarksObtained ?? "No change"}
+                    </td>
+                    <td className={`${rtTd} max-w-[280px]`} data-label="Reason">
+                      {c.reason}
+                    </td>
+                    <td className={rtTd} data-label="Status">
+                      <Badge
+                        label={c.status === "requested" ? "Pending approval" : humanizeStatus(c.status)}
+                        tone={c.status === "requested" ? "amber" : c.status === "rejected" ? "gray" : "green"}
+                      />
+                    </td>
+                    <td className={rtTd} data-actions="">
+                      {c.status === "requested" && (
+                        <span className="inline-flex gap-2">
+                          <button
+                            type="button"
+                            className={ROW_BTN}
+                            disabled={pending}
+                            onClick={() => run(() => approveResultCorrection(c.id), "Correction approved and applied.")}
+                          >
+                            Approve
+                          </button>
+                          <RejectCorrectionButton correctionId={c.id} onDone={() => router.refresh()} />
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
-          </TableWrap>
-        </div>
+          </DataTable>
+        </>
       )}
-    </Section>
+
+      <NoteBlock>
+        Submitting moves entered marks to review. Rejecting a result returns its mark to draft for the trainer to fix.
+        Publishing fixes each grade from the active grade configuration; after that a result changes only through a
+        correction.
+      </NoteBlock>
+
+      {publishFor && (
+        <ConfirmButton
+          label="Publish"
+          variant="primary"
+          icon="check_circle"
+          open
+          onOpenChange={(open) => !open && setPublishFor(null)}
+          title={`Publish approved results for ${publishFor.title}?`}
+          description={<>Grades are fixed using the active configuration now. Published results change only through a correction.</>}
+          successMessage="Results published."
+          onConfirm={() => publishResults(publishFor.id)}
+          onSuccess={() => router.refresh()}
+        />
+      )}
+      {rejectFor && (
+        <RejectResultDialog
+          exam={rejectFor}
+          rows={results.filter((r) => r.examId === rejectFor.id && (r.status === "under_review" || r.status === "submitted"))}
+          onClose={() => setRejectFor(null)}
+          onDone={() => {
+            setRejectFor(null);
+            router.refresh();
+          }}
+        />
+      )}
+      {correctFor && (
+        <CorrectionDialog
+          row={correctFor}
+          maxMarks={examById.get(correctFor.examId)?.maxMarks ?? 100}
+          onClose={() => setCorrectFor(null)}
+          onDone={() => {
+            setCorrectFor(null);
+            router.refresh();
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function RejectResultDialog({
+  exam,
+  rows,
+  onClose,
+  onDone,
+}: {
+  exam: ResultsExam;
+  rows: ResultsRow[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [resultId, setResultId] = useState(rows.length === 1 ? rows[0].id : "");
+  const [reason, setReason] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [banner, setBanner] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  return (
+    <DesignDialog open onOpenChange={(open) => !open && onClose()} title="Reject result" description={`The mark returns to draft for the trainer to fix. ${exam.title}.`}>
+      <form
+        noValidate
+        className="flex min-h-0 flex-1 flex-col"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const next: Record<string, string> = {};
+          if (!resultId) next.resultId = "Choose student.";
+          if (!reason.trim()) next.reason = "Give a reason so the trainer knows what to fix.";
+          setErrors(next);
+          setBanner(Object.keys(next).length > 1 ? "2 fields need attention. They are marked below." : null);
+          if (Object.keys(next).length) return;
+          start(async () => {
+            try {
+              const outcome = await rejectResult(resultId, reason.trim());
+              if (!outcome.ok) {
+                setBanner(outcome.error.message);
+                return;
+              }
+              showSuccessToast("Result rejected and returned to draft.");
+              onDone();
+            } catch {
+              setBanner(NETWORK_ERROR_MESSAGE);
+            }
+          });
+        }}
+      >
+        <DialogBody>
+          <FieldGrid>
+            <DField label="Student" name="resultId" required error={errors.resultId} full>
+              <select value={resultId} onChange={(event) => setResultId(event.target.value)} className={controlClass(Boolean(errors.resultId))} {...invalidProps("resultId", errors.resultId)}>
+                <option value="">Choose a student</option>
+                {rows.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.studentName} ({row.marks ?? "no mark"})
+                  </option>
+                ))}
+              </select>
+            </DField>
+            <DField label="Reason" name="reason" required error={errors.reason} full>
+              <textarea
+                rows={3}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                className={`${fieldControlArea} ${errors.reason ? "border-[#B91C1C]" : "border-border-strong"} min-h-[88px]`}
+                {...invalidProps("reason", errors.reason)}
+              />
+            </DField>
+          </FieldGrid>
+          <FormErrorBanner message={banner} />
+        </DialogBody>
+        <DialogFooter onCancel={onClose} submitLabel="Reject" pendingLabel="Rejecting…" pending={pending} danger />
+      </form>
+    </DesignDialog>
+  );
+}
+
+function CorrectionDialog({
+  row,
+  maxMarks,
+  onClose,
+  onDone,
+}: {
+  row: ResultsRow;
+  maxMarks: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [marks, setMarks] = useState("");
+  const [reason, setReason] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [banner, setBanner] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  return (
+    <DesignDialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="Request correction"
+      description={`${row.studentName}, currently ${row.marks ?? "no mark"} / ${maxMarks}. The original mark stays in the audit log.`}
+    >
+      <form
+        noValidate
+        className="flex min-h-0 flex-1 flex-col"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const next: Record<string, string> = {};
+          const n = Number(marks);
+          if (marks.trim() === "" || !Number.isFinite(n) || n < 0) next.marks = "Enter the proposed mark (0 or more).";
+          else if (n > maxMarks) next.marks = `The maximum is ${maxMarks}.`;
+          if (!reason.trim()) next.reason = "Reason is required.";
+          setErrors(next);
+          setBanner(Object.keys(next).length > 1 ? "2 fields need attention. They are marked below." : null);
+          if (Object.keys(next).length) return;
+          start(async () => {
+            try {
+              const outcome = await requestResultCorrection(row.id, { proposedMarksObtained: n, reason: reason.trim() });
+              if (!outcome.ok) {
+                setBanner(outcome.error.message);
+                return;
+              }
+              showSuccessToast("Correction requested.");
+              onDone();
+            } catch {
+              setBanner(NETWORK_ERROR_MESSAGE);
+            }
+          });
+        }}
+      >
+        <DialogBody>
+          <FieldGrid>
+            <DField label="Proposed marks" name="marks" required error={errors.marks}>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                max={maxMarks}
+                step="any"
+                value={marks}
+                onChange={(event) => setMarks(event.target.value)}
+                className={controlClass(Boolean(errors.marks))}
+                {...invalidProps("marks", errors.marks)}
+              />
+            </DField>
+            <DField label="Reason" name="reason" required error={errors.reason} full>
+              <textarea
+                rows={3}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                className={`${fieldControlArea} ${errors.reason ? "border-[#B91C1C]" : "border-border-strong"} min-h-[88px]`}
+                {...invalidProps("reason", errors.reason)}
+              />
+            </DField>
+          </FieldGrid>
+          <FormErrorBanner message={banner} />
+        </DialogBody>
+        <DialogFooter onCancel={onClose} submitLabel="Send request" pendingLabel="Sending…" pending={pending} />
+      </form>
+    </DesignDialog>
+  );
+}
+
+function RejectCorrectionButton({ correctionId, onDone }: { correctionId: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  return (
+    <>
+      <button type="button" className={ROW_BTN} onClick={() => setOpen(true)}>
+        Reject
+      </button>
+      <DesignDialog open={open} onOpenChange={setOpen} title="Reject correction" description="The published result stays as it is.">
+        <form
+          noValidate
+          className="flex min-h-0 flex-1 flex-col"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!reason.trim()) {
+              setError("Reason is required.");
+              return;
+            }
+            setError(null);
+            start(async () => {
+              try {
+                const outcome = await rejectResultCorrection(correctionId, reason.trim());
+                if (!outcome.ok) {
+                  setBanner(outcome.error.message);
+                  return;
+                }
+                showSuccessToast("Correction rejected.");
+                setOpen(false);
+                onDone();
+              } catch {
+                setBanner(NETWORK_ERROR_MESSAGE);
+              }
+            });
+          }}
+        >
+          <DialogBody>
+            <DField label="Reason" name="reason" required error={error ?? undefined} full>
+              <textarea
+                rows={3}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                className={`${fieldControlArea} ${error ? "border-[#B91C1C]" : "border-border-strong"} min-h-[88px]`}
+                {...invalidProps("reason", error ?? undefined)}
+              />
+            </DField>
+            <FormErrorBanner message={banner} />
+          </DialogBody>
+          <DialogFooter onCancel={() => setOpen(false)} submitLabel="Reject" pendingLabel="Rejecting…" pending={pending} danger />
+        </form>
+      </DesignDialog>
+    </>
   );
 }

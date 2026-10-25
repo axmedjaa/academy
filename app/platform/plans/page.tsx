@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
-import { listSubscriptionPlans } from "@/lib/subscriptions/plans";
+import { listSubscriptionPlansPage } from "@/lib/subscriptions/plans";
 import { PlansManager } from "./plans-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
@@ -36,17 +36,18 @@ export default async function PlatformPlansPage({
     return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
-  // `listSubscriptionPlans()` is also used internally (e.g. the academy
-  // registration plan picker, lib/subscriptions/usage.ts) where it must
-  // keep returning every row — sliced here instead, after fetching, same
-  // "still fully server-side, no DB-level LIMIT/OFFSET" reasoning as
-  // app/platform/academies/page.tsx.
+  // Perf investigation (Afoogy slow-dashboard task): previously called
+  // listSubscriptionPlans() (every row, no DB-level LIMIT/OFFSET) and
+  // sliced the already-fetched array in JS — harmless at a handful of
+  // rows, but that function's own unbounded SELECT means every load of
+  // this page shipped the *entire* subscription_plans table across the
+  // wire first. listSubscriptionPlansPage() pushes LIMIT/OFFSET and the
+  // page-nav total down to Postgres instead; listSubscriptionPlans()
+  // itself is untouched for its other caller (the academy registration
+  // plan picker, which still needs every row).
   const params = await searchParams;
   const page = parsePageParam(params);
-  const allPlans = await listSubscriptionPlans();
-  const totalCount = allPlans.length;
-  const offset = (page - 1) * PAGE_SIZE;
-  const plans = allPlans.slice(offset, offset + PAGE_SIZE);
+  const { plans, totalCount } = await listSubscriptionPlansPage(page, PAGE_SIZE);
 
   return (
     <div className={PAGE_WRAP}>

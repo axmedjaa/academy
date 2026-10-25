@@ -1,5 +1,6 @@
 import { Document, Image, Page, StyleSheet, Text, View } from "@react-pdf/renderer";
 import type { CertificatePrintData } from "@/lib/academies/certificate-print";
+import { color } from "@/lib/ui/theme";
 
 /**
  * Server-only PDF rendering of the same certificate content as
@@ -18,16 +19,16 @@ const styles = StyleSheet.create({
   page: {
     padding: 24,
     fontFamily: "Times-Roman",
-    color: "#1B2A4A",
+    color: color.primaryBlue,
   },
   outerBorder: {
     flex: 1,
-    border: "2pt solid #1B2A4A",
+    border: `2pt solid ${color.primaryBlue}`,
     padding: 8,
   },
   innerBorder: {
     flex: 1,
-    border: "1pt solid #2F5FE0",
+    border: `1pt solid ${color.primaryBlue}`,
     padding: 24,
     alignItems: "center",
     justifyContent: "space-between",
@@ -41,7 +42,7 @@ const styles = StyleSheet.create({
     fontWeight: 700,
     marginTop: 6,
     paddingBottom: 6,
-    borderBottom: "1.5pt solid #2F5FE0",
+    borderBottom: `1.5pt solid ${color.primaryBlue}`,
     textAlign: "center",
   },
   programLine: { fontSize: 13, marginTop: 10, textAlign: "center" },
@@ -55,7 +56,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   column: { flex: 1, alignItems: "center" },
-  signatureLine: { width: 140, borderTop: "1pt solid #1B2A4A", marginBottom: 4 },
+  signatureLine: { width: 140, borderTop: `1pt solid ${color.primaryBlue}`, marginBottom: 4 },
   smallLabel: { fontSize: 8, color: "#6B7280", textTransform: "uppercase", letterSpacing: 1 },
   metaText: { fontSize: 9, color: "#4B5563" },
   certCode: { fontSize: 11, fontWeight: 700, fontFamily: "Courier" },

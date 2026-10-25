@@ -3,7 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import {
   listAcademySubscriptionOptions,
-  listSubscriptionPayments,
+  listSubscriptionPaymentsPage,
 } from "@/lib/subscriptions/payments";
 import { PaymentsManager } from "./payments-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
@@ -44,18 +44,27 @@ export default async function PlatformPaymentsPage({
   const canVerify = await hasPermission(context, VERIFY_PAYMENT_CAPABILITY);
   const params = await searchParams;
   const page = parsePageParam(params);
-  const [allPayments, subscriptionOptions] = await Promise.all([
-    listSubscriptionPayments(),
-    listAcademySubscriptionOptions(),
+  // Perf investigation (Afoogy slow-dashboard task): previously
+  // listSubscriptionPayments() (every row, no DB-level LIMIT/OFFSET) then
+  // sliced the already-fetched array in JS — harmless at this table's
+  // current 29 rows, but the same unbounded-SELECT pattern as
+  // /platform/plans (see that page's own fix). listSubscriptionPaymentsPage()
+  // pushes LIMIT/OFFSET, the newest-first ordering, and the page-nav total
+  // down to Postgres instead; listSubscriptionPayments() itself is
+  // untouched for its other caller (this file's own test).
+  // Perf investigation (Afoogy slow-dashboard task): `listAcademySubscriptionOptions()`
+  // backs this form's plain, unsearchable academy/subscription <select> —
+  // with no `limit`, it fetched (and the page then rendered as literal
+  // <option> elements) every academy_subscriptions row ever created,
+  // platform-wide: harmless at a handful of real academies, but a
+  // multi-second, full-table-plus-two-joins query once that table holds
+  // thousands of rows. The picker was never designed to show thousands of
+  // options anyway — capping it is a query-cost fix, not a feature change.
+  const RECORD_PAYMENT_PICKER_LIMIT = 200;
+  const [{ payments, totalCount }, subscriptionOptions] = await Promise.all([
+    listSubscriptionPaymentsPage(page, PAGE_SIZE),
+    listAcademySubscriptionOptions({ limit: RECORD_PAYMENT_PICKER_LIMIT }),
   ]);
-  // `listSubscriptionPayments()` has no other internal caller today, but
-  // sliced here (after fetching) rather than changed at the DB-query level
-  // anyway, for the same reason and the same shape as every other platform
-  // list page in this pass (see app/platform/academies/page.tsx) — still
-  // fully server-side, no client-side fetch-all.
-  const totalCount = allPayments.length;
-  const offset = (page - 1) * PAGE_SIZE;
-  const payments = allPayments.slice(offset, offset + PAGE_SIZE);
 
   return (
     <div className={PAGE_WRAP}>

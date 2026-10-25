@@ -1,44 +1,42 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { students } from "@/lib/db/schema";
+import { academies, batches, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getStudentReports, type EnrollmentTrendPoint } from "@/lib/academies/student-reports";
 import { listStaff } from "@/lib/academies/staff";
 import { listExams } from "@/lib/academies/exams";
-import { listPendingApprovalRequests } from "@/lib/academies/approval-requests";
-import { getFinanceReports, type FinanceReportsData } from "@/lib/academies/finance-reports";
+import { listBranches } from "@/lib/academies/branches";
+import {
+  listPendingApprovalRequests,
+  type ApprovalRequestEntityType,
+} from "@/lib/academies/approval-requests";
+import { getFinanceReports, type AmountByCurrency } from "@/lib/academies/finance-reports";
+import { getOverdueFeeSummary, type OverdueFeeSummary } from "@/lib/academies/fee-periods";
 import { getOwnAcademyUsage, type OwnAcademyUsageLimits, type OwnAcademyUsageMetrics } from "@/lib/academies/settings";
 import { listStudentPayments, type StudentPaymentRecord } from "@/lib/academies/student-payments";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
- * DESIGN.md §9.1 — `/academy/dashboard`'s real content ("custom layout.
- * Summary cards (active students, staff, upcoming exams, pending
- * approvals, recent payments), alerts..., compact usage indicator...
- * linking to Settings"). This replaces app/academy/dashboard/page.tsx's
- * Item 28 placeholder.
+ * `/academy/dashboard` (Screen Inventory A01) data. Every number comes from
+ * an existing, already-gated read — getStudentReports / listStaff /
+ * listExams / listPendingApprovalRequests / getFinanceReports /
+ * getOwnAcademyUsage / listStudentPayments / listBranches — plus one pure
+ * read, `getOverdueFeeSummary`, that only runs once `getFinanceReports` has
+ * already confirmed the caller can see student payments. Nothing is
+ * estimated or invented.
  *
- * Every number here comes from an existing, already-gated read
- * (getStudentReports/listStaff/listExams/listPendingApprovalRequests/
- * getFinanceReports/getOwnAcademyUsage/listStudentPayments) — nothing new is
- * computed, per this task's "do not invent metrics that don't exist in the
- * backend" instruction. Each source is fetched independently and a
- * "forbidden"/"blocked" result from one is treated as "this card is simply
- * omitted for this role" (mirrors DESIGN.md §3.1 Permission-denied: hidden,
- * not shown as an error) rather than failing the whole page — different
- * academy roles hold very different permission sets (e.g. Admissions
- * Officer has no access to staff or finance at all), so a single "one
- * source failed" should never blank the entire dashboard for that role.
+ * Each source is fetched independently; a "forbidden" result from one only
+ * removes that section for this role (DESIGN.md §3.1: hidden, not an error),
+ * so a role with a narrow permission set still gets a useful page.
+ *
+ * Branch filter: `branchId` is honoured only when it is one of the branches
+ * `listBranches` already returns for this caller (all branches for
+ * academy-wide roles, assigned branches for branch-limited roles) — any
+ * other value is ignored, so a crafted URL can never widen scope or reach
+ * another academy's branch. Student, enrollment, payment, charge, overdue
+ * and exam figures follow the filter; staff, approvals and plan usage are
+ * academy-wide by nature and say so in the UI.
  */
-export interface DashboardAlert {
-  message: string;
-  tone: "amber" | "red";
-  /** Only set when exactly one destination unambiguously resolves the
-   * alert (e.g. outstanding charges -> Finance). The pending-approvals
-   * alert deliberately omits this — those approvals span both Grades and
-   * Finance, with no single correct page to send the user to. */
-  href?: string;
-}
 
 export interface RecentPaymentRow {
   id: string;
@@ -51,21 +49,49 @@ export interface RecentPaymentRow {
   status: StudentPaymentRecord["status"];
 }
 
-type VisibleStudentPaymentsSection = Extract<FinanceReportsData["studentPayments"], { visible: true }>;
+export interface DashboardBranchOption {
+  id: string;
+  name: string;
+}
+
+export interface NextExamSummary {
+  id: string;
+  name: string;
+  batchName: string;
+  examDate: string;
+}
+
+export interface PendingApprovalsSummary {
+  total: number;
+  /** Page holding the largest share of the pending items — where "Review"
+   * sends the user. */
+  href: string;
+  /** Plain-language breakdown, e.g. "2 results, 1 expense". */
+  breakdown: string;
+}
+
+export interface MoneySummary {
+  count: number;
+  totalsByCurrency: AmountByCurrency[];
+}
 
 export interface AcademyDashboardData {
+  academyName: string;
+  branchOptions: DashboardBranchOption[];
+  selectedBranch: DashboardBranchOption | null;
   totalStudents: number | null;
+  activeStudents: number | null;
   activeStaffCount: number | null;
   upcomingExamsCount: number | null;
-  pendingApprovalsCount: number | null;
+  nextExam: NextExamSummary | null;
+  pendingApprovals: PendingApprovalsSummary | null;
+  outstandingCharges: MoneySummary | null;
+  paymentsCollected: MoneySummary | null;
+  overdueFees: OverdueFeeSummary | null;
   recentPayments: RecentPaymentRow[] | null;
   usage: { metrics: OwnAcademyUsageMetrics | null; limits: OwnAcademyUsageLimits | null } | null;
-  finance: VisibleStudentPaymentsSection | null;
-  /** Same `getStudentReports` call already made for `totalStudents` above
-   * — threaded through here too rather than fetched a second time, so the
-   * dashboard's enrollment-trend chart costs this page nothing extra. */
+  /** Monthly new enrollments, oldest first ("YYYY-MM"). */
   enrollmentTrend: EnrollmentTrendPoint[] | null;
-  alerts: DashboardAlert[];
 }
 
 export type GetAcademyDashboardDataResult =
@@ -74,77 +100,137 @@ export type GetAcademyDashboardDataResult =
 
 const CAN_SEE_APPROVALS_ROLES = new Set(["academy_owner", "academy_admin", "manager"]);
 
-/** Previously fetched the academy's entire payment history and sorted/
- * sliced to 5 in JS; now pushed down to a DB-level ORDER BY/LIMIT via
- * `listStudentPayments`'s own `limit` option — see that call below. */
-const RECENT_PAYMENTS_LIMIT = 10;
+/** Reference: "Recent payments · Latest 5". */
+const RECENT_PAYMENTS_LIMIT = 5;
+
+const APPROVAL_BUCKETS: Record<ApprovalRequestEntityType, { href: string; noun: [string, string] }> = {
+  result: { href: "/academy/results", noun: ["result", "results"] },
+  grade_configuration: { href: "/academy/grades", noun: ["grade change", "grade changes"] },
+  expense: { href: "/academy/finance", noun: ["expense", "expenses"] },
+  student_payment: { href: "/academy/finance", noun: ["payment", "payments"] },
+};
+
+function summarizeApprovals(entityTypes: ApprovalRequestEntityType[]): PendingApprovalsSummary {
+  const counts = new Map<ApprovalRequestEntityType, number>();
+  for (const type of entityTypes) counts.set(type, (counts.get(type) ?? 0) + 1);
+  const sorted = [...counts].sort((a, b) => b[1] - a[1]);
+  const top = sorted[0]?.[0];
+  return {
+    total: entityTypes.length,
+    href: top ? APPROVAL_BUCKETS[top].href : "/academy/results",
+    breakdown: sorted
+      .map(([type, n]) => `${n} ${APPROVAL_BUCKETS[type].noun[n === 1 ? 0 : 1]}`)
+      .join(", "),
+  };
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export async function getAcademyDashboardData(
   actorContext: AuthContext,
+  options: { branchId?: string | null } = {},
 ): Promise<GetAcademyDashboardDataResult> {
   const access = await checkAcademyAccessForContext(actorContext);
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
-  const [studentReportsResult, staffResult, examsResult, financeResult, usageResult, paymentsResult] =
-    await Promise.all([
-      getStudentReports(actorContext, {}),
-      listStaff(actorContext),
-      listExams(actorContext),
-      getFinanceReports(actorContext, {}),
-      getOwnAcademyUsage(actorContext),
-      listStudentPayments(actorContext, { limit: RECENT_PAYMENTS_LIMIT }),
-    ]);
+  const { academyId, membershipRole } = access;
+
+  const branchesResult = await listBranches(actorContext);
+  const branchOptions: DashboardBranchOption[] = branchesResult.ok
+    ? branchesResult.branches
+        .filter((branch) => branch.status === "active" || branch.id === options.branchId)
+        .map((branch) => ({ id: branch.id, name: branch.name }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    : [];
+  const selectedBranch = branchOptions.find((branch) => branch.id === options.branchId) ?? null;
+  const branchId = selectedBranch?.id;
+
+  const [
+    studentReportsResult,
+    staffResult,
+    examsResult,
+    financeResult,
+    usageResult,
+    paymentsResult,
+    pendingApprovalRequests,
+    academyRow,
+  ] = await Promise.all([
+    getStudentReports(actorContext, branchId ? { branchId } : {}),
+    listStaff(actorContext),
+    listExams(actorContext),
+    getFinanceReports(actorContext, branchId ? { branchId } : {}),
+    getOwnAcademyUsage(actorContext),
+    listStudentPayments(actorContext, { limit: RECENT_PAYMENTS_LIMIT, branchId }),
+    CAN_SEE_APPROVALS_ROLES.has(membershipRole) ? listPendingApprovalRequests(academyId) : Promise.resolve(null),
+    getOwnAcademyName(academyId),
+  ]);
 
   const totalStudents = studentReportsResult.ok ? studentReportsResult.report.totalStudents : null;
+  const activeStudents = studentReportsResult.ok
+    ? (studentReportsResult.report.statusBreakdown.find((row) => row.status === "active")?.count ?? 0)
+    : null;
   const enrollmentTrend = studentReportsResult.ok ? studentReportsResult.report.enrollmentTrend : null;
-  const activeStaffCount = staffResult.ok ? staffResult.staff.length : null;
-
-  const now = new Date();
-  const upcomingExamsCount = examsResult.ok
-    ? examsResult.exams.filter(
-        (exam) => exam.status === "scheduled" && exam.examDate !== null && new Date(exam.examDate) >= now,
-      ).length
+  const activeStaffCount = staffResult.ok
+    ? staffResult.staff.filter((member) => member.status === "active").length
     : null;
 
-  // Both reads below are independent of each other (one scoped by
-  // academyId, the other by the already-resolved payments' studentIds) —
-  // previously two sequential round trips after the main Promise.all;
-  // run together instead, same "don't serialize independent queries" fix
-  // as checkAcademyAccess's own two lookups (lib/academies/access-gate.ts).
+  const finance =
+    financeResult.ok && financeResult.report.studentPayments.visible ? financeResult.report.studentPayments : null;
+
+  // Upcoming = still scheduled and dated today or later; the batch join
+  // supplies both the display name and the branch for the branch filter.
+  const today = todayIsoDate();
+  const scheduledExams = examsResult.ok
+    ? examsResult.exams.filter(
+        (exam): exam is typeof exam & { examDate: string } =>
+          exam.status === "scheduled" && exam.examDate !== null && exam.examDate >= today,
+      )
+    : [];
+  const examBatchIds = [...new Set(scheduledExams.map((exam) => exam.batchId))];
   const studentIdsForPayments = paymentsResult.ok
     ? [...new Set(paymentsResult.payments.map((payment) => payment.studentId))]
     : [];
 
-  const [pendingApprovalRequests, paymentStudentNameRows] = await Promise.all([
-    CAN_SEE_APPROVALS_ROLES.has(access.membershipRole)
-      ? listPendingApprovalRequests(access.academyId)
-      : Promise.resolve(null),
+  const [examBatchRows, paymentStudentNameRows, overdueFees] = await Promise.all([
+    examBatchIds.length
+      ? db
+          .select({ id: batches.id, name: batches.name, branchId: batches.branchId })
+          .from(batches)
+          .where(and(eq(batches.academyId, academyId), inArray(batches.id, examBatchIds)))
+      : Promise.resolve([]),
     studentIdsForPayments.length
       ? db
           .select({ id: students.id, fullName: students.fullName })
           .from(students)
-          .where(and(eq(students.academyId, access.academyId), inArray(students.id, studentIdsForPayments)))
+          .where(and(eq(students.academyId, academyId), inArray(students.id, studentIdsForPayments)))
       : Promise.resolve([]),
+    finance ? getOverdueFeeSummary(academyId, branchId) : Promise.resolve(null),
   ]);
 
-  const pendingApprovalsCount = pendingApprovalRequests ? pendingApprovalRequests.length : null;
-
-  const usage =
-    usageResult.ok ? { metrics: usageResult.usage, limits: usageResult.limits } : null;
-
-  const finance = financeResult.ok && financeResult.report.studentPayments.visible
-    ? financeResult.report.studentPayments
+  const batchById = new Map(examBatchRows.map((row) => [row.id, row]));
+  const upcomingExams = scheduledExams
+    .filter((exam) => {
+      const batch = batchById.get(exam.batchId);
+      return batch && (!branchId || batch.branchId === branchId);
+    })
+    .sort((a, b) => a.examDate.localeCompare(b.examDate));
+  const upcomingExamsCount = examsResult.ok ? upcomingExams.length : null;
+  const firstExam = upcomingExams[0];
+  const nextExam: NextExamSummary | null = firstExam
+    ? {
+        id: firstExam.id,
+        name: firstExam.name,
+        batchName: batchById.get(firstExam.batchId)?.name ?? "",
+        examDate: firstExam.examDate,
+      }
     : null;
 
   let recentPayments: RecentPaymentRow[] | null = null;
   if (paymentsResult.ok) {
-    // Already the most recent RECENT_PAYMENTS_LIMIT rows, newest first —
-    // `listStudentPayments`'s own `limit` option pushes the ORDER BY/LIMIT
-    // down to Postgres now, so this no longer fetches the academy's entire
-    // payment history just to sort/slice it in JS.
     const nameById = new Map(paymentStudentNameRows.map((row) => [row.id, row.fullName]));
-
     recentPayments = paymentsResult.payments.map((payment) => ({
       id: payment.id,
       studentId: payment.studentId,
@@ -157,41 +243,31 @@ export async function getAcademyDashboardData(
     }));
   }
 
-  const alerts: DashboardAlert[] = [];
-  if (pendingApprovalsCount !== null && pendingApprovalsCount > 0) {
-    alerts.push({
-      message: `${pendingApprovalsCount} item${pendingApprovalsCount === 1 ? "" : "s"} awaiting your approval.`,
-      tone: "amber",
-    });
-  }
-  if (finance && finance.outstandingCharges.count > 0) {
-    alerts.push({
-      message: `${finance.outstandingCharges.count} outstanding charge${finance.outstandingCharges.count === 1 ? "" : "s"}.`,
-      tone: "amber",
-      href: "/academy/finance",
-    });
-  }
-  if (
-    usage?.metrics &&
-    usage.limits &&
-    usage.limits.maxStudents > 0 &&
-    usage.metrics.activeStudentsCount / usage.limits.maxStudents >= 1
-  ) {
-    alerts.push({ message: "This academy is at its student allowance limit.", tone: "red", href: "/academy/settings" });
-  }
-
   return {
     ok: true,
     data: {
+      academyName: academyRow,
+      branchOptions,
+      selectedBranch,
       totalStudents,
+      activeStudents,
       activeStaffCount,
       upcomingExamsCount,
-      pendingApprovalsCount,
+      nextExam,
+      pendingApprovals: pendingApprovalRequests
+        ? summarizeApprovals(pendingApprovalRequests.map((request) => request.entityType))
+        : null,
+      outstandingCharges: finance ? finance.outstandingCharges : null,
+      paymentsCollected: finance ? finance.paymentsReceived : null,
+      overdueFees,
       recentPayments,
-      usage,
-      finance,
+      usage: usageResult.ok ? { metrics: usageResult.usage, limits: usageResult.limits } : null,
       enrollmentTrend,
-      alerts,
     },
   };
+}
+
+async function getOwnAcademyName(academyId: string): Promise<string> {
+  const [row] = await db.select({ name: academies.name }).from(academies).where(eq(academies.id, academyId)).limit(1);
+  return row?.name ?? "Your academy";
 }

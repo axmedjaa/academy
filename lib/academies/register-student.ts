@@ -110,6 +110,17 @@ function optionalEmail(maxLength = 200) {
     });
 }
 
+/** Optional text that can be cleared: absent keeps the stored value
+ * (undefined), empty clears it (null), anything else is trimmed. */
+function clearableText(maxLength: number, label: string) {
+  return z
+    .string()
+    .trim()
+    .max(maxLength, `${label} must be ${maxLength} characters or fewer.`)
+    .optional()
+    .transform((value) => (value === undefined ? undefined : value === "" ? null : value));
+}
+
 export const registerStudentSchema = z.object({
   branchId: z.string().uuid("Select a branch"),
   fullName: z.string().trim().min(1, "Full name is required").max(200),
@@ -123,6 +134,8 @@ export const registerStudentSchema = z.object({
   email: optionalEmail(),
   guardianName: optionalText(200),
   guardianPhone: optionalText(50),
+  address: clearableText(500, "Address"),
+  district: clearableText(120, "District"),
   // An already-uploaded, not-yet-verified R2 object key from
   // requestNewStudentPhotoUploadUrl (lib/academies/students.ts) — lenient
   // here at the schema level (same "just shape, not the real check"
@@ -148,6 +161,8 @@ export interface StudentRecord {
   email: string | null;
   guardianName: string | null;
   guardianPhone: string | null;
+  address: string | null;
+  district: string | null;
   profileImageRef: string | null;
   status: "active" | "archived";
   createdBy: string;
@@ -166,6 +181,8 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
     email: row.email,
     guardianName: row.guardianName,
     guardianPhone: row.guardianPhone,
+    address: row.address,
+    district: row.district,
     profileImageRef: row.profileImageRef,
     status: row.status,
     createdBy: row.createdBy,
@@ -467,6 +484,8 @@ export async function registerStudent(
             email: data.email,
             guardianName: data.guardianName,
             guardianPhone: data.guardianPhone,
+            address: data.address ?? null,
+            district: data.district ?? null,
             profileImageRef: data.profileImageRef,
             createdBy: actorContext.userId,
           })

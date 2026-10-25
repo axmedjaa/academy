@@ -203,11 +203,11 @@ function addDays(parts: DateParts, days: number): DateParts {
   return { y: date.getUTCFullYear(), m: date.getUTCMonth() + 1, d: date.getUTCDate() };
 }
 
-function compareDateOnly(a: string, b: string): number {
+export function compareDateOnly(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function todayDateOnly(): string {
+export function todayDateOnly(): string {
   const now = new Date();
   return formatDateOnly({ y: now.getUTCFullYear(), m: now.getUTCMonth() + 1, d: now.getUTCDate() });
 }
@@ -337,7 +337,7 @@ async function getScopedEnrollment(
     })
     .from(batchEnrollments)
     .innerJoin(batches, eq(batchEnrollments.batchId, batches.id))
-    .innerJoin(courses, eq(batches.courseId, courses.id))
+    .innerJoin(courses, eq(batchEnrollments.courseId, courses.id))
     .where(eq(batchEnrollments.id, enrollmentId))
     .limit(1);
   if (!row || row.academyId !== academyId) return null;
@@ -572,15 +572,19 @@ export async function setEnrollmentFeeSchedule(
     );
 
     if (existingPeriods.length > 0) {
+      // `candidateIds` here is always exactly `notYetStartedPeriods.map(id)`
+      // above (both filter the same `existingPeriods` array by the same
+      // `periodStart > today` condition) — so "which of these already have
+      // a payment allocation" was already answered by `notYetStartedAllocatedIds`
+      // a few lines up. Perf investigation (Afoogy slow-dashboard task,
+      // measured): this function was issuing the identical
+      // `paymentAllocations` lookup, for the identical set of ids, twice —
+      // reusing that result removes one of this function's ~10 sequential
+      // Neon round trips (confirmed ~300ms each) with zero behavior change.
       const candidateIds = existingPeriods.filter((period) => period.periodStart > today).map((period) => period.id);
 
       if (candidateIds.length > 0) {
-        const allocatedIds = await tx
-          .select({ feePeriodId: paymentAllocations.feePeriodId })
-          .from(paymentAllocations)
-          .where(inArray(paymentAllocations.feePeriodId, candidateIds));
-        const protectedIds = new Set(allocatedIds.map((allocation) => allocation.feePeriodId));
-        const deletableIds = candidateIds.filter((id) => !protectedIds.has(id));
+        const deletableIds = candidateIds.filter((id) => !notYetStartedAllocatedIds.has(id));
         if (deletableIds.length > 0) {
           await tx.delete(feePeriods).where(inArray(feePeriods.id, deletableIds));
         }
@@ -627,13 +631,6 @@ export async function getEnrollmentFeeSchedule(
 // Fee period generation — deterministic, idempotent, race-safe via the
 // (enrollment_id, period_start, period_end) unique constraint.
 // ===========================================================================
-
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  if ((err as { code?: unknown }).code === "23505") return true;
-  const cause = (err as { cause?: unknown }).cause;
-  return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "23505";
-}
 
 /**
  * The ONE authoritative calculation for "how much is each monthly
@@ -729,29 +726,39 @@ export async function generateFeePeriodsForEnrollment(
 
   const installments = splitIntoMonthlyInstallments(schedule.amountCents, schedule.intervalMonths);
 
+  // Perf investigation (Afoogy slow-dashboard task): previously issued one
+  // sequential INSERT per remaining installment — up to `intervalMonths`
+  // round trips (12, for a 12-month schedule), each paying this project's
+  // own ~200-300ms Neon round-trip cost. That's the dominant cause of
+  // setEnrollmentFeeSchedule's and enrollStudentInBatch's own test
+  // timeouts (both call this function) — not query execution, round-trip
+  // count. A single multi-row INSERT with the same `ON CONFLICT DO
+  // NOTHING` produces the exact same rows: Postgres resolves the
+  // (enrollment_id, period_start, period_end) exclusion/unique conflict
+  // per inserted row, same as the removed per-row try/catch
+  // (isUniqueViolation) — in one round trip instead of up to N. No two
+  // rows in this batch can conflict with each other (`cursor` strictly
+  // advances one month per entry for this one enrollmentId), only
+  // (harmlessly) with rows a concurrent call already committed.
+  const rowsToInsert: (typeof feePeriods.$inferInsert)[] = [];
   for (let installmentIndex = installmentsAlreadyGenerated; installmentIndex < schedule.intervalMonths; installmentIndex += 1) {
     const periodStart = formatDateOnly(cursor);
     const periodEnd = formatDateOnly(addDays(addMonths(cursor, 1), -1));
-
-    try {
-      await executor
-        .insert(feePeriods)
-        .values({
-          academyId,
-          enrollmentId,
-          intervalMonths: schedule.intervalMonths,
-          periodStart,
-          periodEnd,
-          dueDate: periodStart,
-          expectedAmountCents: installments[installmentIndex],
-          currency: schedule.currency,
-        })
-        .onConflictDoNothing();
-    } catch (err) {
-      if (!isUniqueViolation(err)) throw err;
-    }
-
+    rowsToInsert.push({
+      academyId,
+      enrollmentId,
+      intervalMonths: schedule.intervalMonths,
+      periodStart,
+      periodEnd,
+      dueDate: periodStart,
+      expectedAmountCents: installments[installmentIndex],
+      currency: schedule.currency,
+    });
     cursor = addMonths(cursor, 1);
+  }
+
+  if (rowsToInsert.length > 0) {
+    await executor.insert(feePeriods).values(rowsToInsert).onConflictDoNothing();
   }
 }
 
@@ -844,7 +851,7 @@ export function computeFeePeriodStatus(
  * payments never contribute, same rule as recalculateStudentChargeStatus in
  * student-payments.ts. Returns a Map from fee_period id to paid cents;
  * periods with no approved allocations are simply absent (treat as 0). */
-async function getApprovedPaidCentsByPeriod(
+export async function getApprovedPaidCentsByPeriod(
   executor: DbClient,
   feePeriodIds: string[],
 ): Promise<Map<string, number>> {
@@ -929,8 +936,12 @@ export async function listFeePeriodsForEnrollment(
 
 export interface StudentEnrollmentOption {
   id: string;
+  batchId: string;
   batchName: string;
+  batchCode: string;
+  courseId: string;
   courseName: string;
+  enrolledAt: Date;
   status: "active" | "withdrawn" | "completed";
 }
 
@@ -962,13 +973,18 @@ export async function listEnrollmentsForStudent(
     .select({
       id: batchEnrollments.id,
       status: batchEnrollments.status,
+      batchId: batchEnrollments.batchId,
       batchName: batches.name,
+      batchCode: batches.code,
+      courseId: batchEnrollments.courseId,
       courseName: courses.name,
+      enrolledAt: batchEnrollments.enrolledAt,
     })
     .from(batchEnrollments)
     .innerJoin(batches, eq(batchEnrollments.batchId, batches.id))
-    .innerJoin(courses, eq(batches.courseId, courses.id))
-    .where(and(eq(batchEnrollments.studentId, studentId), eq(batchEnrollments.academyId, academyId)));
+    .innerJoin(courses, eq(batchEnrollments.courseId, courses.id))
+    .where(and(eq(batchEnrollments.studentId, studentId), eq(batchEnrollments.academyId, academyId)))
+    .orderBy(batchEnrollments.enrolledAt);
 
   return { ok: true, enrollments: rows };
 }
@@ -1355,7 +1371,7 @@ export async function listFeePeriodPaymentHistory(
     .innerJoin(feePeriods, eq(paymentAllocations.feePeriodId, feePeriods.id))
     .innerJoin(batchEnrollments, eq(feePeriods.enrollmentId, batchEnrollments.id))
     .innerJoin(batches, eq(batchEnrollments.batchId, batches.id))
-    .innerJoin(courses, eq(batches.courseId, courses.id))
+    .innerJoin(courses, eq(batchEnrollments.courseId, courses.id))
     .where(and(...conditions));
 
   const byPayment = new Map<string, FeePeriodPaymentHistoryRow>();
@@ -1419,7 +1435,7 @@ export type GetEnrollmentPaymentSummaryResult =
  * started yet (a brand-new enrollment whose first period is anchored in
  * the future must still read `Expected > 0`, never an empty summary).
  */
-function selectRelevantPeriods<T extends { periodStart: string }>(periods: T[], today: string): T[] {
+export function selectRelevantPeriods<T extends { periodStart: string }>(periods: T[], today: string): T[] {
   const started = periods.filter((period) => compareDateOnly(period.periodStart, today) <= 0);
   return started.length > 0 ? started : periods.slice(0, 1);
 }
@@ -1427,7 +1443,7 @@ function selectRelevantPeriods<T extends { periodStart: string }>(periods: T[], 
 /** Shared by the same two callers as `selectRelevantPeriods` — folds a set
  * of periods (already narrowed to "relevant") plus their approved-paid
  * cents into one expected/paid/remaining/status aggregate. */
-function aggregateEnrollmentPeriods(
+export function aggregateEnrollmentPeriods(
   periods: { id: string; expectedAmountCents: number; dueDate: string }[],
   paidByPeriod: Map<string, number>,
   today: string,
@@ -1652,4 +1668,86 @@ export async function getStudentPaymentSummaries(
   }
 
   return result;
+}
+
+// ===========================================================================
+// Academy-wide overdue summary for the dashboard's "Requires attention"
+// panel. Same "display enrichment on an already-authorized read" contract as
+// `getStudentPaymentSummaries` above: takes `academyId` directly, never an
+// AuthContext — the only caller (lib/academies/dashboard.ts) invokes it only
+// after `getFinanceReports` has already confirmed the caller can see student
+// payments. PURE read (never generates periods), and only ACTIVE enrollments
+// count, same as the Students list. A period is overdue by exactly
+// `computeFeePeriodStatus`'s rule; its remaining balance is the overdue
+// amount. Totals stay per currency — never summed across currencies.
+// ===========================================================================
+
+export interface OverdueFeeSummary {
+  studentCount: number;
+  periodCount: number;
+  totalsByCurrency: { currency: string; amountCents: number }[];
+  /** Overdue remainder per student, per currency. */
+  byStudent: Record<string, { currency: string; amountCents: number }[]>;
+}
+
+export async function getOverdueFeeSummary(
+  academyId: string,
+  branchId?: string | null,
+  /** Restrict to these students (e.g. a Trainer's visible set). Omit for
+   * every student in the academy/branch. */
+  studentIds?: string[],
+): Promise<OverdueFeeSummary> {
+  if (studentIds && studentIds.length === 0) {
+    return { studentCount: 0, periodCount: 0, totalsByCurrency: [], byStudent: {} };
+  }
+  const today = todayDateOnly();
+  const conditions = [
+    eq(feePeriods.academyId, academyId),
+    eq(batchEnrollments.academyId, academyId),
+    eq(batchEnrollments.status, "active"),
+    eq(students.academyId, academyId),
+    sql`${feePeriods.dueDate} < ${today}`,
+  ];
+  if (branchId) conditions.push(eq(students.branchId, branchId));
+  if (studentIds) conditions.push(inArray(students.id, studentIds));
+
+  const rows = await db
+    .select({
+      id: feePeriods.id,
+      studentId: batchEnrollments.studentId,
+      dueDate: feePeriods.dueDate,
+      expectedAmountCents: feePeriods.expectedAmountCents,
+      currency: feePeriods.currency,
+    })
+    .from(feePeriods)
+    .innerJoin(batchEnrollments, eq(feePeriods.enrollmentId, batchEnrollments.id))
+    .innerJoin(students, eq(batchEnrollments.studentId, students.id))
+    .where(and(...conditions));
+
+  const paidByPeriod = await getApprovedPaidCentsByPeriod(db, rows.map((row) => row.id));
+  const totals = new Map<string, number>();
+  const perStudent = new Map<string, Map<string, number>>();
+  let periodCount = 0;
+  for (const row of rows) {
+    const paid = paidByPeriod.get(row.id) ?? 0;
+    if (computeFeePeriodStatus(row.expectedAmountCents, paid, row.dueDate, today) !== "overdue") continue;
+    const remaining = row.expectedAmountCents - paid;
+    periodCount += 1;
+    totals.set(row.currency, (totals.get(row.currency) ?? 0) + remaining);
+    const own = perStudent.get(row.studentId) ?? new Map<string, number>();
+    own.set(row.currency, (own.get(row.currency) ?? 0) + remaining);
+    perStudent.set(row.studentId, own);
+  }
+
+  return {
+    studentCount: perStudent.size,
+    periodCount,
+    totalsByCurrency: [...totals].map(([currency, amountCents]) => ({ currency, amountCents })),
+    byStudent: Object.fromEntries(
+      [...perStudent].map(([id, byCurrency]) => [
+        id,
+        [...byCurrency].map(([currency, amountCents]) => ({ currency, amountCents })),
+      ]),
+    ),
+  };
 }

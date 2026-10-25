@@ -3,8 +3,9 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { queryAuditLogs } from "@/lib/audit-query-actions";
 import type { AuditResult } from "@/lib/audit-query";
-import { Badge, Button, ErrorMessage, PAGE_WRAP, PageHeader, PageMessage, TableWrap, Toolbar, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Button, ErrorMessage, PAGE_WRAP, PageHeader, PageMessage, TableWrap, Toolbar, inputClass, td, th } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
+import { AuditLogTableRow } from "@/app/academy/_shell/audit-log-row";
 
 const AUDIT_LOGS_CAPABILITY = "queryAuditLogs";
 
@@ -126,6 +127,7 @@ export default async function AuditLogsPage({
           <TableWrap>
             <thead>
               <tr>
+                <th className={`${th} w-9`}></th>
                 <th className={th}>When</th>
                 <th className={th}>Actor</th>
                 <th className={th}>Action</th>
@@ -135,22 +137,15 @@ export default async function AuditLogsPage({
             </thead>
             <tbody>
               {response.data.rows.map((row) => (
-                <tr key={row.id} className={trHover}>
-                  <td className={`${td} whitespace-nowrap`}>{row.createdAt.toISOString()}</td>
-                  <td className={td}>
-                    {row.actorUserId ? (response.actorEmailsByUserId[row.actorUserId] ?? "Unknown user") : "System"}
-                    {row.actorRole && <span className="text-muted"> ({row.actorRole})</span>}
-                  </td>
-                  <td className={td}>{row.action}</td>
-                  <td className={td}>{row.entityType}</td>
-                  <td className={td}>
-                    <Badge label={row.result} tone={row.result === "success" ? "green" : "red"} />
-                  </td>
-                </tr>
+                <AuditLogTableRow
+                  key={row.id}
+                  row={row}
+                  actorLabel={row.actorUserId ? (response.actorEmailsByUserId[row.actorUserId] ?? "Unknown user") : "System"}
+                />
               ))}
               {response.data.rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className={`${td} text-center text-muted`}>
+                  <td colSpan={6} className={`${td} text-center text-muted`}>
                     No audit log entries match these filters.
                   </td>
                 </tr>

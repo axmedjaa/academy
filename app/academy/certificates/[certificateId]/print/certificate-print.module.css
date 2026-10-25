@@ -37,21 +37,21 @@
   display: flex;
   flex-direction: column;
   font-family: Georgia, "Times New Roman", serif;
-  color: #1b2a4a;
+  color: var(--color-brand);
   overflow: hidden;
 }
 
 .borderOuter {
   position: absolute;
   inset: 6mm;
-  border: 2px solid #1b2a4a;
+  border: 2px solid var(--color-brand);
   pointer-events: none;
 }
 
 .borderInner {
   position: absolute;
   inset: 8.5mm;
-  border: 1px solid #2f5fe0;
+  border: 1px solid var(--color-brand);
   pointer-events: none;
 }
 
@@ -85,7 +85,7 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #1b2a4a;
+  color: var(--color-brand);
 }
 
 .title {
@@ -93,7 +93,7 @@
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #1b2a4a;
+  color: var(--color-brand);
   margin: 0.5rem 0 0;
 }
 
@@ -112,14 +112,14 @@
 .studentName {
   font-size: 2.1rem;
   font-weight: 700;
-  color: #1b2a4a;
+  color: var(--color-brand);
   padding: 0 1rem 0.35rem;
-  border-bottom: 1.5px solid #2f5fe0;
+  border-bottom: 1.5px solid var(--color-brand);
 }
 
 .programLine {
   font-size: 1.05rem;
-  color: #1b2a4a;
+  color: var(--color-brand);
   max-width: 190mm;
 }
 
@@ -134,7 +134,7 @@
 
 .gradeLine {
   font-size: 0.95rem;
-  color: #1b2a4a;
+  color: var(--color-brand);
   font-weight: 600;
 }
 
@@ -156,7 +156,7 @@
 
 .signatureLine {
   width: 50mm;
-  border-top: 1px solid #1b2a4a;
+  border-top: 1px solid var(--color-brand);
 }
 
 .signatureLabel {
@@ -178,7 +178,7 @@
 .certCode {
   font-family: "Courier New", monospace;
   font-weight: 700;
-  color: #1b2a4a;
+  color: var(--color-brand);
 }
 
 .qrBlock {

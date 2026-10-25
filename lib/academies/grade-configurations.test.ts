@@ -113,6 +113,20 @@ async function insertConfigDirect(
   return row.id;
 }
 
+/** Submitting now requires valid bands (gradeBandsProblem). Gives a
+ * band-less fixture configuration one band first, then submits. */
+async function ensureBands(gradeConfigurationId: string): Promise<void> {
+  const existing = await db.select({ id: gradeBands.id }).from(gradeBands).where(eq(gradeBands.gradeConfigurationId, gradeConfigurationId)).limit(1);
+  if (existing.length === 0) {
+    await db.insert(gradeBands).values({ gradeConfigurationId, label: "Pass", minMark: "0", maxMark: "100", isPass: true });
+  }
+}
+
+async function submitWithBands(context: AuthContext, gradeConfigurationId: string) {
+  await ensureBands(gradeConfigurationId);
+  return submitGradeConfigForApproval(context, gradeConfigurationId);
+}
+
 function band(label: string, minMark: number, maxMark: number, isPass = true): GradeBandInput {
   return { label, minMark, maxMark, isPass };
 }
@@ -559,7 +573,7 @@ describe("submitGradeConfigForApproval — Draft -> Pending Approval", () => {
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
     const actor = await addActingUser(owner.academyId, role);
 
-    const result = await submitGradeConfigForApproval(actor.context, configId);
+    const result = await submitWithBands(actor.context, configId);
     expect(result.ok).toBe(allowed);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
@@ -568,7 +582,7 @@ describe("submitGradeConfigForApproval — Draft -> Pending Approval", () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
 
-    const result = await submitGradeConfigForApproval(owner.context, configId);
+    const result = await submitWithBands(owner.context, configId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.configuration.status).toBe("pending_approval");
@@ -583,14 +597,14 @@ describe("submitGradeConfigForApproval — Draft -> Pending Approval", () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId, "pending_approval");
 
-    const result = await submitGradeConfigForApproval(owner.context, configId);
+    const result = await submitWithBands(owner.context, configId);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("invalid_state");
   });
 
   it("rejects a nonexistent configuration id with code 'not_found'", async () => {
     const owner = await setupAcademy("academy_owner");
-    const result = await submitGradeConfigForApproval(owner.context, randomUUID());
+    const result = await submitWithBands(owner.context, randomUUID());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
@@ -600,7 +614,7 @@ describe("submitGradeConfigForApproval — Draft -> Pending Approval", () => {
     const otherConfigId = await insertConfigDirect(other.academyId, other.userId);
 
     const owner = await setupAcademy("academy_owner");
-    const result = await submitGradeConfigForApproval(owner.context, otherConfigId);
+    const result = await submitWithBands(owner.context, otherConfigId);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
@@ -619,7 +633,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
     async (role, allowed) => {
       const owner = await setupAcademy("academy_owner");
       const configId = await insertConfigDirect(owner.academyId, owner.userId);
-      const submitResult = await submitGradeConfigForApproval(owner.context, configId);
+      const submitResult = await submitWithBands(owner.context, configId);
       expect(submitResult.ok).toBe(true);
 
       // A different user than the submitter (owner.userId), so a "forbidden"
@@ -635,7 +649,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
   it("approves: status -> approved, approved_by/approved_at set, approval_requests row decided", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    await submitGradeConfigForApproval(owner.context, configId);
+    await submitWithBands(owner.context, configId);
 
     const manager = await addActingUser(owner.academyId, "manager");
     const result = await approveGradeConfig(manager.context, configId);
@@ -655,7 +669,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
     const submitter = await addActingUser(owner.academyId, "manager");
-    await submitGradeConfigForApproval(submitter.context, configId);
+    await submitWithBands(submitter.context, configId);
 
     const result = await approveGradeConfig(submitter.context, configId);
     expect(result.ok).toBe(true);
@@ -668,7 +682,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
   it("Owner self-approval is ALLOWED: Owner also holds both create and approve authority on this row", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    await submitGradeConfigForApproval(owner.context, configId);
+    await submitWithBands(owner.context, configId);
 
     const result = await approveGradeConfig(owner.context, configId);
     expect(result.ok).toBe(true);
@@ -679,7 +693,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
     const owner2 = await setupAcademy("academy_owner");
     const configId2 = await insertConfigDirect(owner2.academyId, owner2.userId);
     const manager = await addActingUser(owner2.academyId, "manager");
-    await submitGradeConfigForApproval(owner2.context, configId2);
+    await submitWithBands(owner2.context, configId2);
     const approved = await approveGradeConfig(manager.context, configId2);
     expect(approved.ok).toBe(true);
   });
@@ -688,7 +702,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
     const admin = await addActingUser(owner.academyId, "academy_admin");
-    await submitGradeConfigForApproval(admin.context, configId);
+    await submitWithBands(admin.context, configId);
 
     const result = await approveGradeConfig(admin.context, configId);
     expect(result.ok).toBe(true);
@@ -701,7 +715,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
   it("Academy Administrator can also approve a DIFFERENT user's submission (real approve authority, not just self-decide)", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    await submitGradeConfigForApproval(owner.context, configId);
+    await submitWithBands(owner.context, configId);
 
     const admin = await addActingUser(owner.academyId, "academy_admin");
     const result = await approveGradeConfig(admin.context, configId);
@@ -721,7 +735,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
   it("refuses to approve an already-approved configuration with code 'invalid_state'", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    await submitGradeConfigForApproval(owner.context, configId);
+    await submitWithBands(owner.context, configId);
     const manager = await addActingUser(owner.academyId, "manager");
     await approveGradeConfig(manager.context, configId);
 
@@ -740,7 +754,7 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
   it("a real pending configuration id belonging to a DIFFERENT academy is rejected as not_found — never approved (tenant isolation, self-decide included)", async () => {
     const other = await setupAcademy("academy_owner");
     const otherConfigId = await insertConfigDirect(other.academyId, other.userId);
-    await submitGradeConfigForApproval(other.context, otherConfigId);
+    await submitWithBands(other.context, otherConfigId);
 
     // A same-role Academy Administrator in a completely different academy
     // — holds "full" level in their OWN academy, but that must never let
@@ -764,7 +778,7 @@ describe("rejectGradeConfig — Pending Approval back to Draft (same authority a
   ])("role %s: reject allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    await submitGradeConfigForApproval(owner.context, configId);
+    await submitWithBands(owner.context, configId);
 
     const decider = await addActingUser(owner.academyId, role);
     const result = await rejectGradeConfig(decider.context, configId, "Bands need revision.");
@@ -775,7 +789,7 @@ describe("rejectGradeConfig — Pending Approval back to Draft (same authority a
   it("requires a non-empty reason with code 'validation'", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    await submitGradeConfigForApproval(owner.context, configId);
+    await submitWithBands(owner.context, configId);
     const manager = await addActingUser(owner.academyId, "manager");
 
     const result = await rejectGradeConfig(manager.context, configId, "   ");
@@ -787,7 +801,7 @@ describe("rejectGradeConfig — Pending Approval back to Draft (same authority a
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
     const submitter = await addActingUser(owner.academyId, "manager");
-    await submitGradeConfigForApproval(submitter.context, configId);
+    await submitWithBands(submitter.context, configId);
 
     const result = await rejectGradeConfig(submitter.context, configId, "Changed my mind.");
     expect(result.ok).toBe(true);
@@ -798,7 +812,7 @@ describe("rejectGradeConfig — Pending Approval back to Draft (same authority a
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
     const admin = await addActingUser(owner.academyId, "academy_admin");
-    await submitGradeConfigForApproval(admin.context, configId);
+    await submitWithBands(admin.context, configId);
 
     const result = await rejectGradeConfig(admin.context, configId, "Changed my mind.");
     expect(result.ok).toBe(true);
@@ -808,7 +822,7 @@ describe("rejectGradeConfig — Pending Approval back to Draft (same authority a
   it("Academy Administrator can also reject a DIFFERENT user's submission (real approve authority)", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    await submitGradeConfigForApproval(owner.context, configId);
+    await submitWithBands(owner.context, configId);
 
     const admin = await addActingUser(owner.academyId, "academy_admin");
     const result = await rejectGradeConfig(admin.context, configId, "Bands need revision.");
@@ -819,7 +833,7 @@ describe("rejectGradeConfig — Pending Approval back to Draft (same authority a
   it("rejects: status returns to 'draft' on the SAME row, reason persisted, and it becomes editable again", async () => {
     const owner = await setupAcademy("academy_owner");
     const configId = await insertConfigDirect(owner.academyId, owner.userId);
-    await submitGradeConfigForApproval(owner.context, configId);
+    await submitWithBands(owner.context, configId);
 
     const manager = await addActingUser(owner.academyId, "manager");
     const result = await rejectGradeConfig(manager.context, configId, "Fail band overlaps pass band.");
@@ -1032,7 +1046,7 @@ describe("Active configuration has no in-place edit (judgment call: 'new Draft r
       band("Fail", 0, 39, false),
       band("Pass", 40, 100, true),
     ]);
-    await submitGradeConfigForApproval(owner.context, newConfigId);
+    await submitWithBands(owner.context, newConfigId);
     const manager = await addActingUser(owner.academyId, "manager");
     await approveGradeConfig(manager.context, newConfigId);
     const activation = await activateGradeConfiguration(owner.context, newConfigId);
@@ -1051,5 +1065,44 @@ describe("Active configuration has no in-place edit (judgment call: 'new Draft r
     const oldConfig = await getGradeConfiguration(owner.context, oldActiveId);
     expect(oldConfig.ok).toBe(true);
     if (oldConfig.ok) expect(oldConfig.configuration.status).toBe("retired");
+  });
+});
+
+describe("grade approval — band validation and tenant isolation", () => {
+  it("refuses to submit a configuration with no bands", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const configId = await insertConfigDirect(owner.academyId, owner.userId);
+    const result = await submitGradeConfigForApproval(owner.context, configId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+  });
+
+  it("an Academy Owner approves their own academy's submitted configuration", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const configId = await insertConfigDirect(owner.academyId, owner.userId);
+    expect((await submitWithBands(owner.context, configId)).ok).toBe(true);
+    const result = await approveGradeConfig(owner.context, configId);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.configuration.status).toBe("approved");
+      expect(result.configuration.approvedBy).toBe(owner.userId);
+      expect(result.configuration.approvedAt).not.toBeNull();
+    }
+    // A second approval is an invalid transition, not a duplicate approval.
+    const again = await approveGradeConfig(owner.context, configId);
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.error.code).toBe("invalid_state");
+  });
+
+  it("an Owner of another academy can't approve it (not found, nothing changes)", async () => {
+    const owner = await setupAcademy("academy_owner");
+    const configId = await insertConfigDirect(owner.academyId, owner.userId);
+    await submitWithBands(owner.context, configId);
+    const outsider = await setupAcademy("academy_owner");
+    const result = await approveGradeConfig(outsider.context, configId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+    const [row] = await db.select({ status: gradeConfigurations.status }).from(gradeConfigurations).where(eq(gradeConfigurations.id, configId));
+    expect(row.status).toBe("pending_approval");
   });
 });

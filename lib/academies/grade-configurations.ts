@@ -256,6 +256,20 @@ function isCheckViolation(err: unknown): boolean {
  * actual, unconditional source of truth, including for any future caller
  * that bypasses this pre-check.
  */
+/**
+ * Why a configuration's bands can't go forward for approval, or null when
+ * they can: there must be at least one band, each band's lower mark must
+ * not exceed its upper mark, and bands must not overlap. Checked when a
+ * draft is submitted and again when it is approved.
+ */
+export function gradeBandsProblem(bands: { label: string; minMark: number; maxMark: number }[]): string | null {
+  if (bands.length === 0) return "Add at least one grade band first.";
+  const bad = bands.find((band) => !(band.maxMark >= band.minMark));
+  if (bad) return `Band ${bad.label}: the lower mark is above the upper mark.`;
+  if (findOverlap(bands)) return "Grade bands must not overlap.";
+  return null;
+}
+
 function findOverlap(bands: { minMark: number; maxMark: number }[]): boolean {
   for (let i = 0; i < bands.length; i += 1) {
     for (let j = i + 1; j < bands.length; j += 1) {
@@ -345,7 +359,7 @@ async function getLatestApprovalSubmitterMap(
 export type ListGradeConfigurationsResult =
   | {
       ok: true;
-      configurations: GradeConfigurationRecord[];
+      configurations: (GradeConfigurationRecord & { bands: GradeBandRecord[] })[];
       /** Can create/submit/activate (canManage's "full"-or-"manage" gate) — drives
        * whether `/academy/grades` shows Create/Submit/Activate controls at all. */
       canManage: boolean;
@@ -369,12 +383,25 @@ export async function listGradeConfigurations(
     .where(eq(gradeConfigurations.academyId, academyId));
 
   const submitterByConfigId = await getLatestApprovalSubmitterMap(rows.map((row) => row.id));
+  // Each configuration's bands, in one read, for the Grades page band tags.
+  const bandRows =
+    rows.length === 0
+      ? []
+      : await db
+          .select()
+          .from(gradeBands)
+          .where(inArray(gradeBands.gradeConfigurationId, rows.map((row) => row.id)));
+  const bandsByConfig = new Map<string, GradeBandRecord[]>();
+  for (const band of bandRows) {
+    bandsByConfig.set(band.gradeConfigurationId, [...(bandsByConfig.get(band.gradeConfigurationId) ?? []), toBandRecord(band)]);
+  }
 
   return {
     ok: true,
     configurations: rows.map((row) => ({
       ...toConfigRecord(row),
       submittedBy: submitterByConfigId.get(row.id) ?? null,
+      bands: (bandsByConfig.get(row.id) ?? []).sort((a, b) => b.minMark - a.minMark),
     })),
     canManage: canManage(permissionLevel),
     canApprove: canApprove(permissionLevel),
@@ -467,6 +494,77 @@ export async function createGradeConfiguration(
     return row;
   });
 
+  return { ok: true, configuration: toConfigRecord(result) };
+}
+
+export type CopyGradeConfigurationResult =
+  | { ok: true; configuration: GradeConfigurationRecord }
+  | { ok: false; error: GradeConfigActionError };
+
+/**
+ * "Copy as draft" (design A11): a new draft configuration named
+ * "<name> (copy)" with the same bands, so an approved or active
+ * configuration can be revised without editing it in place. Same manage
+ * permission as createGradeConfiguration; one transaction, audited.
+ */
+export async function copyGradeConfigurationAsDraft(
+  actorContext: AuthContext,
+  gradeConfigurationId: string,
+): Promise<CopyGradeConfigurationResult> {
+  const resolved = await resolveGradeConfigAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+
+  if (!canManage(permissionLevel)) {
+    return { ok: false, error: FORBIDDEN };
+  }
+  const parsedId = z.string().uuid().safeParse(gradeConfigurationId);
+  if (!parsedId.success) {
+    return { ok: false, error: NOT_FOUND };
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const [source] = await tx
+      .select()
+      .from(gradeConfigurations)
+      .where(and(eq(gradeConfigurations.id, gradeConfigurationId), eq(gradeConfigurations.academyId, academyId)))
+      .limit(1);
+    if (!source) return null;
+
+    const sourceBands = await tx.select().from(gradeBands).where(eq(gradeBands.gradeConfigurationId, source.id));
+    const [row] = await tx
+      .insert(gradeConfigurations)
+      .values({ academyId, name: `${source.name} (copy)`.slice(0, 200), createdBy: actorContext.userId })
+      .returning();
+    if (sourceBands.length > 0) {
+      await tx.insert(gradeBands).values(
+        sourceBands.map((band) => ({
+          gradeConfigurationId: row.id,
+          label: band.label,
+          minMark: band.minMark,
+          maxMark: band.maxMark,
+          isPass: band.isPass,
+        })),
+      );
+    }
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "copyGradeConfiguration",
+        entityType: "grade_configuration",
+        entityId: row.id,
+        before: { copiedFrom: source.id },
+        after: { ...toConfigRecord(row), bands: sourceBands.map(toBandRecord) },
+      },
+      tx,
+    );
+    return row;
+  });
+
+  if (!result) return { ok: false, error: NOT_FOUND };
   return { ok: true, configuration: toConfigRecord(result) };
 }
 
@@ -663,6 +761,12 @@ export async function submitGradeConfigForApproval(
       return { kind: "invalid_state" as const };
     }
 
+    const bandRows = await tx.select().from(gradeBands).where(eq(gradeBands.gradeConfigurationId, gradeConfigurationId));
+    const bandProblem = gradeBandsProblem(bandRows.map(toBandRecord));
+    if (bandProblem) {
+      return { kind: "invalid_bands" as const, message: bandProblem };
+    }
+
     const [updated] = await tx
       .update(gradeConfigurations)
       .set({ status: "pending_approval", updatedAt: new Date() })
@@ -704,6 +808,9 @@ export async function submitGradeConfigForApproval(
 
   if (result.kind === "not_found") {
     return { ok: false, error: NOT_FOUND };
+  }
+  if (result.kind === "invalid_bands") {
+    return { ok: false, error: { code: "validation", message: result.message } };
   }
   if (result.kind === "invalid_state") {
     return {
@@ -818,6 +925,13 @@ export async function approveGradeConfig(
       return { kind: "invalid_state" as const };
     }
 
+    // Re-check the bands at approval time, not only at submission.
+    const bandRows = await tx.select().from(gradeBands).where(eq(gradeBands.gradeConfigurationId, gradeConfigurationId));
+    const bandProblem = gradeBandsProblem(bandRows.map(toBandRecord));
+    if (bandProblem) {
+      return { kind: "invalid_bands" as const, message: bandProblem };
+    }
+
     const decision = await decideApprovalRequest(tx, pending.id, {
       decidedBy: actorContext.userId,
       status: "approved",
@@ -857,6 +971,9 @@ export async function approveGradeConfig(
 
   if (result.kind === "not_found") {
     return { ok: false, error: NOT_FOUND };
+  }
+  if (result.kind === "invalid_bands") {
+    return { ok: false, error: { code: "validation", message: result.message } };
   }
   if (result.kind === "invalid_state") {
     return {

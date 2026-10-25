@@ -19,6 +19,7 @@ vi.mock("@/lib/storage/client", () => ({
 import { getDownloadUrl } from "@/lib/storage/client";
 import { db } from "@/lib/db";
 import {
+  batchCourses,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -51,6 +52,7 @@ import {
   listExams,
   restoreExam,
 } from "./exams";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -155,7 +157,7 @@ async function insertStudentDirect(academyId: string, branchId: string, creatorU
 }
 
 async function enrollStudentDirect(academyId: string, batchId: string, studentId: string): Promise<void> {
-  await db.insert(batchEnrollments).values({ academyId, batchId, studentId, status: "active" });
+  await db.insert(batchEnrollments).values({ academyId, batchId, courseId: await courseOfBatch(batchId), studentId, status: "active" });
 }
 
 async function insertStaffProfile(academyId: string, userId: string): Promise<string> {
@@ -249,6 +251,7 @@ afterAll(async () => {
     await db.delete(batchEnrollments).where(eq(batchEnrollments.academyId, academyId));
     await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));

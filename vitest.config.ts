@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { requireTestDatabaseUrl } from "./lib/testing/require-test-database";
 
 // Vitest runs as a standalone process, so .env.local isn't auto-loaded the
 // way Next.js loads it for the app itself (same reasoning as drizzle.config.ts).
@@ -7,6 +8,11 @@ try {
 } catch {
   // .env.local not present (e.g. CI supplies required vars directly).
 }
+
+// See lib/testing/require-test-database.ts's own doc comment for why this
+// exists and what it protects against (including why it's idempotent).
+// Shared with playwright.config.ts.
+requireTestDatabaseUrl();
 
 export default defineConfig({
   resolve: {

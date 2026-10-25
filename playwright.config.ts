@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { requireTestDatabaseUrl } from "./lib/testing/require-test-database";
 
 // Playwright runs as a standalone process, same reasoning as
 // vitest.config.ts's own comment: .env.local is only auto-loaded for the
@@ -9,7 +10,22 @@ try {
   // .env.local not present (e.g. CI supplies required vars directly).
 }
 
-const PORT = 3000;
+/**
+ * Perf investigation (Afoogy slow-dashboard task, test-isolation step):
+ * e2e specs drive a real signed-in session against real tenant data
+ * (e2e/fixtures/seed-e2e.ts creates users/academies/students) — the same
+ * "must never touch the shared dev database" requirement as Vitest's own
+ * isolation (vitest.config.ts, lib/testing/require-test-database.ts).
+ * Failing fast here, before `webServer` even starts, means a missing/
+ * misconfigured TEST_DATABASE_URL can never result in e2e silently
+ * seeding or exercising dev data.
+ */
+const testDatabaseUrl = requireTestDatabaseUrl();
+
+// Dedicated port, separate from the developer's own `next dev` on 3000 —
+// this config always boots its own Next.js instance (reuseExistingServer:
+// false, below) rather than ever risking attaching to that other one.
+const PORT = 3100;
 const baseURL = `http://localhost:${PORT}`;
 
 /**
@@ -57,10 +73,19 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev",
+    // `-- -p 3100` (not the default 3000) so this never collides with a
+    // `next dev` the developer already has running for their own work.
+    command: "npm run dev -- -p 3100",
     url: baseURL,
     timeout: 120_000,
-    reuseExistingServer: !process.env.CI,
+    // Always a fresh instance — never attach to whatever is already
+    // running on 3100 (or anywhere else). Was `!process.env.CI` (reuse
+    // locally); that meant a *local* run would silently reuse the
+    // developer's own dev server on port 3000 — bound to DATABASE_URL,
+    // i.e. dev data — rather than the isolated instance below. Separate
+    // port (3100) plus `reuseExistingServer: false` removes any path
+    // back to that server, in CI or locally.
+    reuseExistingServer: false,
     env: {
       // Every login attempt across the whole suite shares one
       // Redis-backed rate-limit bucket keyed by client IP
@@ -69,6 +94,16 @@ export default defineConfig({
       // within the same window) never trips it. Test-only override, never
       // touches the production default in lib/env.ts.
       LOGIN_RATE_LIMIT_MAX_ATTEMPTS: "1000",
+      // The app instance this spawns must read/write the exact same
+      // database e2e/global-setup.ts seeded — never dev. See this file's
+      // own `testDatabaseUrl` resolution above (already fail-fast
+      // verified by the time this `env` object is even built).
+      DATABASE_URL: testDatabaseUrl,
+      // Separate build cache from the developer's own `.next` (see
+      // next.config.ts's own comment) — this instance runs concurrently
+      // with their dev server, against a different `-p`, and must not
+      // fight over the same compiled output directory.
+      E2E_DIST_DIR: ".next-e2e",
     },
   },
 });

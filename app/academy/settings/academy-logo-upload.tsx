@@ -8,7 +8,8 @@ import {
   requestAcademyLogoUploadUrlAction,
 } from "@/lib/academies/academy-logo-actions";
 import { ConfirmButton, type ConfirmActionResult } from "@/app/academy/_shell/confirm-dialog";
-import { Button, ErrorMessage, Section } from "@/app/academy/_shell/ui";
+import { Button, ErrorMessage } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { MAX_RASTER_IMAGE_SIZE_BYTES, RASTER_IMAGE_ACCEPT_ATTRIBUTE, isRasterImageContentType } from "@/lib/storage/upload-policy";
 
@@ -179,15 +180,18 @@ export function AcademyLogoUpload({ currentLogoUrl }: Props) {
     return { ok: true };
   }
 
+  const busy = status === "uploading" || status === "confirming";
   return (
-    <Section>
-      <h2 className="text-base font-semibold text-ink">Academy logo</h2>
-      <p className="mt-1 text-sm text-muted">
-        Upload your academy logo. PNG, JPG, WebP, or AVIF. Maximum {MAX_SIZE_LABEL}.
+    <section className="mb-8 rounded-card border border-border bg-surface p-5 shadow-card" aria-labelledby="logo-title">
+      <h2 id="logo-title" className="text-[15px] font-semibold text-ink">
+        Academy logo
+      </h2>
+      <p className="mt-0.5 text-[13px] text-muted">
+        Shown in the sidebar, on ID cards and on certificates. PNG, JPG, WebP or AVIF, up to {MAX_SIZE_LABEL}.
       </p>
 
-      <div className="mt-4 flex flex-wrap items-start gap-4">
-        <div className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-control border border-border bg-app">
+      <div className="mt-4 flex flex-wrap items-center gap-5">
+        <div className="flex h-[88px] w-[88px] shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-app">
           {previewUrl ? (
             // eslint-disable-next-line @next/next/no-img-element -- a local blob: preview URL, not an optimizable remote image.
             <img src={previewUrl} alt="Selected logo preview" className="h-full w-full object-contain" />
@@ -195,34 +199,31 @@ export function AcademyLogoUpload({ currentLogoUrl }: Props) {
             // eslint-disable-next-line @next/next/no-img-element -- a short-lived signed R2 URL, same convention as every other *Ref field render in this codebase.
             <img src={currentLogoUrl} alt="Current academy logo" className="h-full w-full object-contain" />
           ) : (
-            <span className="text-xs text-muted">No logo</span>
+            <span className="text-xs font-semibold text-muted">No logo</span>
           )}
         </div>
 
-        <div className="flex flex-1 flex-col gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
-            onChange={handleFileChange}
-            disabled={status === "uploading" || status === "confirming"}
-            className="text-sm text-ink file:mr-3 file:rounded-control file:border file:border-border file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-ink hover:file:bg-app"
-          />
-
-          {error && <ErrorMessage message={error} />}
-          {(status === "uploading" || status === "confirming") && (
-            <p className="text-sm text-muted">{status === "uploading" ? `Uploading... ${progress}%` : "Verifying..."}</p>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              disabled={!selectedFile || status === "uploading" || status === "confirming"}
-              onClick={handleUpload}
-            >
-              {status === "uploading" || status === "confirming" ? "Uploading..." : "Upload logo"}
-            </Button>
-            {currentLogoUrl && (
+        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="relative inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg border border-dashed border-brand px-4 text-sm font-semibold text-brand hover:bg-brand-tint">
+              <Icon name="upload" width={16} height={16} />
+              {selectedFile ? "Choose another image" : currentLogoUrl ? "Change logo" : "Choose image"}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
+                onChange={handleFileChange}
+                disabled={busy}
+                className="absolute inset-0 cursor-pointer opacity-0"
+                aria-label="Choose a logo image"
+              />
+            </label>
+            {selectedFile && (
+              <Button type="button" disabled={busy} onClick={handleUpload} className="h-11">
+                {busy ? (status === "uploading" ? `Uploading… ${progress}%` : "Verifying…") : "Upload logo"}
+              </Button>
+            )}
+            {currentLogoUrl && !selectedFile && (
               <ConfirmButton
                 label="Remove logo"
                 title="Remove academy logo?"
@@ -233,8 +234,10 @@ export function AcademyLogoUpload({ currentLogoUrl }: Props) {
               />
             )}
           </div>
+          {selectedFile && !busy && <p className="text-xs text-muted">{selectedFile.name} is ready to upload.</p>}
+          {error && <ErrorMessage message={error} />}
         </div>
       </div>
-    </Section>
+    </section>
   );
 }

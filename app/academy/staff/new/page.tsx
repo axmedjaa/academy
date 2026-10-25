@@ -2,8 +2,8 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { ACADEMY_STAFF_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
-import { StaffForm } from "./staff-form";
-import { PageHeader, PageMessage, Section } from "@/app/academy/_shell/ui";
+import { RegisterStaffCard } from "../register-staff-form";
+import { BackLink, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
  * PLAN.md Item 35 — `/academy/staff/new`. Same gating shape as
@@ -37,11 +37,11 @@ export default async function NewStaffPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-xl px-4 py-8 sm:px-6">
-      <PageHeader title="Add staff member" />
-      <Section>
-        <StaffForm />
-      </Section>
+    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
+      <div className="mx-auto max-w-[560px]">
+        <BackLink href="/academy/staff" label="Back to staff" />
+      </div>
+      <RegisterStaffCard />
     </div>
   );
 }
