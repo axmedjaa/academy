@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState, useTransition } from "react";
+import { useActionState, useEffect, useState } from "react";
 import type { StudentRecord } from "@/lib/academies/students";
 import type {
   EnrollmentFeeScheduleRecord,
@@ -16,15 +16,35 @@ import {
 } from "@/lib/academies/fee-periods-actions";
 import {
   createStudentChargeAction,
-  issueReceiptAction,
   recordStudentPaymentAction,
   type StudentPaymentsFormState,
 } from "@/lib/academies/student-payments-actions";
-import { adjustStudentPaymentAction, reverseStudentPaymentAction } from "@/lib/academies/finance-reversals-actions";
-import { BackLink, Badge, Button, ErrorMessage, Field, LinkButton, PageHeader, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
+import { BackLink, Badge, Button, ErrorMessage, Field, PageHeader, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
 import { PAYMENT_PLAN_OPTIONS } from "@/lib/ui/payment-plan";
-import { StudentHeaderActions, StudentOverview, type EnrollmentSummaryEntry } from "./student-overview";
+import { PaymentPlanField } from "@/app/academy/_shell/payment-plan-field";
+import {
+  ManageStudentSection,
+  STATUS_LABEL,
+  StatCards,
+  StudentHeaderActions,
+  StudentOverview,
+  type EnrollmentDetail,
+  type EnrollmentSummaryEntry,
+} from "./student-overview";
+import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import {
+  ActionDialog,
+  ChoiceChips,
+  DField,
+  DesignDialog,
+  controlClass,
+  invalidProps,
+} from "@/app/academy/_shell/design-form";
+import { Icon } from "@/app/academy/_shell/icons";
+import { nextDuePeriod, outstandingCents, previewAllocation, previewScheduleChange } from "@/lib/ui/fee-allocation";
+import { formatDate } from "@/lib/ui/date";
+import { PaymentHistoryPanel, RefundHistoryPanel, type RefundHistoryRow } from "./payment-history";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
 import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
@@ -32,7 +52,6 @@ import { Bone } from "@/app/academy/_shell/skeletons";
 
 const initialState: StudentPaymentsFormState = { ok: false };
 
-const SELF_REVERSAL_TOOLTIP = "You can't reverse or adjust a payment you recorded yourself.";
 
 // The plan value is the number of monthly installments (see lib/ui/payment-plan.ts).
 const INTERVAL_OPTIONS = PAYMENT_PLAN_OPTIONS;
@@ -55,18 +74,18 @@ function isFuturePeriod(period: FeePeriodRecord, today: string): boolean {
 function periodGuidance(period: FeePeriodRecord, currency: string, today: string): string {
   const remaining = formatMoney(period.remainingCents, currency);
   if (isFuturePeriod(period, today)) {
-    return `Not yet due — starts ${period.periodStart}.`;
+    return `Not yet due — starts ${formatDate(period.periodStart)}.`;
   }
   switch (period.status) {
     case "paid":
       return "Fully paid — nothing remaining for this period.";
     case "overdue":
-      return `Overdue since ${period.dueDate} — ${remaining} still due.`;
+      return `Overdue since ${formatDate(period.dueDate)} — ${remaining} still due.`;
     case "partially_paid":
       return `${formatMoney(period.paidCents, currency)} paid so far — ${remaining} remaining.`;
     case "unpaid":
     default:
-      return `${remaining} due by ${period.dueDate}.`;
+      return `${remaining} due by ${formatDate(period.dueDate)}.`;
   }
 }
 
@@ -81,11 +100,17 @@ export interface PaymentHistoryRow {
   /** "Course — Batch: period, period" for a fee-period payment, "Charge:
    * description" for a one-off charge payment, "—" for neither. */
   description: string;
+  /** Payments tab "Applies to": the course · batch, or "Charge: …". */
+  appliesTo: string;
+  /** The fee periods covered ("Oct 29 – Nov 28, 2026"), when any. */
+  appliesToDetail: string | null;
   recordedByLabel: string;
   recordedBy: string;
   notes: string | null;
   receiptId: string | null;
   receiptNumber: string | null;
+  /** Refunded out of this payment on a course withdrawal (0 when none). */
+  refundedCents: number;
 }
 
 interface Props {
@@ -99,8 +124,13 @@ interface Props {
   branchName: string;
   enrollments: StudentEnrollmentOption[];
   enrollmentSummaries: EnrollmentSummaryEntry[];
+  enrollmentDetails: Record<string, EnrollmentDetail>;
+  /** Delete eligibility, or null when the viewer may not delete students. */
+  deletion: { eligible: boolean; reasons: string[] } | null;
   charges: StudentChargeRecord[];
   historyRows: PaymentHistoryRow[];
+  /** Refunds recorded on withdrawal: listed apart from payments. */
+  refundRows: RefundHistoryRow[];
   /** Whether either finance section (charges/payments) resolved at all —
    * false only for a role with "none" on academy.student_payments
    * (Admissions Officer). */
@@ -152,8 +182,11 @@ export function StudentDetail({
   branchName,
   enrollments,
   enrollmentSummaries,
+  enrollmentDetails,
+  deletion,
   charges,
   historyRows,
+  refundRows,
   paymentsSectionVisible,
   canManagePayments,
   canReversePayments,
@@ -219,6 +252,7 @@ export function StudentDetail({
           branchName={branchName}
           enrollments={enrollments}
           enrollmentSummaries={enrollmentSummaries}
+          enrollmentDetails={enrollmentDetails}
           canEditPhoto={canEditStudent}
           canWithdraw={canEnroll}
           canEnroll={canEnroll && enrollBatches.length > 0}
@@ -257,6 +291,7 @@ export function StudentDetail({
             <EnrollmentPaymentPanel
               key={feeEntry.enrollment.id}
               studentId={student.id}
+              studentName={student.fullName}
               entry={feeEntry}
               canManagePayments={canManagePayments}
               today={today}
@@ -275,17 +310,24 @@ export function StudentDetail({
 
       {tab === "payments" &&
         (paymentsSectionVisible ? (
-          <PaymentHistoryPanel
-            rows={historyRows}
-            canManagePayments={canManagePayments}
-            canReversePayments={canReversePayments}
-            currentUserId={currentUserId}
-          />
+          <>
+            <PaymentHistoryPanel
+              rows={historyRows}
+              studentName={student.fullName}
+              photoUrl={photoUrl}
+              canManagePayments={canManagePayments}
+              canReversePayments={canReversePayments}
+              currentUserId={currentUserId}
+            />
+            <RefundHistoryPanel rows={refundRows} />
+          </>
         ) : (
           <Section>
             <p className="text-sm text-muted">Payments aren&apos;t available to your role.</p>
           </Section>
         ))}
+
+      <ManageStudentSection student={student} canArchive={canEditStudent} deletion={deletion} />
     </>
   );
 }
@@ -296,11 +338,13 @@ export function StudentDetail({
 
 function EnrollmentPaymentPanel({
   studentId,
+  studentName,
   entry,
   canManagePayments,
   today,
 }: {
   studentId: string;
+  studentName: string;
   entry: EnrollmentSummaryEntry;
   canManagePayments: boolean;
   today: string;
@@ -332,169 +376,350 @@ function EnrollmentPaymentPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadPeriods intentionally omitted: it closes over enrollment.id and would otherwise re-run every render.
   }, [enrollment.id, refreshKey]);
 
-  // The normal fee-periods view never shows a period before its own
-  // periodStart arrives — the database may already hold it (period
-  // generation always eagerly generates one period ahead; see
-  // generateFeePeriodsForEnrollment's own doc comment), but telling the
-  // student/staff about a payment that isn't owed yet is exactly the
-  // "Upcoming period (not yet due)" banner this view no longer shows.
-  // Purely a display-time filter on each period's own `periodStart` (never
-  // the batch's start date or the enrollment date) — nothing about
-  // generation, status, or balances changes.
-  const visiblePeriods = periods.filter((period) => period.periodStart <= today);
+  // Every installment of the schedule is a real fee_periods row from the
+  // moment the schedule is set (generateFeePeriodsForEnrollment), so the
+  // list shows all of them, oldest first: past, due and upcoming. Upcoming
+  // rows are labelled as such and are not counted as overdue.
+  const visiblePeriods = [...periods].sort((a, b) => a.periodStart.localeCompare(b.periodStart));
+  const [periodPage, setPeriodPage] = useState(1);
+  const periodPages = Math.max(1, Math.ceil(visiblePeriods.length / PERIOD_ROWS));
+  const currentPeriodPage = Math.min(periodPage, periodPages);
+  const pagePeriods = visiblePeriods.slice((currentPeriodPage - 1) * PERIOD_ROWS, currentPeriodPage * PERIOD_ROWS);
+  const [payAllOpen, setPayAllOpen] = useState(false);
 
+  // Course totals from the persisted period ledger (expected and approved
+  // allocations per period), across every period — the same set the server
+  // allocates a payment against. The server summary counts started periods
+  // only, so it is used for the overall status, not for these totals.
+  const currency = schedule?.currency ?? periods[0]?.currency ?? "USD";
+  const ledgerLoaded = periods.length > 0;
+  const scheduledCents = periods.reduce((sum, period) => sum + period.expectedAmountCents, 0);
+  const paidCents = periods.reduce((sum, period) => sum + period.paidCents, 0);
+  const outstanding = outstandingCents(periods);
+  const nextDue = nextDuePeriod(periods);
+
+  const per = schedule ? `${schedule.intervalMonths} x ${formatMoney(schedule.monthlyInstallmentCents, schedule.currency)}` : "";
+
+  // Design A02 Fees tab: four stat cards for the selected course, then one
+  // row (or card, when narrow) per fee period; the schedule editor and the
+  // catch-up payment stay below for those who can manage payments.
   return (
-    <Section>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-ink">
-            {enrollment.courseName} — {enrollment.batchName}
-          </h2>
-          {schedule ? (
-            <>
-              {/* "6 months · $6.00/month · 6 monthly payments" — never "6
-                  months — $36" (that reads as one lump $36 payment, the
-                  exact misreading this wording avoids). A schedule's
-                  intervalMonths is how many EQUAL MONTHLY installments its
-                  own total splits into — see fee-periods.ts's own module
-                  comment ("Payment schedule model"). */}
-              <p className="mt-1 text-sm font-medium text-ink">
-                {schedule.intervalMonths} month{schedule.intervalMonths === 1 ? "" : "s"} ·{" "}
-                {formatMoney(schedule.monthlyInstallmentCents, schedule.currency)}/month · {schedule.intervalMonths}{" "}
-                monthly payment{schedule.intervalMonths === 1 ? "" : "s"}
-              </p>
-              <p className="mt-0.5 text-xs text-muted">Total fee: {formatMoney(schedule.amountCents, schedule.currency)}</p>
-            </>
-          ) : (
-            <p className="mt-1 text-sm text-muted">No fee schedule set yet.</p>
-          )}
-        </div>
-        {summary && schedule && (
-          <div className="flex flex-wrap gap-4 text-sm">
-            <SummaryStat label="Total Fee" value={formatMoney(schedule.amountCents, schedule.currency)} />
-            <SummaryStat label="Previously Paid" value={formatMoney(summary.paidCents, schedule.currency)} />
-            <SummaryStat
-              label="Remaining"
-              value={formatMoney(Math.max(0, schedule.amountCents - summary.paidCents), schedule.currency)}
-            />
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-muted">Status</p>
-              <Badge label={summary.status.replace("_", " ")} tone={getStatusTone(summary.status)} />
-            </div>
-          </div>
-        )}
-      </div>
+    <div className="flex flex-col">
+      {schedule && summary ? (
+        <StatCards
+          items={[
+            {
+              label: "Course fee",
+              value: formatMoney(ledgerLoaded ? scheduledCents : schedule.amountCents, currency),
+              hint: per,
+              icon: "receipt_long",
+            },
+            {
+              label: "Paid",
+              value: ledgerLoaded ? formatMoney(paidCents, currency) : "…",
+              hint: "Payments recorded and applied",
+              icon: "payments",
+            },
+            {
+              label: "Remaining",
+              value: ledgerLoaded ? formatMoney(outstanding, currency) : "…",
+              hint: nextDue
+                ? `Next due ${formatDate(nextDue.dueDate)} · ${formatMoney(nextDue.remainingCents, nextDue.currency)}`
+                : ledgerLoaded
+                  ? "Nothing outstanding"
+                  : "",
+              icon: "payments",
+            },
+            { label: "Status", value: outstanding === 0 && ledgerLoaded ? "Paid" : (STATUS_LABEL[summary.status] ?? summary.status), icon: "info" },
+          ]}
+        />
+      ) : (
+        <Section className="mb-8">
+          <p className="text-sm text-muted">{schedule ? "Fee totals are not available to your role." : "No fee schedule set yet."}</p>
+        </Section>
+      )}
 
       {canManagePayments && (
-        <div className="mt-4">
+        <Section className="mb-8">
+          <h2 className="mb-1 text-base font-semibold text-ink">
+            {enrollment.courseName} · {enrollment.batchCode}
+          </h2>
+          <p className="mb-3 text-[13px] text-muted">
+            {schedule
+              ? `${schedule.intervalMonths} monthly payment${schedule.intervalMonths === 1 ? "" : "s"} of ${formatMoney(schedule.monthlyInstallmentCents, schedule.currency)}, ${formatMoney(schedule.amountCents, schedule.currency)} in total.`
+              : "Set the fee schedule to generate this course's fee periods."}
+          </p>
           <ScheduleForm
             enrollmentId={enrollment.id}
             schedule={schedule}
-            paidCents={summary?.paidCents ?? 0}
+            periods={periods}
+            today={today}
             onSaved={() => setRefreshKey((k) => k + 1)}
           />
-        </div>
+        </Section>
       )}
 
       {periodsError && (
-        <div className="mt-3">
+        <div className="mb-6">
           <ErrorMessage message={periodsError} />
         </div>
       )}
 
       {schedule && (
-        <div className="mt-6">
-          <h3 className="text-sm font-semibold text-ink">Fee periods</h3>
+        <>
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+            <h2 className="text-base font-semibold text-ink">
+              Fee periods {visiblePeriods.length > 0 && <span className="font-normal text-muted">({visiblePeriods.length})</span>}
+            </h2>
+            {canManagePayments && ledgerLoaded && (
+              <span className="flex flex-col items-end gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPayAllOpen(true)}
+                  disabled={outstanding === 0}
+                  className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-white transition-colors duration-150 hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Icon name="payments" width={18} height={18} />
+                  Pay all remaining fees
+                </button>
+                {outstanding === 0 && <span className="text-xs text-muted">Nothing outstanding: every period is paid.</span>}
+              </span>
+            )}
+          </div>
           {loadingPeriods && <span className="sr-only" role="status">Loading fee periods…</span>}
-          <TableWrap>
-            <thead>
-              <tr>
-                <th className={th}>Period</th>
-                <th className={th}>Due date</th>
-                <th className={th}>Expected</th>
-                <th className={th}>Paid</th>
-                <th className={th}>Remaining</th>
-                <th className={th}>Status</th>
-                {canManagePayments && <th className={th}>Action</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {visiblePeriods.length === 0 && loadingPeriods ? (
-                // Placeholder rows while this enrollment's periods load.
-                Array.from({ length: 3 }).map((_, row) => (
-                  <tr key={`loading-${row}`} aria-hidden="true">
-                    {Array.from({ length: canManagePayments ? 7 : 6 }).map((__, cell) => (
-                      <td key={cell} className={td}>
-                        <Bone className={`h-3.5 ${cell === 0 ? "w-28" : "w-16"}`} />
-                      </td>
-                    ))}
-                  </tr>
-                ))
-              ) : visiblePeriods.length === 0 ? (
-                <tr>
-                  <td colSpan={canManagePayments ? 7 : 6} className={`${td} text-center text-muted`}>
-                    No fee periods due yet.
-                  </td>
-                </tr>
+          {visiblePeriods.length === 0 ? (
+            <div className="mb-8 rounded-card border border-border bg-surface px-4 py-8 text-center text-sm text-muted shadow-card">
+              {loadingPeriods ? (
+                <span aria-hidden="true" className="mx-auto flex max-w-md flex-col gap-2">
+                  <Bone className="h-4 w-full" />
+                  <Bone className="h-4 w-2/3" />
+                </span>
               ) : (
-                visiblePeriods.map((period) => (
+                "No fee periods due yet."
+              )}
+            </div>
+          ) : (
+            <DataTable stackBelow={900}>
+              <thead>
+                <tr>
+                  <th className={rtTh}>#</th>
+                  <th className={rtTh}>Due</th>
+                  <th className={`${rtTh} text-right`}>Expected</th>
+                  <th className={`${rtTh} text-right`}>Paid</th>
+                  <th className={`${rtTh} text-right`}>Remaining</th>
+                  <th className={rtTh}>Status</th>
+                  {canManagePayments && (
+                    <th className={rtTh}>
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {pagePeriods.map((period, index) => (
                   <PeriodRow
                     key={period.id}
+                    number={(currentPeriodPage - 1) * PERIOD_ROWS + index + 1}
                     period={period}
                     today={today}
                     studentId={studentId}
                     canManage={canManagePayments}
                     onRecorded={() => setRefreshKey((k) => k + 1)}
                   />
-                ))
-              )}
-            </tbody>
-          </TableWrap>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+          {periodPages > 1 && (
+            <nav aria-label="Fee period pages" className="mb-8 mt-[-1rem] flex items-center justify-between gap-2">
+              <button type="button" className={PAGER_BUTTON} onClick={() => setPeriodPage(currentPeriodPage - 1)} disabled={currentPeriodPage <= 1}>
+                Previous
+              </button>
+              <span className="text-[13px] text-[#374151]">
+                Page {currentPeriodPage} of {periodPages}
+              </span>
+              <button type="button" className={PAGER_BUTTON} onClick={() => setPeriodPage(currentPeriodPage + 1)} disabled={currentPeriodPage >= periodPages}>
+                Next
+              </button>
+            </nav>
+          )}
 
-          {canManagePayments && summary && summary.remainingCents > 0 && (
-            <div className="mt-6 border-t border-border pt-5">
-              <h3 className="text-sm font-semibold text-ink">Record a payment across outstanding periods</h3>
-              <p className="mt-1 text-xs text-muted">
-                Enter one amount and it is applied to the oldest outstanding period(s) first — use this for a
-                catch-up payment spanning more than one period. To pay a single period specifically, use that
-                period&apos;s own Record Payment action above instead.
+          {payAllOpen && (
+            <PayAllRemainingDialog
+              studentId={studentId}
+              studentName={studentName}
+              enrollment={enrollment}
+              periods={visiblePeriods}
+              currency={currency}
+              onClose={() => setPayAllOpen(false)}
+              onRecorded={() => {
+                setPayAllOpen(false);
+                setRefreshKey((k) => k + 1);
+              }}
+            />
+          )}
+
+          {canManagePayments && outstanding > 0 && (
+            <Section className="mb-8">
+              <h3 className="text-base font-semibold text-ink">Record a partial payment</h3>
+              <p className="mt-1 text-[13px] text-muted">
+                One amount, applied to the oldest outstanding period first. To pay one period, use its Record payment
+                action above; to settle everything, use Pay all remaining fees.
               </p>
               <RecordEnrollmentPaymentForm
                 studentId={studentId}
                 enrollmentId={enrollment.id}
-                remainingCents={summary.remainingCents}
+                remainingCents={outstanding}
                 currency={schedule?.currency ?? "USD"}
                 onDone={() => setRefreshKey((k) => k + 1)}
               />
-            </div>
+            </Section>
           )}
-        </div>
+        </>
       )}
-    </Section>
-  );
-}
-
-function SummaryStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-xs font-medium uppercase tracking-wide text-muted">{label}</p>
-      <p className="text-sm font-semibold text-ink">{value}</p>
     </div>
   );
 }
+
 
 
 /** One fee_periods row plus its own per-row Record Payment action. No
  * Action control is rendered at all for an already-`paid` period (not
  * merely disabled) — see fee-periods-manager.tsx's identical PeriodRow for
  * the full reasoning. */
+/** Fee periods per page (design `T` tables page at six). */
+const PERIOD_ROWS = 6;
+const PAGER_BUTTON =
+  "h-10 rounded-lg border border-border-strong bg-surface px-3 text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-app disabled:cursor-not-allowed disabled:opacity-50";
+const METHOD_OPTIONS = [
+  { value: "cash", label: "Cash", icon: "cash" },
+  { value: "mobile_money", label: "Mobile money", icon: "phone" },
+  { value: "bank_transfer", label: "Bank transfer", icon: "bank" },
+];
+
+/**
+ * "Pay all remaining fees": one payment for the course's whole outstanding
+ * balance, confirmed before it is recorded. Shows who, which course, the
+ * balance, method, date, reference and notes, and how the amount will be
+ * applied to each period (oldest first, the server's own rule). Recorded
+ * through `recordEnrollmentPaymentAction`, which re-derives the
+ * allocation, refuses any overpayment and writes the payment and its
+ * allocations in one transaction — one payment, one allocation per period.
+ */
+function PayAllRemainingDialog({
+  studentId,
+  studentName,
+  enrollment,
+  periods,
+  currency,
+  onClose,
+  onRecorded,
+}: {
+  studentId: string;
+  studentName: string;
+  enrollment: StudentEnrollmentOption;
+  periods: FeePeriodRecord[];
+  currency: string;
+  onClose: () => void;
+  onRecorded: () => void;
+}) {
+  const amountCents = outstandingCents(periods);
+  const preview = previewAllocation(periods, amountCents);
+  const numberOf = new Map(periods.map((period, index) => [period.id, index + 1]));
+  const byId = new Map(periods.map((period) => [period.id, period]));
+  const [nowLocal] = useState(() => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
+  return (
+    <ActionDialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title="Pay all remaining fees"
+      description="Records one payment for the whole outstanding balance and applies it to every unpaid period, oldest first."
+      summary={[
+        { label: "Student", value: studentName },
+        { label: "Course", value: `${enrollment.courseName} · ${enrollment.batchCode}` },
+        { label: "Outstanding balance", value: formatMoney(amountCents, currency) },
+        { label: "Amount to be received", value: formatMoney(amountCents, currency) },
+      ]}
+      submitLabel={`Record ${formatMoney(amountCents, currency)}`}
+      pendingLabel="Recording…"
+      rules={[{ name: "receivedAt", label: "Date received", required: true }]}
+      run={async (data) => {
+        const result = await recordEnrollmentPaymentAction({
+          studentId,
+          enrollmentId: enrollment.id,
+          amountCents,
+          currency,
+          method: String(data.get("method") ?? "cash") as "cash" | "mobile_money" | "bank_transfer",
+          reference: String(data.get("reference") ?? "") || undefined,
+          notes: String(data.get("notes") ?? "") || undefined,
+          receivedAt: String(data.get("receivedAt") ?? ""),
+        });
+        return result.ok ? null : (result.error?.message ?? "The payment could not be recorded.");
+      }}
+      onDone={() => {
+        showSuccessToast(`${formatMoney(amountCents, currency)} recorded across ${preview.allocations.length} period${preview.allocations.length === 1 ? "" : "s"}.`);
+        onRecorded();
+      }}
+    >
+      {({ errors, blur }) => (
+        <>
+          <DField label="Method" name="method" group full>
+            <ChoiceChips name="method" options={METHOD_OPTIONS} defaultValue="cash" />
+          </DField>
+          <DField label="Date received" name="receivedAt" required error={errors.receivedAt}>
+            <input
+              type="datetime-local"
+              name="receivedAt"
+              defaultValue={nowLocal}
+              onBlur={blur("receivedAt")}
+              className={controlClass(Boolean(errors.receivedAt))}
+              {...invalidProps("receivedAt", errors.receivedAt)}
+            />
+          </DField>
+          <DField label="Reference" name="reference">
+            <input name="reference" maxLength={200} placeholder="e.g. MM-84920" className={controlClass(false)} />
+          </DField>
+          <DField label="Notes" name="notes" full>
+            <input name="notes" maxLength={1000} placeholder="Optional" className={controlClass(false)} />
+          </DField>
+          <div className="col-span-full">
+            <div className="mb-1.5 text-[13px] font-semibold text-ink">How it is applied</div>
+            <ul className="divide-y divide-border rounded-lg border border-border bg-[#FAFBFC] text-sm">
+              {preview.allocations.map((allocation) => {
+                const period = byId.get(allocation.periodId)!;
+                return (
+                  <li key={allocation.periodId} className="flex items-center justify-between gap-3 px-3 py-2">
+                    <span className="min-w-0 text-[#374151]">
+                      #{numberOf.get(allocation.periodId)} · due {formatDate(period.dueDate)}
+                    </span>
+                    <span className="font-semibold tabular-nums text-ink">{formatMoney(allocation.amountCents, currency)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </>
+      )}
+    </ActionDialog>
+  );
+}
+
+const PERIOD_STATUS: Record<string, { label: string; tone: "green" | "amber" | "red" | "gray" }> = {
+  paid: { label: "Paid", tone: "green" },
+  partially_paid: { label: "Partially paid", tone: "amber" },
+  unpaid: { label: "Unpaid", tone: "amber" },
+  overdue: { label: "Overdue", tone: "red" },
+};
+
 function PeriodRow({
+  number,
   period,
   today,
   studentId,
   canManage,
   onRecorded,
 }: {
+  number: number;
   period: FeePeriodRecord;
   today: string;
   studentId: string;
@@ -503,57 +728,69 @@ function PeriodRow({
 }) {
   const [open, setOpen] = useState(false);
   const future = isFuturePeriod(period, today);
+  const status =
+    future ? { label: "Upcoming", tone: "gray" as const } : (PERIOD_STATUS[period.status] ?? { label: period.status, tone: "gray" as const });
 
   return (
-    <>
-      <tr className={trHover}>
-        <td className={td}>
-          {period.periodStart} – {period.periodEnd}
-        </td>
-        <td className={td}>{period.dueDate}</td>
-        <td className={td}>{formatMoney(period.expectedAmountCents, period.currency)}</td>
-        <td className={td}>{formatMoney(period.paidCents, period.currency)}</td>
-        <td className={td}>{formatMoney(period.remainingCents, period.currency)}</td>
-        <td className={td}>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge label={period.status.replace("_", " ")} tone={getStatusTone(period.status)} />
-            {future && <Badge label="upcoming" tone="gray" />}
-          </div>
-          <p className="mt-1 text-xs text-muted">{periodGuidance(period, period.currency, today)}</p>
-        </td>
-        {canManage && (
-          <td className={`${td} align-top`}>
-            {period.remainingCents > 0 ? (
-              <Button
+    <tr className={trHover}>
+      <td className={rtTd} data-label="#">
+        <span className="font-semibold text-ink">#{number}</span>
+        <span className="block text-xs tabular-nums text-muted">
+          {formatDate(period.periodStart)} – {formatDate(period.periodEnd)}
+        </span>
+      </td>
+      <td className={`${rtTd} whitespace-nowrap tabular-nums`} data-label="Due">
+        {formatDate(period.dueDate)}
+      </td>
+      <td className={`${rtTd} text-right tabular-nums`} data-label="Expected">
+        {formatMoney(period.expectedAmountCents, period.currency)}
+      </td>
+      <td className={`${rtTd} text-right tabular-nums`} data-label="Paid">
+        {formatMoney(period.paidCents, period.currency)}
+      </td>
+      <td className={`${rtTd} text-right tabular-nums`} data-label="Remaining">
+        {formatMoney(period.remainingCents, period.currency)}
+      </td>
+      <td className={rtTd} data-label="Status">
+        <Badge label={status.label} tone={status.tone} />
+        <span className="mt-1 block text-xs text-muted">{periodGuidance(period, period.currency, today)}</span>
+      </td>
+      {canManage && (
+        <td className={rtTd} data-actions="">
+          {period.remainingCents > 0 ? (
+            <>
+              <button
                 type="button"
-                variant={open ? "secondary" : "primary"}
-                className="px-2.5 py-1 text-xs"
-                onClick={() => setOpen((value) => !value)}
+                onClick={() => setOpen(true)}
+                className="inline-flex min-h-10 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app"
               >
-                {open ? "Cancel" : "Record Payment"}
-              </Button>
-            ) : (
-              <span className="text-xs text-muted">—</span>
-            )}
-          </td>
-        )}
-      </tr>
-      {open && (
-        <tr>
-          <td colSpan={canManage ? 7 : 6} className={`${td} bg-app`}>
-            <PeriodPaymentForm
-              studentId={studentId}
-              period={period}
-              onDone={() => {
-                setOpen(false);
-                onRecorded();
-              }}
-              onCancel={() => setOpen(false)}
-            />
-          </td>
-        </tr>
+                Record payment
+              </button>
+              <DesignDialog
+                open={open}
+                onOpenChange={setOpen}
+                title={`Record payment for period #${number}`}
+                description={`${formatDate(period.periodStart)} – ${formatDate(period.periodEnd)} · ${formatMoney(period.remainingCents, period.currency)} remaining`}
+              >
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                  <PeriodPaymentForm
+                    studentId={studentId}
+                    period={period}
+                    onDone={() => {
+                      setOpen(false);
+                      onRecorded();
+                    }}
+                    onCancel={() => setOpen(false)}
+                  />
+                </div>
+              </DesignDialog>
+            </>
+          ) : (
+            <span className="text-xs text-muted">Paid in full</span>
+          )}
+        </td>
       )}
-    </>
+    </tr>
   );
 }
 
@@ -670,112 +907,171 @@ function PeriodPaymentForm({
 function ScheduleForm({
   enrollmentId,
   schedule,
-  paidCents,
+  periods,
+  today,
   onSaved,
 }: {
   enrollmentId: string;
   schedule: EnrollmentFeeScheduleRecord | null;
-  /** How much has actually been approved-paid toward the CURRENT schedule's
-   * already-started installments — see fee-periods.ts's own
-   * setEnrollmentFeeSchedule doc comment ("auto-carry the remaining
-   * balance"). Once this is > 0, the server authoritatively overrides
-   * whatever Total Fee is submitted here with the auto-computed remaining
-   * balance, so this field is locked to that same value rather than
-   * letting the admin type a number the server will silently replace. */
-  paidCents: number;
+  /** The enrollment's current fee periods (all of them, upcoming included). */
+  periods: FeePeriodRecord[];
+  today: string;
   onSaved: () => void;
 }) {
   const [open, setOpen] = useState(schedule === null);
   const [intervalMonths, setIntervalMonths] = useState<number>(schedule?.intervalMonths ?? 1);
-  // Once anything has been paid toward the current schedule, the Total Fee
-  // field always reflects the auto-carried remaining balance — the server
-  // computes and uses this same figure regardless of what's submitted (see
-  // setEnrollmentFeeSchedule's own doc comment), so showing anything else
-  // here would just be misleading.
-  const remainingCents = schedule ? Math.max(0, schedule.amountCents - paidCents) : 0;
-  const amountIsLocked = schedule !== null && paidCents > 0;
   // Entered/displayed in dollars (e.g. "10.00"), never raw cents — see
-  // lib/ui/money.ts's dollarsToCents/centsToDollars. This is the exact
-  // "Fee schedule" input the money-input-system fix specifically calls
-  // out: entering "10" here must mean $10.00 total, not 10 cents.
-  const [amountDollars, setAmountDollars] = useState(
-    schedule ? centsToDollars(amountIsLocked ? remainingCents : schedule.amountCents) : "",
-  );
+  // lib/ui/money.ts's dollarsToCents/centsToDollars.
+  const [amountDollars, setAmountDollars] = useState(schedule ? centsToDollars(schedule.amountCents) : "");
   const [anchorDate, setAnchorDate] = useState(schedule?.anchorDate ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const currency = schedule?.currency ?? "USD";
+
+  // What setEnrollmentFeeSchedule will actually do (lib/ui/fee-allocation.ts
+  // mirrors its rule): started or paid periods stay as they are with their
+  // own amounts; once any do, the part of the plan they don't already
+  // charge carries over and the new installments start the day after them,
+  // whatever amount or date is typed. Those two fields are locked to the
+  // server's figures in that case rather than accepting a value the server
+  // would silently replace.
+  const typedCents = dollarsToCents(amountDollars) ?? 0;
+  const preview = previewScheduleChange({
+    current: schedule ? { amountCents: schedule.amountCents, anchorDate: schedule.anchorDate } : null,
+    periods,
+    today,
+    amountCents: typedCents,
+    anchorDate,
+    count: intervalMonths,
+  });
 
   if (!open) {
     return (
       <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setOpen(true)}>
-        Edit fee schedule
+        Change payment plan
       </Button>
     );
   }
 
   async function handleSave() {
     setError(null);
-    const amount = dollarsToCents(amountDollars);
-    if (amount === null || amount <= 0 || !anchorDate) {
+    const amount = preview.amountCarried ? preview.totalCents : dollarsToCents(amountDollars);
+    const date = preview.dateMoved ? (preview.installments[0]?.date ?? anchorDate) : anchorDate;
+    if (amount === null || amount <= 0 || !date) {
       setError("Enter a valid amount and start date.");
       return;
     }
     setSaving(true);
-    const result = await setEnrollmentFeeScheduleAction({ enrollmentId, intervalMonths, amountCents: amount, anchorDate });
+    const result = await setEnrollmentFeeScheduleAction({ enrollmentId, intervalMonths, amountCents: amount, anchorDate: date });
     setSaving(false);
     if (!result.ok) {
       setError(result.error?.message ?? "Failed to save fee schedule.");
       showErrorToast(result.error?.message ?? "Failed to save fee schedule.");
       return;
     }
-    showSuccessToast("Fee schedule saved.");
+    showSuccessToast(schedule ? "Payment plan changed." : "Payment plan saved.");
     setOpen(false);
     onSaved();
   }
 
+  const planLabel = (count: number) => INTERVAL_OPTIONS.find((option) => option.value === count)?.label ?? `${count} payments`;
+
   return (
     <div className="rounded-card border border-border bg-app p-4">
-      <h3 className="text-sm font-semibold text-ink">{schedule ? "Edit fee schedule" : "Set fee schedule"}</h3>
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Field label="Payment Plan">
-          <select className={inputClass} value={intervalMonths} onChange={(e) => setIntervalMonths(Number(e.target.value))}>
-            {INTERVAL_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label={amountIsLocked ? "Remaining balance (USD, auto-carried)" : "Total fee (USD)"}>
+      <h3 className="text-sm font-semibold text-ink">{schedule ? "Change payment plan" : "Set payment plan"}</h3>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <PaymentPlanField name="intervalMonths" value={intervalMonths} onChange={setIntervalMonths} />
+        <Field label={preview.amountCarried ? "Amount still to schedule (carried over)" : "Total fee (USD)"}>
           <input
             type="number"
             min={0.01}
             step="0.01"
             placeholder="0.00"
             className={inputClass}
-            value={amountDollars}
-            disabled={amountIsLocked}
+            value={preview.amountCarried ? centsToDollars(preview.totalCents) : amountDollars}
+            disabled={preview.amountCarried}
             onChange={(e) => setAmountDollars(e.target.value)}
           />
-          {amountIsLocked && (
-            <p className="mt-1 text-xs text-muted">
-              {formatMoney(paidCents, schedule?.currency ?? "USD")} already paid toward the current plan — the
-              remaining balance carries over automatically into the new one.
-            </p>
-          )}
         </Field>
-        <Field label="First period start date">
-          <input type="date" className={inputClass} value={anchorDate} onChange={(e) => setAnchorDate(e.target.value)} />
+        <Field label={preview.dateMoved ? "First new installment (after kept periods)" : "First installment date"}>
+          <input
+            type="date"
+            className={inputClass}
+            value={preview.dateMoved ? (preview.installments[0]?.date ?? "") : anchorDate}
+            disabled={preview.dateMoved}
+            onChange={(e) => setAnchorDate(e.target.value)}
+          />
         </Field>
       </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        {schedule && (
+          <div className="rounded-lg border border-border bg-surface p-3 text-sm">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted">Saved plan</div>
+            <div className="mt-1 font-semibold text-ink">
+              {planLabel(schedule.intervalMonths)} · {formatMoney(schedule.amountCents, currency)}
+            </div>
+            <div className="mt-1 text-[13px] text-muted">From {formatDate(schedule.anchorDate)}</div>
+            {preview.keptCount > 0 && (
+              <p className="mt-2 text-[13px] text-[#374151]">
+                {preview.keptCount} period{preview.keptCount === 1 ? " has" : "s have"} started or been paid (
+                {formatMoney(preview.keptPaidCents, currency)} paid). {preview.keptCount === 1 ? "It stays" : "They stay"} exactly
+                as recorded; only later, unpaid periods are replaced.
+              </p>
+            )}
+          </div>
+        )}
+        <div className="rounded-lg border border-dashed border-[#F0CDD5] bg-surface p-3 text-sm" aria-live="polite">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted">Proposed plan</span>
+            <Badge label="Preview, not saved" tone="amber" />
+          </div>
+          {preview.nothingToReschedule ? (
+            <p className="mt-2 text-[13px] text-[#374151]">
+              Nothing left to reschedule: every installment of the saved plan has started or been paid.
+            </p>
+          ) : preview.installments.length === 0 ? (
+            <p className="mt-2 text-[13px] text-muted">Enter an amount and a first installment date to see the installments.</p>
+          ) : (
+            <>
+              <div className="mt-1 font-semibold text-ink">
+                {planLabel(intervalMonths)} · {formatMoney(preview.totalCents, currency)}
+              </div>
+              <ul className="mt-2 divide-y divide-border">
+                {preview.installments.map((installment, index) => (
+                  <li key={installment.date} className="flex justify-between gap-3 py-1.5">
+                    <span className="text-[#374151]">
+                      {index + 1}. due {formatDate(installment.date)}
+                    </span>
+                    <span className="font-semibold tabular-nums text-ink">{formatMoney(installment.amountCents, currency)}</span>
+                  </li>
+                ))}
+              </ul>
+              {preview.amountCarried && (
+                <p className="mt-2 text-[13px] text-muted">
+                  The saved plan&apos;s total less the installments kept above, which keep their own amounts and balances,
+                  so the total owed doesn&apos;t change.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {preview.nothingToReschedule && (
+        <div role="alert" className="mt-3 rounded-lg border border-[#F5D08A] bg-[#FFF8E6] px-3 py-2 text-[13px] text-[#7A4B00]">
+          This plan can&apos;t be changed. Every installment has started or been paid, so a new plan could only add charges
+          beyond the course fee. Record payments against the existing periods instead.
+        </div>
+      )}
       {error && (
         <div className="mt-3">
           <ErrorMessage message={error} />
         </div>
       )}
       <div className="mt-3 flex gap-2">
-        <Button type="button" disabled={saving} onClick={handleSave}>
-          {saving ? "Saving..." : "Save schedule"}
+        <Button type="button" disabled={saving || preview.installments.length === 0} onClick={handleSave}>
+          {saving ? "Saving..." : schedule ? "Save new plan" : "Save plan"}
         </Button>
         {schedule && (
           <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
@@ -1018,245 +1314,6 @@ function ChargesPanel({
               {recordingPayment ? "Recording..." : "Record payment"}
             </Button>
           </form>
-        </div>
-      )}
-    </Section>
-  );
-}
-
-// ===========================================================================
-// Payment history — merged fee-period + charge payments, one table
-// ===========================================================================
-
-function PaymentHistoryPanel({
-  rows,
-  canManagePayments,
-  canReversePayments,
-  currentUserId,
-}: {
-  rows: PaymentHistoryRow[];
-  canManagePayments: boolean;
-  canReversePayments: boolean;
-  currentUserId: string;
-}) {
-  const [issuingId, setIssuingId] = useState<string | null>(null);
-  const [issueError, setIssueError] = useState<string | null>(null);
-  const [issuedReceipts, setIssuedReceipts] = useState<Map<string, { id: string; receiptNumber: string }>>(new Map());
-
-  const [isReversalPending, startReversalTransition] = useTransition();
-  const [reversalError, setReversalError] = useState<string | null>(null);
-  const [reversalRowId, setReversalRowId] = useState<string | null>(null);
-  const [reversalMode, setReversalMode] = useState<"reverse" | "adjust" | null>(null);
-  const [reversalReason, setReversalReason] = useState("");
-  const [adjustAmount, setAdjustAmount] = useState("");
-  const [reversedIds, setReversedIds] = useState<Set<string>>(new Set());
-
-  async function handleIssueReceipt(paymentId: string) {
-    setIssuingId(paymentId);
-    setIssueError(null);
-    const result = await issueReceiptAction(paymentId);
-    setIssuingId(null);
-    if (!result.ok) {
-      setIssueError(result.error.message);
-      showErrorToast(result.error.message);
-      return;
-    }
-    setIssuedReceipts((prev) => new Map(prev).set(paymentId, { id: result.receiptId, receiptNumber: result.receiptNumber }));
-    showSuccessToast("Receipt issued.");
-  }
-
-  function startReversal(paymentId: string, mode: "reverse" | "adjust") {
-    setReversalError(null);
-    setReversalRowId(paymentId);
-    setReversalMode(mode);
-    setReversalReason("");
-    setAdjustAmount("");
-  }
-
-  function cancelReversal() {
-    setReversalRowId(null);
-    setReversalMode(null);
-    setReversalReason("");
-    setAdjustAmount("");
-  }
-
-  function confirmReversal(paymentId: string) {
-    setReversalError(null);
-    // The "corrected amount" field is entered in dollars, not cents — see
-    // lib/ui/money.ts's dollarsToCents.
-    if (reversalMode === "adjust" && dollarsToCents(adjustAmount) === null) {
-      setReversalError("Enter a valid corrected amount.");
-      return;
-    }
-    startReversalTransition(async () => {
-      const result =
-        reversalMode === "adjust"
-          ? await adjustStudentPaymentAction(paymentId, reversalReason.trim(), dollarsToCents(adjustAmount)!)
-          : await reverseStudentPaymentAction(paymentId, reversalReason.trim());
-      if (!result.ok) {
-        setReversalError(result.error.message);
-        showErrorToast(result.error.message);
-        return;
-      }
-      setReversedIds((prev) => new Set(prev).add(paymentId));
-      showSuccessToast(reversalMode === "adjust" ? "Payment adjusted." : "Payment reversed.");
-      cancelReversal();
-    });
-  }
-
-  // Anyone who can see this section at all can VIEW an already-issued
-  // receipt (getReceipt's own gate is view-or-above, same as payment
-  // history itself) — only canManagePayments (Manager/Finance Officer)
-  // additionally gets the "Issue receipt" action for one not yet issued.
-  const reverseColumn = canReversePayments;
-  const columnCount = 7 + (reverseColumn ? 1 : 0);
-
-  return (
-    <Section>
-      <h2 className="text-base font-semibold text-ink">Payment history</h2>
-      <TableWrap>
-        <thead>
-          <tr>
-            <th className={th}>Date</th>
-            <th className={th}>Amount</th>
-            <th className={th}>Method</th>
-            <th className={th}>Reference</th>
-            <th className={th}>Notes</th>
-            <th className={th}>Fee period(s) / Charge</th>
-            <th className={th}>Recorded by</th>
-            <th className={th}>Status</th>
-            <th className={th}>Receipt</th>
-            {reverseColumn && <th className={th}>Reverse / Adjust</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={columnCount} className={`${td} text-center text-muted`}>
-                No payments recorded yet.
-              </td>
-            </tr>
-          ) : (
-            rows.map((row) => {
-              const alreadyReversedThisSession = reversedIds.has(row.paymentId);
-              const isSelfRecorded = row.recordedBy === currentUserId;
-              const canReverseThisRow = canReversePayments && row.status === "approved" && !alreadyReversedThisSession;
-              const effectiveStatus = alreadyReversedThisSession ? "reversed" : row.status;
-              const issuedThisSession = issuedReceipts.get(row.paymentId);
-              const receiptId = issuedThisSession?.id ?? row.receiptId;
-              const receiptNumber = issuedThisSession?.receiptNumber ?? row.receiptNumber;
-              return (
-                <tr key={row.paymentId} className={trHover}>
-                  <td className={td}>{row.receivedAt.toLocaleString()}</td>
-                  <td className={`${td} font-medium`}>{formatMoney(row.amountCents, row.currency)}</td>
-                  <td className={td}>{row.method.replace("_", " ")}</td>
-                  <td className={td}>{row.reference ?? "—"}</td>
-                  <td className={td}>{row.notes ?? "—"}</td>
-                  <td className={td}>{row.description}</td>
-                  <td className={td}>{row.recordedByLabel}</td>
-                  <td className={td}>
-                    <Badge label={effectiveStatus.replace("_", " ")} tone={getStatusTone(effectiveStatus)} />
-                  </td>
-                  <td className={td}>
-                    {receiptId ? (
-                      <LinkButton href={`/academy/receipts/${receiptId}`} variant="secondary" className="px-2.5 py-1 text-xs" target="_blank">
-                        View {receiptNumber ?? "receipt"}
-                      </LinkButton>
-                    ) : canManagePayments ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="px-2.5 py-1 text-xs"
-                        disabled={row.status !== "approved" || issuingId === row.paymentId}
-                        onClick={() => handleIssueReceipt(row.paymentId)}
-                      >
-                        {issuingId === row.paymentId ? "Issuing..." : "Issue receipt"}
-                      </Button>
-                    ) : (
-                      <span className="text-muted">—</span>
-                    )}
-                  </td>
-                  {reverseColumn && (
-                    <td className={td}>
-                      {!canReverseThisRow ? (
-                        <span className="text-muted">—</span>
-                      ) : reversalRowId === row.paymentId ? (
-                        <div className="flex min-w-[220px] flex-col gap-2">
-                          {reversalMode === "adjust" && (
-                            <input
-                              type="number"
-                              placeholder="Corrected amount (USD)"
-                              min={0}
-                              step="0.01"
-                              value={adjustAmount}
-                              onChange={(event) => setAdjustAmount(event.target.value)}
-                              className={`${inputClass} py-1.5`}
-                            />
-                          )}
-                          <input
-                            type="text"
-                            placeholder="Reason (required)"
-                            value={reversalReason}
-                            onChange={(event) => setReversalReason(event.target.value)}
-                            className={`${inputClass} py-1.5`}
-                          />
-                          <div className="flex gap-2">
-                            <Button
-                              type="button"
-                              variant="danger"
-                              className="px-2.5 py-1 text-xs"
-                              disabled={
-                                isReversalPending ||
-                                reversalReason.trim() === "" ||
-                                (reversalMode === "adjust" && adjustAmount.trim() === "")
-                              }
-                              onClick={() => confirmReversal(row.paymentId)}
-                            >
-                              {isReversalPending ? "Working..." : reversalMode === "adjust" ? "Confirm adjustment" : "Confirm reversal"}
-                            </Button>
-                            <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" onClick={cancelReversal}>
-                              Back
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-2" title={isSelfRecorded ? SELF_REVERSAL_TOOLTIP : undefined}>
-                          <Button
-                            type="button"
-                            variant="danger"
-                            className="px-2.5 py-1 text-xs"
-                            disabled={isSelfRecorded}
-                            onClick={() => startReversal(row.paymentId, "reverse")}
-                          >
-                            Reverse
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="px-2.5 py-1 text-xs"
-                            disabled={isSelfRecorded}
-                            onClick={() => startReversal(row.paymentId, "adjust")}
-                          >
-                            Adjust
-                          </Button>
-                        </div>
-                      )}
-                    </td>
-                  )}
-                </tr>
-              );
-            })
-          )}
-        </tbody>
-      </TableWrap>
-      {issueError && (
-        <div className="mt-3">
-          <ErrorMessage message={issueError} />
-        </div>
-      )}
-      {reversalError && (
-        <div className="mt-3">
-          <ErrorMessage message={reversalError} />
         </div>
       )}
     </Section>

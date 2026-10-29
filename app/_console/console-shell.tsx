@@ -80,6 +80,7 @@ const ACCOUNT_TITLES: Record<string, string> = {
   "/account/activity": "Activity",
   "/account/verify-email": "Verify email",
   "/academy/notifications": "Notifications",
+  "/account/notifications": "Notifications",
 };
 
 function relativeTime(iso: string): string {
@@ -505,7 +506,7 @@ function HeaderSearch({
         <div
           role="listbox"
           aria-label="Search results"
-          className="cs-menu absolute left-0 right-0 top-[46px] z-40 rounded-xl border border-border bg-surface p-2 shadow-[0_12px_32px_rgba(17,24,39,0.18)]"
+          className="cs-menu absolute left-0 right-0 top-[46px] z-40 max-h-[calc(100dvh-4.5rem)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-surface p-2 shadow-[0_12px_32px_rgba(17,24,39,0.18)]"
         >
           {!fresh || pending ? (
             <div className="px-2 py-3 text-sm text-muted">Searching…</div>
@@ -605,7 +606,7 @@ function NotificationBell({
       {open && (
         <div
           role="menu"
-          className="cs-menu absolute -right-[60px] top-12 z-40 w-[300px] overflow-hidden rounded-xl border border-border bg-surface shadow-[0_12px_32px_rgba(17,24,39,0.18)] sm:right-0 sm:w-[340px]"
+          className="cs-menu absolute -right-[60px] top-12 z-40 max-h-[calc(100dvh-4.5rem)] w-[300px] overflow-y-auto overscroll-contain rounded-xl border border-border bg-surface shadow-[0_12px_32px_rgba(17,24,39,0.18)] sm:right-0 sm:w-[340px]"
         >
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="font-semibold text-ink">Notifications</div>
@@ -715,7 +716,7 @@ function AccountMenu({
       {open && (
         <div
           role="menu"
-          className="cs-menu absolute right-0 top-[52px] z-40 w-[260px] rounded-xl border border-border bg-surface p-2 shadow-[0_12px_32px_rgba(17,24,39,0.18)]"
+          className="cs-menu absolute right-0 top-[52px] z-40 max-h-[calc(100dvh-4.5rem)] w-[260px] overflow-y-auto overscroll-contain rounded-xl border border-border bg-surface p-2 shadow-[0_12px_32px_rgba(17,24,39,0.18)]"
         >
           <div className="mb-2 border-b border-border px-3 pb-3 pt-2">
             <div className="font-semibold text-ink">{user.name}</div>

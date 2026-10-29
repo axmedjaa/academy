@@ -1,133 +1,100 @@
 "use client";
 
+import Link from "next/link";
 import { renewSubscription } from "@/lib/subscriptions/renew-actions";
 import type { PlatformSubscriptionRow } from "@/lib/subscriptions/renew";
-import { Badge, Button, EmptyState, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
+import { formatDate } from "@/lib/ui/date";
+import { Badge, Button, EmptyState, Section } from "@/app/academy/_shell/ui";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import { Icon } from "@/app/academy/_shell/icons";
+import { subscriptionLabel, subscriptionTone } from "../_shared/status";
 
-interface Props {
-  subscriptions: PlatformSubscriptionRow[];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "41 days left", "Ends today", "Ended 3 days ago", "Not started". */
+function termLabel(subscription: PlatformSubscriptionRow, now: number): string {
+  if (subscription.effectiveStatus === "draft") return "Not started";
+  if (!subscription.endsAt) return "No end date";
+  const days = Math.ceil((new Date(subscription.endsAt).getTime() - now) / DAY_MS);
+  if (days > 1) return `${days} days left`;
+  if (days === 1) return "1 day left";
+  if (days === 0) return "Ends today";
+  return `Ended ${-days} day${days === -1 ? "" : "s"} ago`;
 }
 
-const STATUS_LABELS: Record<PlatformSubscriptionRow["effectiveStatus"], string> = {
-  draft: "Draft",
-  trial: "Trial",
-  active: "Active",
-  past_due: "Past Due",
-  suspended: "Suspended",
-  expired: "Expired",
-  cancelled: "Cancelled",
-};
-
-const STATUS_TONE: Record<PlatformSubscriptionRow["effectiveStatus"], "gray" | "blue" | "green" | "amber" | "red"> = {
-  draft: "gray",
-  trial: "blue",
-  active: "green",
-  past_due: "amber",
-  suspended: "red",
-  expired: "red",
-  cancelled: "gray",
-};
-
-function formatDate(date: Date | null): string {
-  return date ? new Date(date).toLocaleDateString() : "—";
-}
-
-// DESIGN.md §8: "/platform/subscriptions | A | Status badge shows the
-// derived label including grace-period countdown (§11.1) and an
-// 'Expiring in N days' amber flag near ends_at. Row action: Renew —
-// disabled with a tooltip if no verified payment exists for that
-// subscription yet (§11.5); never offered on a Cancelled subscription...
-// Renew is platform_owner-only and absent for every platform_admin (§5)."
-// This page is only ever reached by a platform_owner in the first place
-// (see app/platform/subscriptions/page.tsx's gating comment), so there is
-// no separate "canRenew prop toggling the whole action column" the way
-// app/platform/payments/payments-manager.tsx needs one for a
-// platform_admin viewer — the disabled/tooltip state is purely per-row,
-// driven by `renewDisabledReason` from lib/subscriptions/renew.ts's
-// listPlatformSubscriptions.
-export function SubscriptionsManager({ subscriptions }: Props) {
+/**
+ * Subscriptions (design P05): one card per academy subscription with its
+ * plan, status and remaining term, and Renew. Renew is the existing
+ * owner-only action behind a confirmation; when it is not available the
+ * reason is shown as text under the button (the server's own wording),
+ * not only as a hover tooltip.
+ */
+export function SubscriptionsManager({ subscriptions, now }: { subscriptions: PlatformSubscriptionRow[]; now: number }) {
   if (subscriptions.length === 0) {
-    return <EmptyState message="No subscriptions yet." icon={<Icon name="autorenew" />} />;
+    return (
+      <Section className="mb-8">
+        <EmptyState message="No subscriptions yet. Registering an academy creates its first subscription." icon={<Icon name="autorenew" />} />
+      </Section>
+    );
   }
 
   return (
-    <TableWrap>
-      <thead>
-        <tr>
-          <th className={th}>Academy</th>
-          <th className={th}>Plan</th>
-          <th className={th}>Status</th>
-          <th className={th}>Starts</th>
-          <th className={th}>Ends</th>
-          <th className={th}>Renewed</th>
-          <th className={th}>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {subscriptions.map((subscription) => (
-          <SubscriptionRow key={subscription.subscriptionId} subscription={subscription} />
-        ))}
-      </tbody>
-    </TableWrap>
-  );
-}
-
-function SubscriptionRow({ subscription }: { subscription: PlatformSubscriptionRow }) {
-  return (
-    <tr className={trHover}>
-      <td className={`${td} font-medium`}>{subscription.academyName}</td>
-      <td className={td}>
-        {subscription.planName} ({subscription.billingPeriod})
-      </td>
-      <td className={td}>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge label={STATUS_LABELS[subscription.effectiveStatus]} tone={STATUS_TONE[subscription.effectiveStatus]} />
-          {subscription.effectiveStatus === "past_due" && subscription.graceDaysRemaining !== null && (
-            <span className="text-xs text-warning">
-              {subscription.graceDaysRemaining} day{subscription.graceDaysRemaining === 1 ? "" : "s"} left in grace period
-            </span>
-          )}
-          {subscription.expiringSoon && (
-            <span className="text-xs text-warning">
-              Expiring in {subscription.expiringSoonDaysRemaining} day
-              {subscription.expiringSoonDaysRemaining === 1 ? "" : "s"}
-            </span>
-          )}
-        </div>
-      </td>
-      <td className={td}>{formatDate(subscription.startsAt)}</td>
-      <td className={td}>{formatDate(subscription.endsAt)}</td>
-      <td className={td}>{formatDate(subscription.renewedAt)}</td>
-      <td className={td}>
-        {/* Was a native window.confirm() — swapped for the app's one
-            reusable confirmation dialog (ConfirmButton, built on shadcn/
-            Radix AlertDialog) for the same reason every other destructive/
-            consequential action in this app already uses it: a real modal
-            gets focus trapping, Escape-to-close, and consistent styling
-            that a browser-native confirm() can't. Same disabled-with-
-            tooltip split as EligibilityGatedDeleteButton below — a
-            disabled ConfirmButton can't carry the reason as a hover
-            tooltip (its trigger has no `title` passthrough), so the
-            ineligible state renders a plain disabled Button instead. */}
-        {subscription.canRenew ? (
-          <ConfirmButton
-            label="Renew"
-            variant="secondary"
-            className="px-2.5 py-1 text-xs"
-            title={`Renew the subscription for ${subscription.academyName}?`}
-            description={`This will extend ends_at by one ${subscription.billingPeriod} billing period and consume one verified payment.`}
-            onConfirm={() => renewSubscription(subscription.subscriptionId)}
-          />
-        ) : (
-          <span title={subscription.renewDisabledReason ?? undefined}>
-            <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" disabled>
-              Renew
-            </Button>
-          </span>
-        )}
-      </td>
-    </tr>
+    <ul role="list" className="mb-4 flex flex-col gap-3.5">
+      {subscriptions.map((subscription) => (
+        <li key={subscription.subscriptionId} className="@container rounded-card border border-border bg-surface px-5 py-4 shadow-card">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 @[480px]:grid-cols-[minmax(0,1.6fr)_minmax(96px,auto)_minmax(96px,auto)] @[760px]:grid-cols-[minmax(0,1.5fr)_minmax(0,1.5fr)_minmax(96px,auto)_minmax(96px,auto)_minmax(170px,1fr)] @[760px]:items-center">
+            <div className="col-span-full min-w-0 @[760px]:col-span-1">
+              <Link
+                href={`/platform/academies/${subscription.academyId}`}
+                className="font-semibold !text-ink no-underline [overflow-wrap:anywhere] hover:!text-brand hover:underline"
+              >
+                {subscription.academyName}
+              </Link>
+              <span className="mt-0.5 block text-xs text-muted">
+                Started {formatDate(subscription.startsAt)}
+                {subscription.renewedAt ? ` · renewed ${formatDate(subscription.renewedAt)}` : ""}
+              </span>
+            </div>
+            <div className="col-span-2 min-w-0 @[480px]:col-span-1">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">Plan</span>
+              <span className="block text-ink [overflow-wrap:anywhere]">{subscription.planName}</span>
+              <span className="block text-xs capitalize text-muted">{subscription.billingPeriod}</span>
+            </div>
+            <div className="min-w-0">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">Status</span>
+              <Badge label={subscriptionLabel(subscription.effectiveStatus)} tone={subscriptionTone(subscription.effectiveStatus)} />
+              {subscription.effectiveStatus === "past_due" && subscription.graceDaysRemaining !== null && (
+                <span className="mt-0.5 block text-xs text-warning">
+                  {subscription.graceDaysRemaining} day{subscription.graceDaysRemaining === 1 ? "" : "s"} left in grace
+                </span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">Term</span>
+              <span className={`block ${subscription.expiringSoon ? "font-semibold text-warning" : "text-ink"}`}>{termLabel(subscription, now)}</span>
+              {subscription.endsAt && <span className="block text-xs text-muted">Ends {formatDate(subscription.endsAt)}</span>}
+            </div>
+            <div className="col-span-full min-w-0 @[760px]:col-span-1">
+              {subscription.canRenew ? (
+                <ConfirmButton
+                  label="Renew"
+                  variant="primary"
+                  title={`Renew the subscription for ${subscription.academyName}?`}
+                  description={`This extends the term by one ${subscription.billingPeriod} billing period and uses one verified, unused payment.`}
+                  onConfirm={() => renewSubscription(subscription.subscriptionId)}
+                />
+              ) : (
+                <Button type="button" disabled aria-describedby={`renew-why-${subscription.subscriptionId}`}>
+                  Renew
+                </Button>
+              )}
+              <span id={`renew-why-${subscription.subscriptionId}`} className="mt-1 block text-xs text-muted">
+                {subscription.canRenew ? "Uses its verified payment." : (subscription.renewDisabledReason ?? "Renew is not available.")}
+              </span>
+            </div>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -42,6 +42,9 @@ async function createPlan(): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/finance-reports.test.ts)",
       name: `Finance Reports Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",
@@ -583,6 +586,7 @@ describe("getFinanceReports — cross-academy tenant isolation", () => {
       outstandingCharges: { count: 0, totalsByCurrency: [] },
       // Nothing from the other academy in the totals or the month/method breakdowns.
       paymentsReceived: { count: 0, totalsByCurrency: [], byMethod: [], byMonth: [] },
+      refundsRecorded: { count: 0, totalsByCurrency: [] },
     });
     expect(result.report.income).toEqual({ visible: true, count: 0, totalsByCurrency: [] });
     expect(result.report.expenses).toEqual({

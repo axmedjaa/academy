@@ -50,6 +50,9 @@ async function createPlan(): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/student-payments.test.ts)",
       name: `Student Payments Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",
@@ -897,5 +900,115 @@ describe("listStudentCharges / listStudentPayments — tenant isolation", () => 
     const result = await listStudentCharges(context);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+});
+
+describe("listStudentPayments — search, status and method filters (Finance → Payments)", () => {
+  async function insertPayment(
+    academyId: string,
+    studentId: string,
+    recordedBy: string,
+    values: { method?: "cash" | "mobile_money" | "bank_transfer"; reference?: string; amountCents?: number; receivedAt?: Date } = {},
+  ): Promise<string> {
+    const [row] = await db
+      .insert(studentPayments)
+      .values({
+        academyId,
+        studentId,
+        amountCents: values.amountCents ?? 5_000,
+        currency: "USD",
+        method: values.method ?? "cash",
+        reference: values.reference,
+        receivedAt: values.receivedAt ?? new Date(),
+        recordedBy,
+        status: "approved",
+        approvedBy: recordedBy,
+        approvedAt: new Date(),
+      })
+      .returning({ id: studentPayments.id });
+    return row.id;
+  }
+
+  async function namedStudent(academyId: string, branchId: string, creatorUserId: string, fullName: string, studentNumber: string) {
+    const [row] = await db
+      .insert(students)
+      .values({ academyId, branchId, studentNumber, fullName, createdBy: creatorUserId })
+      .returning({ id: students.id });
+    return row.id;
+  }
+
+  async function ids(context: AuthContext, filters: Parameters<typeof listStudentPayments>[1], pagination?: { page: number; pageSize: number }) {
+    const result = await listStudentPayments(context, filters, pagination);
+    expect(result.ok).toBe(true);
+    return result.ok ? { ids: result.payments.map((p) => p.id).sort(), totalCount: result.totalCount } : { ids: [], totalCount: 0 };
+  }
+
+  it("searches student name, student number and reference, case-insensitively and partially", async () => {
+    const { academyId, branchId, studentId, creatorUserId, context } = await setupAcademy("manager");
+    const tag = randomUUID().slice(0, 6);
+    const amina = await namedStudent(academyId, branchId, creatorUserId, `Amina Qx${tag} Ali`, `STN-${tag}`);
+    const byName = await insertPayment(academyId, amina, creatorUserId);
+    const byRef = await insertPayment(academyId, studentId, creatorUserId, { reference: `MM-${tag}-REF` });
+    await insertPayment(academyId, studentId, creatorUserId, { reference: "unrelated" });
+
+    expect((await ids(context, { q: `qx${tag}` })).ids).toEqual([byName]);
+    expect((await ids(context, { q: `stn-${tag}` })).ids).toEqual([byName]);
+    expect((await ids(context, { q: `mm-${tag}` })).ids).toEqual([byRef]);
+    expect((await ids(context, { q: "  " })).ids).toHaveLength(3); // blank search = no filter
+  });
+
+  it("treats % and _ in the search text literally", async () => {
+    const { academyId, studentId, creatorUserId, context } = await setupAcademy("manager");
+    await insertPayment(academyId, studentId, creatorUserId, { reference: "ABC" });
+    const literal = await insertPayment(academyId, studentId, creatorUserId, { reference: "50%_off" });
+    expect((await ids(context, { q: "%" })).ids).toEqual([literal]);
+    expect((await ids(context, { q: "_" })).ids).toEqual([literal]);
+  });
+
+  it("filters Posted / Reversed / Reversal exactly as the table labels them", async () => {
+    const { academyId, studentId, creatorUserId, context } = await setupAcademy("manager");
+    const posted = await insertPayment(academyId, studentId, creatorUserId);
+    const toReverse = await insertPayment(academyId, studentId, creatorUserId);
+    const reversed = await reverseStudentPayment(context, toReverse, "Recorded in error.");
+    expect(reversed.ok).toBe(true);
+    const all = await ids(context, {});
+    expect(all.ids).toHaveLength(3);
+    const reversalRow = all.ids.find((id) => id !== posted && id !== toReverse)!;
+
+    expect((await ids(context, { status: "posted" })).ids).toEqual([posted]);
+    expect((await ids(context, { status: "reversed" })).ids).toEqual([toReverse]);
+    expect((await ids(context, { status: "reversal" })).ids).toEqual([reversalRow]);
+  });
+
+  it("filters by method, combines with search, and counts only matching rows for pagination", async () => {
+    const { academyId, studentId, creatorUserId, context } = await setupAcademy("manager");
+    const tag = randomUUID().slice(0, 6);
+    const mobile = [];
+    for (let i = 0; i < 3; i += 1) {
+      mobile.push(await insertPayment(academyId, studentId, creatorUserId, { method: "mobile_money", reference: `${tag}-${i}`, receivedAt: new Date(Date.now() - i * 60_000) }));
+    }
+    await insertPayment(academyId, studentId, creatorUserId, { method: "cash", reference: `${tag}-cash` });
+
+    expect((await ids(context, { method: "mobile_money" })).ids).toEqual([...mobile].sort());
+    expect((await ids(context, { method: "cash", q: tag })).ids).toHaveLength(1);
+
+    const page1 = await ids(context, { method: "mobile_money" }, { page: 1, pageSize: 2 });
+    const page2 = await ids(context, { method: "mobile_money" }, { page: 2, pageSize: 2 });
+    expect(page1.totalCount).toBe(3);
+    expect(page2.totalCount).toBe(3);
+    expect(page1.ids).toHaveLength(2);
+    expect(page2.ids).toHaveLength(1);
+    expect([...page1.ids, ...page2.ids].sort()).toEqual([...mobile].sort());
+  });
+
+  it("never matches another academy's payments or students, whatever the search", async () => {
+    const other = await setupAcademy("manager");
+    const tag = randomUUID().slice(0, 6);
+    const otherStudent = await namedStudent(other.academyId, other.branchId, other.creatorUserId, `Shared Name ${tag}`, `X-${tag}`);
+    await insertPayment(other.academyId, otherStudent, other.creatorUserId, { reference: `REF-${tag}` });
+
+    const mine = await setupAcademy("manager");
+    expect((await ids(mine.context, { q: tag })).ids).toEqual([]);
+    expect((await ids(mine.context, { q: `REF-${tag}` }, { page: 1, pageSize: 10 })).totalCount).toBe(0);
   });
 });

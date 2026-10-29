@@ -167,18 +167,58 @@ export function FilterDropdown({
   );
 }
 
-/** Shown only while at least one of `params` is set. */
-export function ClearFilters({ params }: { params: string[] }) {
+/** Shown only while at least one of `params` is set. `compact` matches the
+ * 44px plain-select filter bars (Payments). */
+export function ClearFilters({ params, compact = false }: { params: string[]; compact?: boolean }) {
   const { write, searchParams } = useParamWriter();
   if (!params.some((key) => searchParams.get(key))) return null;
   return (
     <button
       type="button"
       onClick={() => write(Object.fromEntries(params.map((key) => [key, null])))}
-      className="h-12 border-0 bg-transparent px-3.5 font-semibold text-brand hover:underline"
+      className={`${compact ? "h-11 text-sm" : "h-12"} border-0 bg-transparent px-3.5 font-semibold text-brand hover:underline`}
     >
       Clear filters
     </button>
+  );
+}
+
+/**
+ * A plain native select that writes one URL param (design P07 Payments
+ * filters: 44px, labelled for assistive tech only). The first option is
+ * the "all" option and must have value "". A value in the URL that is not
+ * one of `options` shows as "all".
+ */
+export function FilterSelect({ param, label, options }: { param: string; label: string; options: FilterOption[] }) {
+  const { write, pending, searchParams } = useParamWriter();
+  const fromUrl = searchParams.get(param) ?? "";
+  const current = options.some((option) => option.value === fromUrl) ? fromUrl : "";
+  // Shows the choice at once while the server re-renders (as SearchField
+  // does), then follows the URL again (back button, Clear filters).
+  const [value, setValue] = useState(current);
+  const [synced, setSynced] = useState(current);
+  if (current !== synced) {
+    setSynced(current);
+    setValue(current);
+  }
+  return (
+    <select
+      aria-label={label}
+      value={value}
+      onChange={(event) => {
+        setValue(event.target.value);
+        write({ [param]: event.target.value || null });
+      }}
+      className={`h-11 min-w-[140px] max-w-full rounded-lg border bg-surface px-3 sm:max-w-[240px] text-sm text-ink transition-[border-color,opacity] duration-150 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/15 ${
+        value ? "border-brand" : "border-border-strong"
+      } ${pending ? "opacity-70" : ""}`}
+    >
+      {options.map((option) => (
+        <option key={option.value || "__all"} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
   );
 }
 

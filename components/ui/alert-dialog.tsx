@@ -82,7 +82,7 @@ function AlertDialogContent({
           // at any width, every existing caller included (ConfirmButton,
           // RecordPaymentDialog, FormDialog), with no visual change at
           // tablet/desktop widths where max-w-md already governs.
-          "fixed top-1/2 left-1/2 z-[100] flex max-h-[85vh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-0 overflow-y-auto rounded-card border border-border bg-surface p-5 shadow-card outline-none motion-safe:data-[state=open]:animate-scale-in motion-safe:data-[state=closed]:animate-scale-out",
+          "fixed top-1/2 left-1/2 z-[100] flex max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-0 overflow-y-auto rounded-card border border-border bg-surface p-5 shadow-card outline-none motion-safe:data-[state=open]:animate-scale-in motion-safe:data-[state=closed]:animate-scale-out",
           className
         )}
         {...props}

@@ -1,7 +1,7 @@
 import { and, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { expenseRecords, incomeRecords, studentCharges, studentPayments, students } from "@/lib/db/schema";
+import { expenseRecords, incomeRecords, studentCharges, studentCourseRefunds, studentPayments, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_EXPENSES_ACTION,
@@ -210,6 +210,10 @@ export type StudentPaymentsReportSection =
       visible: true;
       outstandingCharges: OutstandingChargesSection;
       paymentsReceived: PaymentsReceivedSection;
+      /** Course refunds recorded on withdrawal (student_course_refunds):
+       * money returned, reported on its own — never subtracted from or
+       * added to `paymentsReceived`. */
+      refundsRecorded: { count: number; totalsByCurrency: AmountByCurrency[] };
     };
 
 export type IncomeReportSection =
@@ -291,6 +295,29 @@ async function computeOutstandingCharges(
     .where(and(...conditions))
     .groupBy(studentCharges.currency);
 
+  return { count: totalCount(rows), totalsByCurrency: toAmountsByCurrency(rows) };
+}
+
+/** Course refunds recorded this period (by the date the money was returned),
+ * with the same branch and method filters as payments received. */
+async function computeRefundsRecorded(
+  academyId: string,
+  filters: ParsedFinanceReportFilters,
+): Promise<{ count: number; totalsByCurrency: AmountByCurrency[] }> {
+  const conditions: SQL[] = [eq(studentCourseRefunds.academyId, academyId)];
+  if (filters.method) conditions.push(eq(studentCourseRefunds.method, filters.method));
+  if (filters.dateFrom) conditions.push(gte(studentCourseRefunds.refundedAt, filters.dateFrom));
+  if (filters.dateTo) conditions.push(lte(studentCourseRefunds.refundedAt, filters.dateTo));
+  if (filters.branchId) conditions.push(eq(studentCourseRefunds.branchId, filters.branchId));
+  const rows = await db
+    .select({
+      currency: studentCourseRefunds.currency,
+      amountCents: sql<number>`coalesce(sum(${studentCourseRefunds.amountCents}), 0)::int`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(studentCourseRefunds)
+    .where(and(...conditions))
+    .groupBy(studentCourseRefunds.currency);
   return { count: totalCount(rows), totalsByCurrency: toAmountsByCurrency(rows) };
 }
 
@@ -455,11 +482,12 @@ export async function getFinanceReports(
   const [studentPaymentsSection, incomeSection, expensesSection] = await Promise.all([
     studentPaymentsLevel !== "none"
       ? (async (): Promise<StudentPaymentsReportSection> => {
-          const [outstandingCharges, paymentsReceived] = await Promise.all([
+          const [outstandingCharges, paymentsReceived, refundsRecorded] = await Promise.all([
             computeOutstandingCharges(academyId, filters),
             computePaymentsReceived(academyId, filters),
+            computeRefundsRecorded(academyId, filters),
           ]);
-          return { visible: true, outstandingCharges, paymentsReceived };
+          return { visible: true, outstandingCharges, paymentsReceived, refundsRecorded };
         })()
       : Promise.resolve<StudentPaymentsReportSection>({ visible: false }),
     incomeLevel !== "none"

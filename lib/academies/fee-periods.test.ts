@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, or, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
@@ -27,7 +27,9 @@ import {
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { dollarsToCents } from "@/lib/ui/money";
-import { reverseStudentPayment } from "./finance-reversals";
+import { adjustStudentPayment, reverseStudentPayment } from "./finance-reversals";
+import { issueReceipt } from "./student-payments";
+import { withdrawStudentFromBatch } from "./batch-assignments";
 import {
   computeFeePeriodStatus,
   generateFeePeriodsForEnrollment,
@@ -69,6 +71,9 @@ async function createPlan(): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/fee-periods.test.ts)",
       name: `Fee Periods Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",
@@ -523,13 +528,18 @@ describe("fee period generation", () => {
     // moving anchorDate forward (the exact "form pre-fills the old anchor
     // date" real-world scenario) — `setEnrollmentFeeSchedule` itself is
     // responsible for moving it past the two paid installments.
+    // Both installments are kept (paid), so nothing of the plan is left to
+    // reschedule: the change is refused (it used to charge the submitted
+    // 999_999 as a fresh fee on top of the paid course). The guarantees
+    // below — paid periods untouched, nothing overlapping — still hold.
     const changed = await setEnrollmentFeeSchedule(context, {
       enrollmentId: fixture.enrollmentId,
       intervalMonths: 6,
-      amountCents: 999_999, // irrelevant — overridden by auto-carry, since both installments are already paid in full
+      amountCents: 999_999,
       anchorDate: "2026-09-28",
     });
-    expect(changed.ok).toBe(true);
+    expect(changed.ok).toBe(false);
+    expect(!changed.ok && changed.error.code).toBe("validation");
 
     const afterChange = await db
       .select()
@@ -1104,7 +1114,7 @@ describe("regression: changing the schedule back DOWN (6-month -> monthly) witho
       enrollmentId: fixture.enrollmentId,
       intervalMonths: 6,
       amountCents: 600, // $1.00/month x 6
-      anchorDate: "2026-09-28",
+      anchorDate: todayDateOnlyInAcademyTimezone(),
     });
     await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
 
@@ -1115,8 +1125,7 @@ describe("regression: changing the schedule back DOWN (6-month -> monthly) witho
       .orderBy(feePeriods.periodStart);
     expect(beforeChange).toHaveLength(6); // all 6 monthly installments generated upfront
     const firstInstallment = beforeChange[0];
-    expect(firstInstallment.periodStart).toBe("2026-09-28");
-    expect(firstInstallment.periodEnd).toBe("2026-10-27");
+    expect(firstInstallment.periodStart).toBe(todayDateOnlyInAcademyTimezone());
     expect(firstInstallment.expectedAmountCents).toBe(100);
 
     const paid = await recordFeePeriodPayment(context, {
@@ -1136,7 +1145,7 @@ describe("regression: changing the schedule back DOWN (6-month -> monthly) witho
       enrollmentId: fixture.enrollmentId,
       intervalMonths: 1,
       amountCents: 999_999, // irrelevant — overridden by auto-carry
-      anchorDate: "2026-09-28",
+      anchorDate: todayDateOnlyInAcademyTimezone(),
     });
     expect(changed.ok).toBe(true);
     expect(changed.ok && changed.schedule.amountCents).toBe(500);
@@ -1152,7 +1161,7 @@ describe("regression: changing the schedule back DOWN (6-month -> monthly) witho
     // by exactly ONE new monthly installment of the carried-over $5.00.
     expect(afterChange).toHaveLength(2);
     const newInstallment = afterChange.find((row) => row.id !== firstInstallment.id)!;
-    expect(newInstallment.periodStart).toBe("2026-10-28");
+    expect(newInstallment.periodStart > firstInstallment.periodStart).toBe(true);
     expect(newInstallment.expectedAmountCents).toBe(500);
     expect(newInstallment.periodStart > firstInstallment.periodEnd).toBe(true);
 
@@ -1361,8 +1370,8 @@ describe("legacy corrupted-data detection and safety (does NOT touch/fix anythin
    * script uses to find affected enrollments, now under test so a future
    * change can't silently break the one tool this task relies on for safe
    * detection of corrupted data. */
-  async function findOverlappingPairs(enrollmentId: string) {
-    const result = await db.execute(sql`
+  async function findOverlappingPairs(enrollmentId: string, executor: Pick<typeof db, "execute"> = db) {
+    const result = await executor.execute(sql`
       SELECT a.id AS a_id, b.id AS b_id
       FROM fee_periods a
       JOIN fee_periods b
@@ -1375,10 +1384,45 @@ describe("legacy corrupted-data detection and safety (does NOT touch/fix anythin
     return result.rows as Array<{ a_id: string; b_id: string }>;
   }
 
+  /** Whether migration 0028's fee_periods_no_overlap constraint is present
+   * here. Where it is, legacy overlapping rows cannot exist (the database
+   * correctly refuses them), so these tests can't plant them in the real
+   * table — see each test for how it handles that. */
+  async function overlapConstraintPresent(): Promise<boolean> {
+    const check = await db.execute(sql`SELECT 1 FROM pg_constraint WHERE conname = 'fee_periods_no_overlap'`);
+    return check.rows.length > 0;
+  }
+
   it("detects two directly-seeded overlapping fee_periods rows for the same enrollment (simulating pre-fix legacy data)", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 100, anchorDate: "2026-09-28" });
+
+    if (await overlapConstraintPresent()) {
+      // The constraint (correctly) refuses overlapping rows in the real
+      // table, so the audit query is exercised against a constraint-free
+      // TEMPORARY copy instead: inside one transaction, an unqualified
+      // `fee_periods` resolves to the temp table (pg_temp is searched
+      // first), which is dropped at commit. The real table and its
+      // constraint are never touched.
+      await db.transaction(async (tx) => {
+        await tx.execute(sql`CREATE TEMP TABLE fee_periods (LIKE public.fee_periods INCLUDING DEFAULTS) ON COMMIT DROP`);
+        const planted = await tx.execute(sql`
+          INSERT INTO fee_periods (academy_id, enrollment_id, interval_months, period_start, period_end, due_date, expected_amount_cents, currency)
+          VALUES
+            (${fixture.academyId}, ${fixture.enrollmentId}, 1, '2026-09-28', '2026-10-27', '2026-09-28', 100, 'USD'),
+            (${fixture.academyId}, ${fixture.enrollmentId}, 6, '2026-09-28', '2027-03-27', '2026-09-28', 100, 'USD')
+          RETURNING id
+        `);
+        const plantedIds = new Set((planted.rows as { id: string }[]).map((row) => row.id));
+        const pairs = await findOverlappingPairs(fixture.enrollmentId, tx);
+        expect(pairs).toHaveLength(1);
+        expect(new Set([pairs[0].a_id, pairs[0].b_id])).toEqual(plantedIds);
+      });
+      // Nothing was written to the real table.
+      expect(await findOverlappingPairs(fixture.enrollmentId)).toEqual([]);
+      return;
+    }
 
     // Deliberately bypass generateFeePeriodsForEnrollment to plant an
     // overlapping pair directly — reproducing what the OLD (pre-fix)
@@ -1416,7 +1460,15 @@ describe("legacy corrupted-data detection and safety (does NOT touch/fix anythin
     expect(new Set([pairs[0].a_id, pairs[0].b_id])).toEqual(new Set([monthly.id, sixMonth.id]));
   });
 
-  it("even with legacy overlapping periods present, a payment allocated to ONE of them never appears as paid on the other (allocation-based aggregation is corruption-proof)", async () => {
+  it("even with legacy overlapping periods present, a payment allocated to ONE of them never appears as paid on the other (allocation-based aggregation is corruption-proof)", async (ctx) => {
+    if (await overlapConstraintPresent()) {
+      // Overlapping rows can't exist where the constraint is present (the
+      // "database-level protection" block below asserts the rejection), so
+      // there is no legacy data for this guarantee to protect here. Still
+      // runs, unchanged, on any database without migration 0028.
+      ctx.skip("fee_periods_no_overlap is present here: legacy overlapping periods cannot exist in this database.");
+      return;
+    }
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     // Anchored in the future so the unpaid overlapping period reads
@@ -2658,15 +2710,22 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
         amountCents: 999_999,
         anchorDate: today,
       });
-      expect(changed.ok).toBe(true);
 
-      // The remaining balance: the old total minus what was actually paid
-      // toward it — EXCEPT when that leaves nothing (a 1-installment old
-      // plan, fully paid off by the one payment above), in which case there
-      // is nothing to carry and the caller's own submitted amount applies,
-      // exactly as a fresh first-time schedule would.
+      // What carries is the old total minus the kept period's EXPECTED
+      // amount. A 1-installment old plan is wholly kept, so nothing is left
+      // to reschedule: the change is refused (it used to treat the
+      // submitted amount as a fresh fee, charging beyond the course fee)
+      // and nothing changes.
       const remainingOld = TOTAL_OLD - firstInstallmentCents;
-      const expectedNewTotal = remainingOld > 0 ? remainingOld : 999_999;
+      if (remainingOld <= 0) {
+        expect(changed.ok).toBe(false);
+        expect(!changed.ok && changed.error.code).toBe("validation");
+        const untouched = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId));
+        expect(untouched).toEqual([currentPeriod]);
+        return;
+      }
+      expect(changed.ok).toBe(true);
+      const expectedNewTotal = remainingOld;
       expect(changed.ok && changed.schedule.amountCents).toBe(expectedNewTotal);
 
       // The paid current period: byte-for-byte untouched.
@@ -2751,7 +2810,7 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
       .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
       .orderBy(feePeriods.periodStart);
     expect(periods).toHaveLength(2);
-    const [currentPeriod, futurePeriod] = periods;
+    const [, futurePeriod] = periods;
     expect(futurePeriod.periodStart > today).toBe(true);
 
     // Nothing today stops staff from recording an advance payment against a
@@ -2765,7 +2824,10 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
     });
     expect(advancePayment.ok).toBe(true);
 
-    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 6, amountCents: 6000, anchorDate: today });
+    // Both installments are now kept (one started, one paid ahead), so
+    // the whole plan is already represented and the change is refused.
+    const refused = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 6, amountCents: 6000, anchorDate: today });
+    expect(refused.ok).toBe(false);
 
     // The advance-paid future period survives, completely unmodified —
     // protecting the payment outranks the effective-date rule.
@@ -2777,19 +2839,12 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
       .where(eq(paymentAllocations.feePeriodId, futurePeriod.id));
     expect(futureAllocations).toHaveLength(1);
 
-    // The new 6-month plan's first period resumes only after THIS period
-    // (not after the still-protected current one) — the latest existing
-    // period's own end date, whichever period that turns out to be.
     const periodsAfter = await db
       .select()
       .from(feePeriods)
       .where(eq(feePeriods.enrollmentId, fixture.enrollmentId))
       .orderBy(feePeriods.periodStart);
-    const newPeriod = periodsAfter.find((period) => period.id !== currentPeriod.id && period.id !== futurePeriod.id);
-    expect(newPeriod).toBeDefined();
-    if (!newPeriod) return;
-    expect(newPeriod.periodStart).toBe(addOneDayIso(futurePeriod.periodEnd));
-    expect(newPeriod.intervalMonths).toBe(6);
+    expect(periodsAfter).toEqual(periods);
   });
 
   it("regression (caaxi cali / STD-000008): advance-paying a 1-installment schedule's only period BEFORE anything has started, then correcting the schedule's anchor, never leaves the payment silently orphaned/unreflected — the summary must never read 'unpaid' once the course has actually been paid for", async () => {
@@ -2845,7 +2900,10 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
       amountCents: 1000,
       anchorDate: today,
     });
-    expect(corrected.ok).toBe(true);
+    // The plan's only installment is paid and kept, so there is nothing
+    // left to reschedule: the correction is refused instead of adding a
+    // second $10 charge after the paid period.
+    expect(corrected.ok).toBe(false);
 
     // The original payment and its allocation are completely untouched —
     // never deleted, never duplicated.
@@ -2881,7 +2939,15 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
     if (history.ok) {
       expect(history.rows).toHaveLength(1);
       expect(history.rows[0].periods).toEqual([
-        { feePeriodId: wrongPeriod.id, periodStart: wrongPeriod.periodStart, periodEnd: wrongPeriod.periodEnd, amountCents: 1000 },
+        {
+          feePeriodId: wrongPeriod.id,
+          enrollmentId: fixture.enrollmentId,
+          periodStart: wrongPeriod.periodStart,
+          periodEnd: wrongPeriod.periodEnd,
+          amountCents: 1000,
+          courseName: expect.any(String),
+          batchName: expect.any(String),
+        },
       ]);
     }
 
@@ -2925,10 +2991,12 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
     // produce many more periods between this fixed 2026 date and whenever
     // this test actually runs — see this describe block's other tests for
     // why "anchor = today" is used everywhere a real eager walk matters).
+    // A 2-installment plan whose paid first installment is the only period
+    // so far: $10.00 of it is left to carry into the new plan.
     await setEnrollmentFeeSchedule(context, {
       enrollmentId: fixture.enrollmentId,
-      intervalMonths: 1,
-      amountCents: 1000,
+      intervalMonths: 2,
+      amountCents: 2000,
       anchorDate: "2026-01-31",
     });
     const [seeded] = await db
@@ -2968,11 +3036,10 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
       .where(and(eq(feePeriods.enrollmentId, fixture.enrollmentId), eq(feePeriods.periodStart, "2026-02-28")));
     expect(nextPeriod).toBeDefined();
     expect(nextPeriod.intervalMonths).toBe(6); // the schedule's own installment count, not this period's length
-    // The old 1-installment plan was fully paid off (remaining = 0), so
-    // the submitted $60.00 is used as-is (no remainder to carry), split
-    // into 6 monthly installments of $10.00 each — and every generated
-    // period is exactly ONE calendar month, never 6.
-    expect(nextPeriod.expectedAmountCents).toBe(1000);
+    // The $10.00 left of the old plan is carried (the submitted $60.00 is
+    // ignored) and split into 6 monthly installments (166 x 5 + 170) —
+    // and every generated period is exactly ONE calendar month, never 6.
+    expect(nextPeriod.expectedAmountCents).toBe(166);
     expect(nextPeriod.periodEnd).toBe("2026-03-27"); // Feb 28 + 1 month -> Mar 28 -> end = Mar 27
   });
 
@@ -2980,10 +3047,12 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
 
+    // A 2-installment plan whose paid first installment is the only period
+    // so far: $10.00 of it is left to carry into the new plan.
     await setEnrollmentFeeSchedule(context, {
       enrollmentId: fixture.enrollmentId,
-      intervalMonths: 1,
-      amountCents: 1000,
+      intervalMonths: 2,
+      amountCents: 2000,
       anchorDate: "2028-01-31",
     });
     const [seeded] = await db
@@ -3020,7 +3089,7 @@ describe("setEnrollmentFeeSchedule — effective-date rule for a schedule change
       .where(and(eq(feePeriods.enrollmentId, fixture.enrollmentId), eq(feePeriods.periodStart, "2028-02-29")));
     expect(nextPeriod).toBeDefined();
     expect(nextPeriod.intervalMonths).toBe(6); // the schedule's own installment count, not this period's length
-    expect(nextPeriod.expectedAmountCents).toBe(1000); // $60.00 / 6 monthly installments
+    expect(nextPeriod.expectedAmountCents).toBe(166); // the $10.00 carried / 6 monthly installments
     expect(nextPeriod.periodEnd).toBe("2028-03-28"); // Feb 29 + 1 month -> Mar 29 -> end = Mar 28
   });
 });
@@ -3196,5 +3265,398 @@ describe("getOverdueFeeSummary (dashboard Requires attention)", () => {
     expect(summary.byStudent[fixture.studentId]).toEqual([{ currency: summary.totalsByCurrency[0].currency, amountCents: 8000 }]);
     const restricted = await getOverdueFeeSummary(fixture.academyId, null, [other.studentId]);
     expect(restricted.studentCount).toBe(0);
+  });
+});
+
+describe("setEnrollmentFeeSchedule — carry-over never charges a kept period twice", () => {
+  function shiftIso(dateIso: string, { months = 0, days = 0 }: { months?: number; days?: number }): string {
+    const [y, m, d] = dateIso.split("-").map(Number);
+    const date = new Date(Date.UTC(y, m - 1 + months, Math.min(d, 28) + days));
+    return date.toISOString().slice(0, 10);
+  }
+  function nextDayIso(dateIso: string): string {
+    const [y, m, d] = dateIso.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+  }
+
+  async function periodsOf(enrollmentId: string) {
+    return db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, enrollmentId)).orderBy(feePeriods.periodStart);
+  }
+  const totalExpected = (rows: { expectedAmountCents: number }[]) => rows.reduce((sum, row) => sum + row.expectedAmountCents, 0);
+
+  async function scheduled(intervalMonths: number, amountCents: number, anchorDate?: string) {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const anchor = anchorDate ?? todayDateOnlyInAcademyTimezone();
+    const set = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths, amountCents, anchorDate: anchor });
+    expect(set.ok).toBe(true);
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+    return { fixture, context, periods: await periodsOf(fixture.enrollmentId) };
+  }
+
+  async function pay(context: AuthContext, fixture: Fixture, feePeriodId: string, amountCents: number) {
+    const result = await recordFeePeriodPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      allocations: [{ feePeriodId, amountCents }],
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(result.ok).toBe(true);
+  }
+
+  it("started UNPAID period: carries only the unscheduled part, the total owed stays the course fee", async () => {
+    const { fixture, context, periods } = await scheduled(3, 3000);
+    const [current] = periods;
+    const changed = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 999_999, anchorDate: "2020-01-01" });
+    expect(changed.ok && changed.schedule.amountCents).toBe(2000);
+    const after = await periodsOf(fixture.enrollmentId);
+    expect(after[0]).toEqual(current);
+    expect(after.slice(1).map((p) => p.expectedAmountCents)).toEqual([1000, 1000]);
+    expect(after[1].periodStart).toBe(nextDayIso(current.periodEnd));
+    expect(totalExpected(after)).toBe(3000);
+  });
+
+  it("PARTIALLY paid period: kept with its own amount and allocation; its unpaid part is not carried again", async () => {
+    const { fixture, context, periods } = await scheduled(3, 3000);
+    const [current] = periods;
+    await pay(context, fixture, current.id, 400);
+    const allocationsBefore = await db.select().from(paymentAllocations).where(eq(paymentAllocations.feePeriodId, current.id));
+    const changed = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 4, amountCents: 1, anchorDate: "2020-01-01" });
+    expect(changed.ok && changed.schedule.amountCents).toBe(2000);
+    const after = await periodsOf(fixture.enrollmentId);
+    expect(after[0]).toEqual(current);
+    expect(await db.select().from(paymentAllocations).where(eq(paymentAllocations.feePeriodId, current.id))).toEqual(allocationsBefore);
+    expect(after.slice(1).map((p) => p.expectedAmountCents)).toEqual([500, 500, 500, 500]);
+    expect(totalExpected(after)).toBe(3000);
+  });
+
+  it("FULLY paid period: the same carry as unpaid, because the period's expected amount is what is subtracted", async () => {
+    const { fixture, context, periods } = await scheduled(3, 3000);
+    await pay(context, fixture, periods[0].id, 1000);
+    const changed = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 1, anchorDate: "2020-01-01" });
+    expect(changed.ok && changed.schedule.amountCents).toBe(2000);
+    expect(totalExpected(await periodsOf(fixture.enrollmentId))).toBe(3000);
+  });
+
+  it("MULTIPLE kept periods (several started, one paid ahead): all subtracted, the new plan resumes after the last", async () => {
+    const today = todayDateOnlyInAcademyTimezone();
+    const { fixture, context, periods } = await scheduled(6, 6000, shiftIso(today, { months: -2 }));
+    const started = periods.filter((p) => p.periodStart <= today);
+    expect(started.length).toBeGreaterThanOrEqual(2);
+    const paidAhead = periods.find((p) => p.periodStart > today)!;
+    await pay(context, fixture, started[0].id, 1000);
+    await pay(context, fixture, started[1].id, 250);
+    await pay(context, fixture, paidAhead.id, 100);
+    const kept = [...started, paidAhead];
+
+    const changed = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 1, anchorDate: today });
+    expect(changed.ok && changed.schedule.amountCents).toBe(6000 - totalExpected(kept));
+    const after = await periodsOf(fixture.enrollmentId);
+    for (const period of kept) expect(after.find((p) => p.id === period.id)).toEqual(period);
+    const added = after.filter((p) => !kept.some((k) => k.id === p.id));
+    expect(added).toHaveLength(2);
+    expect(added[0].periodStart).toBe(nextDayIso(paidAhead.periodEnd));
+    expect(totalExpected(after)).toBe(6000);
+  });
+
+  it("NO kept periods: the submitted amount and date are used and the old periods are replaced", async () => {
+    const future = shiftIso(todayDateOnlyInAcademyTimezone(), { days: 10 });
+    const { fixture, context } = await scheduled(3, 3000, future);
+    const later = shiftIso(future, { days: 5 });
+    const changed = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 5000, anchorDate: later });
+    expect(changed.ok && changed.schedule).toMatchObject({ amountCents: 5000, anchorDate: later });
+    const after = await periodsOf(fixture.enrollmentId);
+    expect(after[0].periodStart).toBe(later);
+    expect(totalExpected(after)).toBe(5000);
+  });
+
+  it("ROUNDING: uneven splits still sum to exactly the course fee", async () => {
+    const { fixture, context, periods } = await scheduled(3, 1000);
+    expect(periods.map((p) => p.expectedAmountCents)).toEqual([333, 333, 334]);
+    const changed = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 1, anchorDate: "2020-01-01" });
+    expect(changed.ok && changed.schedule.amountCents).toBe(667);
+    const after = await periodsOf(fixture.enrollmentId);
+    expect(after.slice(1).map((p) => p.expectedAmountCents)).toEqual([222, 222, 223]);
+    expect(totalExpected(after)).toBe(1000);
+  });
+
+  it("REPEATED changes: periods kept from an earlier plan are not subtracted again, and the total never drifts", async () => {
+    const { fixture, context, periods } = await scheduled(3, 1200);
+    const first = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 1, anchorDate: "2020-01-01" });
+    expect(first.ok && first.schedule.amountCents).toBe(800);
+    expect(totalExpected(await periodsOf(fixture.enrollmentId))).toBe(1200);
+
+    const second = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 4, amountCents: 1, anchorDate: "2020-01-01" });
+    expect(second.ok && second.schedule.amountCents).toBe(800);
+    let after = await periodsOf(fixture.enrollmentId);
+    expect(after[0]).toEqual(periods[0]);
+    expect(totalExpected(after)).toBe(1200);
+
+    // Paying the new plan's first installment in advance keeps it too.
+    await pay(context, fixture, after[1].id, 50);
+    const third = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 1, amountCents: 1, anchorDate: "2020-01-01" });
+    expect(third.ok && third.schedule.amountCents).toBe(800 - after[1].expectedAmountCents);
+    after = await periodsOf(fixture.enrollmentId);
+    expect(totalExpected(after)).toBe(1200);
+  });
+
+  it("OVERCHARGE prevention: a plan whose every installment is kept (unpaid or paid) can't be changed", async () => {
+    for (const paid of [0, 1000]) {
+      const { fixture, context, periods } = await scheduled(1, 1000);
+      if (paid) await pay(context, fixture, periods[0].id, paid);
+      const changed = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 3000, anchorDate: "2020-01-01" });
+      expect(changed.ok).toBe(false);
+      expect(!changed.ok && changed.error.code).toBe("validation");
+      expect(await periodsOf(fixture.enrollmentId)).toEqual(periods);
+      const [schedule] = await db.select().from(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.enrollmentId, fixture.enrollmentId));
+      expect(schedule).toMatchObject({ intervalMonths: 1, amountCents: 1000 });
+    }
+  });
+
+  it("INVALID schedules are refused before anything changes", async () => {
+    const { fixture, context, periods } = await scheduled(3, 3000);
+    for (const bad of [
+      { intervalMonths: 3, amountCents: 0 },
+      { intervalMonths: 3, amountCents: -100 },
+      { intervalMonths: 5, amountCents: 3000 },
+      { intervalMonths: 0, amountCents: 3000 },
+    ]) {
+      const result = await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, anchorDate: "2026-01-01", ...bad });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error.code).toBe("validation");
+    }
+    expect(await periodsOf(fixture.enrollmentId)).toEqual(periods);
+  });
+});
+
+describe("payment history for the Payments list — one payment, its allocations, page-scoped lookup", () => {
+  it("a payment spread over several fee periods is ONE payment, with one history row listing every period and its course", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 3000, anchorDate: today });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+
+    const paid = await recordEnrollmentPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      amountCents: 1500,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(paid.ok).toBe(true);
+
+    const payments = await db.select().from(studentPayments).where(eq(studentPayments.studentId, fixture.studentId));
+    expect(payments).toHaveLength(1);
+
+    const history = await listFeePeriodPaymentHistory(context, { paymentIds: [payments[0].id] });
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.rows).toHaveLength(1);
+    expect(history.rows[0].periods.map((p) => p.amountCents)).toEqual([1000, 500]);
+    for (const period of history.rows[0].periods) {
+      expect(period).toMatchObject({ enrollmentId: fixture.enrollmentId, courseName: expect.any(String), batchName: expect.any(String) });
+    }
+  });
+
+  it("paymentIds limits the lookup to those payments; an empty list returns nothing", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 2, amountCents: 2000, anchorDate: today });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+    for (let i = 0; i < 2; i += 1) {
+      const result = await recordEnrollmentPayment(context, {
+        studentId: fixture.studentId,
+        enrollmentId: fixture.enrollmentId,
+        amountCents: 1000,
+        method: "cash",
+        receivedAt: new Date(),
+      });
+      expect(result.ok).toBe(true);
+    }
+    const payments = await db.select().from(studentPayments).where(eq(studentPayments.studentId, fixture.studentId));
+    expect(payments).toHaveLength(2);
+
+    const one = await listFeePeriodPaymentHistory(context, { paymentIds: [payments[0].id] });
+    expect(one.ok && one.rows.map((row) => row.paymentId)).toEqual([payments[0].id]);
+    const none = await listFeePeriodPaymentHistory(context, { paymentIds: [] });
+    expect(none.ok && none.rows).toEqual([]);
+  });
+
+  it("never returns another academy's payment, even when its id is asked for", async () => {
+    const theirs = await setupFixture();
+    const theirManager = await addActingUser(theirs.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+    await setEnrollmentFeeSchedule(theirManager.context, { enrollmentId: theirs.enrollmentId, intervalMonths: 1, amountCents: 1000, anchorDate: today });
+    await generateFeePeriodsForEnrollment(db, theirs.enrollmentId, theirs.academyId);
+    await recordEnrollmentPayment(theirManager.context, {
+      studentId: theirs.studentId,
+      enrollmentId: theirs.enrollmentId,
+      amountCents: 1000,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    const [theirPayment] = await db.select().from(studentPayments).where(eq(studentPayments.studentId, theirs.studentId));
+
+    const mine = await setupFixture();
+    const { context } = await addActingUser(mine.academyId, "manager");
+    const result = await listFeePeriodPaymentHistory(context, { paymentIds: [theirPayment.id] });
+    expect(result.ok && result.rows).toEqual([]);
+  });
+});
+
+describe("withdrawal keeps the course's financial history and the student's other courses", () => {
+  it("periods, allocations and payments are untouched; the course stops counting as owed or overdue; other enrollments stay active", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const today = todayDateOnlyInAcademyTimezone();
+    const twoMonthsAgo = (() => {
+      const [y, m, d] = today.split("-").map(Number);
+      return new Date(Date.UTC(y, m - 3, Math.min(d, 28))).toISOString().slice(0, 10);
+    })();
+
+    // A second course for the same student, in its own batch.
+    const otherCourseId = await insertProgramAndCourse(fixture.academyId);
+    const otherBatchId = await insertBatchDirect(fixture.academyId, fixture.branchId, otherCourseId);
+    const otherEnrollmentId = await insertEnrollmentDirect(fixture.academyId, otherBatchId, fixture.studentId);
+
+    await setEnrollmentFeeSchedule(context, { enrollmentId: fixture.enrollmentId, intervalMonths: 3, amountCents: 3000, anchorDate: twoMonthsAgo });
+    await generateFeePeriodsForEnrollment(db, fixture.enrollmentId, fixture.academyId);
+    const paid = await recordEnrollmentPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId: fixture.enrollmentId,
+      amountCents: 1500,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(paid.ok).toBe(true);
+
+    const overdueBefore = await getOverdueFeeSummary(fixture.academyId, null, [fixture.studentId]);
+    expect(overdueBefore.studentCount).toBe(1);
+
+    const periodsBefore = await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId)).orderBy(feePeriods.periodStart);
+    const paymentsBefore = await db.select().from(studentPayments).where(eq(studentPayments.studentId, fixture.studentId));
+    const allocationsBefore = await db
+      .select()
+      .from(paymentAllocations)
+      .where(inArray(paymentAllocations.feePeriodId, periodsBefore.map((p) => p.id)));
+    expect(allocationsBefore).toHaveLength(2);
+
+    const withdrawn = await withdrawStudentFromBatch(context, fixture.enrollmentId, { reason: "Moved away" });
+    expect(withdrawn.ok).toBe(true);
+
+    expect(await db.select().from(feePeriods).where(eq(feePeriods.enrollmentId, fixture.enrollmentId)).orderBy(feePeriods.periodStart)).toEqual(periodsBefore);
+    expect(await db.select().from(studentPayments).where(eq(studentPayments.studentId, fixture.studentId))).toEqual(paymentsBefore);
+    expect(
+      await db.select().from(paymentAllocations).where(inArray(paymentAllocations.feePeriodId, periodsBefore.map((p) => p.id))),
+    ).toEqual(allocationsBefore);
+
+    const enrollments = await db.select().from(batchEnrollments).where(eq(batchEnrollments.studentId, fixture.studentId));
+    expect(enrollments.find((e) => e.id === fixture.enrollmentId)?.status).toBe("withdrawn");
+    expect(enrollments.find((e) => e.id === otherEnrollmentId)?.status).toBe("active");
+
+    // The withdrawn course no longer counts as overdue.
+    const overdueAfter = await getOverdueFeeSummary(fixture.academyId, null, [fixture.studentId]);
+    expect(overdueAfter.studentCount).toBe(0);
+
+    // What the withdraw dialog reads stays available: the course-level
+    // paid figure (its own allocations only) and its remaining balance.
+    const ledger = await listFeePeriodsForEnrollment(context, fixture.enrollmentId);
+    expect(ledger.ok).toBe(true);
+    if (ledger.ok) {
+      expect(ledger.periods.reduce((sum, p) => sum + p.paidCents, 0)).toBe(1500);
+      expect(ledger.periods.reduce((sum, p) => sum + p.remainingCents, 0)).toBe(1500);
+    }
+  });
+});
+
+describe("refund basis — what counts as paid for a course (feeds the refund cap)", () => {
+  async function scheduledEnrollment(fixture: Fixture, context: AuthContext, enrollmentId: string, amountCents: number) {
+    await setEnrollmentFeeSchedule(context, { enrollmentId, intervalMonths: 1, amountCents, anchorDate: todayDateOnlyInAcademyTimezone() });
+    await generateFeePeriodsForEnrollment(db, enrollmentId, fixture.academyId);
+  }
+  async function pay(context: AuthContext, fixture: Fixture, enrollmentId: string, amountCents: number) {
+    const result = await recordEnrollmentPayment(context, {
+      studentId: fixture.studentId,
+      enrollmentId,
+      amountCents,
+      method: "cash",
+      receivedAt: new Date(),
+    });
+    expect(result.ok).toBe(true);
+    const [latest] = await db
+      .select()
+      .from(studentPayments)
+      .where(eq(studentPayments.studentId, fixture.studentId))
+      .orderBy(sql`${studentPayments.createdAt} desc`)
+      .limit(1);
+    return latest;
+  }
+  async function paidFor(context: AuthContext, enrollmentId: string) {
+    const ledger = await listFeePeriodsForEnrollment(context, enrollmentId);
+    expect(ledger.ok).toBe(true);
+    return ledger.ok ? ledger.periods.reduce((sum, p) => sum + p.paidCents, 0) : -1;
+  }
+
+  it("counts only this course's allocations: a payment for another course of the same student is excluded", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    const otherCourseId = await insertProgramAndCourse(fixture.academyId);
+    const otherBatchId = await insertBatchDirect(fixture.academyId, fixture.branchId, otherCourseId);
+    const otherEnrollmentId = await insertEnrollmentDirect(fixture.academyId, otherBatchId, fixture.studentId);
+    await scheduledEnrollment(fixture, context, fixture.enrollmentId, 10_000);
+    await scheduledEnrollment(fixture, context, otherEnrollmentId, 20_000);
+
+    await pay(context, fixture, fixture.enrollmentId, 2_500);
+    await pay(context, fixture, otherEnrollmentId, 7_000);
+
+    expect(await paidFor(context, fixture.enrollmentId)).toBe(2_500);
+    expect(await paidFor(context, otherEnrollmentId)).toBe(7_000);
+  });
+
+  it("a reversed payment no longer counts as paid for the course", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    await scheduledEnrollment(fixture, context, fixture.enrollmentId, 10_000);
+    const kept = await pay(context, fixture, fixture.enrollmentId, 2_000);
+    const wrong = await pay(context, fixture, fixture.enrollmentId, 1_000);
+    expect(kept.id).not.toBe(wrong.id);
+    expect(await paidFor(context, fixture.enrollmentId)).toBe(3_000);
+
+    const reversed = await reverseStudentPayment(context, wrong.id, "Entered twice.");
+    expect(reversed.ok).toBe(true);
+    expect(await paidFor(context, fixture.enrollmentId)).toBe(2_000);
+  });
+
+  it("an adjusted fee-period payment drops out entirely (existing adjustment model: the corrected row carries no allocation)", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    await scheduledEnrollment(fixture, context, fixture.enrollmentId, 10_000);
+    const payment = await pay(context, fixture, fixture.enrollmentId, 3_000);
+
+    const adjusted = await adjustStudentPayment(context, payment.id, "Was 2,500.", 2_500);
+    expect(adjusted.ok).toBe(true);
+    // Pins the current behaviour the refund cap relies on: never MORE than
+    // what remains approved-allocated, so a cap can't exceed money held.
+    expect(await paidFor(context, fixture.enrollmentId)).toBe(0);
+  });
+
+  it("withdrawing keeps an issued receipt exactly as it was", async () => {
+    const fixture = await setupFixture();
+    const { context } = await addActingUser(fixture.academyId, "manager");
+    await scheduledEnrollment(fixture, context, fixture.enrollmentId, 10_000);
+    const payment = await pay(context, fixture, fixture.enrollmentId, 2_500);
+    const issued = await issueReceipt(context, payment.id);
+    expect(issued.ok).toBe(true);
+    const before = await db.select().from(receipts).where(eq(receipts.studentPaymentId, payment.id));
+    expect(before).toHaveLength(1);
+
+    const withdrawn = await withdrawStudentFromBatch(context, fixture.enrollmentId, { reason: "Left the course" });
+    expect(withdrawn.ok).toBe(true);
+
+    expect(await db.select().from(receipts).where(eq(receipts.studentPaymentId, payment.id))).toEqual(before);
+    expect(await paidFor(context, fixture.enrollmentId)).toBe(2_500);
   });
 });

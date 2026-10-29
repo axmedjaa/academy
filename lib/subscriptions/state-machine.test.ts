@@ -54,6 +54,9 @@ beforeAll(async () => {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/subscriptions/state-machine.test.ts)",
       name: `Test plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",

@@ -2,34 +2,33 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { queryAuditLogs } from "@/lib/audit-query-actions";
-import type { AuditResult } from "@/lib/audit-query";
-import { Button, ErrorMessage, PAGE_WRAP, PageHeader, PageMessage, TableWrap, Toolbar, inputClass, td, th } from "@/app/academy/_shell/ui";
+import type { AuditLogFilters, AuditResult } from "@/lib/audit-query";
+import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
+import { EmptyState, ErrorMessage, PAGE_WRAP, PageHeader, PageMessage, Section } from "@/app/academy/_shell/ui";
+import { DataTable, NoteBlock, rtTh } from "@/app/academy/_shell/page-blocks";
+import { ClearFilters, DateParamField, FilterBar, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
+import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
-import { AuditLogTableRow } from "@/app/academy/_shell/audit-log-row";
+import { AuditRows } from "@/app/academy/audit-logs/audit-rows";
+import { PlatformAuditExportButton } from "./export-button";
 
 const AUDIT_LOGS_CAPABILITY = "queryAuditLogs";
 
-// PLAN.md Item 32 / DESIGN.md §8: platform audit log viewer. Gated the same
-// way as app/platform/staff/page.tsx and app/protected/page.tsx — resolve
-// AuthContext, redirect to /login if unauthenticated, hasPermission() check,
-// calm access-denied message otherwise. "queryAuditLogs" is a Phase-1
-// grantable capability (lib/platform-staff/capabilities.ts), so unlike
-// /platform/staff this page IS reachable by a platform_admin who has been
-// granted it, in addition to platform_owner always.
-//
-// Filters are read from the URL's query string and the page is rendered
-// server-side per navigation — a plain GET <form> re-navigates with new
-// query params, matching this project's existing preference for the
-// simplest mechanism that satisfies the requirement (no client component
-// needed just to filter/paginate a table).
-//
-// Bug fix: the query here was never scoped to the caller's own actions —
-// every actor's rows were always returned — but the table used to render
-// only `actorRole` ("manager", "academy_owner", ...), with no way to tell
-// two different people holding the same role apart. That read as "I can
-// only see my own activity." Now resolves each row's real `actorUserId`
-// to an email via `resolveAuditActorEmails` (lib/audit-query.ts) and shows
-// it as its own "Actor" column.
+const ROLE_LABELS: Record<string, string> = {
+  ...ACADEMY_ROLE_LABELS,
+  platform_owner: "Platform Owner",
+  platform_admin: "Platform Admin",
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Audit log (design P10): every recorded action across the platform, with
+ * search (actor email, action, entity), a Result filter, a date range,
+ * rows that expand to their before and after values, and Export CSV of
+ * the filtered set. The `action`, `actorRole`, `academyId` and `branchId`
+ * URL filters are still honoured for deep links.
+ */
 export default async function AuditLogsPage({
   searchParams,
 }: {
@@ -53,6 +52,7 @@ export default async function AuditLogsPage({
     return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
   };
 
+  const search = get("q").trim().slice(0, 200);
   const actorRole = get("actorRole");
   const action = get("action");
   const academyId = get("academyId");
@@ -63,104 +63,91 @@ export default async function AuditLogsPage({
   const pageParam = Number.parseInt(get("page"), 10);
   const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
 
-  const response = await queryAuditLogs(
-    {
-      actorRole: actorRole || undefined,
-      action: action || undefined,
-      academyId: academyId || undefined,
-      branchId: branchId || undefined,
-      result: (result || undefined) as AuditResult | undefined,
-      createdFrom: createdFrom ? new Date(createdFrom) : undefined,
-      createdTo: createdTo ? new Date(createdTo) : undefined,
-    },
-    { page },
-  );
+  const filters: AuditLogFilters = {
+    search: search || undefined,
+    actorRole: actorRole || undefined,
+    action: action || undefined,
+    academyId: UUID.test(academyId) ? academyId : undefined,
+    branchId: UUID.test(branchId) ? branchId : undefined,
+    result: result === "success" || result === "failure" ? (result as AuditResult) : undefined,
+    createdFrom: createdFrom ? new Date(`${createdFrom}T00:00:00`) : undefined,
+    createdTo: createdTo ? new Date(`${createdTo}T23:59:59.999`) : undefined,
+  };
+  const response = await queryAuditLogs(filters, { page });
+  const filtered = Boolean(search || actorRole || action || academyId || branchId || result || createdFrom || createdTo);
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader title="Audit logs" description="Every recorded action across the whole platform." />
+      <PageHeader title="Audit log" description="Every platform action, with before and after values." />
 
-      <form method="get">
-        <Toolbar>
-          <label className="min-w-[140px]">
-            <span className="mb-1 block text-xs font-medium text-muted">Action</span>
-            <input type="text" name="action" defaultValue={action} className={inputClass} />
-          </label>
-          <label className="min-w-[140px]">
-            <span className="mb-1 block text-xs font-medium text-muted">Actor role</span>
-            <input type="text" name="actorRole" defaultValue={actorRole} className={inputClass} />
-          </label>
-          <label className="min-w-[140px]">
-            <span className="mb-1 block text-xs font-medium text-muted">Academy ID</span>
-            <input type="text" name="academyId" defaultValue={academyId} className={inputClass} />
-          </label>
-          <label className="min-w-[140px]">
-            <span className="mb-1 block text-xs font-medium text-muted">Branch ID</span>
-            <input type="text" name="branchId" defaultValue={branchId} className={inputClass} />
-          </label>
-          <label className="min-w-[120px]">
-            <span className="mb-1 block text-xs font-medium text-muted">Result</span>
-            <select name="result" defaultValue={result} className={inputClass}>
-              <option value="">Any</option>
-              <option value="success">Success</option>
-              <option value="failure">Failure</option>
-            </select>
-          </label>
-          <label className="min-w-[140px]">
-            <span className="mb-1 block text-xs font-medium text-muted">From</span>
-            <input type="date" name="createdFrom" defaultValue={createdFrom} className={inputClass} />
-          </label>
-          <label className="min-w-[140px]">
-            <span className="mb-1 block text-xs font-medium text-muted">To</span>
-            <input type="date" name="createdTo" defaultValue={createdTo} className={inputClass} />
-          </label>
-          <Button type="submit" variant="secondary">
-            Filter
-          </Button>
-        </Toolbar>
-      </form>
+      <FilterBar>
+        <SearchField placeholder="Search actor, action or entity" />
+        <FilterDropdown
+          param="result"
+          label="Result"
+          icon="fact_check"
+          options={[
+            { value: "", label: "All results" },
+            { value: "success", label: "Success" },
+            { value: "failure", label: "Failed" },
+          ]}
+        />
+        <DateParamField param="createdFrom" label="From" />
+        <DateParamField param="createdTo" label="To" />
+        <ClearFilters params={["q", "result", "createdFrom", "createdTo", "action", "actorRole", "academyId", "branchId"]} />
+        <span className="ml-auto">
+          <PlatformAuditExportButton filters={filters} />
+        </span>
+      </FilterBar>
 
       {!response.ok ? (
         <ErrorMessage message={response.error.message} />
-      ) : (
-        <>
-          <TableWrap>
-            <thead>
-              <tr>
-                <th className={`${th} w-9`}></th>
-                <th className={th}>When</th>
-                <th className={th}>Actor</th>
-                <th className={th}>Action</th>
-                <th className={th}>Entity</th>
-                <th className={th}>Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {response.data.rows.map((row) => (
-                <AuditLogTableRow
-                  key={row.id}
-                  row={row}
-                  actorLabel={row.actorUserId ? (response.actorEmailsByUserId[row.actorUserId] ?? "Unknown user") : "System"}
-                />
-              ))}
-              {response.data.rows.length === 0 && (
-                <tr>
-                  <td colSpan={6} className={`${td} text-center text-muted`}>
-                    No audit log entries match these filters.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </TableWrap>
-
-          <PaginationNav
-            page={response.data.page}
-            pageSize={response.data.pageSize}
-            totalCount={response.data.totalCount}
-            searchParams={params}
+      ) : response.data.rows.length === 0 ? (
+        <Section className="mb-8">
+          <EmptyState
+            message={filtered ? "No actions match these filters." : "No actions recorded yet."}
+            icon={<Icon name="history" />}
           />
-        </>
+        </Section>
+      ) : (
+        <DataTable
+          stackBelow={900}
+          footer={
+            <>
+              <p className="mt-3 text-sm text-muted">
+                Showing {response.data.rows.length} of {response.data.totalCount}
+              </p>
+              <PaginationNav
+                page={response.data.page}
+                pageSize={response.data.pageSize}
+                totalCount={response.data.totalCount}
+                searchParams={params}
+              />
+            </>
+          }
+        >
+          <thead>
+            <tr>
+              <th className={rtTh}>When</th>
+              <th className={rtTh}>Actor</th>
+              <th className={rtTh}>Action</th>
+              <th className={rtTh}>Entity</th>
+              <th className={rtTh}>Result</th>
+              <th className={rtTh}>
+                <span className="sr-only">Details</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <AuditRows rows={response.data.rows} actorLabels={response.actorEmailsByUserId} roleLabels={ROLE_LABELS} />
+          </tbody>
+        </DataTable>
       )}
+
+      <NoteBlock>
+        Times are shown in Somalia time. Open Details on a row to see the values before and after the change. Export CSV
+        includes every row that matches the current filters, not only this page.
+      </NoteBlock>
     </div>
   );
 }

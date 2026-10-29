@@ -7,7 +7,7 @@ import { Badge, EmptyState, PageHeader } from "@/app/academy/_shell/ui";
 import { ClearFilters, DateParamField, FilterBar, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
 import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
-import { ACCOUNT_WRAP, AccountTabs } from "../account-tabs";
+import { ACCOUNT_WRAP, AccountTabs, notificationsHrefFor } from "../account-tabs";
 
 const WHEN = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 
@@ -65,7 +65,7 @@ export default async function MyActivityPage({
     ),
     context.platformRole ? Promise.resolve(null) : checkAcademyAccessForContext(context),
   ]);
-  const notificationsHref = access && access.level !== "blocked" ? "/academy/notifications" : null;
+  const notificationsHref = notificationsHrefFor(access && access.level !== "blocked" ? "academy" : null);
 
   return (
     <div className={ACCOUNT_WRAP}>

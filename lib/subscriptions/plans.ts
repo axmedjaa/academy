@@ -1,4 +1,4 @@
-import { count, eq } from "drizzle-orm";
+import { and, count, eq, gte, ilike, lt, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { subscriptionPlans } from "@/lib/db/schema";
@@ -177,6 +177,90 @@ export async function listSubscriptionPlansPage(
   ]);
 
   return { plans: rows.map(toRecord), totalCount };
+}
+
+/** Design P06 filter bar values. Price bands compare the plan's listed
+ * price in its smallest unit: under 100.00, 100.00 to 199.99, 200.00 and up. */
+export const PLAN_STATUS_FILTERS = ["active", "retired"] as const;
+export const PLAN_PRICE_FILTERS = ["low", "mid", "high"] as const;
+
+export interface SubscriptionPlanFilters {
+  /** Case-insensitive match on the plan name ("Search plans by name"). */
+  search?: string;
+  /** "active" = selectable (is_active), "retired" = not. */
+  status?: (typeof PLAN_STATUS_FILTERS)[number];
+  price?: (typeof PLAN_PRICE_FILTERS)[number];
+}
+
+const planFiltersSchema = z.object({
+  search: z.string().trim().min(1).max(200).optional().catch(undefined),
+  status: z.enum(PLAN_STATUS_FILTERS).optional().catch(undefined),
+  price: z.enum(PLAN_PRICE_FILTERS).optional().catch(undefined),
+});
+
+/** URL search params (`q`, `status`, `price`) -> filters. Unknown or
+ * malformed values are ignored, so an old link shows every plan. */
+export function parsePlanFilters(params: Record<string, string | string[] | undefined>): SubscriptionPlanFilters {
+  const first = (key: string) => {
+    const value = params[key];
+    return Array.isArray(value) ? value[0] : value;
+  };
+  const parsed = planFiltersSchema.parse({
+    search: first("q") || undefined,
+    status: first("status") || undefined,
+    price: first("price") || undefined,
+  });
+  return Object.fromEntries(Object.entries(parsed).filter(([, value]) => value !== undefined)) as SubscriptionPlanFilters;
+}
+
+const PRICE_BANDS_CENTS: Record<(typeof PLAN_PRICE_FILTERS)[number], [number | null, number | null]> = {
+  low: [null, 10_000],
+  mid: [10_000, 20_000],
+  high: [20_000, null],
+};
+
+function planFilterWhere(filters: SubscriptionPlanFilters): SQL | undefined {
+  const conditions: SQL[] = [];
+  if (filters.search) {
+    const escaped = filters.search.replace(/[\\%_]/g, (char) => `\\${char}`);
+    conditions.push(ilike(subscriptionPlans.name, `%${escaped}%`));
+  }
+  if (filters.status) conditions.push(eq(subscriptionPlans.isActive, filters.status === "active"));
+  if (filters.price) {
+    const [min, max] = PRICE_BANDS_CENTS[filters.price];
+    if (min !== null) conditions.push(gte(subscriptionPlans.priceAmountCents, min));
+    if (max !== null) conditions.push(lt(subscriptionPlans.priceAmountCents, max));
+  }
+  return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+export interface FilteredSubscriptionPlansPage extends SubscriptionPlansPage {
+  /** Every plan, unfiltered ("Showing X of Y plans"). */
+  overallCount: number;
+}
+
+/** One page of /platform/plans with the P06 filters applied in SQL — same
+ * ordering, LIMIT/OFFSET and "caller already checked plans.manage" contract
+ * as `listSubscriptionPlansPage`; `totalCount` is the filtered total. */
+export async function listFilteredSubscriptionPlansPage(
+  filters: SubscriptionPlanFilters,
+  page: number,
+  pageSize: number,
+): Promise<FilteredSubscriptionPlansPage> {
+  const offset = Math.max(0, page - 1) * pageSize;
+  const where = planFilterWhere(filters);
+  const [rows, [{ value: totalCount }], [{ value: overallCount }]] = await Promise.all([
+    db
+      .select()
+      .from(subscriptionPlans)
+      .where(where)
+      .orderBy(subscriptionPlans.createdAt, subscriptionPlans.id)
+      .limit(pageSize)
+      .offset(offset),
+    db.select({ value: count() }).from(subscriptionPlans).where(where),
+    db.select({ value: count() }).from(subscriptionPlans),
+  ]);
+  return { plans: rows.map(toRecord), totalCount, overallCount };
 }
 
 export type CreateSubscriptionPlanResult =

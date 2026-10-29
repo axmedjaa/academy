@@ -45,7 +45,10 @@ beforeAll(async () => {
   const [activePlan] = await db
     .insert(subscriptionPlans)
     .values({
+      description: "Automated test fixture (lib/subscriptions/create-subscription.test.ts)",
       name: `Active plan ${randomUUID()}`,
+      // Subscription creation requires an active plan.
+      isActive: true,
       priceAmountCents: 1000,
       currency: "USD",
       billingPeriod: "monthly",
@@ -62,6 +65,7 @@ beforeAll(async () => {
   const [inactivePlan] = await db
     .insert(subscriptionPlans)
     .values({
+      description: "Automated test fixture (lib/subscriptions/create-subscription.test.ts)",
       name: `Inactive plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",

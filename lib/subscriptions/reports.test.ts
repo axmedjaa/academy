@@ -14,6 +14,7 @@ import {
 } from "@/lib/db/schema";
 import { resolveAuthContext } from "@/lib/auth/auth-context";
 import {
+  getAcademiesByPlan,
   getActiveAcademyTrend,
   getExpiringSubscriptions,
   getPlatformReports,
@@ -158,6 +159,9 @@ beforeAll(async () => {
   const [planA] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/subscriptions/reports.test.ts)",
       name: `Reports test plan A ${randomUUID()}`,
       priceAmountCents: 100_000,
       currency: "USD",
@@ -175,6 +179,9 @@ beforeAll(async () => {
   const [planB] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/subscriptions/reports.test.ts)",
       name: `Reports test plan B ${randomUUID()}`,
       priceAmountCents: 200_000,
       currency: "USD",
@@ -333,7 +340,7 @@ describe("getPlatformReports — capability split", () => {
       expect(result.data.revenue).toBeNull();
       // Non-revenue sections must still be present for a granted admin.
       expect(Array.isArray(result.data.activeAcademyTrend)).toBe(true);
-      expect(Array.isArray(result.data.expiringSubscriptions)).toBe(true);
+      expect(Array.isArray(result.data.expiringSubscriptions.rows)).toBe(true);
     }
   });
 
@@ -481,36 +488,142 @@ describe("getActiveAcademyTrend", () => {
 });
 
 describe("getExpiringSubscriptions", () => {
+  // The test database is shared, so far more than the 50-row display cap
+  // can match; a large limit makes this file's own fixtures findable.
+  const ALL = 100_000;
+
+  /** One subscription on a throwaway academy, removed again afterwards. */
+  async function withSubscription(
+    values: { status: "active" | "past_due" | "suspended" | "trial"; startsAt: Date; endsAt: Date | null; trialEndsAt?: Date | null },
+    run: (subscriptionId: string) => Promise<void>,
+  ) {
+    const [academy] = await db
+      .insert(academies)
+      .values({
+        name: `Reports test expiring academy ${randomUUID()}`,
+        slug: `reports-test-exp-${randomUUID()}`,
+        defaultCurrency: "USD",
+        createdBy: ownerUserId,
+      })
+      .returning({ id: academies.id });
+    const [sub] = await db
+      .insert(academySubscriptions)
+      .values({ academyId: academy.id, planId: planBId, createdBy: ownerUserId, ...values })
+      .returning({ id: academySubscriptions.id });
+    try {
+      await run(sub.id);
+    } finally {
+      await db.delete(academySubscriptions).where(eq(academySubscriptions.id, sub.id));
+      await db.delete(academies).where(eq(academies.id, academy.id));
+    }
+  }
+
   it("includes an active subscription ending within the window, with a positive days-until-expiry", async () => {
-    const rows = await getExpiringSubscriptions(30);
+    const { rows } = await getExpiringSubscriptions(30, ALL);
     const row = rows.find((r) => r.subscriptionId === subActiveId);
     expect(row).toBeDefined();
-    expect(row?.daysUntilExpiry).toBeGreaterThan(0);
+    expect(row?.status).toBe("active");
+    expect(row?.daysUntilExpiry).toBe(10);
   });
 
-  it("includes an already-overdue non-cancelled subscription, with a negative days-until-expiry", async () => {
-    const rows = await getExpiringSubscriptions(30);
+  it("includes a Past Due subscription still inside the grace period, as overdue", async () => {
+    const { rows } = await getExpiringSubscriptions(30, ALL);
     const row = rows.find((r) => r.subscriptionId === subPastDueId);
     expect(row).toBeDefined();
-    expect(row?.daysUntilExpiry).toBeLessThan(0);
+    expect(row?.status).toBe("past_due");
+    expect(row?.daysUntilExpiry).toBe(-5);
+  });
+
+  it("excludes a subscription whose grace period has run out (effectively Suspended), even when stored as active", async () => {
+    await withSubscription(
+      { status: "active", startsAt: new Date(Date.now() - 60 * DAY_MS), endsAt: new Date(Date.now() - 18 * DAY_MS) },
+      async (id) => {
+        const { rows } = await getExpiringSubscriptions(30, ALL);
+        expect(rows.find((r) => r.subscriptionId === id)).toBeUndefined();
+      },
+    );
+  });
+
+  it("excludes a stored Suspended subscription even when its end date falls in the window", async () => {
+    await withSubscription(
+      { status: "suspended", startsAt: new Date(Date.now() - 20 * DAY_MS), endsAt: new Date(Date.now() + 5 * DAY_MS) },
+      async (id) => {
+        const { rows } = await getExpiringSubscriptions(30, ALL);
+        expect(rows.find((r) => r.subscriptionId === id)).toBeUndefined();
+      },
+    );
+  });
+
+  it("includes a trial by its trial end date", async () => {
+    const trialEndsAt = new Date(Date.now() + 3 * DAY_MS);
+    await withSubscription({ status: "trial", startsAt: new Date(), endsAt: null, trialEndsAt }, async (id) => {
+      const { rows } = await getExpiringSubscriptions(30, ALL);
+      const row = rows.find((r) => r.subscriptionId === id);
+      expect(row?.status).toBe("trial");
+      expect(row?.endsAt.getTime()).toBe(trialEndsAt.getTime());
+      expect(row?.daysUntilExpiry).toBe(3);
+    });
   });
 
   it("excludes cancelled subscriptions even when their endsAt falls in the window", async () => {
-    const rows = await getExpiringSubscriptions(30);
-    const row = rows.find((r) => r.subscriptionId === subCancelledId);
-    expect(row).toBeUndefined();
+    const { rows } = await getExpiringSubscriptions(30, ALL);
+    expect(rows.find((r) => r.subscriptionId === subCancelledId)).toBeUndefined();
   });
 
   it("excludes subscriptions ending after the requested window", async () => {
-    const rows = await getExpiringSubscriptions(1);
-    const row = rows.find((r) => r.subscriptionId === subActiveId);
-    expect(row).toBeUndefined();
+    const { rows } = await getExpiringSubscriptions(1, ALL);
+    expect(rows.find((r) => r.subscriptionId === subActiveId)).toBeUndefined();
   });
 
-  it("sorts soonest/most-overdue first", async () => {
-    const rows = await getExpiringSubscriptions(30);
+  it("returns each subscription once, soonest/most-overdue first", async () => {
+    const { rows } = await getExpiringSubscriptions(30, ALL);
+    expect(new Set(rows.map((r) => r.subscriptionId)).size).toBe(rows.length);
     for (let i = 1; i < rows.length; i += 1) {
       expect(rows[i].endsAt.getTime()).toBeGreaterThanOrEqual(rows[i - 1].endsAt.getTime());
+    }
+  });
+
+  it("caps the rows at the limit but reports the full total", async () => {
+    const capped = await getExpiringSubscriptions(30, 1);
+    expect(capped.rows.length).toBeLessThanOrEqual(1);
+    expect(capped.totalCount).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("getAcademiesByPlan", () => {
+  it("counts each open academy once, by the plan of its most recently started subscription", async () => {
+    const rows = await getAcademiesByPlan();
+    const byName = new Map(rows.map((row) => [row.planName, row.academyCount]));
+    const [planA] = await db.select({ name: subscriptionPlans.name }).from(subscriptionPlans).where(eq(subscriptionPlans.id, planAId));
+    const [planB] = await db.select({ name: subscriptionPlans.name }).from(subscriptionPlans).where(eq(subscriptionPlans.id, planBId));
+
+    // academyA's older cancelled planB row is superseded by its planA row.
+    expect(byName.get(planA.name)).toBe(2);
+    expect(byName.has(planB.name)).toBe(false);
+  });
+
+  it("excludes closed academies", async () => {
+    const [closed] = await db
+      .insert(academies)
+      .values({
+        name: `Reports test closed academy ${randomUUID()}`,
+        slug: `reports-test-closed-${randomUUID()}`,
+        defaultCurrency: "USD",
+        createdBy: ownerUserId,
+        closedAt: new Date(),
+      })
+      .returning({ id: academies.id });
+    const [sub] = await db
+      .insert(academySubscriptions)
+      .values({ academyId: closed.id, planId: planBId, status: "cancelled", startsAt: new Date(), createdBy: ownerUserId })
+      .returning({ id: academySubscriptions.id });
+    try {
+      const [planB] = await db.select({ name: subscriptionPlans.name }).from(subscriptionPlans).where(eq(subscriptionPlans.id, planBId));
+      const rows = await getAcademiesByPlan();
+      expect(rows.some((row) => row.planName === planB.name)).toBe(false);
+    } finally {
+      await db.delete(academySubscriptions).where(eq(academySubscriptions.id, sub.id));
+      await db.delete(academies).where(eq(academies.id, closed.id));
     }
   });
 });

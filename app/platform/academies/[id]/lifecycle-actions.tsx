@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   activateAcademyAction,
@@ -11,22 +11,16 @@ import {
   type LifecycleActionResult,
 } from "@/lib/academies/lifecycle-actions";
 import type { SubscriptionStatus } from "@/lib/subscriptions/state-machine";
-import { Button, ErrorMessage, inputClass } from "@/app/academy/_shell/ui";
+import { showSuccessToast } from "@/lib/ui/toast";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import { ROW_BTN, ROW_BTN_DANGER } from "@/app/academy/_shell/page-blocks";
+import { ActionDialog, DField, ReasonField, controlClass, invalidProps, type DesignFormRule } from "@/app/academy/_shell/design-form";
 
 interface LifecycleActionsProps {
   academyId: string;
-  /**
-   * The *raw stored* academy_subscriptions.status (not the lazily-computed
-   * effective status shown elsewhere) — lib/academies/lifecycle.ts's
-   * activateAcademy/suspendAcademy/etc. all validate transitions against
-   * this literal stored value (transitionSubscriptionState(subscription.status,
-   * event)), so gating each button on the same raw value is what keeps
-   * "enabled" synonymous with "the server call will not reject this for an
-   * invalid-transition reason" — the same never-clickable-but-failing
-   * standard DESIGN.md §11.3 sets for the Activate button specifically,
-   * extended here to every lifecycle button for consistency. Null when the
-   * academy has no academy_subscriptions row at all.
-   */
+  academyName: string;
+  /** The stored (not lazily computed) status: the server's transition
+   * rules check the stored value, so the buttons offered follow it too. */
   subscriptionStatus: SubscriptionStatus | null;
   checklistSatisfied: boolean;
   checklistUnmetReasons: string[];
@@ -36,248 +30,177 @@ interface LifecycleActionsProps {
 const ACTIVATE_SOURCES: ReadonlySet<SubscriptionStatus> = new Set(["draft", "trial"]);
 const SUSPEND_SOURCES: ReadonlySet<SubscriptionStatus> = new Set(["active", "trial", "past_due"]);
 const REACTIVATE_SOURCES: ReadonlySet<SubscriptionStatus> = new Set(["suspended"]);
-const CANCEL_SOURCES: ReadonlySet<SubscriptionStatus> = new Set([
-  "draft",
-  "trial",
-  "active",
-  "past_due",
-  "suspended",
-  "expired",
-]);
+const CANCEL_SOURCES: ReadonlySet<SubscriptionStatus> = new Set(["draft", "trial", "active", "past_due", "suspended", "expired"]);
 
-function StatusMessage({ error, success }: { error: string | null; success: string | null }) {
-  if (error) {
-    return (
-      <div className="mt-2">
-        <ErrorMessage message={error} />
-      </div>
-    );
-  }
-  if (success) {
-    return <p className="mt-2 text-sm font-medium text-success">{success}</p>;
-  }
-  return null;
-}
+type Kind = "suspend" | "reactivate" | "cancel" | "close";
 
-/**
- * One lifecycle action's UI: a button, an optional reason field (required or
- * optional per `reasonMode`), and its own pending/error/success state. Kept
- * generic and reused for Suspend/Reactivate/Cancel/Close rather than
- * duplicating four near-identical forms — Activate has no reason field at
- * all, so it's a separate, simpler component below.
- */
-function ReasonAction({
-  label,
-  pendingLabel,
-  reasonMode,
-  disabled,
-  disabledReason,
-  confirmLabel,
-  onSubmit,
-  variant = "secondary",
-}: {
-  label: string;
-  pendingLabel: string;
-  reasonMode: "required" | "optional";
-  disabled: boolean;
-  disabledReason?: string;
-  /** When set, a confirmation checkbox must be ticked before submitting (Close). */
-  confirmLabel?: string;
-  onSubmit: (reason: string | undefined) => Promise<LifecycleActionResult>;
-  variant?: "secondary" | "danger";
-}) {
-  const router = useRouter();
-  const [reason, setReason] = useState("");
-  const [confirmed, setConfirmed] = useState(false);
-  const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+const REQUIRED_REASON: DesignFormRule[] = [{ name: "reason", label: "Reason", required: true }];
+const CLOSE_RULES: DesignFormRule[] = [
+  ...REQUIRED_REASON,
+  { name: "confirm", label: "Confirmation", check: (value) => (value === "yes" ? null : "Tick the box to confirm.") },
+];
 
-  const reasonMissing = reasonMode === "required" && reason.trim().length === 0;
-  const confirmMissing = Boolean(confirmLabel) && !confirmed;
-  const submitDisabled = disabled || isPending || reasonMissing || confirmMissing;
-
-  function handleSubmit() {
-    setError(null);
-    startTransition(async () => {
-      const result = await onSubmit(reason.trim().length > 0 ? reason.trim() : undefined);
-      if (!result.ok) {
-        setError(result.error.message);
-        return;
-      }
-      setSuccess(`${label} succeeded.`);
-      router.refresh();
-    });
-  }
-
-  return (
-    <div className="rounded-card border border-border bg-surface p-4" title={disabled ? disabledReason : undefined}>
-      <strong className="text-sm font-semibold text-ink">{label}</strong>
-      <div className="mt-2">
-        <input
-          type="text"
-          placeholder={reasonMode === "required" ? "Reason (required)" : "Reason (optional)"}
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-          disabled={disabled || isPending}
-          className={`${inputClass} max-w-md`}
-        />
-      </div>
-      {confirmLabel && (
-        <label className="mt-2 flex items-start gap-2 text-sm text-ink">
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={(event) => setConfirmed(event.target.checked)}
-            disabled={disabled || isPending}
-            className="mt-0.5"
-          />
-          {confirmLabel}
-        </label>
-      )}
-      <div className="mt-3">
-        <Button type="button" variant={variant} onClick={handleSubmit} disabled={submitDisabled} title={disabled ? disabledReason : undefined}>
-          {isPending ? pendingLabel : label}
-        </Button>
-      </div>
-      {disabled && disabledReason && <p className="mt-2 text-xs text-muted">{disabledReason}</p>}
-      <StatusMessage error={error} success={success} />
-    </div>
-  );
-}
+const COPY: Record<Kind, { label: string; hint: string; title: string; description: string; danger: boolean; rules: DesignFormRule[]; done: string }> = {
+  suspend: {
+    label: "Suspend",
+    hint: "Blocks sign-in. Reason required.",
+    title: "Suspend this academy?",
+    description: "Everyone in the academy is blocked from signing in until it is reactivated.",
+    danger: true,
+    rules: REQUIRED_REASON,
+    done: "Academy suspended.",
+  },
+  reactivate: {
+    label: "Reactivate",
+    hint: "Restores sign-in. Reason optional.",
+    title: "Reactivate this academy?",
+    description: "Restores access for a suspended academy. A lapsed subscription is renewed on the Subscriptions page instead.",
+    danger: false,
+    rules: [],
+    done: "Academy reactivated.",
+  },
+  cancel: {
+    label: "Cancel",
+    hint: "Ends the subscription. Reason required.",
+    title: "Cancel this subscription?",
+    description: "The subscription ends and the academy loses access.",
+    danger: true,
+    rules: REQUIRED_REASON,
+    done: "Subscription cancelled.",
+  },
+  close: {
+    label: "Close",
+    hint: "Permanent. Reason and confirmation required.",
+    title: "Close this academy permanently?",
+    description: "Closing cannot be undone. The academy's history is kept and stays verifiable.",
+    danger: true,
+    rules: CLOSE_RULES,
+    done: "Academy closed.",
+  },
+};
 
 /**
- * Wires PLAN.md Item 26's five lifecycle actions
- * (activate/suspend/reactivate/cancel/close) into
- * /platform/academies/[id]. Deliberately no Renew button — DESIGN.md and
- * lib/academies/access-gate.ts both establish that Renew (verified-payment
- * reactivation of a lapsed subscription) lives on /platform/subscriptions
- * (Item 30's page, not this one's scope).
+ * Lifecycle actions (design P02 detail): a short list of the actions the
+ * subscription's current state allows, each a button with its rule written
+ * beside it. Suspend, Cancel and Close ask for a reason in a dialog (Close
+ * also needs a confirmation tick); Reactivate takes an optional reason;
+ * Activate needs every onboarding item done and shows why when it is not.
+ * Renew lives on the Subscriptions page. The server re-checks every rule.
  */
 export function LifecycleActions({
   academyId,
+  academyName,
   subscriptionStatus,
   checklistSatisfied,
   checklistUnmetReasons,
   academyClosed,
 }: LifecycleActionsProps) {
   const router = useRouter();
-  const [activateError, setActivateError] = useState<string | null>(null);
-  const [activateSuccess, setActivateSuccess] = useState<string | null>(null);
-  const [isActivatePending, startActivateTransition] = useTransition();
+  const [acting, setActing] = useState<Kind | null>(null);
 
   if (academyClosed) {
-    return <p className="text-sm text-muted">This academy is permanently closed — no lifecycle actions are available.</p>;
+    return <p className="text-sm text-[#374151]">This academy is permanently closed. No lifecycle actions are available.</p>;
   }
 
   if (subscriptionStatus === null) {
-    return (
-      <p className="text-sm text-muted">
-        This academy has no subscription yet — lifecycle actions become available once one is created.
-      </p>
-    );
+    return <p className="text-sm text-[#374151]">This academy has no subscription yet. Lifecycle actions become available once one is created.</p>;
   }
 
-  const activateStatusReasons = !ACTIVATE_SOURCES.has(subscriptionStatus)
-    ? [`Cannot activate a subscription in status "${subscriptionStatus}".`]
-    : [];
-  const activateDisabledReasons = [...checklistUnmetReasons, ...activateStatusReasons];
-  // Trust checklistSatisfied (not just "is the reasons list empty") as the
-  // checklist half of this condition — it's the single source of truth
-  // getOnboardingChecklistStatus computes, so this button can never disagree
-  // with the widget rendered just above it on the page.
-  const activateDisabled = !checklistSatisfied || activateStatusReasons.length > 0;
+  const canActivate = ACTIVATE_SOURCES.has(subscriptionStatus);
+  const kinds: Kind[] = [
+    ...(SUSPEND_SOURCES.has(subscriptionStatus) ? (["suspend"] as const) : []),
+    ...(REACTIVATE_SOURCES.has(subscriptionStatus) ? (["reactivate"] as const) : []),
+    ...(CANCEL_SOURCES.has(subscriptionStatus) ? (["cancel"] as const) : []),
+    "close",
+  ];
 
-  function handleActivate() {
-    setActivateError(null);
-    startActivateTransition(async () => {
-      const result = await activateAcademyAction(academyId);
-      if (!result.ok) {
-        setActivateError(result.error.message);
-        return;
-      }
-      setActivateSuccess("Academy activated.");
-      router.refresh();
-    });
-  }
+  const run = async (kind: Kind, data: FormData): Promise<string | null> => {
+    const reason = String(data.get("reason") ?? "").trim();
+    let result: LifecycleActionResult;
+    if (kind === "suspend") result = await suspendAcademyAction(academyId, reason);
+    else if (kind === "reactivate") result = await reactivateAcademyAction(academyId, reason || undefined);
+    else if (kind === "cancel") result = await cancelAcademyAction(academyId, reason);
+    else result = await closeAcademyAction(academyId, reason);
+    return result.ok ? null : result.error.message;
+  };
+
+  const copy = acting ? COPY[acting] : null;
 
   return (
-    <div className="flex flex-col gap-3">
-      <div
-        className="rounded-card border border-border bg-surface p-4"
-        title={activateDisabled ? activateDisabledReasons.join(" ") : undefined}
-      >
-        <strong className="text-sm font-semibold text-ink">Activate</strong>
-        <div className="mt-3">
-          <Button
-            type="button"
-            onClick={handleActivate}
-            disabled={activateDisabled || isActivatePending}
-            title={activateDisabled ? activateDisabledReasons.join(" ") : undefined}
-          >
-            {isActivatePending ? "Activating..." : "Activate"}
-          </Button>
-        </div>
-        {activateDisabled && (
-          <ul className="mt-2 list-disc pl-5 text-xs text-muted">
-            {activateDisabledReasons.map((reason) => (
-              <li key={reason}>{reason}</li>
-            ))}
-          </ul>
+    <>
+      <ul role="list" className="flex flex-col gap-3">
+        {canActivate && (
+          <li className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <ConfirmButton
+              label="Activate"
+              variant="primary"
+              disabled={!checklistSatisfied}
+              title={`Activate ${academyName}?`}
+              description="Starts the subscription so the academy can be used."
+              successMessage="Academy activated."
+              onConfirm={() => activateAcademyAction(academyId)}
+              onSuccess={() => router.refresh()}
+            />
+            {checklistSatisfied ? (
+              <span className="text-xs text-[#374151]">Every onboarding item is done.</span>
+            ) : (
+              <span className="text-xs text-[#374151]">Not yet: {checklistUnmetReasons.join(" ")}</span>
+            )}
+          </li>
         )}
-        <StatusMessage error={activateError} success={activateSuccess} />
-      </div>
+        {kinds.map((kind) => (
+          <li key={kind} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <button type="button" className={COPY[kind].danger && kind !== "cancel" ? ROW_BTN_DANGER : ROW_BTN} onClick={() => setActing(kind)}>
+              {COPY[kind].label}
+            </button>
+            <span className="text-xs text-[#374151]">{COPY[kind].hint}</span>
+          </li>
+        ))}
+      </ul>
 
-      <ReasonAction
-        label="Suspend"
-        pendingLabel="Suspending..."
-        reasonMode="required"
-        disabled={!SUSPEND_SOURCES.has(subscriptionStatus)}
-        disabledReason={
-          !SUSPEND_SOURCES.has(subscriptionStatus)
-            ? `Cannot suspend a subscription in status "${subscriptionStatus}".`
-            : undefined
-        }
-        variant="danger"
-        onSubmit={(reason) => suspendAcademyAction(academyId, reason ?? "")}
-      />
-
-      <ReasonAction
-        label="Reactivate"
-        pendingLabel="Reactivating..."
-        reasonMode="optional"
-        disabled={!REACTIVATE_SOURCES.has(subscriptionStatus)}
-        disabledReason={
-          !REACTIVATE_SOURCES.has(subscriptionStatus)
-            ? `Cannot reactivate a subscription in status "${subscriptionStatus}". If this subscription lapsed for non-payment, use Renew on /platform/subscriptions instead.`
-            : undefined
-        }
-        onSubmit={(reason) => reactivateAcademyAction(academyId, reason)}
-      />
-
-      <ReasonAction
-        label="Cancel"
-        pendingLabel="Cancelling..."
-        reasonMode="required"
-        disabled={!CANCEL_SOURCES.has(subscriptionStatus)}
-        disabledReason={
-          !CANCEL_SOURCES.has(subscriptionStatus)
-            ? `Cannot cancel a subscription in status "${subscriptionStatus}".`
-            : undefined
-        }
-        variant="danger"
-        onSubmit={(reason) => cancelAcademyAction(academyId, reason ?? "")}
-      />
-
-      <ReasonAction
-        label="Close academy"
-        pendingLabel="Closing..."
-        reasonMode="required"
-        disabled={false}
-        confirmLabel="I understand this is permanent and cannot be undone."
-        variant="danger"
-        onSubmit={(reason) => closeAcademyAction(academyId, reason ?? "")}
-      />
-    </div>
+      <ActionDialog
+        open={acting !== null}
+        onOpenChange={(open) => !open && setActing(null)}
+        title={copy?.title ?? ""}
+        description={copy?.description}
+        summary={[{ label: "Academy", value: academyName }]}
+        submitLabel={copy?.label ?? ""}
+        pendingLabel="Working…"
+        danger={copy?.danger}
+        rules={copy?.rules ?? []}
+        run={(data) => (acting ? run(acting, data) : Promise.resolve(null))}
+        onDone={() => {
+          if (copy) showSuccessToast(copy.done);
+          setActing(null);
+          router.refresh();
+        }}
+      >
+        {({ errors, blur }) => (
+          <>
+            {acting === "reactivate" ? (
+              <DField label="Reason (optional)" name="reason" full>
+                <textarea name="reason" rows={3} maxLength={500} className={controlClass(false, true)} />
+              </DField>
+            ) : (
+              <ReasonField errors={errors} blur={blur} />
+            )}
+            {acting === "close" && (
+              <DField label="Confirmation" name="confirm" error={errors.confirm} full>
+                <span className="flex items-start gap-2.5 font-normal">
+                  <input
+                    type="checkbox"
+                    name="confirm"
+                    value="yes"
+                    className="mt-0.5 h-[18px] w-[18px] shrink-0 accent-brand"
+                    {...invalidProps("confirm", errors.confirm)}
+                  />
+                  I understand closing is permanent and cannot be undone.
+                </span>
+              </DField>
+            )}
+          </>
+        )}
+      </ActionDialog>
+    </>
   );
 }

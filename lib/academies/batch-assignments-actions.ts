@@ -134,7 +134,8 @@ export async function withdrawStudentFromBatch(
 
   const enrollmentId = String(formData.get("enrollmentId") ?? "");
   const batchId = String(formData.get("batchId") ?? "");
-  const result = await withdrawStudentFromBatchForActor(context, enrollmentId);
+  const reason = String(formData.get("reason") ?? "");
+  const result = await withdrawStudentFromBatchForActor(context, enrollmentId, { reason });
   if (!result.ok) {
     return { ok: false, error: result.error };
   }

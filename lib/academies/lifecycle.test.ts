@@ -69,6 +69,9 @@ async function createPlan(priceAmountCents: number): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/lifecycle.test.ts)",
       name: `Test plan ${randomUUID()}`,
       priceAmountCents,
       currency: "USD",

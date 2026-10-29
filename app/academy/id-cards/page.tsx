@@ -20,6 +20,7 @@ import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
 import { IdCardHeaderActions, IdCardPhotoField, ReprintButton } from "./id-card-lookup";
 import { IdCardPreview } from "./id-card-visual";
+import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 
 const NOTE = "Cards have no expiry date. Issuing always creates a new card; reprinting only counts prints.";
 
@@ -204,7 +205,7 @@ export default async function AcademyIdCardsPage({
   const result = await searchStudents(
     context,
     { searchTerm: q || undefined, status: "active", ...(branchIds ? { branchIds } : {}) },
-    { page, pageSize: 15 },
+    { page, pageSize: LIST_PAGE_SIZE_MAX },
   );
   const rows = result.ok ? result.data.rows : [];
   const ids = rows.map((row) => row.id);

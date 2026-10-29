@@ -1,14 +1,15 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
-import { listSubscriptionPlansPage } from "@/lib/subscriptions/plans";
-import { PlansManager } from "./plans-manager";
+import { listFilteredSubscriptionPlansPage, parsePlanFilters } from "@/lib/subscriptions/plans";
+import { CreatePlanButton, PlansManager } from "./plans-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { NoteBlock } from "@/app/academy/_shell/page-blocks";
 import { PaginationNav } from "@/components/pagination-nav";
-import { parsePageParam } from "@/lib/ui/pagination";
+import { LIST_PAGE_SIZE_MAX, parsePageParam } from "@/lib/ui/pagination";
 
 const PLANS_MANAGE_CAPABILITY = "plans.manage";
-const PAGE_SIZE = 15;
+const PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 
 // PLAN.md Item 22 / DESIGN.md §8: "/platform/plans... Entirely absent for
 // platform_admin regardless of grants (§5)." Gated exactly like
@@ -47,13 +48,28 @@ export default async function PlatformPlansPage({
   // plan picker, which still needs every row).
   const params = await searchParams;
   const page = parsePageParam(params);
-  const { plans, totalCount } = await listSubscriptionPlansPage(page, PAGE_SIZE);
+  // Design P06 filter bar (search, status, price) as URL params, applied
+  // in SQL so paging, refresh and links keep them.
+  const filters = parsePlanFilters(params);
+  const { plans, totalCount, overallCount } = await listFilteredSubscriptionPlansPage(filters, page, PAGE_SIZE);
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader title="Subscription plans" />
-      <PlansManager plans={plans} />
-      <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} />
+      <PageHeader
+        title="Plans"
+        description="Pricing and allowances. Retired plans stay on existing subscriptions and cannot be chosen for new ones."
+        actions={<CreatePlanButton />}
+      />
+      <PlansManager
+        plans={plans}
+        filtersActive={Object.keys(filters).length > 0}
+        matchingCount={totalCount}
+        overallCount={overallCount}
+      />
+      <div className="mb-4">
+        <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} showTotal={false} />
+      </div>
+      <NoteBlock>Plans are never deleted. Editing a plan never changes whether it is active, and retiring never changes its other fields.</NoteBlock>
     </div>
   );
 }

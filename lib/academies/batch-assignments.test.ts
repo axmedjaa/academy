@@ -47,6 +47,7 @@ import {
   unassignTrainerFromBatch,
   updateStudentEnrollment,
   withdrawStudentFromBatch,
+  listEnrollmentWithdrawals,
 } from "./batch-assignments";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
@@ -83,6 +84,9 @@ async function createPlan(): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/batch-assignments.test.ts)",
       name: `Batch Assignments Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",
@@ -940,6 +944,62 @@ describe("enroll/withdraw student — unique-for-active-enrollment enforcement",
     const second = await withdrawStudentFromBatch(context, created.enrollment.id);
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error.code).toBe("invalid_transition");
+  });
+});
+
+describe("withdraw reason and listEnrollmentWithdrawals", () => {
+  it("records the reason with the withdrawal and reports when and why", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    const created = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const before = Date.now();
+    const withdrawn = await withdrawStudentFromBatch(context, created.enrollment.id, { reason: "  Moved to another city  " });
+    expect(withdrawn.ok).toBe(true);
+
+    const details = await listEnrollmentWithdrawals(context, [created.enrollment.id]);
+    const detail = details.get(created.enrollment.id);
+    expect(detail?.reason).toBe("Moved to another city");
+    expect(detail?.withdrawnAt.getTime()).toBeGreaterThanOrEqual(before - 60_000);
+  });
+
+  it("still withdraws without a reason (batch roster) and reports no reason", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    const created = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
+    if (!created.ok) throw new Error("setup failed");
+
+    expect((await withdrawStudentFromBatch(context, created.enrollment.id)).ok).toBe(true);
+    const detail = (await listEnrollmentWithdrawals(context, [created.enrollment.id])).get(created.enrollment.id);
+    expect(detail).toBeDefined();
+    expect(detail?.reason).toBeNull();
+  });
+
+  it("rejects an over-long reason without withdrawing", async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
+    const created = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
+    if (!created.ok) throw new Error("setup failed");
+
+    const result = await withdrawStudentFromBatch(context, created.enrollment.id, { reason: "x".repeat(501) });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    const [row] = await db.select().from(batchEnrollments).where(eq(batchEnrollments.id, created.enrollment.id));
+    expect(row.status).toBe("active");
+  });
+
+  it("never reports another academy's withdrawals", async () => {
+    const a = await setupAcademy("academy_owner");
+    const b = await setupAcademy("academy_owner");
+    const studentId = await insertStudentDirect(a.academyId, a.branchId, a.creatorUserId);
+    const created = await enrollStudentInBatch(a.context, { batchId: a.batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
+    if (!created.ok) throw new Error("setup failed");
+    await withdrawStudentFromBatch(a.context, created.enrollment.id, { reason: "Private" });
+
+    const seenByOther = await listEnrollmentWithdrawals(b.context, [created.enrollment.id]);
+    expect(seenByOther.size).toBe(0);
   });
 });
 

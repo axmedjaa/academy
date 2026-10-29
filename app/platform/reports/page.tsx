@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
-import { getPlatformReports, REPORTS_VIEW_CAPABILITY } from "@/lib/subscriptions/reports";
+import { EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT, getPlatformReports, REPORTS_VIEW_CAPABILITY } from "@/lib/subscriptions/reports";
 import { ReportsManager } from "./reports-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 
@@ -42,10 +42,10 @@ export default async function PlatformReportsPage() {
   return (
     <div className={PAGE_WRAP}>
       <PageHeader
-        title="Platform reports"
-        description="Active-academy trend and expiring-subscriptions list are visible to anyone granted platform reports access. The revenue breakdown below (Collected vs. Expected/Pending, with its group-by and Export button) is visible to the platform owner only — it can never be granted to a platform admin."
+        title="Reports"
+        description="Revenue, academy growth and upcoming expiries."
       />
-      <ReportsManager initialData={result.data} />
+      <ReportsManager initialData={result.data} expiringCap={EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT} />
     </div>
   );
 }

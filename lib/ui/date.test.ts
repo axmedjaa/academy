@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDate } from "./date";
+import { formatCalendarDate, formatDate } from "./date";
 
 describe("formatDate", () => {
   it("formats a date-only string as a calendar date, independent of timezone", () => {
@@ -16,5 +16,17 @@ describe("formatDate", () => {
     expect(formatDate(undefined, "Not set")).toBe("Not set");
     expect(formatDate("")).toBe("—");
     expect(formatDate("soon")).toBe("soon");
+  });
+});
+
+describe("formatCalendarDate", () => {
+  it("shows the day a UTC-midnight timestamp was entered for, whatever the local timezone", () => {
+    expect(formatCalendarDate(new Date("2026-10-20T00:00:00Z"))).toBe("Oct 20, 2026");
+    expect(formatCalendarDate("2026-10-20T00:00:00.000Z")).toBe("Oct 20, 2026");
+  });
+
+  it("returns the fallback for empty or invalid values", () => {
+    expect(formatCalendarDate(null)).toBe("—");
+    expect(formatCalendarDate("not a date", "n/a")).toBe("n/a");
   });
 });

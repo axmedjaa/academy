@@ -33,6 +33,10 @@ export default defineConfig({
     // it removes a false-failure/leak mode that only appears under load,
     // which is the actual root cause here.
     testTimeout: 15000,
-    hookTimeout: 30000,
+    // Fixture setup against the remote test branch can exceed 30s. A
+    // timed-out beforeAll keeps inserting after afterAll has already
+    // cleaned up, which is how fixture rows leaked; give setup room to
+    // finish so cleanup always runs after it.
+    hookTimeout: 120000,
   },
 });

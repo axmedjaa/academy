@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listFeePeriodOverview } from "@/lib/academies/fee-period-overview";
-import type { EnrollmentPaymentStatus } from "@/lib/academies/fee-periods";
+import { todayDateOnlyInAcademyTimezone, type EnrollmentPaymentStatus } from "@/lib/academies/fee-periods";
 import { getStudentPhotoUrlsByIds } from "@/lib/academies/students";
 import { formatMoney } from "@/lib/ui/money";
 import { describePaymentPlan } from "@/lib/ui/payment-plan";
@@ -32,6 +32,7 @@ export default async function FeePeriodsPage({
   if (!context) redirect("/login");
 
   const params = await searchParams;
+  const today = todayDateOnlyInAcademyTimezone();
   const get = (key: string) => {
     const value = params[key];
     return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
@@ -41,7 +42,7 @@ export default async function FeePeriodsPage({
   const pageParam = Number.parseInt(get("page"), 10);
   const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
 
-  const result = await listFeePeriodOverview(context, { searchTerm: q || undefined, status, page, pageSize: 20 });
+  const result = await listFeePeriodOverview(context, { searchTerm: q || undefined, status, page });
   if (!result.ok) {
     return <PageMessage title={result.error.code === "blocked" ? "Access unavailable" : "Access denied"} message={result.error.message} />;
   }
@@ -153,6 +154,7 @@ export default async function FeePeriodsPage({
                           schedule={row.schedule}
                           paidCents={row.paidCents}
                           hasStarted={row.hasStarted}
+                          today={today}
                         />
                       )}
                     </span>

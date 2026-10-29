@@ -3,7 +3,11 @@
 import { useActionState, useState, type ReactNode } from "react";
 import { registerAcademy, type RegisterAcademyState } from "@/lib/academies/register-actions";
 import type { SubscriptionPlanRecord } from "@/lib/subscriptions/plans";
-import { Badge, Button, ErrorMessage, Field, Section, inputClass } from "@/app/academy/_shell/ui";
+import { Badge, ErrorMessage, Field } from "@/app/academy/_shell/ui";
+import { controlClass } from "@/app/academy/_shell/design-form";
+import { PlanPicker, formatPlanPricePerPeriod } from "./plan-picker";
+
+const fieldInput = controlClass(false);
 
 // DESIGN.md §8 /platform/academies/new: "Pattern C (multi-step). Steps:
 // Academy profile ... -> Owner account -> Default branch -> Plan +
@@ -31,16 +35,6 @@ const DEFAULT_TRIAL_DAYS = "14";
 // component that uses it (see e.g. app/academy/courses/courses-list.tsx's
 // own local `initialState`), never inside the action file itself.
 const REGISTER_ACADEMY_INITIAL_STATE: RegisterAcademyState = { ok: false };
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
-  return `${bytes} bytes`;
-}
-
-function formatPrice(cents: number, currency: string): string {
-  return `${(cents / 100).toFixed(2)} ${currency}`;
-}
 
 interface FormState {
   name: string;
@@ -101,45 +95,43 @@ interface RegisterAcademyFormProps {
 }
 
 /**
- * Persistent step rail — a real fixed sequence (this wizard has exactly one
- * order, start to finish), so the numbering + connecting line is structural,
- * not decorative. Horizontal + scrollable below `lg`, a proper vertical
- * "you are here" rail at `lg` and up, sitting beside the step content rather
- * than above it.
+ * Design wizard header: the burgundy band with the title, "Step N of 6",
+ * and a horizontal stepper (done steps ticked, the current one filled).
+ * The steps are a real fixed sequence, so the numbering is structural.
+ * Scrolls sideways on narrow screens rather than squeezing the labels.
  */
-function StepRail({ step }: { step: number }) {
+function WizardHeader({ step }: { step: number }) {
   return (
-    <ol className="flex gap-4 overflow-x-auto pb-2 lg:sticky lg:top-6 lg:flex-col lg:gap-0 lg:overflow-visible lg:pb-0 lg:self-start">
-      {STEPS.map((label, index) => {
-        const state = index === step ? "current" : index < step ? "done" : "upcoming";
-        const isLast = index === STEPS.length - 1;
-        return (
-          <li key={label} className="flex shrink-0 items-start gap-3 lg:pb-7 lg:last:pb-0">
-            <div className="flex flex-col items-center">
+    <div className="border-t-4 border-[#F5B638] bg-brand px-5 pb-5 pt-6 text-center text-white sm:px-8">
+      <h1 className="text-[22px] font-bold leading-tight">Register academy</h1>
+      <p className="mt-1 text-[13px] text-white/90">
+        Step {step + 1} of {STEPS.length}. Nothing is created until you confirm.
+      </p>
+      <ol className="mt-5 flex justify-between gap-1 overflow-x-auto pb-1" aria-label="Registration steps">
+        {STEPS.map((label, index) => {
+          const state = index === step ? "current" : index < step ? "done" : "upcoming";
+          return (
+            <li
+              key={label}
+              aria-current={state === "current" ? "step" : undefined}
+              className="relative flex min-w-[76px] flex-1 flex-col items-center gap-1.5"
+            >
+              {index > 0 && (
+                <span aria-hidden="true" className="absolute right-1/2 top-[14px] w-full border-t-2 border-dashed border-white/50" />
+              )}
               <span
-                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-                  state === "current"
-                    ? "bg-navy text-white"
-                    : state === "done"
-                      ? "bg-success text-white"
-                      : "border border-border-strong bg-surface text-muted"
+                className={`relative flex h-7 w-7 items-center justify-center rounded-full border-2 border-white text-xs font-bold ${
+                  state === "current" ? "bg-white text-brand" : state === "done" ? "bg-white/90 text-brand" : "bg-brand text-white"
                 }`}
               >
                 {state === "done" ? "✓" : index + 1}
               </span>
-              {!isLast && <span aria-hidden="true" className="mt-1 hidden w-px flex-1 bg-border lg:block" style={{ minHeight: 28 }} />}
-            </div>
-            <span
-              className={`whitespace-nowrap pt-1 text-sm lg:whitespace-normal ${
-                state === "current" ? "font-semibold text-ink" : state === "done" ? "text-ink" : "text-muted"
-              }`}
-            >
-              {label}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
+              <span className={`text-[11px] leading-tight sm:text-xs ${state === "current" ? "font-bold" : "font-semibold text-white/90"}`}>{label}</span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
 
@@ -154,29 +146,44 @@ function FieldGroup({ title, first, children }: { title: string; first?: boolean
   );
 }
 
+// Design wizard actions (Platform Console.dc.html, register footer): two
+// equal-width buttons, an outlined "Previous step" and a filled primary.
+const FOOTER_BUTTON =
+  "h-11 min-w-0 flex-1 whitespace-nowrap rounded-lg px-3 font-semibold transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50";
+const PREVIOUS_BUTTON = `${FOOTER_BUTTON} border-[1.5px] border-brand bg-surface text-brand hover:bg-brand-tint`;
+const PRIMARY_BUTTON = `${FOOTER_BUTTON} border-0 bg-brand text-white hover:bg-[#6B0014]`;
+
 function StepFooter({
   onBack,
   onNext,
-  nextLabel,
   nextDisabled,
 }: {
   onBack?: () => void;
   onNext: () => void;
-  nextLabel: string;
   nextDisabled?: boolean;
 }) {
   return (
-    <div className="mt-8 flex items-center justify-between border-t border-border pt-6">
-      {onBack ? (
-        <Button type="button" variant="secondary" onClick={onBack}>
-          Back
-        </Button>
-      ) : (
-        <span />
+    <div className="mt-7 flex gap-3">
+      {onBack && (
+        <button type="button" className={PREVIOUS_BUTTON} onClick={onBack}>
+          Previous step
+        </button>
       )}
-      <Button type="button" onClick={onNext} disabled={nextDisabled}>
-        {nextLabel}
-      </Button>
+      <button type="button" className={PRIMARY_BUTTON} onClick={onNext} disabled={nextDisabled}>
+        Continue
+      </button>
+    </div>
+  );
+}
+
+/** Design `wzErr`: the reason Continue did not move on. */
+function StepError({ message }: { message: string }) {
+  return (
+    <div role="alert" className="mt-4 flex items-start gap-3 rounded-card border border-[#FECACA] bg-[#FEF2F2] px-3.5 py-3">
+      <span aria-hidden="true" className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-[#B91C1C] text-[13px] font-bold text-white">
+        !
+      </span>
+      <span className="text-[13px] font-medium leading-normal text-[#7F1D1D]">{message}</span>
     </div>
   );
 }
@@ -188,6 +195,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
   );
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(initialFormState);
+  const [planError, setPlanError] = useState<string | null>(null);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -206,7 +214,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
   }
 
   function canAdvanceFromPlan(): boolean {
-    return form.planId.trim().length > 0;
+    return activePlans.some((plan) => plan.id === form.planId);
   }
 
   function canAdvanceFromSubscriptionDates(): boolean {
@@ -218,10 +226,10 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
   const selectedPlan = activePlans.find((plan) => plan.id === form.planId);
 
   return (
-    <div className="lg:grid lg:grid-cols-[200px_1fr] lg:gap-10">
-      <StepRail step={step} />
+    <div className="overflow-hidden rounded-card border border-border bg-surface shadow-card">
+      <WizardHeader step={step} />
 
-      <div className="mt-6 min-w-0 lg:mt-0">
+      <div className="min-w-0 px-5 py-6 sm:px-8">
         {state.error && (
           <div className="mb-4">
             <ErrorMessage message={state.error.message} />
@@ -229,7 +237,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
         )}
 
         {step === 0 && (
-          <Section>
+          <div>
             <h2 className="text-base font-semibold text-ink">Academy profile</h2>
             <p className="mt-1 text-sm text-muted">The basic identity of the academy you&apos;re setting up.</p>
 
@@ -238,7 +246,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2fr_1fr]">
                   <Field label="Academy name">
                     <input
-                      className={inputClass}
+                      className={fieldInput}
                       value={form.name}
                       onChange={(e) => update("name", e.target.value)}
                       required
@@ -246,7 +254,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                   </Field>
                   <Field label="Currency">
                     <input
-                      className={inputClass}
+                      className={fieldInput}
                       value={form.defaultCurrency}
                       maxLength={3}
                       placeholder="USD"
@@ -257,7 +265,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                 </div>
                 <Field label="Type">
                   <input
-                    className={inputClass}
+                    className={fieldInput}
                     value={form.type}
                     placeholder="e.g. Training institute, coding bootcamp"
                     onChange={(e) => update("type", e.target.value)}
@@ -267,23 +275,23 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
 
               <FieldGroup title="Contact">
                 <Field label="Address">
-                  <input className={inputClass} value={form.address} onChange={(e) => update("address", e.target.value)} />
+                  <input className={fieldInput} value={form.address} onChange={(e) => update("address", e.target.value)} />
                 </Field>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field label="Phone">
-                    <input className={inputClass} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+                    <input className={fieldInput} value={form.phone} onChange={(e) => update("phone", e.target.value)} />
                   </Field>
                   <Field label="Email">
                     <input
                       type="email"
-                      className={inputClass}
+                      className={fieldInput}
                       value={form.email}
                       onChange={(e) => update("email", e.target.value)}
                     />
                   </Field>
                 </div>
                 <Field label="Website">
-                  <input className={inputClass} value={form.website} onChange={(e) => update("website", e.target.value)} />
+                  <input className={fieldInput} value={form.website} onChange={(e) => update("website", e.target.value)} />
                 </Field>
               </FieldGroup>
 
@@ -291,7 +299,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field label="Logo">
                     <input
-                      className={inputClass}
+                      className={fieldInput}
                       value={form.logoRef}
                       onChange={(e) => update("logoRef", e.target.value)}
                       placeholder="Uploaded file reference"
@@ -299,7 +307,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                   </Field>
                   <Field label="Registration number">
                     <input
-                      className={inputClass}
+                      className={fieldInput}
                       value={form.registrationNumber}
                       onChange={(e) => update("registrationNumber", e.target.value)}
                     />
@@ -308,14 +316,14 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <Field label="Primary contact name">
                     <input
-                      className={inputClass}
+                      className={fieldInput}
                       value={form.primaryContactName}
                       onChange={(e) => update("primaryContactName", e.target.value)}
                     />
                   </Field>
                   <Field label="Primary contact phone">
                     <input
-                      className={inputClass}
+                      className={fieldInput}
                       value={form.primaryContactPhone}
                       onChange={(e) => update("primaryContactPhone", e.target.value)}
                     />
@@ -324,12 +332,12 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
               </FieldGroup>
             </div>
 
-            <StepFooter onNext={() => setStep(1)} nextLabel="Next: Owner account" nextDisabled={!canAdvanceFromProfile()} />
-          </Section>
+            <StepFooter onNext={() => setStep(1)} nextDisabled={!canAdvanceFromProfile()} />
+          </div>
         )}
 
         {step === 1 && (
-          <Section>
+          <div>
             <h2 className="text-base font-semibold text-ink">Owner account</h2>
             <p className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-muted">
               This creates the academy&apos;s first sign-in, with the <Badge label="academy_owner" tone="blue" /> role.
@@ -338,7 +346,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
               <Field label="Owner email">
                 <input
                   type="email"
-                  className={inputClass}
+                  className={fieldInput}
                   value={form.ownerEmail}
                   onChange={(e) => update("ownerEmail", e.target.value)}
                   required
@@ -347,7 +355,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
               <Field label="Temporary password">
                 <input
                   type="password"
-                  className={inputClass}
+                  className={fieldInput}
                   value={form.ownerPassword}
                   minLength={8}
                   onChange={(e) => update("ownerPassword", e.target.value)}
@@ -362,21 +370,20 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
             <StepFooter
               onBack={() => setStep(0)}
               onNext={() => setStep(2)}
-              nextLabel="Next: Default branch"
               nextDisabled={!canAdvanceFromOwner()}
             />
-          </Section>
+          </div>
         )}
 
         {step === 2 && (
-          <Section>
+          <div>
             <h2 className="text-base font-semibold text-ink">Default branch</h2>
             <p className="mt-1 text-sm text-muted">Every academy starts with one branch — more can be added later.</p>
             <div className="mt-6 flex flex-col gap-3">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2fr_1fr]">
                 <Field label="Branch name">
                   <input
-                    className={inputClass}
+                    className={fieldInput}
                     value={form.branchName}
                     onChange={(e) => update("branchName", e.target.value)}
                     required
@@ -384,7 +391,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                 </Field>
                 <Field label="Branch code">
                   <input
-                    className={inputClass}
+                    className={fieldInput}
                     value={form.branchCode}
                     onChange={(e) => update("branchCode", e.target.value.toUpperCase())}
                     required
@@ -394,14 +401,14 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field label="Branch address">
                   <input
-                    className={inputClass}
+                    className={fieldInput}
                     value={form.branchAddress}
                     onChange={(e) => update("branchAddress", e.target.value)}
                   />
                 </Field>
                 <Field label="Branch phone">
                   <input
-                    className={inputClass}
+                    className={fieldInput}
                     value={form.branchPhone}
                     onChange={(e) => update("branchPhone", e.target.value)}
                   />
@@ -411,99 +418,52 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
             <StepFooter
               onBack={() => setStep(1)}
               onNext={() => setStep(3)}
-              nextLabel="Next: Plan & allowances"
               nextDisabled={!canAdvanceFromBranch()}
             />
-          </Section>
+          </div>
         )}
 
         {step === 3 && (
-          <Section>
-            <h2 className="text-base font-semibold text-ink">Plan &amp; allowances</h2>
-            <p className="mt-1 text-sm text-muted">
-              A plan must be chosen now — new academies always start with one. Only active plans are offered.
-            </p>
+          <div>
+            <h2 className="text-base font-semibold text-ink">Plan and allowances</h2>
+            <p className="mt-1 text-sm text-muted">Choose a plan. Allowances come from the plan.</p>
             {activePlans.length === 0 && (
               <div className="mt-4">
                 <ErrorMessage message="No active subscription plans exist yet. Create one at /platform/plans before registering an academy." />
               </div>
             )}
-            <div className="mt-6 flex flex-col gap-3">
-              {activePlans.map((plan) => {
-                const selected = form.planId === plan.id;
-                const features = [plan.smsEnabled && "SMS", plan.emailEnabled && "Email", plan.certificateEnabled && "Certificates"].filter(
-                  Boolean,
-                );
-                return (
-                  <label
-                    key={plan.id}
-                    className={`block cursor-pointer rounded-card border p-5 transition-colors ${
-                      selected ? "border-brand bg-info-bg" : "border-border bg-surface hover:border-border-strong"
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <input
-                        type="radio"
-                        name="planChoice"
-                        value={plan.id}
-                        checked={selected}
-                        onChange={() => update("planId", plan.id)}
-                        className="mt-1.5 h-4 w-4 accent-brand"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                          <span className="font-semibold text-ink">{plan.name}</span>
-                          <span className="text-lg font-bold text-ink">
-                            {formatPrice(plan.priceAmountCents, plan.currency)}{" "}
-                            <span className="text-xs font-normal text-muted">/ {plan.billingPeriod}</span>
-                          </span>
-                        </div>
-                        <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm sm:grid-cols-3">
-                          <div className="flex justify-between gap-2 sm:block">
-                            <dt className="text-xs text-muted">Branches</dt>
-                            <dd className="font-medium text-ink">{plan.maxBranches}</dd>
-                          </div>
-                          <div className="flex justify-between gap-2 sm:block">
-                            <dt className="text-xs text-muted">Students</dt>
-                            <dd className="font-medium text-ink">{plan.maxStudents}</dd>
-                          </div>
-                          <div className="flex justify-between gap-2 sm:block">
-                            <dt className="text-xs text-muted">Staff</dt>
-                            <dd className="font-medium text-ink">{plan.maxStaff}</dd>
-                          </div>
-                          <div className="flex justify-between gap-2 sm:block">
-                            <dt className="text-xs text-muted">Courses</dt>
-                            <dd className="font-medium text-ink">{plan.maxCourses}</dd>
-                          </div>
-                          <div className="flex justify-between gap-2 sm:block">
-                            <dt className="text-xs text-muted">Storage</dt>
-                            <dd className="font-medium text-ink">{formatBytes(plan.maxStorageBytes)}</dd>
-                          </div>
-                          <div className="flex justify-between gap-2 sm:block">
-                            <dt className="text-xs text-muted">Reports</dt>
-                            <dd className="font-medium capitalize text-ink">{plan.reportsLevel}</dd>
-                          </div>
-                        </dl>
-                        <p className="mt-3 text-xs text-muted">
-                          {features.length > 0 ? `Includes ${features.join(", ")}.` : "No optional features included."}
-                        </p>
-                      </div>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
+            {planError && <StepError message={planError} />}
+            {activePlans.length > 0 && (
+              <div className="mt-5">
+                <PlanPicker
+                  plans={activePlans}
+                  value={form.planId}
+                  onChange={(planId) => {
+                    update("planId", planId);
+                    setPlanError(null);
+                  }}
+                />
+              </div>
+            )}
             <StepFooter
-              onBack={() => setStep(2)}
-              onNext={() => setStep(4)}
-              nextLabel="Next: Subscription dates"
-              nextDisabled={!canAdvanceFromPlan()}
+              onBack={() => {
+                setPlanError(null);
+                setStep(2);
+              }}
+              onNext={() => {
+                if (canAdvanceFromPlan()) {
+                  setPlanError(null);
+                  setStep(4);
+                } else {
+                  setPlanError("Choose a plan to continue.");
+                }
+              }}
             />
-          </Section>
+          </div>
         )}
 
         {step === 4 && (
-          <Section>
+          <div>
             <h2 className="text-base font-semibold text-ink">Subscription dates</h2>
             <p className="mt-1 text-sm text-muted">Decide whether this academy starts on a trial or in draft.</p>
 
@@ -527,7 +487,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                 <Field label="Trial length (days)">
                   <input
                     type="number"
-                    className={inputClass}
+                    className={fieldInput}
                     min={1}
                     max={365}
                     value={form.trialDays}
@@ -549,14 +509,13 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
             <StepFooter
               onBack={() => setStep(3)}
               onNext={() => setStep(5)}
-              nextLabel="Next: Review"
               nextDisabled={!canAdvanceFromSubscriptionDates()}
             />
-          </Section>
+          </div>
         )}
 
         {step === 5 && (
-          <Section>
+          <div>
             <h2 className="text-base font-semibold text-ink">Review</h2>
             <p className="mt-1 text-sm text-muted">Check everything before creating the academy — this can&apos;t be undone.</p>
 
@@ -598,6 +557,11 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
                 <div>
                   <div className="text-xs text-muted">Plan</div>
                   <div className="mt-0.5 font-medium text-ink">{selectedPlan?.name ?? "(none selected)"}</div>
+                  {selectedPlan && (
+                    <div className="text-sm text-muted">
+                      {formatPlanPricePerPeriod(selectedPlan)}
+                    </div>
+                  )}
                 </div>
                 <button type="button" onClick={() => setStep(3)} className="shrink-0 text-sm text-brand hover:underline">
                   Edit
@@ -637,16 +601,16 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
               <input type="hidden" name="branchPhone" value={form.branchPhone} />
               <input type="hidden" name="planId" value={form.planId} />
               <input type="hidden" name="trialDays" value={form.startTrial ? form.trialDays : ""} />
-              <div className="mt-8 flex items-center justify-between border-t border-border pt-6">
-                <Button type="button" variant="secondary" onClick={() => setStep(4)} disabled={pending}>
-                  Back
-                </Button>
-                <Button type="submit" disabled={pending} className="px-6">
+              <div className="mt-7 flex gap-3">
+                <button type="button" className={PREVIOUS_BUTTON} onClick={() => setStep(4)} disabled={pending}>
+                  Previous step
+                </button>
+                <button type="submit" className={PRIMARY_BUTTON} disabled={pending}>
                   {pending ? "Registering..." : "Register academy"}
-                </Button>
+                </button>
               </div>
             </form>
-          </Section>
+          </div>
         )}
       </div>
     </div>

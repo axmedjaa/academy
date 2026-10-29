@@ -1,4 +1,4 @@
-import { and, eq, ne, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, ne, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -662,6 +662,60 @@ export async function listAcademyTimetable(
       actorContext.userId,
       row.entry.branchId,
     );
+    if (inScope) visible.push(row);
+  }
+
+  return {
+    ok: true,
+    entries: visible.map((row) => ({
+      ...toRecord(row.entry),
+      batchName: row.batchName,
+      courseId: row.courseId,
+      courseName: row.courseName,
+      branchName: row.branchName,
+      trainerName: row.trainerName,
+    })),
+    canManage: canManage(permissionLevel),
+  };
+}
+
+/** The weekly classes of just these batches (a student's own courses on
+ * the student page), with the same academy scope, permission check and
+ * branch limits as `listAcademyTimetable`. */
+export async function listTimetableForBatches(
+  actorContext: AuthContext,
+  batchIds: string[],
+): Promise<ListAcademyTimetableResult> {
+  const resolved = await resolveScopeAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const ids = [...new Set(batchIds)].filter((id) => z.string().uuid().safeParse(id).success);
+  if (ids.length === 0) return { ok: true, entries: [], canManage: canManage(permissionLevel) };
+
+  const rows = await db
+    .select({
+      entry: timetables,
+      batchName: batches.name,
+      courseId: courses.id,
+      courseName: courses.name,
+      branchName: branches.name,
+      trainerName: staffProfiles.fullName,
+    })
+    .from(timetables)
+    .innerJoin(batches, eq(batches.id, timetables.batchId))
+    .innerJoin(courses, eq(courses.id, timetables.courseId))
+    .innerJoin(branches, eq(branches.id, timetables.branchId))
+    .leftJoin(staffProfiles, eq(staffProfiles.id, timetables.trainerStaffProfileId))
+    .where(and(eq(timetables.academyId, academyId), inArray(timetables.batchId, ids)));
+
+  const scopeByBranch = new Map<string, boolean>();
+  const visible: typeof rows = [];
+  for (const row of rows) {
+    let inScope = scopeByBranch.get(row.entry.branchId);
+    if (inScope === undefined) {
+      inScope = await assertBranchInScope(db, academyId, membershipRole, actorContext.userId, row.entry.branchId);
+      scopeByBranch.set(row.entry.branchId, inScope);
+    }
     if (inScope) visible.push(row);
   }
 

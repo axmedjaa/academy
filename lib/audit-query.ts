@@ -1,12 +1,16 @@
-import { and, count, desc, eq, gte, lte, inArray, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gte, ilike, lte, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db, type DbClient } from "@/lib/db";
 import { auditLogs, users } from "@/lib/db/schema";
+import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 
 // PLAN.md "Pagination, Search & Export Limits" (Planning Gaps Resolution §9)
 // — the project-wide rule, applied here since this is the first real list
 // page that needs it: default 15 / max 100 / offset-based (page, pageSize).
-export const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
-export const AUDIT_LOG_MAX_PAGE_SIZE = 100;
+/** Rows per page and the most any client-callable list action accepts. */
+export const AUDIT_LOG_DEFAULT_PAGE_SIZE = LIST_PAGE_SIZE_MAX;
+export const AUDIT_LOG_MAX_PAGE_SIZE = LIST_PAGE_SIZE_MAX;
+/** Ceiling for server-only batch reads (CSV/JSON export), never a displayed page. */
+export const AUDIT_LOG_BATCH_PAGE_SIZE = 100;
 
 export type AuditResult = "success" | "failure";
 
@@ -28,6 +32,12 @@ export interface AuditLogFilters {
   createdFrom?: Date;
   /** Inclusive upper bound on createdAt. */
   createdTo?: Date;
+  /**
+   * Free-text search (the Platform audit log's search box): a
+   * case-insensitive substring match on the action, the entity type, the
+   * entity id, or the actor's email.
+   */
+  search?: string;
 }
 
 export interface AuditLogPagination {
@@ -77,6 +87,17 @@ function buildWhereClause(filters: AuditLogFilters): SQL | undefined {
   if (filters.createdTo) {
     conditions.push(lte(auditLogs.createdAt, filters.createdTo));
   }
+  if (filters.search) {
+    // Escape LIKE wildcards so the text is matched literally.
+    const pattern = `%${filters.search.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+    const searchCondition = or(
+      ilike(auditLogs.action, pattern),
+      ilike(auditLogs.entityType, pattern),
+      sql`${auditLogs.entityId}::text ilike ${pattern}`,
+      inArray(auditLogs.actorUserId, db.select({ id: users.id }).from(users).where(ilike(users.email, pattern))),
+    );
+    if (searchCondition) conditions.push(searchCondition);
+  }
 
   return conditions.length > 0 ? and(...conditions) : undefined;
 }
@@ -89,7 +110,7 @@ function normalizePage(page: number | undefined): number {
 function normalizePageSize(pageSize: number | undefined): number {
   const requested =
     pageSize && Number.isFinite(pageSize) ? Math.floor(pageSize) : AUDIT_LOG_DEFAULT_PAGE_SIZE;
-  return Math.min(Math.max(requested, 1), AUDIT_LOG_MAX_PAGE_SIZE);
+  return Math.min(Math.max(requested, 1), AUDIT_LOG_BATCH_PAGE_SIZE);
 }
 
 /**

@@ -25,6 +25,8 @@ export interface PaginationNavProps {
    * `"paymentsPage"` — otherwise paging one would silently also move the
    * other). */
   paramName?: string;
+  /** Set false when the page already shows its own "Showing X of Y" line. */
+  showTotal?: boolean;
 }
 
 /** `searchParams` -> a `?query=string`, replacing `paramName` with the
@@ -62,7 +64,7 @@ function buildPageHref(
  * "never show a control with nothing useful to do" — matching this
  * feature's own "hide pagination entirely for one page" requirement.
  */
-export function PaginationNav({ page, pageSize, totalCount, searchParams, paramName = "page" }: PaginationNavProps) {
+export function PaginationNav({ page, pageSize, totalCount, searchParams, paramName = "page", showTotal = true }: PaginationNavProps) {
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   if (totalPages <= 1) {
     return null;
@@ -74,7 +76,7 @@ export function PaginationNav({ page, pageSize, totalCount, searchParams, paramN
 
   return (
     <nav aria-label="Results pagination" className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
-      <p className="text-sm text-muted">{totalCount} total</p>
+      {showTotal && <p className="text-sm text-muted">{totalCount} total</p>}
       <Pagination className="mx-0 w-auto justify-end">
         <PaginationContent>
           <PaginationItem>

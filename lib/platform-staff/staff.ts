@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   platformAdminPermissions,
@@ -284,6 +284,8 @@ export interface PlatformStaffAccount {
   email: string;
   role: "platform_owner" | "platform_admin";
   status: "active" | "disabled";
+  createdAt: Date;
+  lastLoginAt: Date | null;
   grantedCapabilities: string[];
 }
 
@@ -302,9 +304,12 @@ export async function listPlatformStaff(): Promise<PlatformStaffAccount[]> {
       email: users.email,
       role: platformMemberships.role,
       status: users.status,
+      createdAt: users.createdAt,
+      lastLoginAt: users.lastLoginAt,
     })
     .from(platformMemberships)
-    .innerJoin(users, eq(users.id, platformMemberships.userId));
+    .innerJoin(users, eq(users.id, platformMemberships.userId))
+    .orderBy(asc(users.createdAt));
 
   const grants = await db
     .select({

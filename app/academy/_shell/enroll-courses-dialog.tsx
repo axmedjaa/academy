@@ -4,7 +4,8 @@ import { startTransition, useActionState, useEffect, useMemo, useState } from "r
 import { updateStudentEnrollment, type BatchAssignmentFormState } from "@/lib/academies/batch-assignments-actions";
 import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
 import { formatDate } from "@/lib/ui/date";
-import { PAYMENT_PLAN_OPTIONS, describePaymentPlan, parseDollarsToCents } from "@/lib/ui/payment-plan";
+import { describePaymentPlan, parseDollarsToCents } from "@/lib/ui/payment-plan";
+import { PaymentPlanField } from "./payment-plan-field";
 import { showSuccessToast } from "@/lib/ui/toast";
 import {
   DField,
@@ -332,20 +333,7 @@ function EnrollFields({
             )}
           </div>
 
-          <DField label="Payment plan" name="paymentPlanIntervalMonths" required>
-            <select
-              name="paymentPlanIntervalMonths"
-              value={plan}
-              onChange={(event) => setPlan(Number(event.target.value))}
-              className={controlClass(false)}
-            >
-              {PAYMENT_PLAN_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </DField>
+          <PaymentPlanField name="paymentPlanIntervalMonths" value={plan} onChange={setPlan} />
           <DField
             label="Total fee per course (USD)"
             name="paymentPlanAmountDollars"

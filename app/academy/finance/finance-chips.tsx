@@ -31,5 +31,5 @@ export const METHOD_OPTIONS = [
 export function methodChip(method: string) {
   const option = METHOD_OPTIONS.find((m) => m.value === method);
   const tone = method === "cash" ? "brand" : method === "mobile_money" ? "gold" : "slate";
-  return <Chip label={option?.label ?? method} icon={option?.icon ?? "payments"} tone={tone} />;
+  return <Chip label={option?.label ?? method} icon={option?.icon ?? "payments"} tone={tone} nowrap />;
 }

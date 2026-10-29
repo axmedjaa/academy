@@ -30,6 +30,9 @@ async function createPlan(smsEnabled = false): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/notifications/notifications.test.ts)",
       name: `Notifications Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",

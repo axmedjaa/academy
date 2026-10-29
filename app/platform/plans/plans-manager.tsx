@@ -1,354 +1,386 @@
 "use client";
 
-import { useActionState, useEffect, useState, useTransition } from "react";
-import {
-  createSubscriptionPlan,
-  updateSubscriptionPlan,
-  setPlanActive,
-  type PlanFormState,
-} from "@/lib/subscriptions/plans-actions";
+import { startTransition, useActionState, useEffect, useState, useTransition } from "react";
+import { createSubscriptionPlan, updateSubscriptionPlan, setPlanActive, type PlanFormState } from "@/lib/subscriptions/plans-actions";
 import type { SubscriptionPlanRecord } from "@/lib/subscriptions/plans";
-import {
-  Badge,
-  Button,
-  EmptyState,
-  ErrorMessage,
-  Field,
-  FormDialog,
-  Section,
-  TableWrap,
-  inputClass,
-  td,
-  th,
-  trHover,
-} from "@/app/academy/_shell/ui";
-import { Icon } from "@/app/academy/_shell/icons";
+import { guardAction, NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import { centsToDollars, formatMoney } from "@/lib/ui/money";
+import { Badge, Button, EmptyState, Section } from "@/app/academy/_shell/ui";
+import { ClearFilters, FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
+import { Icon } from "@/app/academy/_shell/icons";
+import { ROW_BTN } from "@/app/academy/_shell/page-blocks";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { centsToDollars } from "@/lib/ui/money";
+  DField,
+  DesignDialog,
+  DialogBody,
+  DialogFooter,
+  FieldGrid,
+  FormErrorBanner,
+  controlClass,
+  invalidProps,
+  onDesignSubmit,
+  useDesignForm,
+  type DesignFormRule,
+} from "@/app/academy/_shell/design-form";
 
+const guardedCreate = guardAction(createSubscriptionPlan);
+const guardedUpdate = guardAction(updateSubscriptionPlan);
 const initialState: PlanFormState = { ok: false };
 
-const BILLING_PERIODS = ["monthly", "quarterly", "annual"] as const;
-const REPORTS_LEVELS = ["none", "basic", "advanced"] as const;
+const BILLING_PERIODS = [
+  { value: "monthly", label: "Monthly", per: "per month" },
+  { value: "quarterly", label: "Quarterly", per: "per quarter" },
+  { value: "annual", label: "Annual", per: "per year" },
+] as const;
+const REPORTS_LEVELS = [
+  { value: "none", label: "No reports" },
+  { value: "basic", label: "Basic reports" },
+  { value: "advanced", label: "Advanced reports" },
+] as const;
 
-interface Props {
-  plans: SubscriptionPlanRecord[];
-}
+const GB = 1024 ** 3;
+const formatGb = (bytes: number) => {
+  const gb = bytes / GB;
+  return Number.isInteger(gb) ? String(gb) : gb.toFixed(gb < 1 ? 2 : 1);
+};
 
-// DESIGN.md §8: "/platform/plans | A + C | List of plan templates +
-// create/edit form (name, price, billing period, per-resource limits,
-// feature flags); Retire (not delete) if any academy is on it." Follows
-// app/platform/staff/platform-staff-manager.tsx's style: useActionState for
-// the create/edit forms, useTransition for the Retire/Restore toggle.
-export function PlansManager({ plans }: Props) {
-  const [selectedPlanId, setSelectedPlanId] = useState<string>("");
-  const selectedPlan = plans.find((plan) => plan.id === selectedPlanId) ?? null;
+const wholeNumber = (label: string) => (value: string) =>
+  /^\d+$/.test(value.trim()) ? null : `${label} must be a whole number, 0 or more.`;
 
-  return (
-    <div className="flex flex-col gap-6">
-      <Section>
-        <h2 className="text-base font-semibold text-ink">Create plan</h2>
-        <div className="mt-4">
-          <PlanForm mode="create" />
-        </div>
-      </Section>
+const RULES: DesignFormRule[] = [
+  { name: "name", label: "Plan name", required: true },
+  {
+    name: "priceDollars",
+    label: "Price",
+    required: true,
+    check: (value) => (/^\d+(\.\d{1,2})?$/.test(value.trim()) ? null : "Enter a price like 49 or 49.00."),
+  },
+  {
+    name: "currency",
+    label: "Currency",
+    required: true,
+    check: (value) => (/^[A-Za-z]{3}$/.test(value.trim()) ? null : "Use a 3-letter code, for example USD."),
+  },
+  { name: "maxBranches", label: "Branches", required: true, check: wholeNumber("Branches") },
+  { name: "maxStudents", label: "Students", required: true, check: wholeNumber("Students") },
+  { name: "maxStaff", label: "Staff", required: true, check: wholeNumber("Staff") },
+  { name: "maxCourses", label: "Courses", required: true, check: wholeNumber("Courses") },
+  {
+    name: "maxStorageGb",
+    label: "Storage",
+    required: true,
+    check: (value) => (/^\d+(\.\d{1,2})?$/.test(value.trim()) ? null : "Enter storage in GB, for example 2 or 0.5."),
+  },
+];
 
-      <div>
-        <h2 className="mb-3 text-lg font-semibold text-ink">Plan templates</h2>
-        {plans.length === 0 ? (
-          <EmptyState message="No plans yet — create one above." icon={<Icon name="inventory_2" />} />
-        ) : (
-          <TableWrap>
-            <thead>
-              <tr>
-                <th className={th}>Name</th>
-                <th className={th}>Price</th>
-                <th className={th}>Billing</th>
-                <th className={th}>Reports</th>
-                <th className={th}>Status</th>
-                <th className={th}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plans.map((plan) => (
-                <PlanRow key={plan.id} plan={plan} onEdit={() => setSelectedPlanId(plan.id)} />
-              ))}
-            </tbody>
-          </TableWrap>
-        )}
-      </div>
-
-      {selectedPlan && (
-        <FormDialog
-          open={selectedPlan !== null}
-          onOpenChange={(nextOpen) => !nextOpen && setSelectedPlanId("")}
-          title={`Edit plan: ${selectedPlan.name}`}
-          className="max-w-xl"
-        >
-          {/* key forces a remount (fresh useActionState) when switching
-              which plan is being edited, rather than reusing stale state
-              from a previously selected plan's submission. */}
-          <PlanForm
-            mode="edit"
-            plan={selectedPlan}
-            key={selectedPlan.id}
-            onSuccess={() => setSelectedPlanId("")}
-            onCancel={() => setSelectedPlanId("")}
-          />
-        </FormDialog>
-      )}
-    </div>
-  );
-}
-
-function PlanRow({
-  plan,
-  onEdit,
-}: {
-  plan: SubscriptionPlanRecord;
-  onEdit: () => void;
-}) {
-  const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-
-  function toggleActive() {
-    setError(null);
-    startTransition(async () => {
-      const result = await setPlanActive(plan.id, !plan.isActive);
-      if (!result.ok) {
-        setError(result.error.message);
-      } else {
-        showSuccessToast(plan.isActive ? "Plan retired." : "Plan restored.");
-      }
-    });
-  }
-
+/** Header action: opens the Create plan dialog (design P06). */
+export function CreatePlanButton() {
+  const [open, setOpen] = useState(false);
   return (
     <>
-      <tr className={trHover}>
-        <td className={`${td} font-medium`}>{plan.name}</td>
-        <td className={td}>
-          {(plan.priceAmountCents / 100).toFixed(2)} {plan.currency}
-        </td>
-        <td className={td}>{plan.billingPeriod}</td>
-        <td className={td}>{plan.reportsLevel}</td>
-        <td className={td}>
-          <Badge label={plan.isActive ? "Active" : "Retired"} tone={plan.isActive ? "green" : "gray"} />
-        </td>
-        <td className={td}>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label={`Actions for ${plan.name}`}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-control text-muted transition-colors duration-150 hover:bg-app hover:text-ink motion-safe:active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
-              >
-                <Icon name="more" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
-              <DropdownMenuItem disabled={isPending} onClick={toggleActive}>
-                {plan.isActive ? "Retire" : "Restore"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </td>
-      </tr>
-      {error && (
-        <tr>
-          <td colSpan={6} className={td}>
-            <ErrorMessage message={error} />
-          </td>
-        </tr>
-      )}
+      <Button type="button" onClick={() => setOpen(true)}>
+        Create plan
+      </Button>
+      <DesignDialog open={open} onOpenChange={setOpen} title="Create plan" description="Prices are stored in cents; allowances apply to new subscriptions on this plan." width={640}>
+        {open && <PlanForm mode="create" onDone={() => setOpen(false)} />}
+      </DesignDialog>
     </>
   );
 }
 
-function PlanForm({
-  mode,
-  plan,
-  onSuccess,
-  onCancel,
+/**
+ * Plans (design P06): a card per plan with its price, allowances and
+ * features, and Edit / Retire / Restore. Plans are never deleted; Retire
+ * and Restore only change whether the plan can be chosen for new
+ * subscriptions (the existing `setPlanActive`), Edit never changes it.
+ */
+const PLAN_FILTER_PARAMS = ["q", "status", "price"];
+
+/** Design P06 filter bar: search by name, Status, Price, Clear filters. */
+function PlanFilters() {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-3">
+      <SearchField placeholder="Search plans by name" />
+      <FilterSelect
+        param="status"
+        label="Filter by status"
+        options={[
+          { value: "", label: "All statuses" },
+          { value: "active", label: "Active" },
+          { value: "retired", label: "Retired" },
+        ]}
+      />
+      <FilterSelect
+        param="price"
+        label="Filter by price"
+        options={[
+          { value: "", label: "Any price" },
+          { value: "low", label: "Under $100" },
+          { value: "mid", label: "$100 to $199" },
+          { value: "high", label: "$200 and up" },
+        ]}
+      />
+      <ClearFilters params={PLAN_FILTER_PARAMS} compact />
+    </div>
+  );
+}
+
+export function PlansManager({
+  plans,
+  filtersActive,
+  matchingCount,
+  overallCount,
 }: {
-  mode: "create" | "edit";
-  plan?: SubscriptionPlanRecord;
-  /** Edit mode only — auto-closes the FormDialog once the save succeeds,
-   * the functional equivalent of "redirect back to the list" (see
-   * app/academy/branches/branches-list.tsx's identical pattern). Create
-   * mode has no dialog to close, so it's never passed there. */
-  onSuccess?: () => void;
-  /** Edit mode only — closes the dialog without saving, same as every
-   * other FormDialog-wrapped edit form's own Cancel button. */
-  onCancel?: () => void;
+  plans: SubscriptionPlanRecord[];
+  /** Whether any filter is applied (drives the empty-state wording). */
+  filtersActive: boolean;
+  /** Plans matching the filters, across all pages. */
+  matchingCount: number;
+  /** Every plan, unfiltered. */
+  overallCount: number;
 }) {
-  const action = mode === "create" ? createSubscriptionPlan : updateSubscriptionPlan;
-  const [state, formAction, pending] = useActionState(action, initialState);
+  const [editingId, setEditingId] = useState("");
+  const editing = plans.find((plan) => plan.id === editingId) ?? null;
 
-  useEffect(() => {
-    if (state.ok) showSuccessToast(mode === "create" ? "Plan created." : "Plan updated.");
-    else if (state.error) showErrorToast(state.error.message);
-  }, [state, mode]);
-
-  const [prevOk, setPrevOk] = useState(state.ok);
-  if (state.ok !== prevOk) {
-    setPrevOk(state.ok);
-    if (state.ok) onSuccess?.();
+  if (overallCount === 0) {
+    return (
+      <Section className="mb-8">
+        <EmptyState message="No plans yet. Create the first plan to offer it to academies." icon={<Icon name="layers" />} />
+      </Section>
+    );
   }
 
   return (
-    <form action={formAction} className="flex max-w-xl flex-col gap-3">
-      {mode === "edit" && plan && (
-        <input type="hidden" name="planId" value={plan.id} />
+    <>
+      <PlanFilters />
+      <p className="mb-3 text-[13px] text-muted" aria-live="polite">
+        Showing {matchingCount.toLocaleString("en-US")} of {overallCount.toLocaleString("en-US")} plan{overallCount === 1 ? "" : "s"}
+      </p>
+      {plans.length === 0 && filtersActive && (
+        <div className="mb-8 rounded-card border border-border bg-surface px-4 py-10 text-center text-[#374151]">
+          No plans match these filters. <ClearFilters params={PLAN_FILTER_PARAMS} compact />
+        </div>
       )}
-
-      <Field label="Name">
-        <input type="text" name="name" required defaultValue={plan?.name} className={inputClass} />
-      </Field>
-
-      <Field label="Description">
-        <textarea name="description" defaultValue={plan?.description ?? ""} rows={3} className={inputClass} />
-      </Field>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Price (USD)">
-          <input
-            type="number"
-            name="priceDollars"
-            min={0}
-            step="0.01"
-            placeholder="0.00"
-            required
-            defaultValue={plan ? centsToDollars(plan.priceAmountCents) : undefined}
-            className={inputClass}
-          />
-        </Field>
-        <Field label="Currency (3-letter code)">
-          <input
-            type="text"
-            name="currency"
-            maxLength={3}
-            required
-            defaultValue={plan?.currency ?? "USD"}
-            className={inputClass}
-          />
-        </Field>
-      </div>
-
-      <Field label="Billing period">
-        <select name="billingPeriod" defaultValue={plan?.billingPeriod ?? "monthly"} className={inputClass}>
-          {BILLING_PERIODS.map((period) => (
-            <option key={period} value={period}>
-              {period}
-            </option>
+      <div className="mb-4">
+        {/* Design P06 grid: as many 260px-minimum columns as fit, 24px gap
+            (auto-fill, so a single result keeps card width). */}
+        <ul role="list" className="grid grid-cols-[repeat(auto-fill,minmax(min(260px,100%),1fr))] gap-6">
+          {plans.map((plan) => (
+            <PlanCard key={plan.id} plan={plan} onEdit={() => setEditingId(plan.id)} />
           ))}
-        </select>
-      </Field>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Field label="Max branches">
-          <input
-            type="number"
-            name="maxBranches"
-            min={0}
-            step={1}
-            required
-            defaultValue={plan?.maxBranches ?? 1}
-            className={inputClass}
-          />
-        </Field>
-        <Field label="Max students">
-          <input
-            type="number"
-            name="maxStudents"
-            min={0}
-            step={1}
-            required
-            defaultValue={plan?.maxStudents ?? 100}
-            className={inputClass}
-          />
-        </Field>
-        <Field label="Max staff">
-          <input
-            type="number"
-            name="maxStaff"
-            min={0}
-            step={1}
-            required
-            defaultValue={plan?.maxStaff ?? 10}
-            className={inputClass}
-          />
-        </Field>
-        <Field label="Max courses">
-          <input
-            type="number"
-            name="maxCourses"
-            min={0}
-            step={1}
-            required
-            defaultValue={plan?.maxCourses ?? 10}
-            className={inputClass}
-          />
-        </Field>
+        </ul>
       </div>
+      <DesignDialog
+        open={editing !== null}
+        onOpenChange={(open) => !open && setEditingId("")}
+        title={editing ? `Edit ${editing.name}` : "Edit plan"}
+        description="Editing never changes whether the plan is active."
+        width={640}
+      >
+        {editing && <PlanForm key={editing.id} mode="edit" plan={editing} onDone={() => setEditingId("")} />}
+      </DesignDialog>
+    </>
+  );
+}
 
-      <Field label="Max storage (bytes)">
-        <input
-          type="number"
-          name="maxStorageBytes"
-          min={0}
-          step={1}
-          required
-          defaultValue={plan?.maxStorageBytes ?? 1073741824}
-          className={inputClass}
-        />
-      </Field>
+function PlanCard({ plan, onEdit }: { plan: SubscriptionPlanRecord; onEdit: () => void }) {
+  const [pending, startToggle] = useTransition();
+  const per = BILLING_PERIODS.find((period) => period.value === plan.billingPeriod)?.per ?? plan.billingPeriod;
+  const features = [
+    plan.emailEnabled ? "Email" : null,
+    plan.smsEnabled ? "SMS" : null,
+    plan.certificateEnabled ? "Certificates" : null,
+    REPORTS_LEVELS.find((level) => level.value === plan.reportsLevel)?.label ?? null,
+  ].filter(Boolean) as string[];
 
-      <Field label="Reports level">
-        <select name="reportsLevel" defaultValue={plan?.reportsLevel ?? "basic"} className={inputClass}>
-          {REPORTS_LEVELS.map((level) => (
-            <option key={level} value={level}>
-              {level}
-            </option>
+  function toggle() {
+    startToggle(async () => {
+      try {
+        const result = await setPlanActive(plan.id, !plan.isActive);
+        if (!result.ok) showErrorToast(result.error.message);
+        else showSuccessToast(plan.isActive ? "Plan retired." : "Plan restored.");
+      } catch {
+        showErrorToast(NETWORK_ERROR_MESSAGE);
+      }
+    });
+  }
+
+  const rows: [string, string][] = [
+    ["Branches", plan.maxBranches.toLocaleString("en-US")],
+    ["Students", plan.maxStudents.toLocaleString("en-US")],
+    ["Staff", plan.maxStaff.toLocaleString("en-US")],
+    ["Courses", plan.maxCourses.toLocaleString("en-US")],
+    ["Storage (GB)", formatGb(plan.maxStorageBytes)],
+  ];
+
+  return (
+    <li className={`flex min-w-0 flex-col rounded-card border border-border bg-surface p-5 shadow-card ${plan.isActive ? "" : "opacity-85"}`}>
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="min-w-0 text-[17px] font-semibold leading-snug text-ink [overflow-wrap:anywhere]">{plan.name}</h2>
+        <Badge label={plan.isActive ? "Active" : "Retired"} tone={plan.isActive ? "green" : "slate"} />
+      </div>
+      <p className="mt-2">
+        <span className="text-[30px] font-bold leading-none tracking-[-0.01em] text-brand tabular-nums">
+          {formatMoney(plan.priceAmountCents, plan.currency)}
+        </span>{" "}
+        <span className="text-sm text-muted">{per}</span>
+      </p>
+      {plan.description && <p className="mt-2 line-clamp-2 text-[13px] text-muted">{plan.description}</p>}
+      <dl className="mt-4 divide-y divide-border border-y border-border text-sm">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex items-center justify-between gap-3 py-2.5">
+            <dt className="text-[#374151]">{label}</dt>
+            <dd className="font-semibold tabular-nums text-ink">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {features.length > 0 && (
+        <p className="mt-3 flex flex-wrap gap-1.5">
+          {features.map((feature) => (
+            <span key={feature} className="rounded-full bg-app px-2.5 py-0.5 text-xs font-medium text-[#374151]">
+              {feature}
+            </span>
           ))}
-        </select>
-      </Field>
-
-      <div className="flex flex-col gap-2 rounded-control border border-border bg-app px-3 py-3">
-        <label className="flex items-center gap-2 text-sm text-ink">
-          <input type="checkbox" name="smsEnabled" defaultChecked={plan?.smsEnabled ?? false} />
-          SMS enabled
-        </label>
-        <label className="flex items-center gap-2 text-sm text-ink">
-          <input type="checkbox" name="emailEnabled" defaultChecked={plan?.emailEnabled ?? true} />
-          Email enabled
-        </label>
-        <label className="flex items-center gap-2 text-sm text-ink">
-          <input type="checkbox" name="certificateEnabled" defaultChecked={plan?.certificateEnabled ?? false} />
-          Certificates enabled
-        </label>
+        </p>
+      )}
+      <div className="mt-auto flex gap-2 pt-4">
+        <button type="button" onClick={onEdit} className={`${ROW_BTN} flex-1 justify-center`}>
+          Edit plan
+        </button>
+        <button type="button" onClick={toggle} disabled={pending} className={`${ROW_BTN} flex-1 justify-center`}>
+          {pending ? "Saving…" : plan.isActive ? "Retire plan" : "Restore plan"}
+        </button>
       </div>
+    </li>
+  );
+}
 
-      {state.error && <ErrorMessage message={state.error.message} />}
-      {state.ok && <p className="text-sm font-medium text-success">Saved.</p>}
+function PlanForm({ mode, plan, onDone }: { mode: "create" | "edit"; plan?: SubscriptionPlanRecord; onDone: () => void }) {
+  const [state, formAction, pending] = useActionState(mode === "create" ? guardedCreate : guardedUpdate, initialState);
+  const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(RULES);
 
-      <div className="flex gap-2">
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving..." : mode === "create" ? "Create plan" : "Save changes"}
-        </Button>
-        {mode === "edit" && (
-          <Button type="button" variant="secondary" onClick={onCancel}>
-            Cancel
-          </Button>
-        )}
-      </div>
+  useEffect(() => {
+    if (state.ok) {
+      showSuccessToast(mode === "create" ? "Plan created." : "Plan updated.");
+      onDone();
+    } else if (state.error) {
+      showServerError(state.error.message, [
+        [/name/i, "name"],
+        [/price|amount/i, "priceDollars"],
+        [/currency/i, "currency"],
+        [/branch/i, "maxBranches"],
+        [/student/i, "maxStudents"],
+        [/staff/i, "maxStaff"],
+        [/course/i, "maxCourses"],
+        [/storage/i, "maxStorageGb"],
+      ]);
+    }
+    // Re-run only for a new action result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
+  const number = (name: string, label: string, defaultValue: number | string, hint?: string) => (
+    <DField label={label} name={name} required error={errors[name]} hint={hint}>
+      <input
+        type="text"
+        inputMode="decimal"
+        name={name}
+        defaultValue={defaultValue}
+        onBlur={blur(name)}
+        className={controlClass(Boolean(errors[name]))}
+        {...invalidProps(name, errors[name])}
+      />
+    </DField>
+  );
+
+  return (
+    <form
+      ref={formRef}
+      noValidate
+      className="flex min-h-0 flex-1 flex-col"
+      onSubmit={onDesignSubmit(validate, (data) => {
+        // Storage is entered in GB and stored in bytes (the action's field).
+        data.set("maxStorageBytes", String(Math.round(Number(data.get("maxStorageGb")) * GB)));
+        data.delete("maxStorageGb");
+        data.set("currency", String(data.get("currency") ?? "").trim().toUpperCase());
+        startTransition(() => formAction(data));
+      })}
+    >
+      {mode === "edit" && plan && <input type="hidden" name="planId" value={plan.id} />}
+      <DialogBody>
+        <FieldGrid>
+          <DField label="Plan name" name="name" required error={errors.name} full>
+            <input
+              type="text"
+              name="name"
+              defaultValue={plan?.name}
+              placeholder="Growth"
+              onBlur={blur("name")}
+              className={controlClass(Boolean(errors.name))}
+              {...invalidProps("name", errors.name)}
+            />
+          </DField>
+          <DField label="Description" name="description" full>
+            <textarea name="description" rows={2} defaultValue={plan?.description ?? ""} className={`${controlClass(false)} h-auto py-2.5`} />
+          </DField>
+          {number("priceDollars", "Price", plan ? centsToDollars(plan.priceAmountCents) : "", "Entered in dollars, stored in cents.")}
+          <DField label="Currency" name="currency" required error={errors.currency}>
+            <input
+              type="text"
+              name="currency"
+              maxLength={3}
+              defaultValue={plan?.currency ?? "USD"}
+              onBlur={blur("currency")}
+              className={`${controlClass(Boolean(errors.currency))} uppercase`}
+              {...invalidProps("currency", errors.currency)}
+            />
+          </DField>
+          <DField label="Billing period" name="billingPeriod" required>
+            <select name="billingPeriod" defaultValue={plan?.billingPeriod ?? "monthly"} className={controlClass(false)}>
+              {BILLING_PERIODS.map((period) => (
+                <option key={period.value} value={period.value}>
+                  {period.label}
+                </option>
+              ))}
+            </select>
+          </DField>
+          <DField label="Reports" name="reportsLevel" required>
+            <select name="reportsLevel" defaultValue={plan?.reportsLevel ?? "basic"} className={controlClass(false)}>
+              {REPORTS_LEVELS.map((level) => (
+                <option key={level.value} value={level.value}>
+                  {level.label}
+                </option>
+              ))}
+            </select>
+          </DField>
+          {number("maxBranches", "Branches", plan?.maxBranches ?? 1)}
+          {number("maxStudents", "Students", plan?.maxStudents ?? 100)}
+          {number("maxStaff", "Staff", plan?.maxStaff ?? 10)}
+          {number("maxCourses", "Courses", plan?.maxCourses ?? 10)}
+          {number("maxStorageGb", "Storage (GB)", plan ? formatGb(plan.maxStorageBytes) : 1)}
+          <fieldset className="col-span-full flex flex-wrap gap-x-6 gap-y-2 rounded-lg border border-border bg-app px-4 py-3">
+            <legend className="px-1 text-[13px] font-semibold text-ink">Features</legend>
+            {[
+              ["emailEnabled", "Email", plan?.emailEnabled ?? true],
+              ["smsEnabled", "SMS", plan?.smsEnabled ?? false],
+              ["certificateEnabled", "Certificates", plan?.certificateEnabled ?? false],
+            ].map(([name, label, checked]) => (
+              <label key={name as string} className="flex min-h-10 items-center gap-2 text-sm text-ink">
+                <input type="checkbox" name={name as string} defaultChecked={checked as boolean} className="h-[18px] w-[18px] accent-brand" />
+                {label as string}
+              </label>
+            ))}
+          </fieldset>
+        </FieldGrid>
+        <FormErrorBanner message={banner} />
+      </DialogBody>
+      <DialogFooter
+        onCancel={onDone}
+        submitLabel={mode === "create" ? "Create plan" : "Save changes"}
+        pendingLabel="Saving…"
+        pending={pending}
+      />
     </form>
   );
 }

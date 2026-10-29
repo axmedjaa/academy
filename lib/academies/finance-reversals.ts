@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { expenseRecords, incomeRecords, studentPayments } from "@/lib/db/schema";
+import { expenseRecords, incomeRecords, studentCharges, studentCourseRefundPayments, studentPayments } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_EXPENSES_ACTION,
@@ -119,13 +119,15 @@ import { recalculateStudentChargeStatus } from "@/lib/academies/student-payments
  * approval authority as the underlying transaction type; the recorder can
  * never approve their own." Concretely:
  *
- *   - `student_payments`: `ACADEMY_STUDENT_PAYMENTS_ACTION` level `"full"`
- *     only (Manager) — the same level `approveStudentPayment` (Item 52)
- *     requires. Finance Officer's `"manage"` level records/creates but
- *     does not approve, so it does not reverse either.
- *   - `expense_records`: `ACADEMY_EXPENSES_ACTION` level `"approve"` only
- *     (Academy Administrator or Manager) — the same level `approveExpense`
- *     requires.
+ *   - `student_payments`: any payment — `ACADEMY_STUDENT_PAYMENTS_ACTION`
+ *     level `"full"` (Manager). A payment the actor recorded THEMSELVES —
+ *     any level that can record one (`"full"` or `"manage"`: Manager,
+ *     Finance Officer, Academy Administrator). Revised at the academy's
+ *     request: whoever recorded a payment can correct it; see below.
+ *   - `expense_records`: any expense — `ACADEMY_EXPENSES_ACTION` level
+ *     `"approve"` (Academy Administrator or Manager), the level
+ *     `approveExpense` requires. An expense the actor submitted THEMSELVES
+ *     — any level that can submit one (`"manage"` or `"approve"`).
  *   - `income_records`: no approval step exists anywhere for this entity
  *     (`ACADEMY_INCOME_ACTION` has no `"approve"` level at all — see that
  *     row's own comment in academy-permissions.ts), so per this item's
@@ -157,6 +159,15 @@ import { recalculateStudentChargeStatus } from "@/lib/academies/student-payments
  * file takes the stricter reading since the sentence appears directly on
  * the reversal row and a self-serviced reversal is the more dangerous
  * direction to leave open.
+ *
+ * SUPERSEDED at the academy's explicit request: for student payments,
+ * income and expenses alike, the person who recorded (or submitted) a
+ * record MAY reverse or adjust it. Authority over OTHER people's records
+ * is unchanged (payments: Manager; expenses: Administrator or Manager;
+ * income: Manager or Finance Officer). Every correction still keeps the
+ * original row, adds the linked reversal row, requires a reason and writes
+ * the audit entry naming who did it. `SELF_REVERSAL` / "self_approval" is
+ * no longer returned by this file.
  *
  * =========================================================================
  * Row locking / concurrency
@@ -196,11 +207,6 @@ export interface FinanceReversalError {
 const REASON_REQUIRED: FinanceReversalError = {
   code: "validation",
   message: "A reason is required.",
-};
-
-const SELF_REVERSAL: FinanceReversalError = {
-  code: "self_approval",
-  message: "You cannot reverse or adjust a transaction you recorded yourself.",
 };
 
 const reasonSchema = z.string().trim().min(1, "A reason is required.").max(2000);
@@ -250,16 +256,24 @@ const PAYMENT_NOT_FOUND: FinanceReversalError = {
 };
 const PAYMENT_FORBIDDEN: FinanceReversalError = {
   code: "forbidden",
-  message: "You don't have permission to reverse this academy's student payments.",
+  message: "You can reverse or adjust only payments you recorded yourself. Ask a Manager to correct someone else's payment.",
 };
 const PAYMENT_INVALID_STATE: FinanceReversalError = {
   code: "invalid_state",
   message: "Only an approved payment can be reversed.",
 };
 
-/** `approveStudentPayment` (Item 52)'s required level — Manager only. */
+/** Reversing or adjusting ANY student payment — Manager ("full") only. */
 function canReversePayment(level: AcademyPermissionLevel): boolean {
   return level === "full";
+}
+
+/** Reversing or adjusting a student payment the actor recorded THEMSELVES:
+ * any role allowed to record payments ("full" or "manage": Manager,
+ * Finance Officer, Academy Administrator). The person who recorded a
+ * payment can correct it; anyone else's payment still needs a Manager. */
+function canCorrectOwnPayment(level: AcademyPermissionLevel): boolean {
+  return level === "full" || level === "manage";
 }
 
 async function reverseOrAdjustStudentPaymentInternal(
@@ -273,7 +287,7 @@ async function reverseOrAdjustStudentPaymentInternal(
   const { academyId, membershipRole } = membership;
 
   const permissionLevel = getAcademyPermissionLevel(membershipRole, ACADEMY_STUDENT_PAYMENTS_ACTION);
-  if (!canReversePayment(permissionLevel)) {
+  if (!canCorrectOwnPayment(permissionLevel)) {
     return { ok: false, error: PAYMENT_FORBIDDEN };
   }
 
@@ -301,7 +315,28 @@ async function reverseOrAdjustStudentPaymentInternal(
       .for("update");
     if (!original) return { kind: "not_found" as const };
     if (original.status !== "approved") return { kind: "invalid_state" as const };
-    if (original.recordedBy === actorContext.userId) return { kind: "self_approval" as const };
+    // Checked on the locked row: a Manager may correct any payment; other
+    // recording roles only a payment they recorded themselves.
+    if (!canReversePayment(permissionLevel) && original.recordedBy !== actorContext.userId) {
+      return { kind: "forbidden" as const };
+    }
+    // A refund was recorded out of this payment (migration 0036): reversing
+    // or adjusting it now would leave more refunded than was paid. The
+    // payment row is locked, and the refund path locks it too, so this
+    // can't race a refund being recorded.
+    const [refundLink] = await tx
+      .select({ id: studentCourseRefundPayments.id })
+      .from(studentCourseRefundPayments)
+      .where(eq(studentCourseRefundPayments.studentPaymentId, original.id))
+      .limit(1);
+    if (refundLink) return { kind: "refunded" as const };
+    // Lock the linked charge before inserting the reversal row (whose FK
+    // takes a key-share lock on it) — same deadlock-avoidance order as
+    // recordStudentPayment: two corrections on one charge queue on this
+    // lock instead of each holding key-share and waiting for FOR UPDATE.
+    if (original.chargeId) {
+      await tx.select({ id: studentCharges.id }).from(studentCharges).where(eq(studentCharges.id, original.chargeId)).for("update");
+    }
 
     const [updatedOriginal] = await tx
       .update(studentPayments)
@@ -360,7 +395,16 @@ async function reverseOrAdjustStudentPaymentInternal(
 
   if (result.kind === "not_found") return { ok: false, error: PAYMENT_NOT_FOUND };
   if (result.kind === "invalid_state") return { ok: false, error: PAYMENT_INVALID_STATE };
-  if (result.kind === "self_approval") return { ok: false, error: SELF_REVERSAL };
+  if (result.kind === "forbidden") return { ok: false, error: PAYMENT_FORBIDDEN };
+  if (result.kind === "refunded") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_state",
+        message: "A refund has been recorded out of this payment, so it can no longer be reversed or adjusted.",
+      },
+    };
+  }
   return { ok: true, original: result.original, reversal: result.reversal };
 }
 
@@ -453,7 +497,6 @@ async function reverseOrAdjustIncomeRecordInternal(
       .for("update");
     if (!original) return { kind: "not_found" as const };
     if (original.status !== "posted") return { kind: "invalid_state" as const };
-    if (original.recordedBy === actorContext.userId) return { kind: "self_approval" as const };
 
     const [updatedOriginal] = await tx
       .update(incomeRecords)
@@ -504,7 +547,6 @@ async function reverseOrAdjustIncomeRecordInternal(
 
   if (result.kind === "not_found") return { ok: false, error: INCOME_NOT_FOUND };
   if (result.kind === "invalid_state") return { ok: false, error: INCOME_INVALID_STATE };
-  if (result.kind === "self_approval") return { ok: false, error: SELF_REVERSAL };
   return { ok: true, original: result.original, reversal: result.reversal };
 }
 
@@ -541,7 +583,7 @@ export type ReverseExpenseRecordResult =
 const EXPENSE_NOT_FOUND: FinanceReversalError = { code: "not_found", message: "Expense record not found." };
 const EXPENSE_FORBIDDEN: FinanceReversalError = {
   code: "forbidden",
-  message: "You don't have permission to reverse this academy's expense records.",
+  message: "You can reverse or adjust only expenses you submitted yourself. Ask a Manager or Academy Administrator to correct someone else's expense.",
 };
 const EXPENSE_INVALID_STATE: FinanceReversalError = {
   code: "invalid_state",
@@ -549,8 +591,17 @@ const EXPENSE_INVALID_STATE: FinanceReversalError = {
 };
 
 /** `approveExpense`'s required level — Academy Administrator or Manager. */
+/** Reversing or adjusting ANY approved expense — "approve" (Academy
+ * Administrator, Manager), the same authority that approves expenses. */
 function canReverseExpense(level: AcademyPermissionLevel): boolean {
   return level === "approve";
+}
+
+/** Reversing or adjusting an expense the actor SUBMITTED themselves — any
+ * level that can submit one ("manage" or "approve"), as expense-records.ts
+ * `canCreate`. */
+function canCorrectOwnExpense(level: AcademyPermissionLevel): boolean {
+  return level === "manage" || level === "approve";
 }
 
 async function reverseOrAdjustExpenseRecordInternal(
@@ -564,7 +615,7 @@ async function reverseOrAdjustExpenseRecordInternal(
   const { academyId, membershipRole } = membership;
 
   const permissionLevel = getAcademyPermissionLevel(membershipRole, ACADEMY_EXPENSES_ACTION);
-  if (!canReverseExpense(permissionLevel)) {
+  if (!canCorrectOwnExpense(permissionLevel)) {
     return { ok: false, error: EXPENSE_FORBIDDEN };
   }
 
@@ -592,7 +643,11 @@ async function reverseOrAdjustExpenseRecordInternal(
       .for("update");
     if (!original) return { kind: "not_found" as const };
     if (original.status !== "approved") return { kind: "invalid_state" as const };
-    if (original.submittedBy === actorContext.userId) return { kind: "self_approval" as const };
+    // Checked on the locked row: approvers may correct any expense; other
+    // submitting roles only an expense they submitted themselves.
+    if (!canReverseExpense(permissionLevel) && original.submittedBy !== actorContext.userId) {
+      return { kind: "forbidden" as const };
+    }
 
     const [updatedOriginal] = await tx
       .update(expenseRecords)
@@ -644,7 +699,7 @@ async function reverseOrAdjustExpenseRecordInternal(
 
   if (result.kind === "not_found") return { ok: false, error: EXPENSE_NOT_FOUND };
   if (result.kind === "invalid_state") return { ok: false, error: EXPENSE_INVALID_STATE };
-  if (result.kind === "self_approval") return { ok: false, error: SELF_REVERSAL };
+  if (result.kind === "forbidden") return { ok: false, error: EXPENSE_FORBIDDEN };
   return { ok: true, original: result.original, reversal: result.reversal };
 }
 

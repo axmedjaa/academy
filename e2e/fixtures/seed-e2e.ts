@@ -105,7 +105,9 @@ async function getOrCreatePlan(name: string): Promise<string> {
       emailEnabled: true,
       certificateEnabled: true,
       reportsLevel: "advanced",
-      isActive: true,
+      // Only backs the E2E academies' subscriptions; never offered at registration.
+      isActive: false,
+      description: "Automated test fixture (e2e/fixtures/seed-e2e.ts)",
     })
     .returning({ id: subscriptionPlans.id });
   return row.id;

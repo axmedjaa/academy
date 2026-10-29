@@ -25,6 +25,9 @@ async function createPlan(priceAmountCents: number): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/onboarding-checklist.test.ts)",
       name: `Onboarding checklist test plan ${randomUUID()}`,
       priceAmountCents,
       currency: "USD",

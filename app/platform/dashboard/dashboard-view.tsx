@@ -6,6 +6,8 @@ import { buildMonthlyWindow } from "@/lib/ui/monthly-window";
 import { Icon } from "@/app/academy/_shell/icons";
 import { DashboardTrendChart } from "@/app/academy/_shell/dashboard-trend-chart";
 import { Badge, EmptyState } from "@/app/academy/_shell/ui";
+import { EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT } from "@/lib/subscriptions/reports";
+import { ExpiringList } from "../_shared/expiring-list";
 
 /**
  * `/platform/dashboard` — Screen Inventory P01, built from the active
@@ -28,11 +30,6 @@ import { Badge, EmptyState } from "@/app/academy/_shell/ui";
 
 const CARD = "dd-lift rounded-card border border-border bg-surface p-5 shadow-card";
 const EXPIRING_WINDOW_DAYS = 14;
-/** The card previews the most urgent rows only (source is already sorted
- * most-overdue / soonest first); the KPI above keeps the full count and the
- * card links to the full list. */
-const EXPIRING_PREVIEW_LIMIT = 5;
-
 function formatDate(date: Date | string): string {
   return new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
@@ -52,11 +49,6 @@ function getInitials(name: string): string {
   return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "")).toUpperCase() || "?";
 }
 
-function dayBadge(days: number): { label: string; tone: "red" | "amber" | "blue" } {
-  const label =
-    days < 0 ? `${-days} day${days === -1 ? "" : "s"} overdue` : days === 0 ? "Today" : `${days} day${days === 1 ? "" : "s"} left`;
-  return { label, tone: days <= 3 ? "red" : days <= 7 ? "amber" : "blue" };
-}
 
 const PAYMENT_BADGE: Record<string, { label: string; tone: "amber" | "green" | "red" | "slate" }> = {
   pending: { label: "Pending", tone: "amber" },
@@ -103,8 +95,18 @@ export function PlatformDashboardView({ data }: { data: PlatformDashboardData })
   const counts = data.academyCounts;
   const pendingCount = counts ? (counts.byStatus.pending_approval ?? 0) : null;
   const expiring = data.expiringSubscriptions
-    ? data.expiringSubscriptions.filter((row) => row.daysUntilExpiry <= EXPIRING_WINDOW_DAYS)
+    ? data.expiringSubscriptions.rows.filter((row) => row.daysUntilExpiry <= EXPIRING_WINDOW_DAYS)
     : null;
+  // Rows arrive soonest first and capped, so the 14-day count is exact
+  // unless the cap cut the list off while still inside those 14 days.
+  const expiringRows = data.expiringSubscriptions?.rows ?? [];
+  const expiringTotal =
+    data.expiringSubscriptions === null || expiring === null
+      ? null
+      : data.expiringSubscriptions.totalCount <= expiringRows.length ||
+          (expiringRows.at(-1)?.daysUntilExpiry ?? 0) > EXPIRING_WINDOW_DAYS
+        ? expiring.length
+        : null;
   const trend = data.activeAcademyTrend
     ? buildMonthlyWindow(data.activeAcademyTrend.map((p) => ({ period: p.month, count: p.newlyActivated })), {
         cumulative: true,
@@ -184,7 +186,7 @@ export function PlatformDashboardView({ data }: { data: PlatformDashboardData })
             />
             <KpiRow
               label="Expiring subscriptions"
-              value={expiring ? expiring.length.toLocaleString() : "—"}
+              value={expiring ? (expiringTotal === null ? `${expiring.length}+` : expiringTotal.toLocaleString()) : "—"}
               hint={expiring ? `Within ${EXPIRING_WINDOW_DAYS} days, or overdue` : "Not available for your account"}
               icon="warning"
               href={expiring ? (data.canRenewSubscriptions ? "/platform/subscriptions" : "/platform/reports") : undefined}
@@ -265,15 +267,18 @@ export function PlatformDashboardView({ data }: { data: PlatformDashboardData })
         <div className="grid grid-cols-1 items-start gap-6 @[700px]:grid-cols-2">
           <section className={CARD} aria-labelledby="dash-expiring">
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h2 id="dash-expiring" className="font-semibold text-ink">
-                Expiring subscriptions
-              </h2>
+              <div>
+                <h2 id="dash-expiring" className="font-semibold text-ink">
+                  Expiring subscriptions
+                </h2>
+                <p className="text-xs text-muted">Within {EXPIRING_WINDOW_DAYS} days, including past due</p>
+              </div>
               {expiring && expiring.length > 0 && (
                 <Link
                   href={data.canRenewSubscriptions ? "/platform/subscriptions" : "/platform/reports"}
-                  className="text-[13px] !text-brand hover:underline"
+                  className="shrink-0 text-[13px] !text-brand hover:underline"
                 >
-                  {expiring.length > EXPIRING_PREVIEW_LIMIT ? `View all ${expiring.length}` : data.canRenewSubscriptions ? "Renew" : "View all"}
+                  {data.canRenewSubscriptions ? "Renew" : "Reports"}
                 </Link>
               )}
             </div>
@@ -282,36 +287,15 @@ export function PlatformDashboardView({ data }: { data: PlatformDashboardData })
             ) : expiring.length === 0 ? (
               <EmptyState message={`No subscriptions end in the next ${EXPIRING_WINDOW_DAYS} days.`} icon={<Icon name="autorenew" />} />
             ) : (
-              <ul>
-                {expiring.slice(0, EXPIRING_PREVIEW_LIMIT).map((row) => {
-                  const badge = dayBadge(row.daysUntilExpiry);
-                  const content = (
-                    <>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium">{row.academyName}</span>
-                        <span className="block truncate text-xs text-muted">
-                          {row.planName} plan · ends {formatDate(row.endsAt)}
-                        </span>
-                      </span>
-                      <Badge label={badge.label} tone={badge.tone} />
-                    </>
-                  );
-                  return (
-                    <li key={row.subscriptionId} className="border-t border-border">
-                      {data.canOpenAcademies ? (
-                        <Link
-                          href={`/platform/academies/${row.academyId}`}
-                          className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-2.5 text-ink no-underline transition-colors duration-150 hover:bg-app hover:no-underline"
-                        >
-                          {content}
-                        </Link>
-                      ) : (
-                        <div className="flex items-center gap-3 py-2.5">{content}</div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+              <ExpiringList
+                variant="preview"
+                viewAllHref="/platform/reports"
+                rows={expiring}
+                totalCount={expiringTotal}
+                cap={EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT}
+                linkAcademies={data.canOpenAcademies}
+                emptyMessage={`No subscriptions end in the next ${EXPIRING_WINDOW_DAYS} days.`}
+              />
             )}
           </section>
 

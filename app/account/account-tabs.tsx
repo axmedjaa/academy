@@ -7,15 +7,14 @@ export const ACCOUNT_WRAP = "mx-auto w-full max-w-[880px] px-4 py-8 sm:px-6";
 
 /**
  * Account settings / Activity / Notifications tabs (design S01 to S03),
- * underlined, at the top of each shared account page. Notifications appears
- * only where a notifications page exists (`notificationsHref`); the
- * Platform console has none yet.
+ * underlined, at the top of each shared account page. `notificationsHref`
+ * is the console's own inbox route (see `notificationsHrefFor`).
  */
-export function AccountTabs({ current, notificationsHref }: { current: AccountTab; notificationsHref: string | null }) {
+export function AccountTabs({ current, notificationsHref }: { current: AccountTab; notificationsHref: string }) {
   const tabs: { key: AccountTab; label: string; href: string }[] = [
     { key: "settings", label: "Account settings", href: "/account/security" },
     { key: "activity", label: "Activity", href: "/account/activity" },
-    ...(notificationsHref ? [{ key: "notifications" as const, label: "Notifications", href: notificationsHref }] : []),
+    { key: "notifications", label: "Notifications", href: notificationsHref },
   ];
   return (
     <nav aria-label="Account" className="mb-7 flex overflow-x-auto border-b border-border">
@@ -38,7 +37,8 @@ export function AccountTabs({ current, notificationsHref }: { current: AccountTa
   );
 }
 
-/** Notifications link for the account tabs: the Academy inbox for academy members. */
-export function notificationsHrefFor(console: "academy" | "platform" | null): string | null {
-  return console === "academy" ? "/academy/notifications" : null;
+/** Notifications link for the account tabs: the Academy inbox inside the
+ * Academy shell, the shared account inbox for everyone else. */
+export function notificationsHrefFor(console: "academy" | "platform" | null): string {
+  return console === "academy" ? "/academy/notifications" : "/account/notifications";
 }

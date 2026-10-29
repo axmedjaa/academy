@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -435,6 +435,19 @@ export async function listStudentCharges(
   return { ok: true, charges: rows.map(toChargeRecord), canManage: canManage(permissionLevel) };
 }
 
+/** Payment list status filter, as the Payments table labels rows: a posted
+ * original, a reversed original, or the linked reversal row itself. */
+export const STUDENT_PAYMENT_LIST_STATUSES = ["posted", "reversed", "reversal"] as const;
+export type StudentPaymentListStatus = (typeof STUDENT_PAYMENT_LIST_STATUSES)[number];
+export const STUDENT_PAYMENT_METHODS = ["cash", "mobile_money", "bank_transfer"] as const;
+export type StudentPaymentMethod = (typeof STUDENT_PAYMENT_METHODS)[number];
+/** Longest search text accepted; anything longer is cut, never an error. */
+export const STUDENT_PAYMENT_SEARCH_MAX = 100;
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 export type ListStudentPaymentsResult =
   | {
       ok: true;
@@ -459,7 +472,15 @@ export async function listStudentPayments(
    * fetching every payment the academy has ever recorded and slicing in
    * JS, which is what the dashboard used to do. Omit it (the default) for
    * every other existing caller — behavior there is unchanged. */
-  filters: { studentId?: string; limit?: number; branchId?: string } = {},
+  filters: {
+    studentId?: string;
+    limit?: number;
+    branchId?: string;
+    /** Student name, student number or payment reference (case-insensitive, partial). */
+    q?: string;
+    status?: StudentPaymentListStatus;
+    method?: StudentPaymentMethod;
+  } = {},
   /** Full page/pageSize pagination (distinct from `limit` above, which has
    * no `totalCount`/offset concept) — for `/academy/finance`'s own
    * Payments table, which previously fetched every payment the academy has
@@ -487,6 +508,32 @@ export async function listStudentPayments(
       ),
     );
   }
+  const q = filters.q?.trim().slice(0, STUDENT_PAYMENT_SEARCH_MAX);
+  if (q) {
+    const pattern = `%${escapeLike(q)}%`;
+    conditions.push(
+      or(
+        ilike(studentPayments.reference, pattern),
+        // Matching students of THIS academy only — the outer academy
+        // condition already scopes the payments themselves.
+        inArray(
+          studentPayments.studentId,
+          db
+            .select({ id: students.id })
+            .from(students)
+            .where(and(eq(students.academyId, academyId), or(ilike(students.fullName, pattern), ilike(students.studentNumber, pattern)))),
+        ),
+      )!,
+    );
+  }
+  if (filters.status === "posted") {
+    conditions.push(eq(studentPayments.status, "approved"), isNull(studentPayments.reversedPaymentId));
+  } else if (filters.status === "reversed") {
+    conditions.push(eq(studentPayments.status, "reversed"), isNull(studentPayments.reversedPaymentId));
+  } else if (filters.status === "reversal") {
+    conditions.push(isNotNull(studentPayments.reversedPaymentId));
+  }
+  if (filters.method) conditions.push(eq(studentPayments.method, filters.method));
   const where = and(...conditions);
 
   if (pagination) {
@@ -703,6 +750,12 @@ export async function recordStudentPayment(
     }
 
     if (data.chargeId) {
+      // Lock the charge FIRST. Inserting the payment below takes a FK
+      // key-share lock on this charge row, and recalculateStudentChargeStatus
+      // then asks for FOR UPDATE; two concurrent payments on one charge used
+      // to each hold the key-share lock and wait for the other's — a
+      // deadlock Postgres resolved by aborting one payment. Taking FOR
+      // UPDATE up front makes them queue instead.
       const [charge] = await tx
         .select({
           id: studentCharges.id,
@@ -711,7 +764,8 @@ export async function recordStudentPayment(
         })
         .from(studentCharges)
         .where(eq(studentCharges.id, data.chargeId))
-        .limit(1);
+        .limit(1)
+        .for("update");
       if (!charge || charge.academyId !== academyId || charge.studentId !== data.studentId) {
         return { kind: "charge_not_found" as const };
       }

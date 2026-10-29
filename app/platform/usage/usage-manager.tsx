@@ -1,79 +1,30 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { recalculateUsageAction } from "@/lib/subscriptions/usage-actions";
 import type { AcademyUsageOverviewRow } from "@/lib/subscriptions/usage";
-import { Badge, Button, EmptyState, ErrorMessage, Section } from "@/app/academy/_shell/ui";
+import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
+import { formatDate } from "@/lib/ui/date";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
+import { Badge, EmptyState, ErrorMessage, Section } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
+import { ROW_BTN } from "@/app/academy/_shell/page-blocks";
+import { UsageBar, formatGb } from "../_shared/usage-bar";
+import { planLabel } from "../_shared/status";
 
-interface Props {
-  rows: AcademyUsageOverviewRow[];
-}
-
-const RESOURCE_LABELS = {
-  branches: "Branches",
-  students: "Students",
-  staff: "Staff",
-  courses: "Courses",
-  storage: "Storage",
-} as const;
-
-function formatBytes(bytes: number): string {
-  if (bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const exponent = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    units.length - 1,
-  );
-  const value = bytes / 1024 ** exponent;
-  return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
-}
-
-// DESIGN.md §3 "Usage/allowance bar": "Green under 80%, amber 80–99%, red
-// at 100% (blocked)."
-function barColorClass(percentage: number): string {
-  if (percentage >= 100) return "bg-danger";
-  if (percentage >= 80) return "bg-warning";
-  return "bg-success";
-}
-
-function UsageBar({
-  label,
-  current,
-  limit,
-  formatValue,
-}: {
-  label: string;
-  current: number;
-  limit: number;
-  formatValue?: (value: number) => string;
-}) {
-  const percentage = limit > 0 ? Math.min(100, (current / limit) * 100) : 0;
-  const format = formatValue ?? ((value: number) => String(value));
-  const overLimit = current >= limit;
-
-  return (
-    <div className="mb-2">
-      <div className="mb-1 flex justify-between text-sm">
-        <span className="text-ink">{label}</span>
-        <span className={overLimit ? "font-medium text-danger" : "text-muted"}>
-          {format(current)} / {format(limit)}
-          {overLimit ? " — at limit" : ""}
-        </span>
-      </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-app">
-        <div className={`h-full rounded-full ${barColorClass(percentage)}`} style={{ width: `${percentage}%` }} />
-      </div>
-    </div>
-  );
-}
-
-export function UsageManager({ rows }: Props) {
+/**
+ * Usage (design P08): one card per academy with five allowance bars from
+ * the last usage snapshot, an "Over limit" badge and red ring when any
+ * resource is at or over its limit, and Recalculate. Display only;
+ * allowances are enforced live when records are created, never here.
+ */
+export function UsageManager({ rows }: { rows: AcademyUsageOverviewRow[] }) {
   const [isPending, startTransition] = useTransition();
   const [pendingAcademyId, setPendingAcademyId] = useState<string | null>(null);
   const [errorsByAcademy, setErrorsByAcademy] = useState<Record<string, string>>({});
 
-  function handleRecalculate(academyId: string) {
+  function handleRecalculate(academyId: string, academyName: string) {
     setPendingAcademyId(academyId);
     setErrorsByAcademy((previous) => {
       const next = { ...previous };
@@ -81,102 +32,109 @@ export function UsageManager({ rows }: Props) {
       return next;
     });
     startTransition(async () => {
-      const result = await recalculateUsageAction(academyId);
-      if (!result.ok) {
-        setErrorsByAcademy((previous) => ({
-          ...previous,
-          [academyId]: result.error.message,
-        }));
+      let message: string | null = null;
+      try {
+        const result = await recalculateUsageAction(academyId);
+        if (!result.ok) message = result.error.message;
+      } catch {
+        message = NETWORK_ERROR_MESSAGE;
+      }
+      if (message) {
+        setErrorsByAcademy((previous) => ({ ...previous, [academyId]: message }));
+        showErrorToast(message);
+      } else {
+        showSuccessToast(`Usage recalculated for ${academyName}.`);
       }
       setPendingAcademyId(null);
     });
   }
 
   if (rows.length === 0) {
-    return <EmptyState message="No academies yet." icon={<Icon name="apartment" />} />;
+    return (
+      <Section className="mb-8">
+        <EmptyState message="No academies yet." icon={<Icon name="apartment" />} />
+      </Section>
+    );
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {rows.map((row) => {
-        const anyOverLimit =
-          row.usage && row.limits
-            ? row.usage.branchCount >= row.limits.maxBranches ||
-              row.usage.activeStudentsCount >= row.limits.maxStudents ||
-              row.usage.activeStaffCount >= row.limits.maxStaff ||
-              row.usage.courseCount >= row.limits.maxCourses ||
-              row.usage.storageUsedBytes >= row.limits.maxStorageBytes
-            : false;
+    <div className="@container mb-4">
+      <ul role="list" className="grid grid-cols-1 gap-5 @[620px]:grid-cols-2 @[940px]:grid-cols-3">
+        {rows.map((row) => {
+          const { usage, limits } = row;
+          const overLimit =
+            usage && limits
+              ? usage.branchCount >= limits.maxBranches ||
+                usage.activeStudentsCount >= limits.maxStudents ||
+                usage.activeStaffCount >= limits.maxStaff ||
+                usage.courseCount >= limits.maxCourses ||
+                usage.storageUsedBytes >= limits.maxStorageBytes
+              : false;
+          const working = isPending && pendingAcademyId === row.academyId;
+          // calculatedAt crosses the server->client boundary as a string.
+          const snapshot = usage ? new Date(usage.calculatedAt) : null;
 
-        return (
-          <Section key={row.academyId} className={anyOverLimit ? "ring-1 ring-inset ring-danger/40" : ""}>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <strong className="text-ink">{row.academyName}</strong>
-                <span className="text-sm text-muted">{row.planName ?? "No active plan"}</span>
-                {anyOverLimit && <Badge label="Over limit" tone="red" />}
+          return (
+            <li
+              key={row.academyId}
+              className={`flex flex-col rounded-card border bg-surface px-5 py-4 shadow-card ${
+                overLimit ? "border-[#FCA5A5] ring-1 ring-[#FCA5A5]" : "border-border"
+              }`}
+            >
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <Link
+                    href={`/platform/academies/${row.academyId}`}
+                    className="font-semibold !text-ink no-underline [overflow-wrap:anywhere] hover:!text-brand hover:underline"
+                  >
+                    {row.academyName}
+                  </Link>
+                  <span className="mt-0.5 block text-xs text-muted [overflow-wrap:anywhere]" suppressHydrationWarning>
+                    {row.planName ? planLabel(row.planName) : "No active plan"}
+                    {snapshot &&
+                      ` · snapshot ${formatDate(snapshot)}, ${snapshot.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}`}
+                  </span>
+                </div>
+                {overLimit && (
+                  <span className="shrink-0">
+                    <Badge label="Over limit" tone="red" />
+                  </span>
+                )}
               </div>
-              <Button
-                type="button"
-                variant="secondary"
-                className="px-2.5 py-1 text-xs"
-                disabled={isPending && pendingAcademyId === row.academyId}
-                onClick={() => handleRecalculate(row.academyId)}
-              >
-                {isPending && pendingAcademyId === row.academyId ? "Recalculating..." : "Recalculate"}
-              </Button>
-            </div>
 
-            {errorsByAcademy[row.academyId] && (
-              <div className="mb-3">
-                <ErrorMessage message={errorsByAcademy[row.academyId]} />
+              {!limits && <p className="mb-3 text-sm text-muted">No subscription plan, so there are no allowances to show.</p>}
+              {limits && !usage && <p className="mb-3 text-sm text-muted">Not calculated yet. Recalculate to take a snapshot.</p>}
+
+              {usage && limits && (
+                <div className="mb-4 flex flex-col gap-3">
+                  <UsageBar label="Branches" current={usage.branchCount} limit={limits.maxBranches} />
+                  <UsageBar label="Students" current={usage.activeStudentsCount} limit={limits.maxStudents} />
+                  <UsageBar label="Staff" current={usage.activeStaffCount} limit={limits.maxStaff} />
+                  <UsageBar label="Courses" current={usage.courseCount} limit={limits.maxCourses} />
+                  <UsageBar label="Storage (GB)" current={usage.storageUsedBytes} limit={limits.maxStorageBytes} format={formatGb} />
+                </div>
+              )}
+
+              {errorsByAcademy[row.academyId] && (
+                <div className="mb-3">
+                  <ErrorMessage message={errorsByAcademy[row.academyId]} />
+                </div>
+              )}
+
+              <div className="mt-auto">
+                <button
+                  type="button"
+                  className={ROW_BTN}
+                  disabled={working}
+                  onClick={() => handleRecalculate(row.academyId, row.academyName)}
+                >
+                  {working ? "Recalculating…" : "Recalculate"}
+                </button>
               </div>
-            )}
-
-            {!row.limits && <p className="text-sm text-muted">No subscription/plan — allowance cannot be shown.</p>}
-
-            {!row.usage && <p className="text-sm text-muted">Not yet calculated — click Recalculate.</p>}
-
-            {row.usage && row.limits && (
-              <>
-                <UsageBar
-                  label={RESOURCE_LABELS.branches}
-                  current={row.usage.branchCount}
-                  limit={row.limits.maxBranches}
-                />
-                <UsageBar
-                  label={RESOURCE_LABELS.students}
-                  current={row.usage.activeStudentsCount}
-                  limit={row.limits.maxStudents}
-                />
-                <UsageBar
-                  label={RESOURCE_LABELS.staff}
-                  current={row.usage.activeStaffCount}
-                  limit={row.limits.maxStaff}
-                />
-                <UsageBar
-                  label={RESOURCE_LABELS.courses}
-                  current={row.usage.courseCount}
-                  limit={row.limits.maxCourses}
-                />
-                <UsageBar
-                  label={RESOURCE_LABELS.storage}
-                  current={row.usage.storageUsedBytes}
-                  limit={row.limits.maxStorageBytes}
-                  formatValue={formatBytes}
-                />
-                <p className="mt-2 text-xs text-muted">
-                  {/* calculatedAt crosses the server->client boundary as a
-                      serialized string despite its Date type (same as
-                      payments-manager.tsx's receivedAt) — re-wrap before
-                      formatting. */}
-                  Last calculated {new Date(row.usage.calculatedAt).toLocaleString()}
-                </p>
-              </>
-            )}
-          </Section>
-        );
-      })}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

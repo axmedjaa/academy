@@ -39,6 +39,9 @@ async function createPlan(): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/timetable-print.test.ts)",
       name: `Timetable Print Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",

@@ -229,7 +229,7 @@ export async function markNotificationRead(
   return { ok: true };
 }
 
-const MAX_BULK_MARK_READ_IDS = 500;
+export const MAX_BULK_MARK_READ_IDS = 500;
 
 const notificationIdsInputSchema = z
   .array(z.string().uuid())
