@@ -21,6 +21,7 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { createTimetableEntry } from "./timetables";
 import { getTimetablePrintData } from "./timetable-print";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -87,6 +88,8 @@ async function insertBatchDirect(academyId: string, branchId: string, courseId: 
     .insert(batches)
     .values({ academyId, branchId, courseId, name, code: `B-${randomUUID().slice(0, 8)}`, startDate: "2026-01-01" })
     .returning({ id: batches.id });
+  // Like createBatch: register the batch's course in batch_courses.
+  await courseOfBatch(row.id);
   return row.id;
 }
 
