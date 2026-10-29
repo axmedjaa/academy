@@ -67,6 +67,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci_test
+          # Account-email tests (password reset, email change) build their
+          # links from APP_URL; the email client itself is mocked.
+          APP_URL: http://localhost:3000
           REDIS_URL: redis://localhost:6379
           MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
 

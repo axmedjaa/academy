@@ -19,6 +19,7 @@ import {
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { getCourseImageKey } from "@/lib/storage/keys";
+import { courseOfBatch } from "@/lib/academies/test-batch-course";
 
 // Real Cloudflare R2 is never called from the test suite — same
 // single-boundary mock as academy-logo.test.ts/books.test.ts. None of this
@@ -182,6 +183,8 @@ async function insertBatchDirect(academyId: string, branchId: string, courseId: 
       startDate: "2026-01-01",
     })
     .returning({ id: batches.id });
+  // Like createBatch: register the batch's course in batch_courses.
+  await courseOfBatch(row.id);
   return row.id;
 }
 

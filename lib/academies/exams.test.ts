@@ -142,6 +142,8 @@ async function insertBatchDirect(academyId: string, branchId: string, courseId: 
       startDate: "2026-01-01",
     })
     .returning({ id: batches.id });
+  // Like createBatch: register the batch's course in batch_courses.
+  await courseOfBatch(row.id);
   return row.id;
 }
 
