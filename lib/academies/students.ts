@@ -1,6 +1,7 @@
 import { and, count, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
+import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 import {
   batchEnrollments,
   branches,
@@ -332,7 +333,9 @@ async function resolveStudentAccess(
 // from this phase onward" — same default/max page size and offset-based
 // shape already established by lib/audit-query.ts (Item 32a) for the first
 // paginated list in this codebase; reused verbatim here as the second.
-export const STUDENTS_DEFAULT_PAGE_SIZE = 15;
+export const STUDENTS_DEFAULT_PAGE_SIZE = LIST_PAGE_SIZE_MAX;
+/** Ceiling for server-only option loads (student pickers) and export
+ * batches — never a displayed list page, which uses the default above. */
 export const STUDENTS_MAX_PAGE_SIZE = 100;
 
 function normalizePage(page: number | undefined): number {

@@ -1,4 +1,5 @@
 import { and, asc, count, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
+import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 import { db } from "@/lib/db";
 import { batchEnrollments, batches, courses, enrollmentFeeSchedules, feePeriods, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
@@ -65,7 +66,7 @@ export async function listFeePeriodOverview(
   }
   const canManage = level === "full" || level === "manage";
   const page = Math.max(1, options.page ?? 1);
-  const pageSize = Math.min(100, Math.max(1, options.pageSize ?? 20));
+  const pageSize = Math.min(LIST_PAGE_SIZE_MAX, Math.max(1, options.pageSize ?? LIST_PAGE_SIZE_MAX));
   const empty = { ok: true as const, rows: [], totalCount: 0, page, pageSize, canManage };
 
   const scope = await resolveScope(academyId, membershipRole, actorContext.userId, undefined);

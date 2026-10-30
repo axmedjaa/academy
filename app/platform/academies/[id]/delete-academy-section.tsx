@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
+import { ROW_BTN_DANGER } from "@/app/academy/_shell/page-blocks";
 import { deleteAcademy } from "@/lib/academies/delete-academy-actions";
 import type { AcademyDeletionEligibility } from "@/lib/academies/delete-academy";
 
@@ -31,21 +32,26 @@ export function DeleteAcademySection({ eligibility }: { eligibility: AcademyDele
     if (eligibility.blockers.hasExamResults) reasons.push("exam results");
 
     return (
-      <div className="rounded-card border border-border bg-app px-4 py-3 text-sm text-muted">
-        This academy cannot be permanently deleted because it has {reasons.join(", ")}. Close it instead if it
-        should stop operating — closed academies keep their full history and stay verifiable.
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <button type="button" disabled aria-describedby="delete-why" className={ROW_BTN_DANGER}>
+          Delete academy
+        </button>
+        <p id="delete-why" className="min-w-0 flex-[1_1_220px] text-xs text-[#4B5563]">
+          Unavailable: this academy has {reasons.join(", ")}. Close it instead; closed academies keep their full history
+          and stay verifiable.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm text-muted">
-        This academy has no financial, subscription-payment, certificate, or exam-result history, so it&apos;s
-        eligible for permanent deletion.
+      <p className="text-xs text-[#4B5563]">
+        This academy has no financial, subscription-payment, certificate or exam-result history, so it can be
+        permanently deleted.
       </p>
       <ConfirmButton
-        label="Delete Academy"
+        label="Delete academy"
         variant="danger"
         className="self-start"
         title={`Permanently delete "${eligibility.academyName}"?`}

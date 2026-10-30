@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { getPlatformSettings, PLATFORM_SETTINGS_CAPABILITY } from "@/lib/platform/settings";
-import { Badge, PAGE_WRAP, PageHeader, PageMessage, Section, TableWrap, td, th, trHover } from "@/app/academy/_shell/ui";
+import { Badge, PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { NoteBlock } from "@/app/academy/_shell/page-blocks";
+import { Icon } from "@/app/academy/_shell/icons";
 
 /**
  * PLAN.md Phase 5, Item 61b — `/platform/settings` (DESIGN.md: "Global
@@ -41,67 +43,50 @@ export default async function PlatformSettingsPage() {
 
   const settings = getPlatformSettings();
 
+  const rows = [
+    {
+      label: "SMS sending",
+      hint: "When off, no SMS is sent for any academy, whatever its plan allows.",
+      on: settings.smsGloballyEnabled,
+    },
+    { label: "Registrations open", hint: "Allows new academy registrations.", on: settings.newAcademyRegistrationsOpen },
+    {
+      label: "Maintenance mode",
+      hint: "Shows a maintenance notice and blocks sign-in.",
+      on: settings.maintenanceMode,
+      warnWhenOn: true,
+    },
+  ];
+
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Platform settings"
-        description="Global, platform-wide feature switches — separate from any single academy's own plan or settings."
-      />
+      <PageHeader title="Settings" description="Platform-wide switches." />
 
-      <div role="status" className="mb-4 rounded-control border border-warning/30 bg-warning-bg px-4 py-3 text-sm text-warning">
-        These switches are currently <strong>read-only</strong>. Persisting a change requires a small schema
-        addition that hasn&apos;t landed yet — the values below reflect this server&apos;s current environment
-        configuration, not a database row that can be edited from here.
+      <div role="note" className="mb-4 flex items-start gap-3 rounded-card border border-[#FDE68A] bg-[#FFFBEB] px-4 py-3.5 text-sm text-[#92400E]">
+        <Icon name="warning" width={20} height={20} className="mt-px shrink-0" />
+        <div>
+          <p className="font-semibold">Read-only</p>
+          <p>These values come from environment configuration. Changing them from this page is not available yet.</p>
+        </div>
       </div>
 
-      <Section>
-        <TableWrap>
-          <thead>
-            <tr>
-              <th className={th}>Switch</th>
-              <th className={th}>Current value</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className={trHover}>
-              <td className={td}>
-                SMS enabled platform-wide
-                <div className="mt-0.5 text-xs text-muted">
-                  Independent of any academy&apos;s own plan-level SMS allowance.
-                </div>
-              </td>
-              <td className={td}>
-                <SwitchBadge on={settings.smsGloballyEnabled} />
-              </td>
-            </tr>
-            <tr className={trHover}>
-              <td className={td}>
-                New academy registrations open
-                <div className="mt-0.5 text-xs text-muted">
-                  Whether the platform is currently accepting new academy sign-ups.
-                </div>
-              </td>
-              <td className={td}>
-                <SwitchBadge on={settings.newAcademyRegistrationsOpen} />
-              </td>
-            </tr>
-            <tr className={trHover}>
-              <td className={td}>
-                Maintenance mode
-                <div className="mt-0.5 text-xs text-muted">Platform-wide maintenance banner/lockout.</div>
-              </td>
-              <td className={td}>
-                <SwitchBadge on={settings.maintenanceMode} activeIsWarning />
-              </td>
-            </tr>
-          </tbody>
-        </TableWrap>
-      </Section>
+      <section className="mb-4 rounded-card border border-border bg-surface px-5 shadow-card">
+        <ul role="list">
+          {rows.map((row) => (
+            <li key={row.label} className="flex items-center justify-between gap-4 border-b border-border py-4 last:border-b-0">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-ink">{row.label}</p>
+                <p className="text-[13px] text-[#374151]">{row.hint}</p>
+              </div>
+              <span className="shrink-0">
+                <Badge label={row.on ? "On" : "Off"} tone={row.on ? (row.warnWhenOn ? "amber" : "green") : "gray"} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <NoteBlock>This page is visible to the Platform Owner only.</NoteBlock>
     </div>
   );
-}
-
-function SwitchBadge({ on, activeIsWarning }: { on: boolean; activeIsWarning?: boolean }) {
-  const warning = activeIsWarning && on;
-  return <Badge label={on ? "On" : "Off"} tone={warning ? "amber" : on ? "green" : "gray"} />;
 }

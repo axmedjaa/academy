@@ -1,11 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { setEnrollmentFeeScheduleAction } from "@/lib/academies/fee-periods-actions";
+import type { FeePeriodRecord } from "@/lib/academies/fee-periods";
+import { listFeePeriodsForEnrollmentAction, setEnrollmentFeeScheduleAction } from "@/lib/academies/fee-periods-actions";
+import { previewScheduleChange } from "@/lib/ui/fee-allocation";
+import { formatDate } from "@/lib/ui/date";
 import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
 import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
-import { PAYMENT_PLAN_OPTIONS, describePaymentPlan } from "@/lib/ui/payment-plan";
+import { describePaymentPlan } from "@/lib/ui/payment-plan";
+import { PaymentPlanField } from "@/app/academy/_shell/payment-plan-field";
 import { showSuccessToast } from "@/lib/ui/toast";
 import { ROW_BTN } from "@/app/academy/_shell/page-blocks";
 import { ActionDialog, DField, controlClass, invalidProps, type DesignFormRule } from "@/app/academy/_shell/design-form";
@@ -13,9 +17,13 @@ import { ActionDialog, DField, controlClass, invalidProps, type DesignFormRule }
 /**
  * Change schedule (design `schedule` form): payment plan and total fee for
  * one enrollment, through the existing audited `setEnrollmentFeeSchedule`.
- * Once an installment has started the server keeps it, carries the unpaid
- * balance and picks the next start date itself, so the total is shown
- * locked to that balance and the start date field is not offered.
+ * Once an installment has started (or been paid) the server keeps it with
+ * its own amount, carries the part of the plan no kept installment already
+ * charges, and picks the next start date itself, so the amount is shown
+ * locked to that figure (lib/ui/fee-allocation.ts mirrors the rule, from
+ * the enrollment's periods, loaded when the dialog opens) and the start
+ * date field is not offered. When every installment is kept the change is
+ * refused rather than charging beyond the course fee.
  */
 export function ChangeScheduleButton({
   enrollmentId,
@@ -24,6 +32,7 @@ export function ChangeScheduleButton({
   schedule,
   paidCents,
   hasStarted,
+  today,
 }: {
   enrollmentId: string;
   studentName: string;
@@ -31,14 +40,39 @@ export function ChangeScheduleButton({
   schedule: { intervalMonths: number; amountCents: number; currency: string; anchorDate: string };
   paidCents: number;
   hasStarted: boolean;
+  /** The academy's today (YYYY-MM-DD), as the server judges "started". */
+  today: string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const locked = hasStarted;
-  const carried = Math.max(0, schedule.amountCents - paidCents);
+  const [intervalMonths, setIntervalMonths] = useState(schedule.intervalMonths);
+  const [periods, setPeriods] = useState<FeePeriodRecord[] | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    listFeePeriodsForEnrollmentAction(enrollmentId).then((result) => {
+      if (!cancelled) setPeriods(result.ok ? result.periods : []);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, enrollmentId]);
+
+  const preview = periods
+    ? previewScheduleChange({
+        current: { amountCents: schedule.amountCents, anchorDate: schedule.anchorDate },
+        periods,
+        today,
+        amountCents: schedule.amountCents,
+        anchorDate: schedule.anchorDate,
+        count: intervalMonths,
+      })
+    : null;
+  const locked = preview ? preview.dateMoved : hasStarted;
+  const NOTHING_LEFT =
+    "Every installment of this plan has started or been paid, so there is nothing left to reschedule. Changing it would charge more than the course fee.";
 
   const rules: DesignFormRule[] = [
-    { name: "intervalMonths", label: "Payment plan", required: true, kind: "select" },
     ...(locked
       ? []
       : [
@@ -64,7 +98,7 @@ export function ChangeScheduleButton({
         open={open}
         onOpenChange={setOpen}
         title="Change fee schedule"
-        description="Total is the full fee. Remaining balance carries over."
+        description="Started or paid installments stay as they are. The rest of the plan is spread over the new installments."
         summary={[
           { label: "Student", value: studentName },
           { label: "Batch", value: batchLabel },
@@ -75,13 +109,14 @@ export function ChangeScheduleButton({
         pendingLabel="Saving…"
         rules={rules}
         run={async (data) => {
+          if (preview?.nothingToReschedule) return NOTHING_LEFT;
           try {
             const result = await setEnrollmentFeeScheduleAction({
               enrollmentId,
               intervalMonths: Number(data.get("intervalMonths")),
-              // When locked the server overrides both with the carried balance
+              // When locked the server overrides both with the carried amount
               // and the next unstarted period; these are only placeholders.
-              amountCents: locked ? Math.max(1, carried) : dollarsToCents(String(data.get("amountDollars") ?? ""))!,
+              amountCents: locked ? Math.max(1, preview?.totalCents ?? 1) : dollarsToCents(String(data.get("amountDollars") ?? ""))!,
               anchorDate: locked ? schedule.anchorDate : String(data.get("anchorDate") ?? ""),
             });
             return result.ok ? null : (result.error?.message ?? "The schedule couldn't be saved.");
@@ -97,29 +132,49 @@ export function ChangeScheduleButton({
       >
         {({ errors, blur }) => (
           <>
-            <DField label="Payment plan" name="intervalMonths" required error={errors.intervalMonths}>
-              <select
-                name="intervalMonths"
-                defaultValue={String(schedule.intervalMonths)}
-                onBlur={blur("intervalMonths")}
-                className={controlClass(Boolean(errors.intervalMonths))}
-                {...invalidProps("intervalMonths", errors.intervalMonths)}
-              >
-                {PAYMENT_PLAN_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </DField>
+            <PaymentPlanField name="intervalMonths" value={intervalMonths} onChange={setIntervalMonths} />
             {locked ? (
-              <DField
-                label="Remaining balance"
-                name="carried"
-                hint="Installments have already started, so the unpaid balance carries into the new plan from the next installment."
-              >
-                <input type="text" value={formatMoney(carried, schedule.currency)} readOnly disabled className={controlClass(false)} />
-              </DField>
+              <>
+                <DField
+                  label="Amount still to schedule"
+                  name="carried"
+                  full
+                  hint="Started or paid installments stay as they are, with their own amounts and balances. The rest of the plan carries into the new installments, so the total owed doesn't change."
+                >
+                  <input
+                    type="text"
+                    value={preview ? formatMoney(preview.totalCents, schedule.currency) : "Loading…"}
+                    readOnly
+                    disabled
+                    className={controlClass(false)}
+                  />
+                </DField>
+                {preview && (
+                  <div className="col-span-full rounded-lg border border-border bg-[#FAFBFC] p-3 text-[13px]" aria-live="polite">
+                    {preview.nothingToReschedule ? (
+                      <p role="alert" className="text-[#7A4B00]">
+                        {NOTHING_LEFT}
+                      </p>
+                    ) : (
+                      <>
+                        <div className="mb-1.5 font-semibold text-ink">New installments (preview, not saved)</div>
+                        <ul className="divide-y divide-border">
+                          {preview.installments.map((installment, index) => (
+                            <li key={installment.date} className="flex justify-between gap-3 py-1.5">
+                              <span className="text-[#374151]">
+                                {index + 1}. due {formatDate(installment.date)}
+                              </span>
+                              <span className="font-semibold tabular-nums text-ink">
+                                {formatMoney(installment.amountCents, schedule.currency)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 <DField label="Total fee (USD)" name="amountDollars" required error={errors.amountDollars}>

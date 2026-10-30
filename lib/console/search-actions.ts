@@ -1,12 +1,13 @@
 "use server";
 
-import { desc, eq, ilike } from "drizzle-orm";
+import { desc, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { academies, subscriptionPayments } from "@/lib/db/schema";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { searchStudents } from "@/lib/academies/students";
+import { formatCalendarDate } from "@/lib/ui/date";
 
 /**
  * Header search for the console shell (design: top-bar search with a
@@ -81,7 +82,8 @@ export async function searchPlatformConsoleAction(rawQuery: string): Promise<Con
           })
           .from(subscriptionPayments)
           .innerJoin(academies, eq(academies.id, subscriptionPayments.academyId))
-          .where(ilike(academies.name, pattern))
+          // Same match as the Payments page's own search: academy name or payment id.
+          .where(or(ilike(academies.name, pattern), ilike(sql`${subscriptionPayments.id}::text`, pattern)))
           .orderBy(desc(subscriptionPayments.receivedAt))
           .limit(4)
       : Promise.resolve([]),
@@ -98,8 +100,9 @@ export async function searchPlatformConsoleAction(rawQuery: string): Promise<Con
     ...paymentRows.map((row) => ({
       key: `payment-${row.id}`,
       label: `${row.academyName} · ${(row.amountCents / 100).toFixed(2)} ${row.currency}`,
-      sub: `Payment · ${row.status} · ${row.receivedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
-      href: "/platform/payments",
+      sub: `Payment ${row.id.slice(0, 8).toUpperCase()} · ${row.status} · ${formatCalendarDate(row.receivedAt)}`,
+      // Opens Payments filtered to this one payment (its search matches the id).
+      href: `/platform/payments?q=${encodeURIComponent(row.id)}`,
       icon: "payments",
     })),
   ];

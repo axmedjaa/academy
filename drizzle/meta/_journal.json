@@ -253,6 +253,13 @@
       "when": 1792880000000,
       "tag": "0035_certificate_course",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792970000000,
+      "tag": "0036_student_course_refunds",
+      "breakpoints": true
     }
   ]
 }

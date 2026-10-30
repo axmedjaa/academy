@@ -36,6 +36,7 @@ export async function markNotificationReadAction(
   }
 
   revalidatePath("/academy/notifications");
+  revalidatePath("/account/notifications");
   return { ok: true };
 }
 
@@ -57,5 +58,6 @@ export async function markNotificationsReadAction(
   }
 
   revalidatePath("/academy/notifications");
+  revalidatePath("/account/notifications");
   return { ok: true, markedCount: result.markedCount };
 }

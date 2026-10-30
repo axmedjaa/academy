@@ -2975,3 +2975,77 @@ export const bookSaleRefunds = pgTable(
     check("book_sale_refunds_returned_quantity_nonnegative", sql`${table.returnedQuantity} >= 0`),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Course-withdrawal refunds (migration 0036). A refund is money the academy
+// returned (manually, outside the system) when a student withdrew from a
+// course — recorded as its own row, never as a student payment (it is not
+// money received) and never as a reversal (that means "entered in error").
+// The cap per enrollment is net paid for that course minus refunds already
+// recorded (lib/academies/course-refund-rules.ts); the server derives the
+// academy, branch, student and the original payments it came out of from
+// the locked enrollment — none of them is taken from the client.
+// ---------------------------------------------------------------------------
+export const studentCourseRefunds = pgTable(
+  "student_course_refunds",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    // The batch's branch at refund time (enrollments have no branch column).
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id),
+    enrollmentId: uuid("enrollment_id")
+      .notNull()
+      .references(() => batchEnrollments.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    amountCents: integer("amount_cents").notNull(),
+    currency: text("currency").notNull(),
+    method: studentPaymentMethodEnum("method").notNull(),
+    // When the money was returned (operator-entered), distinct from createdAt.
+    refundedAt: timestamp("refunded_at", { withTimezone: true }).notNull(),
+    reference: text("reference"),
+    reason: text("reason").notNull(),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    // One per dialog submission: a retried request inserts at most once.
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    unique("student_course_refunds_idempotency").on(table.academyId, table.idempotencyKey),
+    index("student_course_refunds_enrollment_idx").on(table.enrollmentId),
+    index("student_course_refunds_student_idx").on(table.studentId),
+    index("student_course_refunds_academy_date_idx").on(table.academyId, table.refundedAt),
+    check("student_course_refunds_amount_cents_positive", sql`${table.amountCents} > 0`),
+    check("student_course_refunds_reason_length", sql`length(btrim(${table.reason})) BETWEEN 1 AND 500`),
+    check("student_course_refunds_reference_length", sql`${table.reference} IS NULL OR length(${table.reference}) <= 200`),
+  ],
+);
+
+/** Which original payments a refund came out of, and how much from each. */
+export const studentCourseRefundPayments = pgTable(
+  "student_course_refund_payments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    refundId: uuid("refund_id")
+      .notNull()
+      .references(() => studentCourseRefunds.id),
+    studentPaymentId: uuid("student_payment_id")
+      .notNull()
+      .references(() => studentPayments.id),
+    amountCents: integer("amount_cents").notNull(),
+  },
+  (table) => [
+    unique("student_course_refund_payments_once").on(table.refundId, table.studentPaymentId),
+    index("student_course_refund_payments_payment_idx").on(table.studentPaymentId),
+    check("student_course_refund_payments_amount_cents_positive", sql`${table.amountCents} > 0`),
+  ],
+);

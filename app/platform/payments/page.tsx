@@ -2,17 +2,20 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import {
+  getSubscriptionPaymentFilterOptions,
   listAcademySubscriptionOptions,
-  listSubscriptionPaymentsPage,
+  listFilteredSubscriptionPaymentsPage,
+  parsePaymentFilters,
 } from "@/lib/subscriptions/payments";
 import { PaymentsManager } from "./payments-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { NoteBlock } from "@/app/academy/_shell/page-blocks";
 import { PaginationNav } from "@/components/pagination-nav";
-import { parsePageParam } from "@/lib/ui/pagination";
+import { LIST_PAGE_SIZE_MAX, parsePageParam } from "@/lib/ui/pagination";
 
 const RECORD_PAYMENT_CAPABILITY = "recordSubscriptionPayment";
 const VERIFY_PAYMENT_CAPABILITY = "verifySubscriptionPayment";
-const PAGE_SIZE = 15;
+const PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 
 // PLAN.md Item 25 / DESIGN.md §8: "/platform/payments... grantable to
 // platform_admin [for recording]. Row actions: Verify / Reject / Reverse...
@@ -61,23 +64,45 @@ export default async function PlatformPaymentsPage({
   // thousands of rows. The picker was never designed to show thousands of
   // options anyway — capping it is a query-cost fix, not a feature change.
   const RECORD_PAYMENT_PICKER_LIMIT = 200;
-  const [{ payments, totalCount }, subscriptionOptions] = await Promise.all([
-    listSubscriptionPaymentsPage(page, PAGE_SIZE),
+  // Design P07 filter bar: search, status, method, academy and month, all
+  // URL params applied in SQL so paging stays server-side.
+  const filters = parsePaymentFilters(params);
+  const [{ payments, totalCount, overallCount, verifiedTotals }, subscriptionOptions, filterOptions] = await Promise.all([
+    listFilteredSubscriptionPaymentsPage(filters, page, PAGE_SIZE),
     listAcademySubscriptionOptions({ limit: RECORD_PAYMENT_PICKER_LIMIT }),
+    getSubscriptionPaymentFilterOptions(),
   ]);
+  // Academy names for this page's rows (the picker is capped, so look the
+  // page's own subscriptions up rather than relying on it).
+  const pageOptions =
+    payments.length > 0
+      ? await listAcademySubscriptionOptions({ subscriptionIds: [...new Set(payments.map((payment) => payment.subscriptionId))] })
+      : [];
+  const academyNames = Object.fromEntries(pageOptions.map((option) => [option.academyId, option.academyName]));
+  const first = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const last = Math.min(totalCount, page * PAGE_SIZE);
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Subscription payments"
-        description="Record incoming subscription payments and, if you're the platform owner, verify, reject, or reverse them."
-      />
+      <PageHeader title="Payments" description="Subscription payments recorded for academies." />
       <PaymentsManager
         payments={payments}
+        academyNames={academyNames}
         subscriptionOptions={subscriptionOptions}
         canVerify={canVerify}
+        filterOptions={filterOptions}
+        filtersActive={Object.keys(filters).length > 0}
+        matchingCount={totalCount}
+        overallCount={overallCount}
+        verifiedTotals={verifiedTotals}
       />
-      <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} />
+      <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} showTotal={false} />
+      {totalCount > 0 && (
+        <NoteBlock>
+          Rows {first}–{last} of {totalCount.toLocaleString("en-US")}. Reversing a payment marks the same row Reversed; no linked record is created.
+          {canVerify ? "" : " Verifying, rejecting and reversing are done by the platform owner."}
+        </NoteBlock>
+      )}
     </div>
   );
 }

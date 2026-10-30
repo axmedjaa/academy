@@ -111,6 +111,9 @@ function planValues(overrides: Partial<typeof subscriptionPlans.$inferInsert> = 
     emailEnabled: true,
     certificateEnabled: false,
     reportsLevel: "basic" as const,
+    // Registration needs a selectable plan; inactive cases override this.
+    isActive: true,
+    description: "Automated test fixture (lib/academies/register.test.ts)",
     ...overrides,
   };
 }

@@ -239,11 +239,28 @@ export const ROW_BTN_DANGER =
 
 /** Design table `chip`: a tinted pill with a leading icon (finance
  * categories, payment methods). */
-export function Chip({ label, icon, tone = "slate" }: { label: string; icon: string; tone?: keyof typeof SIDE_TONE }) {
+/**
+ * Design `chip`: icon + label pill. Free-text labels (categories) wrap only
+ * between words — `overflow-wrap: break-word` still breaks a word too long
+ * for its card, but unlike `anywhere` it doesn't let a table column shrink
+ * to one character (which split "Mobile money" letter by letter). `nowrap`
+ * keeps short fixed labels (payment methods) on one line, as designed.
+ */
+export function Chip({
+  label,
+  icon,
+  tone = "slate",
+  nowrap = false,
+}: {
+  label: string;
+  icon: string;
+  tone?: keyof typeof SIDE_TONE;
+  nowrap?: boolean;
+}) {
   return (
     <span className={`inline-flex max-w-full items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold ${SIDE_TONE[tone]}`}>
       <Icon name={icon} width={15} height={15} className="shrink-0" />
-      <span className="min-w-0 [overflow-wrap:anywhere]">{label}</span>
+      <span className={`min-w-0 ${nowrap ? "whitespace-nowrap" : "[overflow-wrap:break-word]"}`}>{label}</span>
     </span>
   );
 }

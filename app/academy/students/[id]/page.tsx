@@ -1,6 +1,10 @@
 import { redirect } from "next/navigation";
+import { formatDate } from "@/lib/ui/date";
+import { describeAllocations } from "@/lib/ui/payment-allocations";
+import { getRefundedAmountsForPayments, listStudentRefunds } from "@/lib/academies/course-refunds";
+import type { RefundHistoryRow } from "./payment-history";
 import { getAuthContext } from "@/lib/auth/auth-context";
-import { getStudent, getStudentPhotoUrl } from "@/lib/academies/students";
+import { getStudent, getStudentDeletionEligibility, getStudentPhotoUrl } from "@/lib/academies/students";
 import {
   getEnrollmentFeeSchedule,
   getEnrollmentPaymentSummary,
@@ -15,7 +19,13 @@ import { listBranches } from "@/lib/academies/branches";
 import { getEnrollBatchOptions } from "@/lib/academies/enroll-options";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { ACADEMY_STUDENTS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
+import { listEnrollmentWithdrawals } from "@/lib/academies/batch-assignments";
+import { listTimetableForBatches } from "@/lib/academies/timetables";
 import { StudentDetail, type PaymentHistoryRow } from "./student-detail";
+import type { EnrollmentDetail } from "./student-overview";
+
+const DAY_SHORT: Record<string, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+const DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 /**
  * `/academy/students/[id]` — the student-centered payment workflow's home:
@@ -104,6 +114,7 @@ export default async function StudentDetailPage({
   // the recorder's current role in this academy (e.g. "Manager"), falling
   // back to their email if their membership no longer exists.
   const recorderIds = payments.map((payment) => payment.recordedBy);
+  const refundedByPayment = await getRefundedAmountsForPayments(student.academyId, payments.map((payment) => payment.id));
   const recorderLabelById = await resolveStaffLabels(student.academyId, recorderIds);
 
   const historyRows: PaymentHistoryRow[] = payments
@@ -118,8 +129,18 @@ export default async function StudentDetailPage({
         : charge
           ? `Charge: ${charge.description}`
           : "—";
+      const appliesTo = feePeriodEntry
+        ? describeAllocations(feePeriodEntry.periods).label
+        : charge
+          ? `Charge: ${charge.description}`
+          : "Not linked to a fee period or charge";
+      const appliesToDetail = feePeriodEntry
+        ? feePeriodEntry.periods.map((period) => `${formatDate(period.periodStart)} – ${formatDate(period.periodEnd)}`).join(", ")
+        : null;
       return {
         paymentId: payment.id,
+        appliesTo,
+        appliesToDetail,
         receivedAt: payment.receivedAt,
         amountCents: payment.amountCents,
         currency: payment.currency,
@@ -132,17 +153,96 @@ export default async function StudentDetailPage({
         recordedBy: payment.recordedBy,
         receiptId: receipt?.id ?? null,
         receiptNumber: receipt?.receiptNumber ?? null,
+        refundedCents: refundedByPayment.get(payment.id) ?? 0,
       };
     })
     .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
 
   // Header and tab data: branch name, edit rights (same gate updateStudent
   // checks) and the enroll options (scoped batches with their courses).
-  const [branchesResult, enrollOptions, access] = await Promise.all([
+  const pastEnrollments = enrollments.filter((enrollment) => enrollment.status !== "active");
+  const [branchesResult, enrollOptions, access, timetableResult, withdrawals, refundsResult] = await Promise.all([
     listBranches(context),
     getEnrollBatchOptions(context),
     checkAcademyAccessForContext(context),
+    listTimetableForBatches(context, activeEnrollments.map((enrollment) => enrollment.batchId)),
+    listEnrollmentWithdrawals(context, pastEnrollments.map((enrollment) => enrollment.id)),
+    listStudentRefunds(context, studentId),
   ]);
+  // Refunds recorded on withdrawal (their own records, never payments).
+  const refunds = refundsResult.ok ? refundsResult.refunds : null;
+  const refundRecorderLabels = refunds?.length
+    ? await resolveStaffLabels(student.academyId, refunds.map((refund) => refund.recordedBy))
+    : new Map<string, string>();
+  const refundRows: RefundHistoryRow[] = (refunds ?? []).map((refund) => ({
+    id: refund.id,
+    refundedAt: refund.refundedAt,
+    appliesTo: `${refund.courseName} · ${refund.batchName}`,
+    method: refund.method,
+    amountCents: refund.amountCents,
+    currency: refund.currency,
+    reference: refund.reference,
+    reason: refund.reason,
+    recordedByLabel: refundRecorderLabels.get(refund.recordedBy) ?? "Staff member",
+    paymentCount: refund.payments.length,
+  }));
+  // Same gate and rules as the Students list's Delete: refused (null here)
+  // for roles that may not delete; otherwise eligible or the reasons why not.
+  const deletionResult = await getStudentDeletionEligibility(context, studentId);
+  const deletion = deletionResult.ok
+    ? { eligible: deletionResult.eligibility.eligible, reasons: deletionResult.eligibility.reasons }
+    : null;
+
+  // Design A02 course tables. Enrolled: the weekly schedule and trainer of
+  // each course ("Mon/Wed 09:00 to 11:00"). Past: what was paid and
+  // reversed for that course (from its fee-period allocations) and when /
+  // why it was withdrawn (from the withdraw audit entry).
+  const enrollmentDetails: Record<string, EnrollmentDetail> = {};
+  for (const enrollment of activeEnrollments) {
+    if (!timetableResult.ok) {
+      enrollmentDetails[enrollment.id] = { schedule: null, trainers: null };
+      continue;
+    }
+    const slots = timetableResult.entries.filter(
+      (entry) => entry.batchId === enrollment.batchId && entry.courseId === enrollment.courseId,
+    );
+    const byTime = new Map<string, string[]>();
+    for (const slot of [...slots].sort((a, b) => DAY_ORDER.indexOf(a.dayOfWeek) - DAY_ORDER.indexOf(b.dayOfWeek))) {
+      const range = `${slot.startTime.slice(0, 5)} to ${slot.endTime.slice(0, 5)}`;
+      byTime.set(range, [...(byTime.get(range) ?? []), DAY_SHORT[slot.dayOfWeek] ?? slot.dayOfWeek]);
+    }
+    enrollmentDetails[enrollment.id] = {
+      schedule: [...byTime].map(([range, days]) => `${days.join("/")} ${range}`).join(", "),
+      trainers: [...new Set(slots.map((slot) => slot.trainerName).filter((name): name is string => Boolean(name)))],
+    };
+  }
+  const historyRowsForPast = feePeriodHistoryResult.ok ? feePeriodHistoryResult.rows : null;
+  for (const enrollment of pastEnrollments) {
+    const withdrawal = withdrawals.get(enrollment.id);
+    let paidCents: number | null = null;
+    let currency: string | null = null;
+    if (historyRowsForPast) {
+      paidCents = 0;
+      for (const row of historyRowsForPast) {
+        const allocated = row.periods
+          .filter((period) => period.enrollmentId === enrollment.id)
+          .reduce((n, period) => n + period.amountCents, 0);
+        if (allocated === 0) continue;
+        currency = currency ?? row.currency;
+        if (row.status === "approved") paidCents += allocated;
+      }
+    }
+    // Refunded: actual refund records for this enrollment (never reversals).
+    const enrollmentRefunds = refunds?.filter((refund) => refund.enrollmentId === enrollment.id) ?? null;
+    if (enrollmentRefunds?.length) currency = currency ?? enrollmentRefunds[0].currency;
+    enrollmentDetails[enrollment.id] = {
+      paidCents,
+      refundedCents: enrollmentRefunds ? enrollmentRefunds.reduce((n, refund) => n + refund.amountCents, 0) : null,
+      currency,
+      withdrawnAt: withdrawal?.withdrawnAt ?? null,
+      withdrawReason: withdrawal?.reason ?? null,
+    };
+  }
   const branchName =
     (branchesResult.ok ? branchesResult.branches.find((b) => b.id === student.branchId)?.name : undefined) ?? "Branch";
   const studentsLevel = access.level === "blocked" ? "none" : getAcademyPermissionLevel(access.membershipRole, ACADEMY_STUDENTS_ACTION);
@@ -160,8 +260,11 @@ export default async function StudentDetailPage({
         enrollBatches={enrollOptions.batches}
         enrollments={enrollments}
         enrollmentSummaries={enrollmentSummaries}
+        enrollmentDetails={enrollmentDetails}
+        deletion={deletion}
         charges={charges}
         historyRows={historyRows}
+        refundRows={refundRows}
         paymentsSectionVisible={paymentsSectionVisible}
         canManagePayments={canManagePayments}
         canReversePayments={canReversePayments}

@@ -52,6 +52,9 @@ async function createPlan(): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/timetables.test.ts)",
       name: `Timetables Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",
@@ -122,6 +125,8 @@ async function insertBatchDirect(
       startDate: "2026-01-01",
     })
     .returning({ id: batches.id });
+  // Like createBatch: register the batch's course in batch_courses.
+  await courseOfBatch(row.id);
   return row.id;
 }
 

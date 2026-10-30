@@ -11,8 +11,9 @@ import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
 import { getBooksOverview } from "../../books-data";
 import { SaleActions } from "../../books-client";
+import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 
 const buyerOf = (sale: BookSaleListRow) =>
   sale.buyerType === "student" ? (sale.studentName ?? "Student") : (sale.otherBuyerName ?? "Other person");

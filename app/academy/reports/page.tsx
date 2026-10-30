@@ -395,6 +395,16 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
                   hint: `${studentPayments.paymentsReceived.count} posted`,
                   icon: "payments",
                 },
+                ...(studentPayments.refundsRecorded.count > 0
+                  ? [
+                      {
+                        label: "Course refunds",
+                        value: moneyLine(studentPayments.refundsRecorded.totalsByCurrency),
+                        hint: `${studentPayments.refundsRecorded.count} recorded on withdrawal`,
+                        icon: "autorenew",
+                      },
+                    ]
+                  : []),
               ]
             : []),
           ...(income.visible

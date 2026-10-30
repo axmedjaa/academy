@@ -3,7 +3,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { listSubscriptionPlans } from "@/lib/subscriptions/plans";
 import { RegisterAcademyForm } from "./register-academy-form";
-import { PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { BackLink, PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 
 const REGISTER_ACADEMY_CAPABILITY = "registerAcademy";
 
@@ -39,12 +39,11 @@ export default async function RegisterAcademyPage() {
   const activePlans = plans.filter((plan) => plan.isActive);
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6">
-      <PageHeader
-        title="Register a new academy"
-        description="Creates the academy profile, its owner account, a default branch, and its initial subscription in one step."
-      />
-      <RegisterAcademyForm activePlans={activePlans} />
+    <div className={PAGE_WRAP}>
+      <BackLink href="/platform/academies" label="Back to academies" />
+      <div className="mx-auto w-full max-w-[720px]">
+        <RegisterAcademyForm activePlans={activePlans} />
+      </div>
     </div>
   );
 }

@@ -45,7 +45,6 @@ import { categoryChip, methodChip } from "./finance-chips";
  * rule up front (its title says why).
  */
 
-const SELF_REVERSAL = "You can't reverse or adjust a record you entered yourself. Ask another Manager.";
 
 const REASON_RULES: DesignFormRule[] = [{ name: "reason", label: "Reason", required: true }];
 const ADJUST_RULES: DesignFormRule[] = [
@@ -76,15 +75,21 @@ function CorrectionDialog({
   onClose,
   reverse,
   adjust,
+  switchable = false,
 }: {
   correction: Correction | null;
   noun: "payment" | "income" | "expense";
   onClose: () => void;
   reverse: (id: string, reason: string) => Promise<string | null>;
   adjust: (id: string, reason: string, cents: number) => Promise<string | null>;
+  /** One "Reverse" row action (design `pay` table) that offers both
+   * corrections inside the dialog: reverse in full, or adjust the amount. */
+  switchable?: boolean;
 }) {
   const router = useRouter();
-  const adjusting = correction?.mode === "adjust";
+  const [chosen, setChosen] = useState<{ id: string; mode: Correction["mode"] } | null>(null);
+  const mode = switchable && chosen && chosen.id === correction?.id ? chosen.mode : correction?.mode;
+  const adjusting = mode === "adjust";
   return (
     <ActionDialog
       open={correction !== null}
@@ -115,6 +120,33 @@ function CorrectionDialog({
     >
       {({ errors, blur }) => (
         <>
+          {switchable && correction && (
+            <DField label="Correction" name="correctionMode" group full>
+              <span role="radiogroup" aria-label="Correction" className="flex flex-wrap gap-2">
+                {(
+                  [
+                    ["reverse", "Reverse in full"],
+                    ["adjust", "Adjust amount"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <label
+                    key={value}
+                    className="inline-flex min-h-11 cursor-pointer items-center rounded-lg border border-border-strong bg-surface px-3.5 text-sm font-semibold text-ink transition-colors duration-150 hover:bg-app has-[:checked]:border-brand has-[:checked]:bg-brand-tint has-[:checked]:text-brand has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand/30"
+                  >
+                    <input
+                      type="radio"
+                      name="correctionMode"
+                      value={value}
+                      checked={mode === value}
+                      onChange={() => setChosen({ id: correction.id, mode: value })}
+                      className="sr-only"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </span>
+            </DField>
+          )}
           {adjusting && (
             <DField label="Corrected amount (USD)" name="amountDollars" required error={errors.amountDollars}>
               <input
@@ -135,14 +167,14 @@ function CorrectionDialog({
   );
 }
 
-function CorrectionButtons({ self, onReverse, onAdjust }: { self: boolean; onReverse: () => void; onAdjust: () => void }) {
+function CorrectionButtons({ onReverse, onAdjust }: { onReverse: () => void; onAdjust: () => void }) {
   return (
     <>
-      <button type="button" className={ROW_BTN_DANGER} disabled={self} title={self ? SELF_REVERSAL : undefined} onClick={onReverse}>
+      <button type="button" className={ROW_BTN_DANGER} onClick={onReverse}>
         <Icon name="autorenew" width={16} height={16} />
         Reverse
       </button>
-      <button type="button" className={ROW_BTN} disabled={self} title={self ? SELF_REVERSAL : undefined} onClick={onAdjust}>
+      <button type="button" className={ROW_BTN} onClick={onAdjust}>
         Adjust
       </button>
     </>
@@ -164,8 +196,20 @@ export interface PaymentRow {
   photoUrl: string | null;
   recordedByName: string;
   appliesTo: string;
+  /** e.g. "3 fee periods" when one payment was split across several. */
+  appliesToDetail?: string | null;
   receipt: { id: string; number: string } | null;
+  /** Refunded out of this payment on a course withdrawal. */
+  refundedCents?: number;
 }
+
+/** Design `pStatus`: Posted / Reversed (and the legacy approval states). */
+const PAYMENT_STATUS_LABEL: Record<string, string> = {
+  approved: "Posted",
+  reversed: "Reversed",
+  pending_approval: "Pending approval",
+  rejected: "Rejected",
+};
 
 export function PaymentsTable({
   rows,
@@ -204,12 +248,16 @@ export function PaymentsTable({
 
   return (
     <>
-      <DataTable stackBelow={900} footer={footer}>
+      {/* Design `pay` table columns: 64px 1.5fr 1fr 150px 90px 100px 220px.
+          Its own card rule (px total + 110 per fr + gaps + padding) puts the
+          switch to cards at ~1,030px of content, hence stackBelow 1040. */}
+      <DataTable stackBelow={1040} footer={footer}>
         <thead>
           <tr>
-            <th className={rtTh}>Date</th>
-            <th className={rtTh}>Student</th>
-            <th className={rtTh}>Applies to</th>
+            <th className={`${rtTh} whitespace-nowrap`}>Date</th>
+            {/* Design 1.5fr : 1fr between Student and Applies to. */}
+            <th className={`${rtTh} w-[24%]`}>Student</th>
+            <th className={`${rtTh} w-[16%] whitespace-nowrap`}>Applies to</th>
             <th className={rtTh}>Method</th>
             <th className={`${rtTh} text-right`}>Amount</th>
             <th className={rtTh}>Status</th>
@@ -219,7 +267,7 @@ export function PaymentsTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ payment, studentName, studentNumber, photoUrl, recordedByName, appliesTo, receipt }) => {
+          {rows.map(({ payment, studentName, photoUrl, recordedByName, appliesTo, appliesToDetail, receipt, refundedCents = 0 }) => {
             const reversalRow = payment.reversedPaymentId !== null;
             const posted = payment.status === "approved" && !reversalRow;
             const self = payment.recordedBy === currentUserId;
@@ -232,29 +280,37 @@ export function PaymentsTable({
                 <td className={rtTd} data-label="Student">
                   <PersonCell
                     name={studentName}
-                    sub={`${studentNumber ? `${studentNumber} · ` : ""}Recorded by ${recordedByName}`}
+                    sub={`Recorded by ${recordedByName}`}
                     href={`/academy/students/${payment.studentId}`}
                     photoUrl={photoUrl}
                   />
                 </td>
-                <td className={rtTd} data-label="Applies to">
-                  {appliesTo}
-                  {payment.reference && <span className="block text-xs text-muted">Ref. {payment.reference}</span>}
+                <td className={`${rtTd} break-words`} data-label="Applies to">
+                  <span className="flex min-w-0 flex-col">
+                    <span>{appliesTo}</span>
+                    {appliesToDetail && <span className="text-xs text-muted">{appliesToDetail}</span>}
+                    {payment.reference && <span className="break-all text-xs text-muted">Ref. {payment.reference}</span>}
+                    {refundedCents > 0 && (
+                      <span className="text-xs font-semibold text-[#9A5B00]">
+                        {formatMoney(refundedCents, payment.currency)} refunded on withdrawal
+                      </span>
+                    )}
+                  </span>
                 </td>
-                <td className={rtTd} data-label="Method">
+                <td className={`${rtTd} whitespace-nowrap`} data-label="Method">
                   {methodChip(payment.method)}
                 </td>
-                <td className={`${rtTd} text-right font-semibold tabular-nums`} data-label="Amount">
+                <td className={`${rtTd} whitespace-nowrap text-right font-semibold tabular-nums`} data-label="Amount">
                   {formatMoney(payment.amountCents, payment.currency)}
                 </td>
-                <td className={rtTd} data-label="Status">
+                <td className={`${rtTd} whitespace-nowrap`} data-label="Status">
                   <Badge
-                    label={reversalRow ? "Reversal" : payment.status === "approved" ? "Posted" : payment.status}
+                    label={reversalRow ? "Reversal" : (PAYMENT_STATUS_LABEL[payment.status] ?? payment.status)}
                     tone={reversalRow ? "slate" : getStatusTone(payment.status)}
                   />
                 </td>
                 <td className={`${rtTd} text-right`} data-actions="">
-                  <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                  <span className="inline-flex flex-wrap items-center justify-end gap-2 whitespace-nowrap min-[1100px]:flex-nowrap">
                     {receipt ? (
                       <Link href={`/academy/receipts/${receipt.id}`} className={ROW_BTN} title={`Receipt ${receipt.number}`}>
                         <Icon name="receipt_long" width={16} height={16} />
@@ -266,12 +322,21 @@ export function PaymentsTable({
                         {issuingId === payment.id ? "Issuing…" : "Issue receipt"}
                       </button>
                     ) : null}
-                    {canReverse && posted && (
-                      <CorrectionButtons
-                        self={self}
-                        onReverse={() => setCorrection({ mode: "reverse", id: payment.id, label, amount: formatMoney(payment.amountCents, payment.currency) })}
-                        onAdjust={() => setCorrection({ mode: "adjust", id: payment.id, label, amount: formatMoney(payment.amountCents, payment.currency) })}
-                      />
+                    {/* A Manager can correct any payment; anyone who records
+                        payments can correct a payment they recorded. The
+                        server enforces the same rule on the locked row. */}
+                    {/* A payment a refund came out of can't be reversed or
+                        adjusted (the server refuses it too). */}
+                    {posted && refundedCents === 0 && (canReverse || (canManage && self)) && (
+                      <button
+                        type="button"
+                        className={ROW_BTN_DANGER}
+                        title="Reverse in full, or adjust the amount"
+                        onClick={() => setCorrection({ mode: "reverse", id: payment.id, label, amount: formatMoney(payment.amountCents, payment.currency) })}
+                      >
+                        <Icon name="autorenew" width={16} height={16} />
+                        Reverse
+                      </button>
                     )}
                   </span>
                 </td>
@@ -283,6 +348,7 @@ export function PaymentsTable({
       <CorrectionDialog
         correction={correction}
         noun="payment"
+        switchable
         onClose={() => setCorrection(null)}
         reverse={(id, reason) => call(() => reverseStudentPaymentAction(id, reason))}
         adjust={(id, reason, cents) => call(() => adjustStudentPaymentAction(id, reason, cents))}
@@ -298,11 +364,9 @@ export function PaymentsTable({
 export function IncomeTable({
   rows,
   canReverse,
-  currentUserId,
 }: {
   rows: { record: IncomeRecordRecord; recordedByName: string }[];
   canReverse: boolean;
-  currentUserId: string;
 }) {
   const [correction, setCorrection] = useState<Correction | null>(null);
   return (
@@ -349,7 +413,6 @@ export function IncomeTable({
                     {record.status === "posted" && !reversalRow && (
                       <span className="inline-flex flex-wrap items-center justify-end gap-2">
                         <CorrectionButtons
-                          self={record.recordedBy === currentUserId}
                           onReverse={() => setCorrection({ mode: "reverse", id: record.id, label: record.category, amount })}
                           onAdjust={() => setCorrection({ mode: "adjust", id: record.id, label: record.category, amount })}
                         />
@@ -484,9 +547,10 @@ export function ExpensesTable({
                         </button>
                       </>
                     )}
-                    {canApprove && record.status === "approved" && !reversalRow && (
+                    {/* Approvers correct any approved expense; whoever submitted
+                        one can correct their own (enforced on the server). */}
+                    {(canApprove || (canCreate && own)) && record.status === "approved" && !reversalRow && (
                       <CorrectionButtons
-                        self={own}
                         onReverse={() => setCorrection({ mode: "reverse", id: record.id, label: record.category, amount })}
                         onAdjust={() => setCorrection({ mode: "adjust", id: record.id, label: record.category, amount })}
                       />

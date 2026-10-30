@@ -47,6 +47,9 @@ async function createPlan(): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/grade-configurations.test.ts)",
       name: `Grade Config Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",
@@ -604,7 +607,8 @@ describe("submitGradeConfigForApproval — Draft -> Pending Approval", () => {
 
   it("rejects a nonexistent configuration id with code 'not_found'", async () => {
     const owner = await setupAcademy("academy_owner");
-    const result = await submitWithBands(owner.context, randomUUID());
+    // No bands to prepare: the id doesn't exist (inserting one would fail its FK).
+    const result = await submitGradeConfigForApproval(owner.context, randomUUID());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });

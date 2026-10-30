@@ -798,7 +798,7 @@ export function ListPageSkeleton({
  * previously rendered as a permanent inline section below a table
  * (Branches, Courses). Wraps the existing `AlertDialog` primitives
  * (components/ui/alert-dialog.tsx) rather than hand-rolling a new dialog —
- * `AlertDialogContent` already centers itself, caps at `max-h-[85vh]` with
+ * `AlertDialogContent` already centers itself, caps at `max-h-[85dvh]` with
  * internal scrolling, and animates in via the app's existing
  * `animate-scale-in`/`animate-fade-in` keyframes, so this only needs to add
  * the title and a slightly wider max-width suited to multi-field forms.
@@ -830,7 +830,7 @@ export function FormDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent
         className={cn(
-          "max-h-[92vh] max-w-[560px] overflow-hidden rounded-2xl border-0 p-0 shadow-[0_24px_48px_rgba(17,24,39,0.32)]",
+          "max-h-[92dvh] max-w-[560px] overflow-hidden rounded-2xl border-0 p-0 shadow-[0_24px_48px_rgba(17,24,39,0.32)]",
           className,
         )}
       >

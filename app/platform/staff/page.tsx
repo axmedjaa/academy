@@ -2,13 +2,13 @@ import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission, UNGRANTABLE_CAPABILITIES } from "@/lib/auth/permissions";
 import { listPlatformStaff } from "@/lib/platform-staff/staff";
-import { PlatformStaffManager } from "./platform-staff-manager";
+import { AddStaffButton, PlatformStaffManager } from "./platform-staff-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
-import { parsePageParam } from "@/lib/ui/pagination";
+import { LIST_PAGE_SIZE_MAX, parsePageParam } from "@/lib/ui/pagination";
 
 const STAFF_MANAGE_CAPABILITY = "platform.staff.manage";
-const PAGE_SIZE = 15;
+const PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 
 // PLAN.md Item 31 / DESIGN.md §8: "/platform/staff... visible and usable by
 // platform_owner only — absent entirely from every platform_admin's nav and
@@ -51,7 +51,8 @@ export default async function PlatformStaffPage({
     <div className={PAGE_WRAP}>
       <PageHeader
         title="Platform staff"
-        description="Create platform_admin accounts and grant them individual capabilities."
+        description="Platform Admin accounts and the capabilities each one has been granted."
+        actions={<AddStaffButton />}
       />
       <PlatformStaffManager
         staff={staff}

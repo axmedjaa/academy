@@ -32,7 +32,8 @@ test.describe("Cross-tenant isolation", () => {
     // Proves the id is real and the row is genuinely viewable by its own
     // tenant — the necessary control for the IDOR test below.
     await expect(page.getByText(ACADEMY_B.batchName)).toBeVisible();
-    await expect(page.getByText(`(${ACADEMY_B.batchCode})`)).toBeVisible();
+    // The batch code leads the page heading ("CODE, Course").
+    await expect(page.getByRole("heading", { level: 1, name: new RegExp(ACADEMY_B.batchCode) })).toBeVisible();
   });
 
   test("Academy A's student list never contains Academy B's students", async ({ page }) => {
@@ -75,7 +76,7 @@ test.describe("Cross-tenant isolation", () => {
     // nonexistent id gets (lib/academies/batches.ts's NOT_FOUND — same
     // code/message for nonexistent, cross-academy, and unassigned-branch
     // cases, by design, so a guess can't distinguish any of them).
-    await expect(page.getByRole("heading", { name: "Access denied" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
     await expect(page.getByText("Batch not found.")).toBeVisible();
   });
 });

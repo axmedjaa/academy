@@ -14,8 +14,11 @@ import {
 } from "@/lib/db/schema";
 import { resolveAuthContext } from "@/lib/auth/auth-context";
 import {
+  getSubscriptionPaymentFilterOptions,
   listAcademySubscriptionOptions,
+  listFilteredSubscriptionPaymentsPage,
   listSubscriptionPayments,
+  parsePaymentFilters,
   recordSubscriptionPayment,
   rejectSubscriptionPayment,
   reverseSubscriptionPayment,
@@ -99,6 +102,9 @@ beforeAll(async () => {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/subscriptions/payments.test.ts)",
       name: `Payments test plan ${randomUUID()}`,
       priceAmountCents: 5_000_00,
       currency: "USD",
@@ -541,5 +547,186 @@ describe("listSubscriptionPayments / listAcademySubscriptionOptions", () => {
     const found = options.find((option) => option.subscriptionId === subscriptionId);
     expect(found).toBeDefined();
     expect(found?.academyId).toBe(academyId);
+  });
+});
+
+describe("listFilteredSubscriptionPaymentsPage / parsePaymentFilters / getSubscriptionPaymentFilterOptions", () => {
+  // A method unique to this run scopes every assertion to this block's own rows.
+  const method = `Filter test ${randomUUID().slice(0, 8)}`;
+  const ids: Record<string, string> = {};
+
+  beforeAll(async () => {
+    const rows = [
+      { key: "usdVerifiedMar", status: "verified", amountCents: 100_000, currency: "USD", receivedAt: new Date(Date.UTC(2020, 2, 15)) },
+      { key: "usdVerifiedMarEnd", status: "verified", amountCents: 50_000, currency: "USD", receivedAt: new Date(Date.UTC(2020, 2, 31, 23, 59)) },
+      { key: "sosVerifiedApr", status: "verified", amountCents: 30_000, currency: "SOS", receivedAt: new Date(Date.UTC(2020, 3, 1)) },
+      { key: "usdPendingApr", status: "pending", amountCents: 99_900, currency: "USD", receivedAt: new Date(Date.UTC(2020, 3, 2)) },
+    ] as const;
+    for (const row of rows) {
+      const [inserted] = await db
+        .insert(subscriptionPayments)
+        .values({
+          academyId,
+          subscriptionId,
+          amountCents: row.amountCents,
+          currency: row.currency,
+          paymentMethod: method,
+          receivedAt: row.receivedAt,
+          recordedBy: ownerUserId,
+          status: row.status,
+        })
+        .returning({ id: subscriptionPayments.id });
+      ids[row.key] = inserted.id;
+    }
+  });
+
+  it("parses URL params and drops malformed values instead of failing", () => {
+    expect(
+      parsePaymentFilters({ q: " caaxi ", status: "verified", method: "Cash", academy: academyId, month: "2026-10", page: "3" }),
+    ).toEqual({ search: "caaxi", status: "verified", method: "Cash", academyId, month: "2026-10" });
+    expect(parsePaymentFilters({ status: "paid", academy: "not-a-uuid", month: "2026-13", q: "   " })).toEqual({});
+    expect(parsePaymentFilters({})).toEqual({});
+  });
+
+  it("filters by academy and method together, with the unfiltered total alongside", async () => {
+    const result = await listFilteredSubscriptionPaymentsPage({ academyId, method }, 1, 10);
+    expect(result.totalCount).toBe(4);
+    expect(result.payments.map((p) => p.id).sort()).toEqual(Object.values(ids).sort());
+    expect(result.overallCount).toBeGreaterThanOrEqual(result.totalCount);
+  });
+
+  it("combines status with the other filters", async () => {
+    const pending = await listFilteredSubscriptionPaymentsPage({ academyId, method, status: "pending" }, 1, 10);
+    expect(pending.payments.map((p) => p.id)).toEqual([ids.usdPendingApr]);
+    const rejected = await listFilteredSubscriptionPaymentsPage({ academyId, method, status: "rejected" }, 1, 10);
+    expect(rejected.totalCount).toBe(0);
+    expect(rejected.verifiedTotals).toEqual([]);
+  });
+
+  it("filters by UTC calendar month, including the last minute of the month", async () => {
+    const march = await listFilteredSubscriptionPaymentsPage({ academyId, method, month: "2020-03" }, 1, 10);
+    expect(march.payments.map((p) => p.id).sort()).toEqual([ids.usdVerifiedMar, ids.usdVerifiedMarEnd].sort());
+    const april = await listFilteredSubscriptionPaymentsPage({ academyId, method, month: "2020-04" }, 1, 10);
+    expect(april.totalCount).toBe(2);
+  });
+
+  it("sums verified amounts per currency for the matching rows only", async () => {
+    const result = await listFilteredSubscriptionPaymentsPage({ academyId, method }, 1, 10);
+    expect(result.verifiedTotals).toEqual([
+      { currency: "SOS", amountCents: 30_000 },
+      { currency: "USD", amountCents: 150_000 },
+    ]);
+  });
+
+  it("searches the payment id and the academy name, treating LIKE wildcards literally", async () => {
+    const [academy] = await db.select({ name: academies.name }).from(academies).where(eq(academies.id, academyId));
+    const byName = await listFilteredSubscriptionPaymentsPage({ method, search: academy.name.slice(-12).toUpperCase() }, 1, 10);
+    expect(byName.totalCount).toBe(4);
+    const byId = await listFilteredSubscriptionPaymentsPage({ academyId, search: ids.sosVerifiedApr.slice(0, 8) }, 1, 10);
+    expect(byId.payments.map((p) => p.id)).toEqual([ids.sosVerifiedApr]);
+    const wildcard = await listFilteredSubscriptionPaymentsPage({ academyId, method, search: "%" }, 1, 10);
+    expect(wildcard.totalCount).toBe(0);
+  });
+
+  it("pages the filtered rows with the filtered total", async () => {
+    const page2 = await listFilteredSubscriptionPaymentsPage({ academyId, method }, 2, 3);
+    expect(page2.totalCount).toBe(4);
+    expect(page2.payments).toHaveLength(1);
+  });
+
+  describe("plan filter", () => {
+    // A second plan and subscription on the same academy, with payments of
+    // their own, so the plan filter has two plans to tell apart.
+    const methodB = `Filter plan test ${randomUUID().slice(0, 8)}`;
+    let planBId: string;
+    let subscriptionBId: string;
+    const planBPaymentIds: string[] = [];
+
+    beforeAll(async () => {
+      const [planB] = await db
+        .insert(subscriptionPlans)
+        .values({
+          isActive: false,
+          description: "Automated test fixture (lib/subscriptions/payments.test.ts)",
+          name: `Payments filter plan B ${randomUUID()}`,
+          priceAmountCents: 5000,
+          currency: "USD",
+          billingPeriod: "monthly",
+          maxBranches: 1,
+          maxStudents: 10,
+          maxStaff: 5,
+          maxCourses: 5,
+          maxStorageBytes: 1_073_741_824,
+          reportsLevel: "basic",
+        })
+        .returning({ id: subscriptionPlans.id });
+      planBId = planB.id;
+      const [subscriptionB] = await db
+        .insert(academySubscriptions)
+        .values({ academyId, planId: planBId, status: "cancelled", createdBy: ownerUserId })
+        .returning({ id: academySubscriptions.id });
+      subscriptionBId = subscriptionB.id;
+      for (const [status, day] of [["verified", 5], ["pending", 6], ["verified", 7]] as const) {
+        const [row] = await db
+          .insert(subscriptionPayments)
+          .values({
+            academyId,
+            subscriptionId: subscriptionBId,
+            amountCents: 5000,
+            currency: "USD",
+            paymentMethod: methodB,
+            receivedAt: new Date(Date.UTC(2020, 4, day)),
+            recordedBy: ownerUserId,
+            status,
+          })
+          .returning({ id: subscriptionPayments.id });
+        planBPaymentIds.push(row.id);
+      }
+    });
+
+    afterAll(async () => {
+      await db.delete(subscriptionPayments).where(eq(subscriptionPayments.subscriptionId, subscriptionBId));
+      await db.delete(academySubscriptions).where(eq(academySubscriptions.id, subscriptionBId));
+      await db.delete(subscriptionPlans).where(eq(subscriptionPlans.id, planBId));
+    });
+
+    it("parses the plan param and ignores a malformed one", () => {
+      expect(parsePaymentFilters({ plan: planId })).toEqual({ planId });
+      expect(parsePaymentFilters({ plan: "basic" })).toEqual({});
+    });
+
+    it("shows only payments on the selected plan", async () => {
+      const planA = await listFilteredSubscriptionPaymentsPage({ academyId, planId }, 1, 10);
+      expect(planA.payments.map((p) => p.id)).not.toEqual(expect.arrayContaining([planBPaymentIds[0]]));
+      expect(planA.payments.every((p) => p.subscriptionId === subscriptionId)).toBe(true);
+      const planB = await listFilteredSubscriptionPaymentsPage({ academyId, planId: planBId }, 1, 10);
+      expect(planB.payments.map((p) => p.id).sort()).toEqual([...planBPaymentIds].sort());
+      expect(planB.verifiedTotals).toEqual([{ currency: "USD", amountCents: 10_000 }]);
+    });
+
+    it("combines the plan with status, search and paging", async () => {
+      const verified = await listFilteredSubscriptionPaymentsPage({ planId: planBId, status: "verified" }, 1, 10);
+      expect(verified.totalCount).toBe(2);
+      const searched = await listFilteredSubscriptionPaymentsPage({ planId: planBId, search: planBPaymentIds[1] }, 1, 10);
+      expect(searched.payments.map((p) => p.id)).toEqual([planBPaymentIds[1]]);
+      const otherPlanSearch = await listFilteredSubscriptionPaymentsPage({ planId, search: planBPaymentIds[1] }, 1, 10);
+      expect(otherPlanSearch.totalCount).toBe(0);
+      const page2 = await listFilteredSubscriptionPaymentsPage({ planId: planBId }, 2, 2);
+      expect(page2.totalCount).toBe(3);
+      expect(page2.payments).toHaveLength(1);
+    });
+
+    it("lists both plans as options", async () => {
+      const options = await getSubscriptionPaymentFilterOptions();
+      expect(options.plans.map((p) => p.id)).toEqual(expect.arrayContaining([planId, planBId]));
+    });
+  });
+
+  it("offers the methods, academies and months that have payments", async () => {
+    const options = await getSubscriptionPaymentFilterOptions();
+    expect(options.methods).toContain(method);
+    expect(options.academies.some((a) => a.id === academyId)).toBe(true);
+    expect(options.months).toEqual(expect.arrayContaining(["2020-03", "2020-04"]));
+    expect([...options.months].sort().reverse()).toEqual(options.months);
   });
 });

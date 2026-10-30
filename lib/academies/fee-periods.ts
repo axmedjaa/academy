@@ -5,6 +5,7 @@ import {
   academies,
   batchEnrollments,
   batches,
+  branches,
   courses,
   enrollmentFeeSchedules,
   FEE_INTERVAL_MONTHS_OPTIONS,
@@ -372,18 +373,17 @@ export type SetEnrollmentFeeScheduleResult =
  * server-computed, authoritatively, so an admin changing the schedule
  * never needs to do (or risk getting wrong) the "how much is actually
  * left, and when does the new plan actually start" arithmetic themselves:
- *   - `amountCents` becomes `previousTotal - paidSoFar` (the CURRENT
- *     schedule's own total fee, minus whatever has actually been
- *     approved-paid against its own already-started installments) — but
- *     only while that remainder is still positive. This is the
- *     "auto-carry the remaining balance" rule: restructuring a payment
- *     plan never changes the total a student ultimately owes for the
- *     course, only how the UNPAID remainder gets split going forward. If
- *     the current schedule is already fully paid off, there is nothing
- *     left to carry (and a computed $0 total would violate the schema's
- *     own "amount must be positive" check besides) — the caller's own
- *     submitted `amountCents` is used instead, exactly as a genuine
- *     first-time setup would.
+ *   - `amountCents` becomes the CURRENT schedule's own total minus the
+ *     expected amounts of its kept installments (started or paid, kept
+ *     with their own amounts whether paid, partly paid or unpaid). This
+ *     is the "auto-carry the remaining balance" rule: restructuring a
+ *     payment plan never changes the total a student owes for the course,
+ *     only how the part not yet scheduled is split going forward.
+ *     (Subtracting only what was PAID would charge a kept period's unpaid
+ *     part twice: once on the period, once in the new plan.) If every
+ *     installment of the current schedule is already kept, nothing is
+ *     left to reschedule and the change is refused rather than adding
+ *     charges beyond the course fee.
  *   - `anchorDate` becomes the day after the latest already-started
  *     period's own end date — "the new plan begins at the start of the
  *     next not-yet-started period," never today, never wherever the form
@@ -443,16 +443,23 @@ export async function setEnrollmentFeeSchedule(
     // For the audit log's "before" value, AND (below) to decide whether
     // this is a genuine change to an already-active schedule versus a
     // first-time setup.
+    // Locked so two concurrent changes can't both carry from the same state.
     const [existingForAudit] = await tx
       .select()
       .from(enrollmentFeeSchedules)
       .where(eq(enrollmentFeeSchedules.enrollmentId, data.enrollmentId))
-      .limit(1);
+      .limit(1)
+      .for("update");
 
     const today = todayDateOnlyInAcademyTimezone();
     const existingPeriods = existingForAudit
       ? await tx
-          .select({ id: feePeriods.id, periodStart: feePeriods.periodStart, periodEnd: feePeriods.periodEnd })
+          .select({
+            id: feePeriods.id,
+            periodStart: feePeriods.periodStart,
+            periodEnd: feePeriods.periodEnd,
+            expectedAmountCents: feePeriods.expectedAmountCents,
+          })
           .from(feePeriods)
           .where(eq(feePeriods.enrollmentId, data.enrollmentId))
       : [];
@@ -503,30 +510,24 @@ export async function setEnrollmentFeeSchedule(
       );
       effectiveAnchorDate = formatDateOnly(addDays(parseDateOnly(latestProtectedPeriodEnd), 1));
 
-      const protectedIds = protectedPeriods.map((period) => period.id);
-      const paidRows = await tx
-        .select({
-          feePeriodId: paymentAllocations.feePeriodId,
-          paid: sql<string>`coalesce(sum(${paymentAllocations.amountCents}), 0)`,
-        })
-        .from(paymentAllocations)
-        .innerJoin(studentPayments, eq(paymentAllocations.studentPaymentId, studentPayments.id))
-        .where(and(inArray(paymentAllocations.feePeriodId, protectedIds), eq(studentPayments.status, "approved")))
-        .groupBy(paymentAllocations.feePeriodId);
-      const paidSoFarCents = paidRows.reduce((sum, row) => sum + Number(row.paid), 0);
-      const remainingCents = existingForAudit.amountCents - paidSoFarCents;
+      // What carries into the new plan is the part of the current
+      // schedule's total that no kept period already charges. Kept periods
+      // keep their own expected amounts (paid, partly paid or unpaid), so
+      // subtracting only what was PAID would charge their unpaid part a
+      // second time. Only kept periods of the CURRENT schedule count here
+      // (they start on or after its anchor); periods kept from an earlier
+      // schedule were already outside this schedule's total when it was
+      // set. Payments, allocations and receipts are never touched.
+      const keptExpectedCents = protectedPeriods
+        .filter((period) => compareDateOnly(period.periodStart, existingForAudit.anchorDate) >= 0)
+        .reduce((sum, period) => sum + period.expectedAmountCents, 0);
+      const carriedCents = existingForAudit.amountCents - keptExpectedCents;
 
-      // Only auto-carry when there IS a genuine positive remaining balance
-      // to protect — once the current schedule's own total is already
-      // fully paid off, there is nothing left to carry forward (and a
-      // computed $0 total would violate the schema's own "amount must be
-      // positive" invariant besides), so a schedule change at that point
-      // is effectively a fresh start: the caller's own submitted
-      // `amountCents` is used as-is, same as a genuine first-time setup —
-      // only `anchorDate` (moved above) still protects against overlap.
-      if (remainingCents > 0) {
-        effectiveAmountCents = remainingCents;
-      }
+      // Every installment of the current plan is already kept, so a new
+      // plan could only add charges beyond the course fee. Refused rather
+      // than treating the submitted amount as a fresh fee.
+      if (carriedCents <= 0) return { kind: "nothing_to_reschedule" as const };
+      effectiveAmountCents = carriedCents;
     }
 
     // Atomic upsert targeting the table's own unique(enrollment_id) index —
@@ -597,6 +598,16 @@ export async function setEnrollmentFeeSchedule(
   });
 
   if (result.kind === "not_found") return { ok: false, error: ENROLLMENT_NOT_FOUND };
+  if (result.kind === "nothing_to_reschedule") {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message:
+          "Every installment of the current plan has started or been paid, so there is nothing left to reschedule. Changing the plan now would charge more than the course fee.",
+      },
+    };
+  }
   return { ok: true, schedule: toScheduleRecord(result.row) };
 }
 
@@ -943,6 +954,9 @@ export interface StudentEnrollmentOption {
   courseName: string;
   enrolledAt: Date;
   status: "active" | "withdrawn" | "completed";
+  /** The batch's own lifecycle status (planned, active, completed, archived). */
+  batchStatus: "planned" | "active" | "completed" | "archived";
+  branchName: string;
 }
 
 export type ListEnrollmentsForStudentResult =
@@ -979,9 +993,12 @@ export async function listEnrollmentsForStudent(
       courseId: batchEnrollments.courseId,
       courseName: courses.name,
       enrolledAt: batchEnrollments.enrolledAt,
+      batchStatus: batches.status,
+      branchName: branches.name,
     })
     .from(batchEnrollments)
     .innerJoin(batches, eq(batchEnrollments.batchId, batches.id))
+    .innerJoin(branches, eq(batches.branchId, branches.id))
     .innerJoin(courses, eq(batchEnrollments.courseId, courses.id))
     .where(and(eq(batchEnrollments.studentId, studentId), eq(batchEnrollments.academyId, academyId)))
     .orderBy(batchEnrollments.enrolledAt);
@@ -1329,7 +1346,17 @@ export interface FeePeriodPaymentHistoryRow {
   courseName: string;
   batchName: string;
   intervalMonths: number;
-  periods: { feePeriodId: string; periodStart: string; periodEnd: string; amountCents: number }[];
+  /** One entry per allocation. A payment can fund periods of several
+   * enrollments, so each carries its own course and batch. */
+  periods: {
+    feePeriodId: string;
+    enrollmentId: string;
+    periodStart: string;
+    periodEnd: string;
+    amountCents: number;
+    courseName: string;
+    batchName: string;
+  }[];
 }
 
 export type ListFeePeriodPaymentHistoryResult =
@@ -1338,7 +1365,7 @@ export type ListFeePeriodPaymentHistoryResult =
 
 export async function listFeePeriodPaymentHistory(
   actorContext: AuthContext,
-  filters: { studentId?: string; enrollmentId?: string } = {},
+  filters: { studentId?: string; enrollmentId?: string; paymentIds?: string[] } = {},
 ): Promise<ListFeePeriodPaymentHistoryResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -1347,6 +1374,10 @@ export async function listFeePeriodPaymentHistory(
   const conditions = [eq(studentPayments.academyId, academyId)];
   if (filters.studentId) conditions.push(eq(studentPayments.studentId, filters.studentId));
   if (filters.enrollmentId) conditions.push(eq(feePeriods.enrollmentId, filters.enrollmentId));
+  if (filters.paymentIds) {
+    if (filters.paymentIds.length === 0) return { ok: true, rows: [] };
+    conditions.push(inArray(studentPayments.id, filters.paymentIds));
+  }
 
   const rows = await db
     .select({
@@ -1360,6 +1391,7 @@ export async function listFeePeriodPaymentHistory(
       recordedBy: studentPayments.recordedBy,
       allocationAmountCents: paymentAllocations.amountCents,
       feePeriodId: feePeriods.id,
+      enrollmentId: feePeriods.enrollmentId,
       periodStart: feePeriods.periodStart,
       periodEnd: feePeriods.periodEnd,
       intervalMonths: feePeriods.intervalMonths,
@@ -1394,7 +1426,15 @@ export async function listFeePeriodPaymentHistory(
       };
       byPayment.set(row.paymentId, entry);
     }
-    entry.periods.push({ feePeriodId: row.feePeriodId, periodStart: row.periodStart, periodEnd: row.periodEnd, amountCents: row.allocationAmountCents });
+    entry.periods.push({
+      feePeriodId: row.feePeriodId,
+      enrollmentId: row.enrollmentId,
+      periodStart: row.periodStart,
+      periodEnd: row.periodEnd,
+      amountCents: row.allocationAmountCents,
+      courseName: row.courseName,
+      batchName: row.batchName,
+    });
   }
 
   return { ok: true, rows: [...byPayment.values()].sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime()) };

@@ -14,8 +14,9 @@ import { ChipParamFilter, ClearFilters, FilterBar, FilterDropdown, SearchField }
 import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
 import { CancelCertificateButton, IssueCertificateButton, VerifyCertificateCard, type CertificateBatchOption } from "./certificates-client";
+import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 
 /**
  * Certificates (design A17): verify a code the way the public page does,

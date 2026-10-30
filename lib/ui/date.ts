@@ -19,3 +19,15 @@ export function formatDate(value: Date | string | null | undefined, fallback = "
     ...(dateOnly ? { timeZone: "UTC" } : {}),
   });
 }
+
+/**
+ * A calendar date stored as a UTC-midnight timestamp (a form's date input
+ * coerced with z.coerce.date, such as a payment's received date). Formatted
+ * in UTC so it shows the day that was entered, in any timezone.
+ */
+export function formatCalendarDate(value: Date | string | null | undefined, fallback = "—"): string {
+  if (value === null || value === undefined || value === "") return fallback;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return formatDate(date.toISOString().slice(0, 10), fallback);
+}

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { academies, auditLogs, branches, users } from "@/lib/db/schema";
 import {
+  AUDIT_LOG_BATCH_PAGE_SIZE,
   AUDIT_LOG_DEFAULT_PAGE_SIZE,
   AUDIT_LOG_MAX_PAGE_SIZE,
   fetchAuditLogs,
@@ -18,6 +19,7 @@ const insertedBranchIds: string[] = [];
 const insertedAcademyIds: string[] = [];
 
 let actorUserId: string;
+let actorEmail: string;
 
 async function insertRow(overrides: Partial<typeof auditLogs.$inferInsert> = {}) {
   const [row] = await db
@@ -67,10 +69,11 @@ async function createBranch(academyId: string): Promise<string> {
 }
 
 beforeAll(async () => {
+  actorEmail = `audit-query-test-${randomUUID()}@example.com`;
   const [user] = await db
     .insert(users)
     .values({
-      email: `audit-query-test-${randomUUID()}@example.com`,
+      email: actorEmail,
       passwordHash: "not-a-real-hash",
     })
     .returning({ id: users.id });
@@ -246,16 +249,21 @@ describe("fetchAuditLogs", () => {
     expect(page1Ids.some((id) => page2Ids.includes(id))).toBe(false);
   });
 
-  it("clamps a requested page size above the maximum", async () => {
+  it("shows 10 rows per page by default and accepts at most 10 per list request", () => {
+    expect(AUDIT_LOG_DEFAULT_PAGE_SIZE).toBe(10);
+    expect(AUDIT_LOG_MAX_PAGE_SIZE).toBe(10);
+  });
+
+  it("clamps a requested page size above the server-only batch ceiling", async () => {
     const academyId = await createAcademy();
     await insertRow({ academyId });
 
     const result = await fetchAuditLogs(
       { academyId },
-      { pageSize: AUDIT_LOG_MAX_PAGE_SIZE + 500 },
+      { pageSize: AUDIT_LOG_BATCH_PAGE_SIZE + 500 },
     );
 
-    expect(result.pageSize).toBe(AUDIT_LOG_MAX_PAGE_SIZE);
+    expect(result.pageSize).toBe(AUDIT_LOG_BATCH_PAGE_SIZE);
   });
 
   it("clamps a page number below 1 up to 1", async () => {
@@ -274,5 +282,43 @@ describe("fetchAuditLogs", () => {
 
     expect(result.rows).toHaveLength(0);
     expect(result.totalCount).toBe(0);
+  });
+
+  describe("search", () => {
+    it("matches the action, entity type and entity id case-insensitively", async () => {
+      const marker = randomUUID().slice(0, 8);
+      const entityId = randomUUID();
+      const byAction = await insertRow({ action: `test.Search-${marker}` });
+      const byEntityId = await insertRow({ action: "test.other", entityId });
+      await insertRow({ action: "test.unrelated" });
+
+      const actionHits = await fetchAuditLogs({ search: `search-${marker.toUpperCase()}` });
+      expect(actionHits.rows.map((row) => row.id)).toEqual([byAction]);
+
+      const idHits = await fetchAuditLogs({ search: entityId.slice(4, 20) });
+      expect(idHits.rows.map((row) => row.id)).toEqual([byEntityId]);
+
+      const typeHits = await fetchAuditLogs({ search: TAG });
+      expect(typeHits.totalCount).toBeGreaterThanOrEqual(3);
+    });
+
+    it("matches the actor's email", async () => {
+      const id = await insertRow({ actorUserId, action: "test.by-actor" });
+
+      const result = await fetchAuditLogs({ search: actorEmail.toUpperCase() });
+
+      expect(result.rows.map((row) => row.id)).toContain(id);
+      expect(result.rows.every((row) => row.actorUserId === actorUserId)).toBe(true);
+    });
+
+    it("treats LIKE wildcards literally", async () => {
+      const marker = randomUUID().slice(0, 8);
+      const literal = await insertRow({ action: `test.${marker}%_done` });
+      await insertRow({ action: `test.${marker}xx-done` });
+
+      const result = await fetchAuditLogs({ search: `${marker}%_` });
+
+      expect(result.rows.map((row) => row.id)).toEqual([literal]);
+    });
   });
 });

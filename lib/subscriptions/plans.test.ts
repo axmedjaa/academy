@@ -11,6 +11,8 @@ import {
   setPlanActive,
   updateSubscriptionPlan,
   type PlanInput,
+  listFilteredSubscriptionPlansPage,
+  parsePlanFilters,
 } from "./plans";
 
 let ownerUserId: string;
@@ -322,5 +324,90 @@ describe("listSubscriptionPlans", () => {
     const found = plans.find((plan) => plan.id === created.plan.id);
     expect(found).toBeDefined();
     expect(found?.isActive).toBe(false);
+  });
+});
+
+describe("listFilteredSubscriptionPlansPage / parsePlanFilters", () => {
+  // A prefix unique to this run scopes every search to this block's own plans.
+  const prefix = `Plan filter test ${randomUUID().slice(0, 8)}`;
+  const ids: Record<string, string> = {};
+
+  beforeAll(async () => {
+    const fixtures = [
+      { key: "low", cents: 9_999, isActive: true },
+      { key: "midLow", cents: 10_000, isActive: false },
+      { key: "midHigh", cents: 19_999, isActive: false },
+      { key: "high", cents: 20_000, isActive: false },
+    ];
+    for (const fixture of fixtures) {
+      const [row] = await db
+        .insert(subscriptionPlans)
+        .values({
+          // Only "low" is active: the status filter needs one; it is deleted below.
+          isActive: fixture.isActive,
+          description: "Automated test fixture (lib/subscriptions/plans.test.ts)",
+          name: `${prefix} ${fixture.key}`,
+          priceAmountCents: fixture.cents,
+          currency: "USD",
+          billingPeriod: "monthly",
+          maxBranches: 1,
+          maxStudents: 10,
+          maxStaff: 5,
+          maxCourses: 5,
+          maxStorageBytes: 1_073_741_824,
+          reportsLevel: "basic",
+        })
+        .returning({ id: subscriptionPlans.id });
+      ids[fixture.key] = row.id;
+    }
+  });
+
+  afterAll(async () => {
+    for (const id of Object.values(ids)) {
+      await db.delete(subscriptionPlans).where(eq(subscriptionPlans.id, id));
+    }
+  });
+
+  const names = (plans: { name: string }[]) => plans.map((plan) => plan.name.slice(prefix.length + 1)).sort();
+
+  it("parses URL params and drops malformed values", () => {
+    expect(parsePlanFilters({ q: " Growth ", status: "retired", price: "mid", page: "2" })).toEqual({
+      search: "Growth",
+      status: "retired",
+      price: "mid",
+    });
+    expect(parsePlanFilters({ q: "  ", status: "archived", price: "cheap" })).toEqual({});
+  });
+
+  it("searches plan names case-insensitively, treating LIKE wildcards literally", async () => {
+    const result = await listFilteredSubscriptionPlansPage({ search: prefix.toUpperCase() }, 1, 10);
+    expect(names(result.plans)).toEqual(["high", "low", "midHigh", "midLow"]);
+    expect(result.overallCount).toBeGreaterThanOrEqual(result.totalCount);
+    const wildcard = await listFilteredSubscriptionPlansPage({ search: `${prefix}%` }, 1, 10);
+    expect(wildcard.totalCount).toBe(0);
+  });
+
+  it("filters by status", async () => {
+    const active = await listFilteredSubscriptionPlansPage({ search: prefix, status: "active" }, 1, 10);
+    expect(names(active.plans)).toEqual(["low"]);
+    const retired = await listFilteredSubscriptionPlansPage({ search: prefix, status: "retired" }, 1, 10);
+    expect(names(retired.plans)).toEqual(["high", "midHigh", "midLow"]);
+  });
+
+  it("filters by price band at the 100.00 and 200.00 boundaries", async () => {
+    const low = await listFilteredSubscriptionPlansPage({ search: prefix, price: "low" }, 1, 10);
+    expect(names(low.plans)).toEqual(["low"]);
+    const mid = await listFilteredSubscriptionPlansPage({ search: prefix, price: "mid" }, 1, 10);
+    expect(names(mid.plans)).toEqual(["midHigh", "midLow"]);
+    const high = await listFilteredSubscriptionPlansPage({ search: prefix, price: "high" }, 1, 10);
+    expect(names(high.plans)).toEqual(["high"]);
+  });
+
+  it("combines filters and pages the filtered rows", async () => {
+    const none = await listFilteredSubscriptionPlansPage({ search: prefix, status: "active", price: "high" }, 1, 10);
+    expect(none.totalCount).toBe(0);
+    const page2 = await listFilteredSubscriptionPlansPage({ search: prefix, status: "retired" }, 2, 2);
+    expect(page2.totalCount).toBe(3);
+    expect(page2.plans).toHaveLength(1);
   });
 });

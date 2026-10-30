@@ -10,7 +10,7 @@ describe("payment plan helpers", () => {
   it("describes installments, not a frequency", () => {
     expect(describePaymentPlan(18000, 6, "USD")).toBe("6 monthly payments of $30.00");
     expect(describePaymentPlan(10000, 3, "USD")).toBe("3 monthly payments of $33.33 (last $33.34)");
-    expect(describePaymentPlan(18000, 1, "USD")).toBe("1 payment of $180.00");
+    expect(describePaymentPlan(18000, 1, "USD")).toBe("Full payment of $180.00");
   });
 
   it("parses typed dollar amounts", () => {

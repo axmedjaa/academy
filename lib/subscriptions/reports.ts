@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull, lte, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   academies,
@@ -7,6 +7,7 @@ import {
   subscriptionPlans,
 } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
+import { computeLazySubscriptionStatus, GRACE_PERIOD_DAYS } from "@/lib/subscriptions/state-machine";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -115,15 +116,31 @@ export interface ExpiringSubscriptionRow {
   academyId: string;
   academyName: string;
   planName: string;
-  status: string;
+  /** Effective status (state machine, lazy): "active", "trial" or "past_due". */
+  status: "active" | "trial" | "past_due";
+  /** When access ends: `trial_ends_at` for a trial, otherwise `ends_at`. */
   endsAt: Date;
-  /** Negative when endsAt is already in the past (overdue, not yet renewed). */
+  /** Negative when endsAt is already in the past (Past Due, inside the grace period). */
   daysUntilExpiry: number;
+}
+
+export interface ExpiringSubscriptions {
+  /** Soonest/most-overdue first, capped at `EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT`. */
+  rows: ExpiringSubscriptionRow[];
+  /** Every matching subscription, before the cap. */
+  totalCount: number;
+}
+
+export interface AcademiesByPlanRow {
+  planName: string;
+  academyCount: number;
 }
 
 export interface PlatformReportsResult {
   activeAcademyTrend: ActiveAcademyTrendPoint[];
-  expiringSubscriptions: ExpiringSubscriptionRow[];
+  expiringSubscriptions: ExpiringSubscriptions;
+  /** Open (not closed) academies counted by their current plan. */
+  academiesByPlan: AcademiesByPlanRow[];
   /**
    * null whenever the actor lacks REVENUE_VIEW_CAPABILITY — the section is
    * meant to be entirely absent, not merely hidden, so there is no payload
@@ -191,6 +208,36 @@ export async function getActiveAcademyTrend(
   }));
 }
 
+/**
+ * Open academies (closed_at is null) counted by the plan of their current
+ * subscription — the most recently started row, the same "latest starts_at
+ * wins" convention as lib/academies/approve.ts. Academies with no
+ * subscription row are left out. Sorted by count, largest first.
+ */
+export async function getAcademiesByPlan(): Promise<AcademiesByPlanRow[]> {
+  const rows = await db
+    .select({
+      academyId: academySubscriptions.academyId,
+      planName: subscriptionPlans.name,
+    })
+    .from(academySubscriptions)
+    .innerJoin(academies, eq(academies.id, academySubscriptions.academyId))
+    .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+    .where(isNull(academies.closedAt))
+    .orderBy(desc(academySubscriptions.startsAt));
+
+  const seen = new Set<string>();
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (seen.has(row.academyId)) continue; // first row per academy = latest
+    seen.add(row.academyId);
+    counts.set(row.planName, (counts.get(row.planName) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([planName, academyCount]) => ({ planName, academyCount }))
+    .sort((a, b) => b.academyCount - a.academyCount || a.planName.localeCompare(b.planName));
+}
+
 /** Default cap on `getExpiringSubscriptions`'s row count — the date window
  * alone (`withinDays`) bounds this query correctly, but with no row cap a
  * platform with many academies expiring in the same window renders every
@@ -198,53 +245,88 @@ export async function getActiveAcademyTrend(
  * control today). Soonest/most-overdue rows are kept — see the `orderBy`
  * below — so a cap never hides the most urgent ones. */
 export const EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT = 50;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * PLAN.md/DESIGN.md's "expiring-subscriptions list". Includes every
- * non-cancelled subscription with a known endsAt on or before `withinDays`
- * from now — deliberately no lower bound, so a subscription whose endsAt has
- * already passed (overdue, not yet renewed) is included too, with a
- * negative daysUntilExpiry, since that is exactly the kind of row a platform
- * operator needs to see on an "expiring" list. Sorted soonest/most-overdue
- * first, capped to `limit` rows (see `EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT`).
+ * PLAN.md/DESIGN.md's "expiring-subscriptions list" (design P01/P09
+ * `expRows`: effective status Active, Trial or Past Due, ending within
+ * `withinDays`, soonest first). Classification uses the state machine's own
+ * `computeLazySubscriptionStatus`, never the stored status alone: a stored
+ * "active" row whose 7-day grace period has run out is effectively
+ * Suspended and is not "expiring", and a stored "suspended", "expired",
+ * "draft" or "cancelled" row never is. Past Due rows (ended, still inside
+ * the grace period) are kept with a negative `daysUntilExpiry` so they
+ * read as overdue. A trial ends at `trial_ends_at`. One row per
+ * subscription (subscriptions are the FROM table; the joins are to-one).
  */
 export async function getExpiringSubscriptions(
   withinDays = 30,
   limit = EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT,
-): Promise<ExpiringSubscriptionRow[]> {
+): Promise<ExpiringSubscriptions> {
   const now = new Date();
-  const windowEnd = new Date(now.getTime() + withinDays * 24 * 60 * 60 * 1000);
+  const windowEnd = new Date(now.getTime() + withinDays * DAY_MS);
+  const graceStart = new Date(now.getTime() - GRACE_PERIOD_DAYS * DAY_MS);
+  const accessEnd = sql<Date>`case when ${academySubscriptions.status} = 'trial' then ${academySubscriptions.trialEndsAt} else ${academySubscriptions.endsAt} end`;
 
-  const rows = await db
-    .select({
-      subscriptionId: academySubscriptions.id,
-      academyId: academySubscriptions.academyId,
-      academyName: academies.name,
-      planName: subscriptionPlans.name,
-      status: academySubscriptions.status,
-      endsAt: academySubscriptions.endsAt,
-    })
-    .from(academySubscriptions)
-    .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
-    .innerJoin(academies, eq(academies.id, academySubscriptions.academyId))
-    .where(
-      and(
-        ne(academySubscriptions.status, "cancelled"),
-        isNotNull(academySubscriptions.endsAt),
-        lte(academySubscriptions.endsAt, windowEnd),
-      ),
-    )
-    .orderBy(asc(academySubscriptions.endsAt))
-    .limit(limit);
+  // Mirrors computeLazySubscriptionStatus: active/past_due rows count from
+  // the start of the grace period, trial rows only until they lapse.
+  const where = or(
+    and(
+      inArray(academySubscriptions.status, ["active", "past_due"]),
+      gte(academySubscriptions.endsAt, graceStart),
+      lte(academySubscriptions.endsAt, windowEnd),
+    ),
+    and(
+      eq(academySubscriptions.status, "trial"),
+      gte(academySubscriptions.trialEndsAt, now),
+      lte(academySubscriptions.trialEndsAt, windowEnd),
+    ),
+  );
 
-  return rows.map((row) => {
-    const endsAt = row.endsAt as Date;
-    return {
-      ...row,
-      endsAt,
-      daysUntilExpiry: Math.ceil((endsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000)),
-    };
+  const [rows, [{ value: totalCount }]] = await Promise.all([
+    db
+      .select({
+        subscriptionId: academySubscriptions.id,
+        academyId: academySubscriptions.academyId,
+        academyName: academies.name,
+        planName: subscriptionPlans.name,
+        status: academySubscriptions.status,
+        endsAt: academySubscriptions.endsAt,
+        trialEndsAt: academySubscriptions.trialEndsAt,
+      })
+      .from(academySubscriptions)
+      .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+      .innerJoin(academies, eq(academies.id, academySubscriptions.academyId))
+      .where(where)
+      .orderBy(asc(accessEnd), asc(academySubscriptions.id))
+      .limit(limit),
+    db.select({ value: count() }).from(academySubscriptions).where(where),
+  ]);
+
+  const classified = rows.flatMap((row) => {
+    const effective = computeLazySubscriptionStatus(
+      { status: row.status, trialEndsAt: row.trialEndsAt, endsAt: row.endsAt },
+      now,
+    );
+    if (effective !== "active" && effective !== "trial" && effective !== "past_due") return [];
+    const endsAt = (effective === "trial" ? row.trialEndsAt : row.endsAt) as Date;
+    const msLeft = endsAt.getTime() - now.getTime();
+    return [
+      {
+        subscriptionId: row.subscriptionId,
+        academyId: row.academyId,
+        academyName: row.academyName,
+        planName: row.planName,
+        status: effective,
+        endsAt,
+        // Whole days left, rounded up ("1 day left" until it ends); whole
+        // days overdue, rounded down ("0" never reads as overdue).
+        daysUntilExpiry: msLeft >= 0 ? Math.ceil(msLeft / DAY_MS) : -Math.max(1, Math.floor(-msLeft / DAY_MS)),
+      },
+    ];
   });
+
+  return { rows: classified, totalCount: Number(totalCount) };
 }
 
 interface PaymentGroupSource {
@@ -451,13 +533,14 @@ export async function getPlatformReports(
   // check on its own first (cheap) lets all three real reads run together.
   const canViewRevenue = await hasPermission(actorContext, REVENUE_VIEW_CAPABILITY);
 
-  const [activeAcademyTrend, expiringSubscriptions, revenue] = await Promise.all([
+  const [activeAcademyTrend, expiringSubscriptions, academiesByPlan, revenue] = await Promise.all([
     getActiveAcademyTrend(trendMonths),
     getExpiringSubscriptions(expiringWithinDays),
+    getAcademiesByPlan(),
     canViewRevenue ? getRevenueBreakdown(groupBy) : Promise.resolve(null),
   ]);
 
-  return { ok: true, data: { activeAcademyTrend, expiringSubscriptions, revenue } };
+  return { ok: true, data: { activeAcademyTrend, expiringSubscriptions, academiesByPlan, revenue } };
 }
 
 /**

@@ -4,7 +4,7 @@ import { startTransition, useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { registerStudent, type RegisterStudentFormState } from "@/lib/academies/register-student-actions";
 import { showInfoToast, showSuccessToast } from "@/lib/ui/toast";
-import { PAYMENT_PLAN_OPTIONS } from "@/lib/ui/payment-plan";
+import { PaymentPlanField } from "@/app/academy/_shell/payment-plan-field";
 import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
 import { StudentPhotoField } from "./student-photo-field";
 import {
@@ -39,8 +39,6 @@ import {
  * authoritative validation, scoping and audit logging.
  */
 
-// The plan value is the number of monthly installments (see lib/ui/payment-plan.ts).
-const PLAN_OPTIONS = PAYMENT_PLAN_OPTIONS;
 
 const initialState: RegisterStudentFormState = { ok: false };
 
@@ -308,15 +306,7 @@ function RegisterStudentFields({
             )}
             {batchId && (
               <>
-                <DField label="Payment plan" name="paymentPlanIntervalMonths">
-                  <select name="paymentPlanIntervalMonths" defaultValue="1" className={controlClass(false)}>
-                    {PLAN_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </DField>
+                <PaymentPlanField name="paymentPlanIntervalMonths" defaultValue={1} />
                 <DField label="Total fee per course (USD)" name="paymentPlanAmountDollars" required error={errors.paymentPlanAmountDollars}>
                   <input
                     type="text"

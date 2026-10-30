@@ -1,4 +1,4 @@
-import { count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, lt, or, sql, sum, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import {
@@ -225,6 +225,183 @@ export async function listSubscriptionPaymentsPage(
   ]);
 
   return { payments: rows.map(toRecord), totalCount };
+}
+
+export const SUBSCRIPTION_PAYMENT_STATUSES = ["pending", "verified", "rejected", "reversed"] as const;
+export type SubscriptionPaymentStatusFilter = (typeof SUBSCRIPTION_PAYMENT_STATUSES)[number];
+
+/** Filters for the /platform/payments list (design P07 filter bar). Every
+ * field is optional; invalid values are dropped by `parsePaymentFilters`
+ * before they reach the query. */
+export interface SubscriptionPaymentFilters {
+  /** Case-insensitive match on the payment id or the academy name. */
+  search?: string;
+  status?: SubscriptionPaymentStatusFilter;
+  /** Exact recorded method. */
+  method?: string;
+  academyId?: string;
+  /** Payments made against a subscription on this plan. */
+  planId?: string;
+  /** "YYYY-MM": payments received in that UTC calendar month (the dates
+   * the table shows are UTC calendar dates, see lib/ui/date.ts). */
+  month?: string;
+}
+
+const paymentFiltersSchema = z.object({
+  search: z.string().trim().min(1).max(200).optional().catch(undefined),
+  status: z.enum(SUBSCRIPTION_PAYMENT_STATUSES).optional().catch(undefined),
+  method: z.string().trim().min(1).max(200).optional().catch(undefined),
+  academyId: z.string().uuid().optional().catch(undefined),
+  planId: z.string().uuid().optional().catch(undefined),
+  month: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+    .optional()
+    .catch(undefined),
+});
+
+/** URL search params -> filters. Unknown or malformed values are ignored
+ * (an old or hand-edited link shows the unfiltered list, never an error). */
+export function parsePaymentFilters(params: Record<string, string | string[] | undefined>): SubscriptionPaymentFilters {
+  const first = (key: string) => {
+    const value = params[key];
+    return Array.isArray(value) ? value[0] : value;
+  };
+  const parsed = paymentFiltersSchema.parse({
+    search: first("q") || undefined,
+    status: first("status") || undefined,
+    method: first("method") || undefined,
+    academyId: first("academy") || undefined,
+    planId: first("plan") || undefined,
+    month: first("month") || undefined,
+  });
+  return Object.fromEntries(Object.entries(parsed).filter(([, value]) => value !== undefined)) as SubscriptionPaymentFilters;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
+function paymentFilterWhere(filters: SubscriptionPaymentFilters): SQL | undefined {
+  const conditions: SQL[] = [];
+  if (filters.search) {
+    const pattern = `%${escapeLike(filters.search)}%`;
+    conditions.push(
+      or(ilike(sql`${subscriptionPayments.id}::text`, pattern), ilike(academies.name, pattern)) as SQL,
+    );
+  }
+  if (filters.status) conditions.push(eq(subscriptionPayments.status, filters.status));
+  if (filters.method) conditions.push(eq(subscriptionPayments.paymentMethod, filters.method));
+  if (filters.academyId) conditions.push(eq(subscriptionPayments.academyId, filters.academyId));
+  if (filters.planId) conditions.push(eq(academySubscriptions.planId, filters.planId));
+  if (filters.month) {
+    const [year, month] = filters.month.split("-").map(Number);
+    conditions.push(gte(subscriptionPayments.receivedAt, new Date(Date.UTC(year, month - 1, 1))));
+    conditions.push(lt(subscriptionPayments.receivedAt, new Date(Date.UTC(year, month, 1))));
+  }
+  return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+export interface FilteredSubscriptionPaymentsPage {
+  payments: SubscriptionPaymentRecord[];
+  /** Payments matching the filters, across all pages. */
+  totalCount: number;
+  /** Every payment, unfiltered ("Showing X of Y payments"). */
+  overallCount: number;
+  /** Verified amounts among the matching payments, per currency. */
+  verifiedTotals: { currency: string; amountCents: number }[];
+}
+
+/**
+ * One page of /platform/payments with the design P07 filters applied in
+ * SQL, newest first — same ordering and LIMIT/OFFSET as
+ * `listSubscriptionPaymentsPage`. Callers must already have checked the
+ * page's own permission (recordSubscriptionPayment), as that page does.
+ */
+export async function listFilteredSubscriptionPaymentsPage(
+  filters: SubscriptionPaymentFilters,
+  page: number,
+  pageSize: number,
+): Promise<FilteredSubscriptionPaymentsPage> {
+  const offset = Math.max(0, page - 1) * pageSize;
+  const where = paymentFilterWhere(filters);
+
+  const [rows, [{ value: totalCount }], [{ value: overallCount }], verifiedRows] = await Promise.all([
+    db
+      .select({ payment: subscriptionPayments })
+      .from(subscriptionPayments)
+      .innerJoin(academies, eq(academies.id, subscriptionPayments.academyId))
+      .innerJoin(academySubscriptions, eq(academySubscriptions.id, subscriptionPayments.subscriptionId))
+      .where(where)
+      .orderBy(desc(subscriptionPayments.createdAt), desc(subscriptionPayments.id))
+      .limit(pageSize)
+      .offset(offset),
+    db
+      .select({ value: count() })
+      .from(subscriptionPayments)
+      .innerJoin(academies, eq(academies.id, subscriptionPayments.academyId))
+      .innerJoin(academySubscriptions, eq(academySubscriptions.id, subscriptionPayments.subscriptionId))
+      .where(where),
+    db.select({ value: count() }).from(subscriptionPayments),
+    db
+      .select({ currency: subscriptionPayments.currency, amountCents: sum(subscriptionPayments.amountCents) })
+      .from(subscriptionPayments)
+      .innerJoin(academies, eq(academies.id, subscriptionPayments.academyId))
+      .innerJoin(academySubscriptions, eq(academySubscriptions.id, subscriptionPayments.subscriptionId))
+      .where(and(eq(subscriptionPayments.status, "verified"), where))
+      .groupBy(subscriptionPayments.currency)
+      .orderBy(asc(subscriptionPayments.currency)),
+  ]);
+
+  return {
+    payments: rows.map((row) => toRecord(row.payment)),
+    totalCount,
+    overallCount,
+    verifiedTotals: verifiedRows.map((row) => ({ currency: row.currency, amountCents: Number(row.amountCents ?? 0) })),
+  };
+}
+
+export interface SubscriptionPaymentFilterOptions {
+  /** Distinct recorded methods, A to Z. */
+  methods: string[];
+  /** Academies that have at least one payment, A to Z. */
+  academies: { id: string; name: string }[];
+  /** Plans with at least one payment (through the paid subscription), A to Z. */
+  plans: { id: string; name: string }[];
+  /** "YYYY-MM" months that have payments (UTC), newest first. */
+  months: string[];
+}
+
+/** Option lists for the P07 filter bar, built from the payments that exist
+ * (design: "All methods" + each method present, "All academies" + each
+ * academy with payments, "Any date" + months; plus "All plans" + each plan
+ * that has payments). */
+export async function getSubscriptionPaymentFilterOptions(): Promise<SubscriptionPaymentFilterOptions> {
+  const monthExpr = sql<string>`to_char(${subscriptionPayments.receivedAt} at time zone 'UTC', 'YYYY-MM')`;
+  const [methodRows, academyRows, planRows, monthRows] = await Promise.all([
+    db
+      .selectDistinct({ method: subscriptionPayments.paymentMethod })
+      .from(subscriptionPayments)
+      .orderBy(asc(subscriptionPayments.paymentMethod)),
+    db
+      .selectDistinct({ id: academies.id, name: academies.name })
+      .from(subscriptionPayments)
+      .innerJoin(academies, eq(academies.id, subscriptionPayments.academyId))
+      .orderBy(asc(academies.name), asc(academies.id)),
+    db
+      .selectDistinct({ id: subscriptionPlans.id, name: subscriptionPlans.name })
+      .from(subscriptionPayments)
+      .innerJoin(academySubscriptions, eq(academySubscriptions.id, subscriptionPayments.subscriptionId))
+      .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
+      .orderBy(asc(subscriptionPlans.name), asc(subscriptionPlans.id)),
+    db.selectDistinct({ month: monthExpr }).from(subscriptionPayments).orderBy(desc(monthExpr)),
+  ]);
+  return {
+    methods: methodRows.map((row) => row.method),
+    academies: academyRows,
+    plans: planRows,
+    months: monthRows.map((row) => row.month),
+  };
 }
 
 export interface AcademySubscriptionOption {

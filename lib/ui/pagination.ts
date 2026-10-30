@@ -8,6 +8,16 @@
 export type PaginationItem = number | "ellipsis";
 
 /**
+ * Maximum (and default) number of records shown per page or returned by
+ * one list request anywhere in the app. Applies only to how many rows a
+ * list displays at once — never to business limits such as a plan's
+ * maximum students. Server-only batch reads (exports, picker option
+ * loads) use their own larger internal batch sizes; every client-callable
+ * list action validates against this.
+ */
+export const LIST_PAGE_SIZE_MAX = 10;
+
+/**
  * Parses a Next.js server-component `searchParams`' `page` value into a
  * valid 1-based page number — every paginated page in this app was
  * previously re-deriving this exact `Number.parseInt(...) || 1` dance

@@ -29,20 +29,30 @@ const WHEN = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", 
  * existing actions, which only ever touch the caller's own notifications.
  */
 export function NotificationsList({
+  basePath,
   notifications,
   unreadOnly,
   unreadCount,
+  allUnreadIds,
+  firstIndex,
   total,
 }: {
+  /** The route this inbox lives at; the All / Unread filter links stay on it. */
+  basePath: string;
+  /** The current page's rows. */
   notifications: NotificationListItem[];
   unreadOnly: boolean;
   unreadCount: number;
+  /** Every unread id across all pages (up to the bulk cap), for "Mark all as read". */
+  allUnreadIds: string[];
+  /** Zero-based index of the first row on this page, for the "Showing" line. */
+  firstIndex: number;
+  /** Rows matching the filter, across all pages. */
   total: number;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const unreadIds = notifications.filter((n) => n.readAt === null).map((n) => n.id);
 
   function mark(ids: string[]) {
     if (ids.length === 0) return;
@@ -71,11 +81,11 @@ export function NotificationsList({
       <section className="mb-3 overflow-hidden rounded-card border border-border bg-surface shadow-card">
         <div className="flex flex-wrap items-center gap-3 border-b border-border bg-[#FAFBFC] px-4 py-3">
           <nav aria-label="Filter notifications" className="flex overflow-hidden rounded-lg border border-border-strong bg-surface">
-            <Link href="/academy/notifications" aria-current={!unreadOnly ? "page" : undefined} className={segment(!unreadOnly)}>
+            <Link href={basePath} aria-current={!unreadOnly ? "page" : undefined} className={segment(!unreadOnly)}>
               All
             </Link>
             <Link
-              href="/academy/notifications?filter=unread"
+              href={`${basePath}?filter=unread`}
               aria-current={unreadOnly ? "page" : undefined}
               className={`${segment(unreadOnly)} border-l border-border-strong`}
             >
@@ -89,7 +99,7 @@ export function NotificationsList({
               Mark {selected.size} as read
             </Button>
           )}
-          <Button type="button" variant="secondary" disabled={pending || unreadIds.length === 0} onClick={() => mark(unreadIds)}>
+          <Button type="button" variant="secondary" disabled={pending || allUnreadIds.length === 0} onClick={() => mark(allUnreadIds)}>
             Mark all as read
           </Button>
         </div>
@@ -163,7 +173,7 @@ export function NotificationsList({
         )}
       </section>
       <p className="text-[13px] text-muted">
-        Showing {notifications.length} of {total}.
+        {total === 0 ? "Showing 0 of 0." : `Showing ${firstIndex + 1}–${firstIndex + notifications.length} of ${total}.`}
       </p>
     </>
   );

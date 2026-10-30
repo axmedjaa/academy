@@ -8,13 +8,12 @@ import { formatMoney } from "./money";
  * say exactly that, never "every N months".
  */
 
+/** Installment counts offered for a "Monthly installments" plan (1 is Full payment). */
+export const MONTHLY_INSTALLMENT_COUNTS = [2, 3, 4, 6, 12] as const;
+
 export const PAYMENT_PLAN_OPTIONS: { value: number; label: string }[] = [
-  { value: 1, label: "1 payment" },
-  { value: 2, label: "2 monthly payments" },
-  { value: 3, label: "3 monthly payments" },
-  { value: 4, label: "4 monthly payments" },
-  { value: 6, label: "6 monthly payments" },
-  { value: 12, label: "12 monthly payments" },
+  { value: 1, label: "Full payment" },
+  ...MONTHLY_INSTALLMENT_COUNTS.map((count) => ({ value: count, label: `${count} monthly installments` })),
 ];
 
 /** Same split as fee-periods.ts `splitIntoMonthlyInstallments`: equal
@@ -26,9 +25,9 @@ export function splitInstallments(totalCents: number, count: number): number[] {
   return installments;
 }
 
-/** "6 monthly payments of $30.00" (or "1 payment of $180.00"). */
+/** "6 monthly payments of $30.00" (or "Full payment of $180.00"). */
 export function describePaymentPlan(totalCents: number, count: number, currency: string): string {
-  if (count <= 1) return `1 payment of ${formatMoney(totalCents, currency)}`;
+  if (count <= 1) return `Full payment of ${formatMoney(totalCents, currency)}`;
   const parts = splitInstallments(totalCents, count);
   const first = formatMoney(parts[0], currency);
   const last = parts[count - 1];

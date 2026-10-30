@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
+  auditLogs,
   batchCourses,
   batchEnrollments,
   batchTrainerAssignments,
@@ -887,6 +888,23 @@ export type WithdrawStudentResult =
   | { ok: true; enrollment: BatchEnrollmentRecord }
   | { ok: false; error: BatchAssignmentActionError };
 
+/** The locked, verified enrollment handed to a withdrawal's in-transaction
+ * step (see `withdrawStudentFromBatch`'s `withinTransaction`). */
+export interface LockedWithdrawal {
+  academyId: string;
+  branchId: string;
+  enrollmentId: string;
+  studentId: string;
+  membershipRole: AcademyRole;
+}
+
+/** Thrown inside the transaction to roll it back with a caller's error. */
+class WithdrawStepRefused extends Error {
+  constructor(readonly error: BatchAssignmentActionError) {
+    super(error.message);
+  }
+}
+
 /** No hard delete — status = "withdrawn" is the only removal path for an
  * active enrollment; re-enrollment afterward inserts a fresh row (see this
  * file's module comment on the partial unique index). Branch-limited
@@ -894,6 +912,18 @@ export type WithdrawStudentResult =
 export async function withdrawStudentFromBatch(
   actorContext: AuthContext,
   enrollmentId: string,
+  /** Why the student left (design A02 withdraw dialog). Optional here —
+   * the batch roster withdraws without one — and stored only in the audit
+   * entry's context, so no schema change. */
+  options: {
+    reason?: string;
+    /** Runs inside the withdrawal's own transaction, after the enrollment
+     * row is locked and checked (academy, branch, still active) and before
+     * it is set to withdrawn. Returning an error rolls the whole withdrawal
+     * back — used by withdraw-with-refund (lib/academies/course-refunds.ts)
+     * so the refund and the withdrawal commit together or not at all. */
+    withinTransaction?: (tx: DbClient, locked: LockedWithdrawal) => Promise<BatchAssignmentActionError | null>;
+  } = {},
 ): Promise<WithdrawStudentResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -906,6 +936,13 @@ export async function withdrawStudentFromBatch(
   const parsedId = z.string().uuid().safeParse(enrollmentId);
   if (!parsedId.success) {
     return { ok: false, error: ENROLLMENT_NOT_FOUND };
+  }
+  const reason = options.reason?.trim() || undefined;
+  if (reason && reason.length > WITHDRAW_REASON_MAX) {
+    return {
+      ok: false,
+      error: { code: "validation", message: `Keep the reason under ${WITHDRAW_REASON_MAX} characters.` },
+    };
   }
 
   const result = await db.transaction(async (tx) => {
@@ -930,6 +967,17 @@ export async function withdrawStudentFromBatch(
       return { outcome: "invalid_transition" as const, status: existing.enrollment.status };
     }
 
+    if (options.withinTransaction) {
+      const refused = await options.withinTransaction(tx, {
+        academyId,
+        branchId: existing.branchId,
+        enrollmentId,
+        studentId: existing.enrollment.studentId,
+        membershipRole,
+      });
+      if (refused) throw new WithdrawStepRefused(refused);
+    }
+
     const [updated] = await tx
       .update(batchEnrollments)
       .set({ status: "withdrawn" })
@@ -947,13 +995,18 @@ export async function withdrawStudentFromBatch(
         branchId: existing.branchId,
         before: { status: existing.enrollment.status },
         after: { status: "withdrawn" },
+        ...(reason ? { context: { reason } } : {}),
       },
       tx,
     );
 
     return { outcome: "ok" as const, row: updated };
+  }).catch((error: unknown) => {
+    if (error instanceof WithdrawStepRefused) return { outcome: "refused" as const, error: error.error };
+    throw error;
   });
 
+  if (result.outcome === "refused") return { ok: false, error: result.error };
   if (result.outcome === "not_found") return { ok: false, error: ENROLLMENT_NOT_FOUND };
   if (result.outcome === "invalid_transition") {
     return {
@@ -965,6 +1018,57 @@ export async function withdrawStudentFromBatch(
     };
   }
   return { ok: true, enrollment: toEnrollmentRecord(result.row) };
+}
+
+export const WITHDRAW_REASON_MAX = 500;
+
+export interface EnrollmentWithdrawal {
+  /** When the enrollment was withdrawn (the withdraw audit entry's time). */
+  withdrawnAt: Date;
+  /** The reason given, when one was recorded. */
+  reason: string | null;
+}
+
+/**
+ * When, and why, each of these enrollments was withdrawn — read from the
+ * `withdrawStudentFromBatch` audit entries, since `batch_enrollments` has
+ * no withdrawn-at or reason column. Scoped to the caller's academy; ids the
+ * academy has no withdraw entry for (completed enrollments, or withdrawals
+ * that predate audit logging) are simply absent from the map.
+ */
+export async function listEnrollmentWithdrawals(
+  actorContext: AuthContext,
+  enrollmentIds: string[],
+): Promise<Map<string, EnrollmentWithdrawal>> {
+  const ids = enrollmentIds.filter((id) => z.string().uuid().safeParse(id).success);
+  if (ids.length === 0) return new Map();
+  const resolved = await resolveScopeAccess(actorContext);
+  if (!resolved.ok) return new Map();
+
+  const rows = await db
+    .select({ entityId: auditLogs.entityId, createdAt: auditLogs.createdAt, context: auditLogs.context })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.academyId, resolved.access.academyId),
+        eq(auditLogs.entityType, "batch_enrollment"),
+        eq(auditLogs.action, "withdrawStudentFromBatch"),
+        inArray(auditLogs.entityId, ids),
+      ),
+    )
+    .orderBy(auditLogs.createdAt);
+
+  const byEnrollment = new Map<string, EnrollmentWithdrawal>();
+  for (const row of rows) {
+    if (!row.entityId) continue;
+    const context = row.context as { reason?: unknown } | null;
+    // The latest entry wins (an enrollment is withdrawn at most once).
+    byEnrollment.set(row.entityId, {
+      withdrawnAt: row.createdAt,
+      reason: typeof context?.reason === "string" ? context.reason : null,
+    });
+  }
+  return byEnrollment;
 }
 
 /**

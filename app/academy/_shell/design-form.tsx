@@ -68,7 +68,7 @@ export function DesignDialog({
                 field.focus();
               }
             }}
-            className={`pointer-events-auto flex max-h-[92vh] w-full ${maxWidth} flex-col overflow-hidden rounded-2xl bg-surface shadow-[0_24px_48px_rgba(17,24,39,0.32)] animate-scale-in focus:outline-none`}
+            className={`pointer-events-auto flex max-h-[92dvh] w-full ${maxWidth} flex-col overflow-hidden rounded-2xl bg-surface shadow-[0_24px_48px_rgba(17,24,39,0.32)] animate-scale-in focus:outline-none`}
           >
             <div className="flex items-start gap-3 border-b border-border px-6 pb-4 pt-5">
               <div className="min-w-0 flex-1">

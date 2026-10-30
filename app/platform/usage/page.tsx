@@ -5,9 +5,9 @@ import { listAcademyUsageOverviewPage, USAGE_VIEW_CAPABILITY } from "@/lib/subsc
 import { UsageManager } from "./usage-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
-import { parsePageParam } from "@/lib/ui/pagination";
+import { LIST_PAGE_SIZE_MAX, parsePageParam } from "@/lib/ui/pagination";
 
-const PAGE_SIZE = 15;
+const PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 
 // PLAN.md Item 29 / DESIGN.md §7: "/platform/usage | A | Per-academy usage
 // bars vs. plan limits; over-limit rows visually flagged even though this
@@ -50,15 +50,8 @@ export default async function PlatformUsagePage({
   return (
     <div className={PAGE_WRAP}>
       <PageHeader
-        title="Usage & Allowances"
-        description={
-          <>
-            Per-academy usage vs. plan limits. This view is informational — allowance is
-            enforced server-side at the moment a branch/staff/student/course/storage-upload
-            is created, not here. Figures reflect the last time &quot;Recalculate&quot; was
-            run for that academy.
-          </>
-        }
+        title="Usage"
+        description="Allowance snapshot per academy. Creating records always checks live allowances, not this snapshot."
       />
       <UsageManager rows={rows} />
       <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} />

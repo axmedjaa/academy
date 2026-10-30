@@ -3,7 +3,7 @@ import { getAcademyStatusCounts, listPendingApprovalAcademies } from "@/lib/acad
 import {
   getPlatformReports,
   type ActiveAcademyTrendPoint,
-  type ExpiringSubscriptionRow,
+  type ExpiringSubscriptions,
   type RevenueBreakdownResult,
 } from "@/lib/subscriptions/reports";
 import { listSubscriptionPayments } from "@/lib/subscriptions/payments";
@@ -49,7 +49,7 @@ export interface AcademyCounts {
 
 export interface PlatformDashboardData {
   pendingApprovals: PendingApprovalRow[] | null;
-  expiringSubscriptions: ExpiringSubscriptionRow[] | null;
+  expiringSubscriptions: ExpiringSubscriptions | null;
   recentPayments: RecentSubscriptionPaymentRow[] | null;
   /** Same `listAcademies()` call already made for `pendingApprovals` above,
    * just also summarized into counts — no second query. Null under the

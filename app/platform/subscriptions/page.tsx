@@ -5,10 +5,15 @@ import { listPlatformSubscriptionsPage } from "@/lib/subscriptions/renew";
 import { SubscriptionsManager } from "./subscriptions-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { PaginationNav } from "@/components/pagination-nav";
-import { parsePageParam } from "@/lib/ui/pagination";
+import { LIST_PAGE_SIZE_MAX, parsePageParam } from "@/lib/ui/pagination";
 
 const RENEW_CAPABILITY = "renewSubscription";
-const PAGE_SIZE = 15;
+const PAGE_SIZE = LIST_PAGE_SIZE_MAX;
+
+/** The time this request is rendered at (terms are counted from it). */
+function requestTime(): number {
+  return Date.now();
+}
 
 // PLAN.md Item 30 / DESIGN.md §8: "/platform/subscriptions | A | ... Renew
 // is platform_owner-only and absent for every platform_admin (§5)." Unlike
@@ -54,11 +59,22 @@ export default async function PlatformSubscriptionsPage({
   const page = parsePageParam(params);
   const { subscriptions, totalCount } = await listPlatformSubscriptionsPage(page, PAGE_SIZE);
 
+  const from = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const to = Math.min(page * PAGE_SIZE, totalCount);
+
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader title="Subscriptions" />
-      <SubscriptionsManager subscriptions={subscriptions} />
-      <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} />
+      <PageHeader title="Subscriptions" description="Subscription state and renewals for every academy." />
+      <SubscriptionsManager subscriptions={subscriptions} now={requestTime()} />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-[13px] text-muted">{totalCount > 0 ? `Showing ${from}–${to} of ${totalCount.toLocaleString("en-US")}` : ""}</p>
+        <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} showTotal={false} />
+      </div>
+      {/* Design P05: a plain grey note under the list, not a callout. */}
+      <p className="mb-8 text-[13px] text-muted">
+        Renew extends the term by one billing period from the later of the current end date and today. It needs a verified,
+        unused payment.
+      </p>
     </div>
   );
 }

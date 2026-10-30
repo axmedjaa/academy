@@ -46,6 +46,9 @@ async function createPlan(maxStudents = 100): Promise<string> {
   const [plan] = await db
     .insert(subscriptionPlans)
     .values({
+      // Never offered at registration, even if cleanup is interrupted.
+      isActive: false,
+      description: "Automated test fixture (lib/academies/register-student.test.ts)",
       name: `Register Student Test Plan ${randomUUID()}`,
       priceAmountCents: 1000,
       currency: "USD",

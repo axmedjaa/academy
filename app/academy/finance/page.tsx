@@ -5,7 +5,15 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { db } from "@/lib/db";
 import { studentCharges, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { listReceiptsForPayments, listStudentCharges, listStudentPayments } from "@/lib/academies/student-payments";
+import {
+  STUDENT_PAYMENT_LIST_STATUSES,
+  STUDENT_PAYMENT_METHODS,
+  listReceiptsForPayments,
+  listStudentCharges,
+  listStudentPayments,
+  type StudentPaymentListStatus,
+  type StudentPaymentMethod,
+} from "@/lib/academies/student-payments";
 import { listFeePeriodPaymentHistory } from "@/lib/academies/fee-periods";
 import { getStudentPhotoUrlsByIds, searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
 import { getStudentsOverview } from "@/lib/academies/students-overview";
@@ -28,8 +36,12 @@ import { PaginationNav } from "@/components/pagination-nav";
 import { FinanceCreateAction, FinanceExportButton } from "./finance-create";
 import { ExpensesTable, IncomeTable, PaymentsTable } from "./finance-tables";
 import { categoryChip } from "./finance-chips";
+import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
+import { ChipParamFilter, ClearFilters, FilterBar, FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
+import { describeAllocations } from "@/lib/ui/payment-allocations";
+import { getRefundedAmountsForPayments } from "@/lib/academies/course-refunds";
 
-const FINANCE_PAGE_SIZE = 15;
+const FINANCE_PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 
 type FinanceTab = "charges" | "payments" | "income" | "expenses";
 const TAB_LABEL: Record<FinanceTab, string> = { charges: "Charges", payments: "Payments", income: "Income", expenses: "Expenses" };
@@ -256,7 +268,19 @@ export default async function AcademyFinancePage({
 
   /* ---------------------------------------------------------------- */
   if (tab === "payments") {
-    const paymentsResult = await listStudentPayments(context, {}, { page, pageSize: FINANCE_PAGE_SIZE });
+    // Search and filters (design `pay` table: searchable). Unknown values are
+    // ignored rather than trusted; the list call scopes everything to this
+    // academy and re-checks access itself.
+    const q = get("q").trim();
+    const statusParam = get("status");
+    const status = (STUDENT_PAYMENT_LIST_STATUSES as readonly string[]).includes(statusParam)
+      ? (statusParam as StudentPaymentListStatus)
+      : undefined;
+    const methodParam = get("method");
+    const method = (STUDENT_PAYMENT_METHODS as readonly string[]).includes(methodParam) ? (methodParam as StudentPaymentMethod) : undefined;
+    const filtered = Boolean(q || status || method);
+
+    const paymentsResult = await listStudentPayments(context, { q, status, method }, { page, pageSize: FINANCE_PAGE_SIZE });
     if (!paymentsResult.ok) return <PageMessage title="Access denied" message={paymentsResult.error.message} />;
     const payments = paymentsResult.payments;
     const canManage = paymentsResult.canManage;
@@ -266,7 +290,8 @@ export default async function AcademyFinancePage({
       studentsById(payments.map((p) => p.studentId)),
       resolveStaffNames(academyId, payments.map((p) => p.recordedBy)),
       listReceiptsForPayments(context, payments.map((p) => p.id)),
-      listFeePeriodPaymentHistory(context, {}),
+      // Only this page's payments: what each one was allocated to.
+      listFeePeriodPaymentHistory(context, { paymentIds: payments.map((p) => p.id) }),
       chargeIds.length
         ? db
             .select({ id: studentCharges.id, description: studentCharges.description })
@@ -277,9 +302,11 @@ export default async function AcademyFinancePage({
       canManage ? studentOptions() : Promise.resolve([]),
     ]);
     const chargeDescription = Object.fromEntries(chargeRows.map((row) => [row.id, row.description]));
-    const courseByPayment = Object.fromEntries(
-      (history.ok ? history.rows : []).map((row) => [row.paymentId, `${row.courseName} · ${row.batchName}`]),
-    );
+    // Refunds recorded out of these payments (course withdrawals).
+    const refundedByPayment = await getRefundedAmountsForPayments(academyId, payments.map((p) => p.id));
+    // One payment can fund several fee periods, even of several courses: it
+    // stays one row, labelled with every course it was allocated to.
+    const allocationsByPayment = new Map((history.ok ? history.rows : []).map((row) => [row.paymentId, describeAllocations(row.periods)]));
 
     const rows = payments.map((payment) => ({
       payment,
@@ -289,9 +316,11 @@ export default async function AcademyFinancePage({
       recordedByName: staffNames[payment.recordedBy] ?? "Staff member",
       appliesTo:
         (payment.chargeId ? chargeDescription[payment.chargeId] : undefined) ??
-        courseByPayment[payment.id] ??
+        allocationsByPayment.get(payment.id)?.label ??
         (payment.reversedPaymentId ? "Reversal" : "General payment"),
+      appliesToDetail: allocationsByPayment.get(payment.id)?.detail ?? null,
       receipt: receipts.get(payment.id) ? { id: receipts.get(payment.id)!.id, number: receipts.get(payment.id)!.receiptNumber } : null,
+      refundedCents: refundedByPayment.get(payment.id) ?? 0,
     }));
 
     return (
@@ -313,9 +342,38 @@ export default async function AcademyFinancePage({
           ) : null,
         )}
         <TabLinks tabs={tabLinks} current={tab} label="Finance sections" />
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <ChipParamFilter
+            param="status"
+            label="Filter by payment status"
+            options={[
+              { value: "", label: "All" },
+              { value: "posted", label: "Posted" },
+              { value: "reversed", label: "Reversed" },
+              { value: "reversal", label: "Reversal" },
+            ]}
+          />
+        </div>
+        <FilterBar>
+          <SearchField placeholder="Search student, number or reference" />
+          <FilterSelect
+            param="method"
+            label="Method"
+            options={[
+              { value: "", label: "All methods" },
+              { value: "cash", label: "Cash" },
+              { value: "mobile_money", label: "Mobile money" },
+              { value: "bank_transfer", label: "Bank transfer" },
+            ]}
+          />
+          {filtered && <ClearFilters params={["q", "status", "method"]} compact />}
+        </FilterBar>
         {payments.length === 0 ? (
           <Section className="mb-8">
-            <EmptyState message="No payments to show yet." icon={<Icon name="payments" />} />
+            <EmptyState
+              message={filtered ? "No payment matches these filters." : "No payments to show yet."}
+              icon={<Icon name="payments" />}
+            />
           </Section>
         ) : (
           <PaymentsTable
@@ -334,8 +392,9 @@ export default async function AcademyFinancePage({
           />
         )}
         <NoteBlock>
-          Student payments post immediately and cannot be edited. A Manager corrects one by reversing or adjusting it; the
-          original stays on record with a linked reversal, and nobody can reverse a payment they recorded themselves.
+          Student payments post immediately and cannot be edited. They are corrected by reversing or adjusting them: the
+          person who recorded a payment can correct it, and a Manager can correct any payment. The original stays on record
+          with a linked reversal.
         </NoteBlock>
       </div>
     );
@@ -359,10 +418,12 @@ export default async function AcademyFinancePage({
           <IncomeTable
             rows={records.map((record) => ({ record, recordedByName: staffNames[record.recordedBy] ?? "Staff member" }))}
             canReverse={incomeResult.canCreate}
-            currentUserId={context.userId}
           />
         )}
-        <NoteBlock>Income posts directly with no approval step. Book sale payments appear here automatically.</NoteBlock>
+        <NoteBlock>
+          Income posts directly with no approval step and is corrected by reversing or adjusting it, including by whoever
+          recorded it. Book sale payments appear here automatically.
+        </NoteBlock>
       </div>
     );
   }
@@ -391,8 +452,8 @@ export default async function AcademyFinancePage({
       )}
       <NoteBlock>
         Expenses keep an approval workflow: a new expense is a draft until it is submitted for approval. Approved expenses
-        are corrected by reversing or adjusting them, never edited, and nobody can reverse an expense they recorded
-        themselves.
+        are corrected by reversing or adjusting them, never edited: whoever submitted an expense can correct it, and an
+        Administrator or Manager can correct any expense.
       </NoteBlock>
     </div>
   );

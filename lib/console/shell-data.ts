@@ -160,9 +160,8 @@ export async function getPlatformConsoleShellData(context: AuthContext): Promise
       email,
       roleLabel: context.platformRole ? PLATFORM_ROLE_LABELS[context.platformRole] : "Platform staff",
     },
-    // No platform notifications page exists yet (Screen Inventory S03:
-    // Platform route unresolved) — the bell previews only.
-    notifications: { unreadCount: unread.length, latest, viewAllHref: null },
+    // The shared account inbox (design S03 in the Platform shell).
+    notifications: { unreadCount: unread.length, latest, viewAllHref: "/account/notifications" },
     search: canSearchAcademies || canSearchPayments ? { placeholder, label: placeholder } : null,
     contextLabel: null,
   };

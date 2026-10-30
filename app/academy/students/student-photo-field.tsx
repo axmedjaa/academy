@@ -8,6 +8,7 @@ import {
 } from "@/lib/academies/students-actions";
 import { requestNewStudentPhotoUploadUrlAction } from "@/lib/academies/register-student-actions";
 import { ConfirmButton, type ConfirmActionResult } from "@/app/academy/_shell/confirm-dialog";
+import { Icon } from "@/app/academy/_shell/icons";
 import { showSuccessToast } from "@/lib/ui/toast";
 import { MAX_RASTER_IMAGE_SIZE_BYTES, RASTER_IMAGE_ACCEPT_ATTRIBUTE, isRasterImageContentType } from "@/lib/storage/upload-policy";
 
@@ -50,6 +51,9 @@ type Props =
       studentId: string;
       currentPhotoUrl: string | null;
       onChanged: () => void;
+      /** Design A02 "Student photo" card: large avatar, title and text,
+       * and the upload button on the right. Needs the name for initials. */
+      hero?: { fullName: string };
     };
 
 export function StudentPhotoField(props: Props) {
@@ -160,6 +164,68 @@ export function StudentPhotoField(props: Props) {
   const hasCurrentPhoto = props.mode === "edit" && Boolean(props.currentPhotoUrl) && !previewUrl;
   const busy = status === "uploading" || status === "confirming";
   const hasNewPhoto = props.mode === "new" && (Boolean(uploadedKey) || Boolean(previewUrl));
+
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
+      onChange={handleFileChange}
+      disabled={busy}
+      className="absolute h-px w-px opacity-0"
+    />
+  );
+
+  if (props.mode === "edit" && props.hero) {
+    const initials = props.hero.fullName
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("");
+    return (
+      <section className="mb-8 flex flex-wrap items-center gap-5 rounded-card border border-border bg-surface p-5 shadow-card">
+        <span className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-surface bg-brand-tint text-[28px] font-bold text-brand shadow-[0_2px_10px_rgba(17,24,39,0.14)]">
+          {displayedPreviewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- a local blob: preview or a short-lived signed R2 URL.
+            <img src={displayedPreviewUrl} alt={`Photo of ${props.hero.fullName}`} className="h-full w-full object-cover" />
+          ) : (
+            <span aria-hidden="true">{initials}</span>
+          )}
+        </span>
+        <div className="min-w-[180px] flex-1">
+          <h2 className="text-base font-semibold text-ink">Student photo</h2>
+          <p className="mt-1 max-w-[340px] text-[13px] text-muted">
+            Shown on the student list and the ID card. JPEG, PNG, WebP or AVIF, up to {MAX_SIZE_LABEL}.
+          </p>
+          {error && (
+            <span role="alert" className="mt-1 block text-xs font-medium text-[#B91C1C]">
+              {error}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {hasCurrentPhoto && !busy && (
+            <ConfirmButton
+              label="Remove"
+              title="Remove this student's photo?"
+              description="This permanently deletes the current photo. This cannot be undone."
+              successMessage="Photo removed."
+              onConfirm={handleRemove}
+              onSuccess={props.onChanged}
+            />
+          )}
+          <label
+            className={`relative inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-brand px-5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-brand-hover ${busy ? "pointer-events-none opacity-60" : ""}`}
+          >
+            <Icon name="upload" width={18} height={18} />
+            {busy ? (status === "confirming" ? "Verifying…" : "Uploading…") : displayedPreviewUrl ? "Change image" : "Upload image"}
+            {fileInput}
+          </label>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-1.5">
