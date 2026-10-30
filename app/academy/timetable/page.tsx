@@ -4,13 +4,10 @@ import { listAcademyTimetable } from "@/lib/academies/timetables";
 import { listBatches } from "@/lib/academies/batches";
 import { listBranches } from "@/lib/academies/branches";
 import { listCourses } from "@/lib/academies/courses";
-import { listStaff } from "@/lib/academies/staff";
+import { listStaffSummaries } from "@/lib/academies/staff";
 import { TimetableList } from "./timetable-list";
 import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { db } from "@/lib/db";
-import { academies } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
 
 /**
  * PLAN.md Item 45: `/academy/timetable` — academy-wide timetable CRUD, no
@@ -24,7 +21,20 @@ export default async function AcademyTimetablePage() {
     redirect("/login");
   }
 
-  const result = await listAcademyTimetable(context);
+  // Performance plan P4: these reads are independent of each other, so they
+  // run together instead of one after another. Each one still applies its
+  // own gate and scoping, and the option lists below stay best-effort
+  // exactly as before (a failed list just leaves its select empty).
+  const [result, branchesResult, batchesResult, coursesResult, staffResult, access] = await Promise.all([
+    listAcademyTimetable(context),
+    listBranches(context),
+    listBatches(context),
+    listCourses(context),
+    // Only id and name are used here, so the lighter read (same gate and
+    // visibility as listStaff, no deletion-eligibility counts) is enough.
+    listStaffSummaries(context),
+    checkAcademyAccessForContext(context),
+  ]);
 
   if (!result.ok) {
     return (
@@ -39,30 +49,18 @@ export default async function AcademyTimetablePage() {
   // create form — all already apply the same branch-scoping (for
   // branch-limited roles) or permission gating the timetable action itself
   // uses, so nothing here widens access beyond what the caller already has.
-  const branchesResult = await listBranches(context);
   const branchOptions = branchesResult.ok ? branchesResult.branches : [];
-  const batchesResult = await listBatches(context);
   const batchOptions = batchesResult.ok ? batchesResult.batches : [];
   // Courses are academy-wide (no branch_id of their own — see
   // lib/academies/timetables.ts's own module comment); "courses available
   // at a branch" is derived client-side from batchOptions, not from a
   // courses.branch_id column that doesn't exist.
-  const coursesResult = await listCourses(context);
   const courseOptions = coursesResult.ok ? coursesResult.courses : [];
-  // Same listStaff + { id, fullName } mapping already used by
-  // app/academy/batches/[batchId]/page.tsx's "Assign trainer" field.
-  const staffResult = await listStaff(context);
   const staffOptions = staffResult.ok ? staffResult.staff.map((s) => ({ id: s.id, fullName: s.fullName })) : [];
 
-  // Display-only: the academy name for the timetable card's eyebrow. The
-  // layout already passed the access gate; this resolves the caller's own
-  // academy id the same way every page does.
-  const access = await checkAcademyAccessForContext(context);
-  const academyRow =
-    access.level !== "blocked"
-      ? await db.select({ name: academies.name }).from(academies).where(eq(academies.id, access.academyId)).limit(1)
-      : [];
-  const academyName = academyRow[0]?.name ?? "Academy";
+  // Display-only: the academy name for the timetable card's eyebrow, from
+  // the access gate's own academy row (the layout already passed the gate).
+  const academyName = access.level !== "blocked" ? access.academy.name || "Academy" : "Academy";
 
   return (
     <div className={PAGE_WRAP}>

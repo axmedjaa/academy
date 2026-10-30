@@ -1,4 +1,5 @@
 import { and, eq, inArray, ne, sql, type SQL } from "drizzle-orm";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -6,7 +7,6 @@ import {
   batches,
   branches,
   courses,
-  staffBranchAssignments,
   staffProfiles,
   timetables,
 } from "@/lib/db/schema";
@@ -49,14 +49,6 @@ import type { AcademyRole } from "@/lib/auth/roles";
  * CRITICAL — Decision #21: no attendance/check-in concept anywhere in this
  * file, its schema, or its UI.
  */
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set([
-  "admissions_officer",
-  "trainer",
-]);
-
-function isBranchLimited(role: AcademyRole): boolean {
-  return BRANCH_LIMITED_ROLES.has(role);
-}
 
 function canManage(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
@@ -83,30 +75,12 @@ const BATCH_NOT_FOUND: TimetableActionError = {
 };
 
 /** Same per-file join-pattern copy as batches.ts/batch-assignments.ts. */
-async function getAssignedBranchIds(
-  executor: DbClient,
-  academyId: string,
-  userId: string,
-): Promise<string[]> {
-  const [profile] = await executor
-    .select({ id: staffProfiles.id })
-    .from(staffProfiles)
-    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)))
-    .limit(1);
-  if (!profile) return [];
-
-  const assignments = await executor
-    .select({ branchId: staffBranchAssignments.branchId })
-    .from(staffBranchAssignments)
-    .where(eq(staffBranchAssignments.staffProfileId, profile.id));
-
-  return assignments.map((row) => row.branchId);
-}
 
 interface ResolvedScopeAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  academyWide: boolean;
 }
 
 type ResolveScopeAccessResult =
@@ -129,11 +103,11 @@ async function resolveScopeAccess(actorContext: AuthContext): Promise<ResolveSco
 
   return {
     ok: true,
-    access: { academyId: access.academyId, membershipRole: access.membershipRole, permissionLevel },
+    access: { academyId: access.academyId, membershipRole: access.membershipRole, academyWide: access.academyWide, permissionLevel },
   };
 }
 
-/** Verifies a branch-limited caller may act on the given branchId — the
+/** Verifies a caller without all-branch access may act on the given branchId — the
  * identical branch, not derived from a batch, since a timetable entry's own
  * `branch_id` is the authoritative scope (it need not match the batch's
  * branch, though in practice it always will since a batch belongs to one
@@ -141,11 +115,11 @@ async function resolveScopeAccess(actorContext: AuthContext): Promise<ResolveSco
 async function assertBranchInScope(
   executor: DbClient,
   academyId: string,
-  membershipRole: AcademyRole,
+  academyWide: boolean,
   userId: string,
   branchId: string,
 ): Promise<boolean> {
-  if (!isBranchLimited(membershipRole)) return true;
+  if (academyWide) return true;
   const assignedIds = await getAssignedBranchIds(executor, academyId, userId);
   return assignedIds.includes(branchId);
 }
@@ -442,7 +416,7 @@ export async function createWeeklyTimetableEntries(
 ): Promise<CreateWeeklyTimetableResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -460,7 +434,7 @@ export async function createWeeklyTimetableEntries(
   const inScope = await assertBranchInScope(
     db,
     academyId,
-    membershipRole,
+    academyWide,
     actorContext.userId,
     data.branchId,
   );
@@ -635,7 +609,7 @@ export async function listAcademyTimetable(
 ): Promise<ListAcademyTimetableResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, academyWide } = resolved.access;
 
   const rows = await db
     .select({
@@ -658,7 +632,7 @@ export async function listAcademyTimetable(
     const inScope = await assertBranchInScope(
       db,
       academyId,
-      membershipRole,
+      academyWide,
       actorContext.userId,
       row.entry.branchId,
     );
@@ -688,7 +662,7 @@ export async function listTimetableForBatches(
 ): Promise<ListAcademyTimetableResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, academyWide } = resolved.access;
   const ids = [...new Set(batchIds)].filter((id) => z.string().uuid().safeParse(id).success);
   if (ids.length === 0) return { ok: true, entries: [], canManage: canManage(permissionLevel) };
 
@@ -713,7 +687,7 @@ export async function listTimetableForBatches(
   for (const row of rows) {
     let inScope = scopeByBranch.get(row.entry.branchId);
     if (inScope === undefined) {
-      inScope = await assertBranchInScope(db, academyId, membershipRole, actorContext.userId, row.entry.branchId);
+      inScope = await assertBranchInScope(db, academyId, academyWide, actorContext.userId, row.entry.branchId);
       scopeByBranch.set(row.entry.branchId, inScope);
     }
     if (inScope) visible.push(row);
@@ -745,7 +719,7 @@ export async function listTimetableEntries(
 ): Promise<ListTimetableEntriesResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, academyWide } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(batchId);
   if (!parsedId.success) return { ok: false, error: BATCH_NOT_FOUND };
@@ -764,7 +738,7 @@ export async function listTimetableEntries(
     const inScope = await assertBranchInScope(
       db,
       academyId,
-      membershipRole,
+      academyWide,
       actorContext.userId,
       row.branchId,
     );
@@ -818,7 +792,7 @@ export async function updateTimetableEntry(
 ): Promise<UpdateTimetableEntryResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -847,7 +821,7 @@ export async function updateTimetableEntry(
     const inScope = await assertBranchInScope(
       tx,
       academyId,
-      membershipRole,
+      academyWide,
       actorContext.userId,
       existing.branchId,
     );
@@ -950,7 +924,7 @@ export async function deleteTimetableEntry(
 ): Promise<DeleteTimetableEntryResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -970,7 +944,7 @@ export async function deleteTimetableEntry(
     const inScope = await assertBranchInScope(
       tx,
       academyId,
-      membershipRole,
+      academyWide,
       actorContext.userId,
       existing.branchId,
     );

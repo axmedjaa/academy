@@ -22,6 +22,6 @@ export default async function AccountLayout({ children }: LayoutProps<"/account"
   const access = await checkAcademyAccessForContext(context);
   if (access.level === "blocked") return children;
 
-  const data = await getAcademyConsoleShellData(context, access.academyId, access.membershipRole);
+  const data = await getAcademyConsoleShellData(context, access);
   return <ConsoleShell data={data}>{children}</ConsoleShell>;
 }

@@ -1,7 +1,8 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { auditLogs, batches, branches, staffBranchAssignments, staffProfiles, students, timetables } from "@/lib/db/schema";
+import { auditLogs, batches, branches, staffBranchAssignments, students, timetables } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   getAcademyPermissionLevel,
@@ -35,21 +36,6 @@ import type { AcademyRole } from "@/lib/auth/roles";
  */
 export const ACADEMY_BRANCHES_ACTION = "academy.branches";
 
-// PLAN.md §6: "further by branch_id for branch-limited roles (Admissions
-// Officer, Trainer) — academy-wide roles (Academy Owner, Academy
-// Administrator, Manager, Finance Officer) skip the branch filter by
-// design, not by accident." Finance Officer has no access to this row at
-// all (permission level "none"), so it never reaches the branch-filter
-// question, but is listed in PLAN.md's academy-wide group for
-// completeness/consistency with that section's own wording.
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set([
-  "admissions_officer",
-  "trainer",
-]);
-
-function isBranchLimited(role: AcademyRole): boolean {
-  return BRANCH_LIMITED_ROLES.has(role);
-}
 
 function canManage(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
@@ -59,6 +45,19 @@ export interface BranchActionError {
   code: "forbidden" | "validation" | "not_found" | "blocked" | "conflict" | "allowance" | "ineligible";
   message: string;
 }
+
+/** Adding, archiving, restoring and deleting branches change the academy's
+ * structure, so they need all-branch access (lib/academies/branch-access.ts)
+ * on top of the branches permission. */
+const STRUCTURE_FORBIDDEN: BranchActionError = {
+  code: "forbidden",
+  message: "Only someone with access to all branches can add, archive, restore or delete branches.",
+};
+
+const MAIN_BRANCH_PROTECTED: BranchActionError = {
+  code: "conflict",
+  message: "The Main Branch can't be archived or deleted. An academy always keeps its Main Branch.",
+};
 
 const FORBIDDEN: BranchActionError = {
   code: "forbidden",
@@ -107,6 +106,8 @@ export interface BranchRecord {
   status: "active" | "archived";
   address: string | null;
   phone: string | null;
+  /** The academy's Main Branch (Head Office) — exactly one per academy. */
+  isMain: boolean;
   createdAt: Date;
 }
 
@@ -119,6 +120,7 @@ function toRecord(row: typeof branches.$inferSelect): BranchRecord {
     status: row.status,
     address: row.address,
     phone: row.phone,
+    isMain: row.isMain,
     createdAt: row.createdAt,
   };
 }
@@ -132,30 +134,12 @@ function toRecord(row: typeof branches.$inferSelect): BranchRecord {
  * not an error, so a branch-limited role with no assignments yet simply
  * sees no branches rather than every branch.
  */
-async function getAssignedBranchIds(
-  executor: DbClient,
-  academyId: string,
-  userId: string,
-): Promise<string[]> {
-  const [profile] = await executor
-    .select({ id: staffProfiles.id })
-    .from(staffProfiles)
-    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)))
-    .limit(1);
-  if (!profile) return [];
-
-  const assignments = await executor
-    .select({ branchId: staffBranchAssignments.branchId })
-    .from(staffBranchAssignments)
-    .where(eq(staffBranchAssignments.staffProfileId, profile.id));
-
-  return assignments.map((row) => row.branchId);
-}
 
 interface ResolvedBranchAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  academyWide: boolean;
 }
 
 type ResolveBranchAccessResult =
@@ -183,6 +167,7 @@ async function resolveBranchAccess(
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
+      academyWide: access.academyWide,
       permissionLevel,
     },
   };
@@ -194,6 +179,11 @@ export type ListBranchesResult =
       branches: (BranchRecord & { deletionEligibility: BranchDeletionEligibilitySummary })[];
       permissionLevel: AcademyPermissionLevel;
       canManage: boolean;
+      /** Add, archive, restore and delete: the branches permission AND
+       * all-branch access (see STRUCTURE_FORBIDDEN). */
+      canManageStructure: boolean;
+      /** The caller works across every branch (owner, or granted). */
+      allBranchAccess: boolean;
     }
   | { ok: false; error: BranchActionError };
 
@@ -208,10 +198,10 @@ export type ListBranchesResult =
 export async function listBranches(actorContext: AuthContext): Promise<ListBranchesResult> {
   const resolved = await resolveBranchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, academyWide } = resolved.access;
 
   let rows: (typeof branches.$inferSelect)[];
-  if (isBranchLimited(membershipRole)) {
+  if (!academyWide) {
     const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
     rows =
       assignedIds.length === 0
@@ -245,14 +235,19 @@ export async function listBranches(actorContext: AuthContext): Promise<ListBranc
   return {
     ok: true,
     branches: rows.map((row) => {
-      const reasons = buildBranchDeletionReasons({
-        studentCount: studentCountByBranch.get(row.id) ?? 0,
-        batchCount: batchCountByBranch.get(row.id) ?? 0,
-      });
+      const reasons = [
+        ...(row.isMain ? ["it is the academy's Main Branch"] : []),
+        ...buildBranchDeletionReasons({
+          studentCount: studentCountByBranch.get(row.id) ?? 0,
+          batchCount: batchCountByBranch.get(row.id) ?? 0,
+        }),
+      ];
       return { ...toRecord(row), deletionEligibility: { eligible: reasons.length === 0, reasons } };
     }),
     permissionLevel,
     canManage: canManage(permissionLevel),
+    canManageStructure: canManage(permissionLevel) && academyWide,
+    allBranchAccess: academyWide,
   };
 }
 
@@ -273,7 +268,7 @@ export async function getBranch(
 ): Promise<GetBranchResult> {
   const resolved = await resolveBranchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole } = resolved.access;
+  const { academyId, academyWide } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(branchId);
   if (!parsedId.success) {
@@ -289,7 +284,7 @@ export async function getBranch(
     return { ok: false, error: NOT_FOUND };
   }
 
-  if (isBranchLimited(membershipRole)) {
+  if (!academyWide) {
     const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
     if (!assignedIds.includes(row.id)) {
       return { ok: false, error: NOT_FOUND };
@@ -352,10 +347,13 @@ export async function createBranch(
 ): Promise<CreateBranchResult> {
   const resolved = await resolveBranchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  if (!academyWide) {
+    return { ok: false, error: STRUCTURE_FORBIDDEN };
   }
 
   const parsed = createBranchSchema.safeParse(input);
@@ -450,10 +448,14 @@ export async function updateBranch(
 ): Promise<UpdateBranchResult> {
   const resolved = await resolveBranchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  // A branch outside the caller's scope is the same NOT_FOUND as a missing one.
+  if (!academyWide && !(await getAssignedBranchIds(db, academyId, actorContext.userId)).includes(branchId)) {
+    return { ok: false, error: NOT_FOUND };
   }
 
   const parsedId = z.string().uuid().safeParse(branchId);
@@ -550,10 +552,13 @@ export async function archiveBranch(
 ): Promise<ArchiveBranchResult> {
   const resolved = await resolveBranchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  if (!academyWide) {
+    return { ok: false, error: STRUCTURE_FORBIDDEN };
   }
 
   const parsedId = z.string().uuid().safeParse(branchId);
@@ -568,6 +573,7 @@ export async function archiveBranch(
       .where(and(eq(branches.id, branchId), eq(branches.academyId, academyId)))
       .limit(1);
     if (!existing) return null;
+    if (existing.isMain) return "main_branch" as const;
 
     const [updated] = await tx
       .update(branches)
@@ -593,6 +599,9 @@ export async function archiveBranch(
     return updated;
   });
 
+  if (result === "main_branch") {
+    return { ok: false, error: MAIN_BRANCH_PROTECTED };
+  }
   if (!result) {
     return { ok: false, error: NOT_FOUND };
   }
@@ -621,10 +630,13 @@ export async function restoreBranch(
 ): Promise<RestoreBranchResult> {
   const resolved = await resolveBranchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  if (!academyWide) {
+    return { ok: false, error: STRUCTURE_FORBIDDEN };
   }
 
   const parsedId = z.string().uuid().safeParse(branchId);
@@ -765,10 +777,13 @@ export async function getBranchDeletionEligibility(
 ): Promise<GetBranchDeletionEligibilityResult> {
   const resolved = await resolveBranchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  if (!academyWide) {
+    return { ok: false, error: STRUCTURE_FORBIDDEN };
   }
 
   const parsedId = z.string().uuid().safeParse(branchId);
@@ -777,7 +792,7 @@ export async function getBranchDeletionEligibility(
   }
 
   const [branch] = await db
-    .select({ id: branches.id, name: branches.name })
+    .select({ id: branches.id, name: branches.name, isMain: branches.isMain })
     .from(branches)
     .where(and(eq(branches.id, branchId), eq(branches.academyId, academyId)))
     .limit(1);
@@ -786,7 +801,7 @@ export async function getBranchDeletionEligibility(
   }
 
   const counts = await countBranchDependents(db, branch.id);
-  const reasons = buildBranchDeletionReasons(counts);
+  const reasons = [...(branch.isMain ? ["it is the academy's Main Branch"] : []), ...buildBranchDeletionReasons(counts)];
 
   return {
     ok: true,
@@ -816,10 +831,13 @@ export async function deleteBranch(
 ): Promise<DeleteBranchResult> {
   const resolved = await resolveBranchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  if (!academyWide) {
+    return { ok: false, error: STRUCTURE_FORBIDDEN };
   }
 
   const parsedId = z.string().uuid().safeParse(branchId);
@@ -835,6 +853,9 @@ export async function deleteBranch(
       .for("update");
     if (!existing) {
       return { ok: false, error: NOT_FOUND };
+    }
+    if (existing.isMain) {
+      return { ok: false, error: MAIN_BRANCH_PROTECTED };
     }
 
     if (confirmedName !== existing.name) {

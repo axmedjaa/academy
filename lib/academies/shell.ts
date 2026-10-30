@@ -1,25 +1,21 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { academies, branches, staffBranchAssignments, staffProfiles } from "@/lib/db/schema";
-import { listNotificationsForUser } from "@/lib/notifications/list-notifications";
+import { branches, staffBranchAssignments, staffProfiles, users } from "@/lib/db/schema";
 import type { AuthContext } from "@/lib/auth/auth-context";
-import type { AcademyRole } from "@/lib/auth/roles";
 
 /**
  * Read-only, presentation-only data for the `/academy/*` shell (sidebar +
- * topbar) — academy display name, the DESIGN.md §2.2 "Academy/Branch
- * Context Chip" label, and the notification-bell unread count. Deliberately
+ * topbar) — the caller's email and staff name, and the DESIGN.md §2.2
+ * "Academy/Branch Context Chip" label. Deliberately
  * NOT a permission gate of its own: every caller has already passed
  * `checkAcademyAccessForContext` (this file is only ever called from
  * app/academy/layout.tsx, after that check succeeds with "full"/"grace"),
  * so this only resolves display strings, never a new authorization
  * decision.
  *
- * Branch-limited roles (Admissions Officer, Trainer — same set
- * lib/academies/branches.ts and lib/academies/id-cards.ts each separately
- * define as BRANCH_LIMITED_ROLES, not exported from either) get their
- * assigned branch name(s) as a locked label; academy-wide roles get "All
- * branches". DESIGN.md §2.2 describes a *dropdown* for academy-wide roles
+ * Members without all-branch access (lib/academies/branch-access.ts) get
+ * their assigned branch name(s) as a locked label; all-branch members get
+ * "All branches". DESIGN.md §2.2 describes a *dropdown* for academy-wide roles
  * and a *locked, possibly multi-branch-switchable* control for
  * branch-limited roles with more than one assignment — this wave renders
  * both as a static label only (no functional branch-filter is wired to any
@@ -27,52 +23,50 @@ import type { AcademyRole } from "@/lib/auth/roles";
  * "build the navigation shell"). Documented scope decision, not a silent
  * simplification.
  */
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set(["admissions_officer", "trainer"]);
 
-export interface AcademyShellData {
-  academyName: string;
-  /** Storage key of the academy's own logo (shown in place of the Dardar
-   * mark in the sidebar), or null. */
-  logoRef: string | null;
+export interface AcademyShellIdentity {
+  email: string;
+  /** The caller's staff record name in this academy, or null if none. */
+  staffFullName: string | null;
   branchChipLabel: string;
-  unreadNotificationsCount: number;
 }
 
-export async function getAcademyShellData(
+/**
+ * Performance plan P3: the caller's email, staff name and branch chip label
+ * in ONE query — previously a `users` read, a `staff_profiles` read (done
+ * twice: once for the name, once for the branch lookup) and, for
+ * branch-limited roles, a dependent `staff_branch_assignments` read. The
+ * staff profile join is scoped to this academy and this user exactly as
+ * before; assignments are only turned into a label for branch-limited roles.
+ * Academy name/logo now come from the access gate's own academy row.
+ */
+export async function getAcademyShellIdentity(
   actorContext: AuthContext,
   academyId: string,
-  membershipRole: AcademyRole,
-): Promise<AcademyShellData> {
-  const [academy, unread] = await Promise.all([
-    db.select({ name: academies.name, logoRef: academies.logoRef }).from(academies).where(eq(academies.id, academyId)).limit(1),
-    listNotificationsForUser(actorContext, { unreadOnly: true }),
-  ]);
+  academyWide: boolean,
+): Promise<AcademyShellIdentity> {
+  const rows = await db
+    .select({
+      email: users.email,
+      staffProfileId: staffProfiles.id,
+      staffFullName: staffProfiles.fullName,
+      branchName: branches.name,
+    })
+    .from(users)
+    .leftJoin(staffProfiles, and(eq(staffProfiles.userId, users.id), eq(staffProfiles.academyId, academyId)))
+    .leftJoin(staffBranchAssignments, eq(staffBranchAssignments.staffProfileId, staffProfiles.id))
+    .leftJoin(branches, eq(branches.id, staffBranchAssignments.branchId))
+    .where(eq(users.id, actorContext.userId));
 
   let branchChipLabel = "All branches";
-  if (BRANCH_LIMITED_ROLES.has(membershipRole)) {
-    const [profile] = await db
-      .select({ id: staffProfiles.id })
-      .from(staffProfiles)
-      .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, actorContext.userId)))
-      .limit(1);
-
-    const assignedBranchNames = profile
-      ? (
-          await db
-            .select({ name: branches.name })
-            .from(staffBranchAssignments)
-            .innerJoin(branches, eq(branches.id, staffBranchAssignments.branchId))
-            .where(eq(staffBranchAssignments.staffProfileId, profile.id))
-        ).map((row) => row.name)
-      : [];
-
+  if (!academyWide) {
+    const assignedBranchNames = rows.map((row) => row.branchName).filter((name): name is string => name !== null);
     branchChipLabel = assignedBranchNames.length > 0 ? assignedBranchNames.join(", ") : "No branch assigned";
   }
 
   return {
-    academyName: academy[0]?.name ?? "Academy",
-    logoRef: academy[0]?.logoRef ?? null,
+    email: rows[0]?.email ?? "",
+    staffFullName: rows[0]?.staffFullName ?? null,
     branchChipLabel,
-    unreadNotificationsCount: unread.length,
   };
 }

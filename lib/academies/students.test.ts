@@ -41,6 +41,7 @@ import {
 } from "./students";
 import { enrollStudentInBatch, type PaymentPlanInput } from "./batch-assignments";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -104,7 +105,7 @@ async function addMembership(
   academyId: string,
   role: AcademyRole,
 ): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 /** Full fixture: a fresh academy, one active plan/subscription, and one
@@ -660,31 +661,50 @@ describe("branch-scoped IDOR — Admissions Officer (mutation-side; unaffected b
 
 });
 
-describe("Admissions Officer — academy-wide student visibility", () => {
-  it("sees all students in their academy, across multiple branches, with zero staff_profiles/branch-assignment rows at all", async () => {
-    const { academyId, context } = await setupAcademy("admissions_officer");
+async function grantAllBranches(academyId: string, userId: string): Promise<void> {
+  await db
+    .update(academyMemberships)
+    .set({ academyWide: true })
+    .where(and(eq(academyMemberships.academyId, academyId), eq(academyMemberships.userId, userId)));
+}
+
+// Multi-branch (migration 0037): an Admissions Officer now works in their
+// assigned branches like every other member without all-branch access; the
+// owner can grant all-branch access (Main Branch staff only).
+describe("Admissions Officer — branch-scoped student visibility", () => {
+  it("sees no students without a branch, only their branch once assigned, and every branch with all-branch access", { timeout: 60_000 }, async () => {
+    const { academyId, userId, context } = await setupAcademy("admissions_officer");
     const branchA = await insertBranchDirect(academyId);
     const branchB = await insertBranchDirect(academyId);
     const creatorId = await createUser();
     const studentA = await insertStudentDirect(academyId, branchA, creatorId);
     const studentB = await insertStudentDirect(academyId, branchB, creatorId);
-    // Deliberately no assignUserToBranches call — this officer has no
-    // staff_profiles row, and therefore no branch assignment, at all.
 
-    const result = await searchStudents(context);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.rows.map((r) => r.id).sort()).toEqual([studentA.id, studentB.id].sort());
+    const unassigned = await searchStudents(context);
+    expect(unassigned.ok && unassigned.data.rows).toEqual([]);
+
+    await assignUserToBranches(academyId, userId, [branchA]);
+    const assigned = await searchStudents(context);
+    expect(assigned.ok && assigned.data.rows.map((r) => r.id)).toEqual([studentA.id]);
+
+    await grantAllBranches(academyId, userId);
+    const everywhere = await searchStudents(context);
+    expect(everywhere.ok && everywhere.data.rows.map((r) => r.id).sort()).toEqual([studentA.id, studentB.id].sort());
   });
 
-  it("getStudent succeeds for a student in any branch, with zero branch assignment", async () => {
-    const { academyId, context } = await setupAcademy("admissions_officer");
-    const branchId = await insertBranchDirect(academyId);
+  it("getStudent succeeds for a student of their branch and is not_found for another branch's", { timeout: 60_000 }, async () => {
+    const { academyId, userId, context } = await setupAcademy("admissions_officer");
+    const ownBranch = await insertBranchDirect(academyId);
+    const otherBranch = await insertBranchDirect(academyId);
+    await assignUserToBranches(academyId, userId, [ownBranch]);
     const creatorId = await createUser();
-    const student = await insertStudentDirect(academyId, branchId, creatorId);
+    const own = await insertStudentDirect(academyId, ownBranch, creatorId);
+    const other = await insertStudentDirect(academyId, otherBranch, creatorId);
 
-    const result = await getStudent(context, student.id);
-    expect(result.ok).toBe(true);
+    expect((await getStudent(context, own.id)).ok).toBe(true);
+    const outside = await getStudent(context, other.id);
+    expect(outside.ok).toBe(false);
+    if (!outside.ok) expect(outside.error.code).toBe("not_found");
   });
 
   it("cannot see students from another academy", async () => {
@@ -716,18 +736,19 @@ describe("Admissions Officer — academy-wide student visibility", () => {
     if (!result.ok) expect(result.error.code).toBe("blocked");
   });
 
-  it("an explicit branchId filter narrows within the whole-academy dataset — never a restriction", async () => {
-    const { academyId, context } = await setupAcademy("admissions_officer");
+  it("an explicit branchId filter only narrows — it never widens past their branches", { timeout: 60_000 }, async () => {
+    const { academyId, userId, context } = await setupAcademy("admissions_officer");
     const branchA = await insertBranchDirect(academyId);
     const branchB = await insertBranchDirect(academyId);
+    await assignUserToBranches(academyId, userId, [branchA]);
     const creatorId = await createUser();
     const inBranchA = await insertStudentDirect(academyId, branchA, creatorId);
     await insertStudentDirect(academyId, branchB, creatorId);
 
-    const result = await searchStudents(context, { branchId: branchA });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.rows.map((r) => r.id)).toEqual([inBranchA.id]);
+    const own = await searchStudents(context, { branchId: branchA });
+    expect(own.ok && own.data.rows.map((r) => r.id)).toEqual([inBranchA.id]);
+    const other = await searchStudents(context, { branchId: branchB });
+    expect(other.ok && other.data.rows).toEqual([]);
   });
 });
 
@@ -1154,18 +1175,21 @@ describe("getAdmissionsView — applied (not-yet-enrolled) candidates", () => {
     expect(result.data.rows.map((r) => r.id)).not.toContain(archived.id);
   });
 
-  it("Admissions Officer sees admissions candidates across every branch in the academy, with zero branch assignment", async () => {
-    const { academyId, context } = await setupAcademy("admissions_officer");
+  it("Admissions Officer sees admissions candidates of their branch, and of every branch with all-branch access", { timeout: 60_000 }, async () => {
+    const { academyId, userId, context } = await setupAcademy("admissions_officer");
     const branchA = await insertBranchDirect(academyId);
     const branchB = await insertBranchDirect(academyId);
+    await assignUserToBranches(academyId, userId, [branchA]);
     const creatorId = await createUser();
     const candidateA = await insertStudentDirect(academyId, branchA, creatorId);
     const candidateB = await insertStudentDirect(academyId, branchB, creatorId);
 
-    const result = await getAdmissionsView(context);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.rows.map((r) => r.id).sort()).toEqual([candidateA.id, candidateB.id].sort());
+    const own = await getAdmissionsView(context);
+    expect(own.ok && own.data.rows.map((r) => r.id)).toEqual([candidateA.id]);
+
+    await grantAllBranches(academyId, userId);
+    const everywhere = await getAdmissionsView(context);
+    expect(everywhere.ok && everywhere.data.rows.map((r) => r.id).sort()).toEqual([candidateA.id, candidateB.id].sort());
   });
 
   it("Trainer sees a withdrawn (no longer actively enrolled) former student as an admissions candidate again, but not a currently-enrolled one", async () => {

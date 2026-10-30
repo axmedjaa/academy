@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { branchScopeCondition, getBranchScope, inBranchScope, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { books, bookSalePayments, bookSaleRefunds, bookSales, branches, incomeRecords, students } from "@/lib/db/schema";
@@ -77,6 +78,8 @@ interface ResolvedAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  /** Multi-branch: see lib/academies/branch-access.ts. */
+  scope: BranchScope;
 }
 
 type ResolveAccessResult = { ok: true; access: ResolvedAccess } | { ok: false; error: BookSaleActionError };
@@ -86,7 +89,7 @@ async function resolveAccess(actorContext: AuthContext): Promise<ResolveAccessRe
   if (access.level === "blocked") return { ok: false, error: { code: "blocked", message: access.message } };
   const permissionLevel = getAcademyPermissionLevel(access.membershipRole, ACADEMY_BOOKS_ACTION);
   if (permissionLevel === "none") return { ok: false, error: FORBIDDEN };
-  return { ok: true, access: { academyId: access.academyId, membershipRole: access.membershipRole, permissionLevel } };
+  return { ok: true, access: { academyId: access.academyId, membershipRole: access.membershipRole, permissionLevel, scope: await getBranchScope(access, actorContext.userId) } };
 }
 
 function isUniqueViolation(err: unknown): boolean {
@@ -219,7 +222,7 @@ export type CreateBookSaleResult = { ok: true; sale: BookSaleRecord } | { ok: fa
 export async function createBookSale(actorContext: AuthContext, input: CreateBookSaleInput): Promise<CreateBookSaleResult> {
   const resolved = await resolveAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
   if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
 
   const parsed = createBookSaleSchema.safeParse(input);
@@ -250,6 +253,11 @@ export async function createBookSale(actorContext: AuthContext, input: CreateBoo
         .where(eq(branches.id, data.branchId))
         .limit(1);
       if (!branch || branch.academyId !== academyId) return { kind: "branch_not_found" as const };
+    }
+    // Multi-branch: a member without all-branch access sells only for one of
+    // their own branches.
+    if (!scope.academyWide && (!data.branchId || !scope.branchIds.includes(data.branchId))) {
+      return { kind: "branch_not_found" as const };
     }
 
     const { subtotalCents, discountAmountCents, finalAmountCents } = computeBookSalePricing(
@@ -382,7 +390,7 @@ export type AddBookSalePaymentResult =
 export async function addBookSalePayment(actorContext: AuthContext, input: AddBookSalePaymentInput): Promise<AddBookSalePaymentResult> {
   const resolved = await resolveAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
   if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
 
   const parsed = addBookSalePaymentSchema.safeParse(input);
@@ -393,7 +401,7 @@ export async function addBookSalePayment(actorContext: AuthContext, input: AddBo
 
   const result = await db.transaction(async (tx) => {
     const [sale] = await tx.select().from(bookSales).where(eq(bookSales.id, data.bookSaleId)).for("update");
-    if (!sale || sale.academyId !== academyId) return { kind: "not_found" as const };
+    if (!sale || sale.academyId !== academyId || !inBranchScope(scope, sale.branchId)) return { kind: "not_found" as const };
 
     const [paidRow] = await tx
       .select({ total: sql<string>`coalesce(sum(${bookSalePayments.amountCents}), 0)` })
@@ -483,7 +491,7 @@ export type RefundBookSaleResult = { ok: true; refund: BookSaleRefundRecord } | 
 export async function refundBookSale(actorContext: AuthContext, input: RefundBookSaleInput): Promise<RefundBookSaleResult> {
   const resolved = await resolveAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
   if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
 
   const parsed = refundBookSaleSchema.safeParse(input);
@@ -494,7 +502,7 @@ export async function refundBookSale(actorContext: AuthContext, input: RefundBoo
 
   const result = await db.transaction(async (tx) => {
     const [sale] = await tx.select().from(bookSales).where(eq(bookSales.id, data.bookSaleId)).for("update");
-    if (!sale || sale.academyId !== academyId) return { kind: "not_found" as const };
+    if (!sale || sale.academyId !== academyId || !inBranchScope(scope, sale.branchId)) return { kind: "not_found" as const };
 
     const [paidRow] = await tx
       .select({ total: sql<string>`coalesce(sum(${bookSalePayments.amountCents}), 0)` })
@@ -624,9 +632,11 @@ export async function listBookSales(
 ): Promise<ListBookSalesResult> {
   const resolved = await resolveAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, scope } = resolved.access;
 
   const conditions = [eq(bookSales.academyId, academyId)];
+  const saleScope = branchScopeCondition(scope, bookSales.branchId);
+  if (saleScope) conditions.push(saleScope);
   if (filters.bookId) conditions.push(eq(bookSales.bookId, filters.bookId));
   if (filters.studentId) conditions.push(eq(bookSales.studentId, filters.studentId));
   if (filters.paymentStatus) conditions.push(eq(bookSales.paymentStatus, filters.paymentStatus));
@@ -713,7 +723,7 @@ export type GetBookSaleResult = { ok: true; sale: BookSaleDetail } | { ok: false
 export async function getBookSale(actorContext: AuthContext, bookSaleId: string): Promise<GetBookSaleResult> {
   const resolved = await resolveAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId } = resolved.access;
+  const { academyId, scope } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(bookSaleId);
   if (!parsedId.success) return { ok: false, error: SALE_NOT_FOUND };
@@ -725,7 +735,7 @@ export async function getBookSale(actorContext: AuthContext, bookSaleId: string)
     .leftJoin(students, eq(bookSales.studentId, students.id))
     .where(eq(bookSales.id, bookSaleId))
     .limit(1);
-  if (!row || row.sale.academyId !== academyId) return { ok: false, error: SALE_NOT_FOUND };
+  if (!row || row.sale.academyId !== academyId || !inBranchScope(scope, row.sale.branchId)) return { ok: false, error: SALE_NOT_FOUND };
 
   const payments = await db.select().from(bookSalePayments).where(eq(bookSalePayments.bookSaleId, bookSaleId));
   const refunds = await db.select().from(bookSaleRefunds).where(eq(bookSaleRefunds.bookSaleId, bookSaleId));
@@ -773,7 +783,7 @@ export async function getRecentSaleCountsByBook(
 ): Promise<{ ok: true; counts: Map<string, number> } | { ok: false; error: BookSaleActionError }> {
   const resolved = await resolveAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId } = resolved.access;
+  const { academyId, scope } = resolved.access;
 
   if (bookIds.length === 0) return { ok: true, counts: new Map() };
 
@@ -781,7 +791,7 @@ export async function getRecentSaleCountsByBook(
   const rows = await db
     .select({ bookId: bookSales.bookId, count: sql<string>`count(*)` })
     .from(bookSales)
-    .where(and(eq(bookSales.academyId, academyId), inArray(bookSales.bookId, bookIds), sql`${bookSales.createdAt} >= ${since}`))
+    .where(and(eq(bookSales.academyId, academyId), inArray(bookSales.bookId, bookIds), sql`${bookSales.createdAt} >= ${since}`, branchScopeCondition(scope, bookSales.branchId)))
     .groupBy(bookSales.bookId);
 
   return { ok: true, counts: new Map(rows.map((row) => [row.bookId, Number(row.count)])) };

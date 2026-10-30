@@ -27,6 +27,7 @@ import {
   updateGradeBands,
   type GradeBandInput,
 } from "./grade-configurations";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -81,7 +82,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function setupAcademy(

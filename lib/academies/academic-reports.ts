@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { batches, courses, examResults, exams } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { getAssignedBatchIds } from "@/lib/academies/batch-assignments";
+import { getAllowedBatchIds } from "@/lib/academies/exams";
 import {
   ACADEMY_EXAMS_ACTION,
   ACADEMY_RESULTS_ACTION,
@@ -230,9 +230,10 @@ export async function getAcademicReports(
     return { ok: false, error: FORBIDDEN };
   }
 
-  let allowedBatchIds: string[] | null = null;
-  if (membershipRole === "trainer") {
-    allowedBatchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
+  // Trainer: the batches they teach; multi-branch: anyone else without
+  // all-branch access, the batches of their branches (lib/academies/exams.ts).
+  const allowedBatchIds = await getAllowedBatchIds(db, access, actorContext.userId);
+  if (allowedBatchIds) {
     if (allowedBatchIds.length === 0) {
       return { ok: true, report: emptyReport(academyId, filters) };
     }

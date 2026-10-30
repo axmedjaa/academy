@@ -1,4 +1,5 @@
 import { and, count, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
@@ -7,8 +8,6 @@ import {
   branches,
   certificates,
   examResults,
-  staffBranchAssignments,
-  staffProfiles,
   studentCharges,
   studentDocuments,
   studentIdCards,
@@ -58,18 +57,12 @@ import type { AcademyRole } from "@/lib/auth/roles";
  * export directly, per the brief's own instruction, rather than keeping a
  * second, locally-defined constant around.
  */
+// Re-exported for existing importers; the shared definition lives in
+// lib/academies/branch-access.ts.
+export { getAssignedBranchIds };
+
 export const STUDENTS_PERMISSION_ACTION = ACADEMY_STUDENTS_ACTION;
 
-// PLAN.md §6 / lib/academies/branches.ts's identical set: the two
-// branch-limited roles across every Phase 2 area.
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set([
-  "admissions_officer",
-  "trainer",
-]);
-
-function isBranchLimited(role: AcademyRole): boolean {
-  return BRANCH_LIMITED_ROLES.has(role);
-}
 
 // Matrix cells: Full/Full/Manage/Manage/View/"View assigned" ->
 // full/full/manage/manage/view/view. "full" and "manage" are both
@@ -79,7 +72,7 @@ function isBranchLimited(role: AcademyRole): boolean {
 // which roles hold which label.
 const MANAGE_LEVELS: ReadonlySet<AcademyPermissionLevel> = new Set(["full", "manage"]);
 
-function canManageStudents(level: AcademyPermissionLevel): boolean {
+export function canManageStudents(level: AcademyPermissionLevel): boolean {
   return MANAGE_LEVELS.has(level);
 }
 
@@ -90,11 +83,11 @@ function canViewStudents(level: AcademyPermissionLevel): boolean {
 /** Stricter than `canManageStudents`/archive: Admissions Officer holds
  * "manage" on this action for their own assigned branch (see this file's
  * module comment), but permanent deletion is deliberately narrower than
- * archive — only Owner/Admin/Manager (the three academy-wide roles) may
- * ever delete a student, matching the same restriction already applied to
- * Programs/Courses/Batches. */
-function canDeleteStudent(role: AcademyRole, level: AcademyPermissionLevel): boolean {
-  return canManageStudents(level) && !isBranchLimited(role);
+ * archive — only a member with all-branch access (the owner, or an
+ * Admin/Manager/Finance Officer granted it) may ever delete a student,
+ * matching the same restriction already applied to Programs/Courses/Batches. */
+function canDeleteStudent(academyWide: boolean, level: AcademyPermissionLevel): boolean {
+  return canManageStudents(level) && academyWide;
 }
 
 export interface StudentActionError {
@@ -257,25 +250,6 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
  * isn't on Item 61's do-not-touch list, and adding `export` here is a
  * behavior-preserving change (no existing call site is affected).
  */
-export async function getAssignedBranchIds(
-  executor: DbClient,
-  academyId: string,
-  userId: string,
-): Promise<string[]> {
-  const [profile] = await executor
-    .select({ id: staffProfiles.id })
-    .from(staffProfiles)
-    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)))
-    .limit(1);
-  if (!profile) return [];
-
-  const assignments = await executor
-    .select({ branchId: staffBranchAssignments.branchId })
-    .from(staffBranchAssignments)
-    .where(eq(staffBranchAssignments.staffProfileId, profile.id));
-
-  return assignments.map((row) => row.branchId);
-}
 
 // Same per-file local copy as lib/academies/batches.ts's
 // branchExistsInAcademy — verifies a client-supplied branchId actually
@@ -297,6 +271,7 @@ interface ResolvedStudentAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  academyWide: boolean;
 }
 
 type ResolveStudentAccessResult =
@@ -324,6 +299,7 @@ async function resolveStudentAccess(
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
+      academyWide: access.academyWide,
       permissionLevel,
     },
   };
@@ -478,11 +454,11 @@ async function getTrainerVisibleStudentIds(
  * just this file's own `students`-rooted selects.
  */
 export async function resolveScope(
-  academyId: string,
-  membershipRole: AcademyRole,
+  scopeAccess: { academyId: string; membershipRole: AcademyRole; academyWide: boolean },
   userId: string,
   requestedBranchId: string | undefined,
 ): Promise<{ conditions: SQL[]; unreachable: boolean }> {
+  const { academyId, membershipRole, academyWide } = scopeAccess;
   const conditions: SQL[] = [eq(students.academyId, academyId)];
 
   if (membershipRole === "trainer") {
@@ -491,6 +467,14 @@ export async function resolveScope(
       return { conditions, unreachable: true };
     }
     conditions.push(inArray(students.id, visibleStudentIds));
+  } else if (!academyWide) {
+    // Multi-branch: a member without all-branch access sees only students of
+    // the branches they are assigned to (lib/academies/branch-access.ts).
+    const branchIds = await getAssignedBranchIds(db, academyId, userId);
+    if (branchIds.length === 0) {
+      return { conditions, unreachable: true };
+    }
+    conditions.push(inArray(students.branchId, branchIds));
   }
 
   if (requestedBranchId) {
@@ -513,7 +497,7 @@ export async function searchStudents(
 ): Promise<SearchStudentsResult> {
   const resolved = await resolveStudentAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canViewStudents(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -523,7 +507,7 @@ export async function searchStudents(
   const pageSize = normalizePageSize(pagination.pageSize);
   const offset = (page - 1) * pageSize;
 
-  const scope = await resolveScope(academyId, membershipRole, actorContext.userId, filters.branchId);
+  const scope = await resolveScope(resolved.access, actorContext.userId, filters.branchId);
   if (scope.unreachable) {
     return {
       ok: true,
@@ -531,7 +515,7 @@ export async function searchStudents(
       permissionLevel,
       canManage: canManageStudents(permissionLevel),
       membershipRole,
-      canDelete: canDeleteStudent(membershipRole, permissionLevel),
+      canDelete: canDeleteStudent(academyWide, permissionLevel),
     };
   }
 
@@ -608,7 +592,7 @@ export async function searchStudents(
     permissionLevel,
     canManage: canManageStudents(permissionLevel),
     membershipRole,
-    canDelete: canDeleteStudent(membershipRole, permissionLevel),
+    canDelete: canDeleteStudent(academyWide, permissionLevel),
   };
 }
 
@@ -632,7 +616,7 @@ export async function getStudent(
 ): Promise<GetStudentResult> {
   const resolved = await resolveStudentAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { permissionLevel } = resolved.access;
 
   if (!canViewStudents(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -643,7 +627,7 @@ export async function getStudent(
     return { ok: false, error: NOT_FOUND };
   }
 
-  const scope = await resolveScope(academyId, membershipRole, actorContext.userId, undefined);
+  const scope = await resolveScope(resolved.access, actorContext.userId, undefined);
   if (scope.unreachable) {
     return { ok: false, error: NOT_FOUND };
   }
@@ -696,7 +680,7 @@ export async function updateStudent(
 ): Promise<UpdateStudentResult> {
   const resolved = await resolveStudentAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManageStudents(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -716,7 +700,7 @@ export async function updateStudent(
   }
   const data = parsed.data;
 
-  const branchLimited = isBranchLimited(membershipRole);
+  const branchLimited = !academyWide;
   if (branchLimited && data.branchId !== undefined) {
     return {
       ok: false,
@@ -848,7 +832,7 @@ async function resolveStudentForPhoto(
 > {
   const resolved = await resolveStudentAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManageStudents(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -868,7 +852,7 @@ async function resolveStudentForPhoto(
     return { ok: false, error: NOT_FOUND };
   }
 
-  if (isBranchLimited(membershipRole)) {
+  if (!academyWide) {
     const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
     if (!assignedIds.includes(existing.branchId)) {
       return { ok: false, error: NOT_FOUND };
@@ -1276,7 +1260,7 @@ export async function getAdmissionsView(
 ): Promise<GetAdmissionsViewResult> {
   const resolved = await resolveStudentAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { membershipRole, permissionLevel } = resolved.access;
 
   if (!canViewStudents(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -1286,7 +1270,7 @@ export async function getAdmissionsView(
   const pageSize = normalizePageSize(pagination.pageSize);
   const offset = (page - 1) * pageSize;
 
-  const scope = await resolveScope(academyId, membershipRole, actorContext.userId, filters.branchId);
+  const scope = await resolveScope(resolved.access, actorContext.userId, filters.branchId);
   if (scope.unreachable) {
     return {
       ok: true,
@@ -1486,9 +1470,9 @@ export async function getStudentDeletionEligibility(
 ): Promise<GetStudentDeletionEligibilityResult> {
   const resolved = await resolveStudentAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, academyWide } = resolved.access;
 
-  if (!canDeleteStudent(membershipRole, permissionLevel)) {
+  if (!canDeleteStudent(academyWide, permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
   }
 
@@ -1542,9 +1526,9 @@ export async function deleteStudent(
 ): Promise<DeleteStudentResult> {
   const resolved = await resolveStudentAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
-  if (!canDeleteStudent(membershipRole, permissionLevel)) {
+  if (!canDeleteStudent(academyWide, permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
   }
 

@@ -49,6 +49,7 @@ import {
   updateCourse,
   type CreateCourseInput,
 } from "./courses";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const getUploadUrlMock = vi.mocked(getUploadUrl);
 const headObjectMock = vi.mocked(headObject);
@@ -119,7 +120,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function insertProgramDirect(academyId: string): Promise<string> {

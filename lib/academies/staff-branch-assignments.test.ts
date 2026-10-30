@@ -20,6 +20,7 @@ import {
   assignStaffBranches,
   listAssignedBranches,
 } from "./staff-branch-assignments";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 /**
  * PLAN.md Phase 2, Item 36 — "Staff branch assignment (many-to-many) +
@@ -82,7 +83,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function setupAcademy(
@@ -252,21 +253,22 @@ describe("assignStaffBranches — assign/reassign/unassign (diff + insert/delete
     expect(rows.map((r) => r.branchId).sort()).toEqual([branchB, branchC].sort());
   });
 
-  it("unassigns: an empty array removes every existing assignment", async () => {
+  // Multi-branch: a member limited to their branches must keep at least one.
+  it("refuses to remove a branch-limited member's last branch, leaving it in place", async () => {
     const { academyId, context } = await setupAcademy("academy_owner");
     const target = await createTargetStaff(academyId);
     const branchA = await insertBranchDirect(academyId);
     await assignBranchesDirect(academyId, target.staffProfileId, [branchA]);
 
     const result = await assignStaffBranches(context, target.staffProfileId, []);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.branchIds).toEqual([]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
 
     const rows = await db
       .select({ branchId: staffBranchAssignments.branchId })
       .from(staffBranchAssignments)
       .where(eq(staffBranchAssignments.staffProfileId, target.staffProfileId));
-    expect(rows).toEqual([]);
+    expect(rows.map((r) => r.branchId)).toEqual([branchA]);
   });
 
   it("de-duplicates a caller-supplied duplicate branchId instead of erroring on the unique index", async () => {

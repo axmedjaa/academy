@@ -1,4 +1,5 @@
 import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { getBranchScope, inBranchScope, isStudentInScope, studentInScopeCondition, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -340,6 +341,7 @@ interface ResolvedStudentPaymentsAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  scope: BranchScope;
 }
 
 type ResolveStudentPaymentsAccessResult =
@@ -368,8 +370,21 @@ async function resolveStudentPaymentsAccess(
       academyId: access.academyId,
       membershipRole: access.membershipRole,
       permissionLevel,
+      // Multi-branch: payments, charges and receipts belong to a student,
+      // and a student to a branch — see lib/academies/branch-access.ts.
+      scope: await getBranchScope(access, actorContext.userId),
     },
   };
+}
+
+/** Payment ids of in-scope students (for receipts, which reference a payment). */
+function paymentInScopeCondition(scope: BranchScope, academyId: string) {
+  const studentCondition = studentInScopeCondition(scope, academyId, studentPayments.studentId);
+  if (!studentCondition) return undefined;
+  return inArray(
+    receipts.studentPaymentId,
+    db.select({ id: studentPayments.id }).from(studentPayments).where(and(eq(studentPayments.academyId, academyId), studentCondition)),
+  );
 }
 
 export type ListStudentChargesResult =
@@ -400,9 +415,11 @@ export async function listStudentCharges(
 ): Promise<ListStudentChargesResult> {
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, scope } = resolved.access;
 
   const conditions = [eq(studentCharges.academyId, academyId)];
+  const chargeScope = studentInScopeCondition(scope, academyId, studentCharges.studentId);
+  if (chargeScope) conditions.push(chargeScope);
   if (filters.studentId) {
     conditions.push(eq(studentCharges.studentId, filters.studentId));
   }
@@ -489,9 +506,11 @@ export async function listStudentPayments(
 ): Promise<ListStudentPaymentsResult> {
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, scope } = resolved.access;
 
   const conditions = [eq(studentPayments.academyId, academyId)];
+  const paymentScope = studentInScopeCondition(scope, academyId, studentPayments.studentId);
+  if (paymentScope) conditions.push(paymentScope);
   if (filters.studentId) {
     conditions.push(eq(studentPayments.studentId, filters.studentId));
   }
@@ -580,7 +599,7 @@ export async function getReceipt(
 ): Promise<GetReceiptResult> {
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId } = resolved.access;
+  const { academyId, scope } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(receiptId);
   if (!parsedId.success) {
@@ -590,7 +609,7 @@ export async function getReceipt(
   const [row] = await db
     .select()
     .from(receipts)
-    .where(and(eq(receipts.id, receiptId), eq(receipts.academyId, academyId)))
+    .where(and(eq(receipts.id, receiptId), eq(receipts.academyId, academyId), paymentInScopeCondition(scope, academyId)))
     .limit(1);
   if (!row) {
     return { ok: false, error: RECEIPT_NOT_FOUND };
@@ -612,12 +631,18 @@ export async function listReceiptsForPayments(
 
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return result;
-  const { academyId } = resolved.access;
+  const { academyId, scope } = resolved.access;
 
   const rows = await db
     .select()
     .from(receipts)
-    .where(and(eq(receipts.academyId, academyId), inArray(receipts.studentPaymentId, studentPaymentIds)));
+    .where(
+      and(
+        eq(receipts.academyId, academyId),
+        inArray(receipts.studentPaymentId, studentPaymentIds),
+        paymentInScopeCondition(scope, academyId),
+      ),
+    );
 
   for (const row of rows) {
     result.set(row.studentPaymentId, toReceiptRecord(row));
@@ -642,7 +667,7 @@ export async function createStudentCharge(
 ): Promise<CreateStudentChargeResult> {
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -659,11 +684,11 @@ export async function createStudentCharge(
 
   const result = await db.transaction(async (tx) => {
     const [student] = await tx
-      .select({ id: students.id, academyId: students.academyId })
+      .select({ id: students.id, academyId: students.academyId, branchId: students.branchId })
       .from(students)
       .where(eq(students.id, data.studentId))
       .limit(1);
-    if (!student || student.academyId !== academyId) {
+    if (!student || student.academyId !== academyId || !inBranchScope(scope, student.branchId)) {
       return { kind: "student_not_found" as const };
     }
 
@@ -724,7 +749,7 @@ export async function recordStudentPayment(
 ): Promise<RecordStudentPaymentResult> {
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -741,11 +766,11 @@ export async function recordStudentPayment(
 
   const result = await db.transaction(async (tx) => {
     const [student] = await tx
-      .select({ id: students.id, academyId: students.academyId })
+      .select({ id: students.id, academyId: students.academyId, branchId: students.branchId })
       .from(students)
       .where(eq(students.id, data.studentId))
       .limit(1);
-    if (!student || student.academyId !== academyId) {
+    if (!student || student.academyId !== academyId || !inBranchScope(scope, student.branchId)) {
       return { kind: "student_not_found" as const };
     }
 
@@ -899,7 +924,7 @@ export async function issueReceipt(
 ): Promise<IssueReceiptResult> {
   const resolved = await resolveStudentPaymentsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -932,7 +957,7 @@ export async function issueReceipt(
             and(eq(studentPayments.id, studentPaymentId), eq(studentPayments.academyId, academyId)),
           )
           .for("update");
-        if (!payment) {
+        if (!payment || !(await isStudentInScope(scope, academyId, payment.studentId, tx))) {
           return { kind: "not_found" as const };
         }
         if (payment.status !== "approved") {

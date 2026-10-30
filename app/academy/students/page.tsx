@@ -1,7 +1,13 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { getStudentPhotoUrl, searchStudents, type StudentSearchFilters } from "@/lib/academies/students";
+import {
+  canManageStudents,
+  getStudentPhotoUrl,
+  searchStudents,
+  STUDENTS_PERMISSION_ACTION,
+  type StudentSearchFilters,
+} from "@/lib/academies/students";
 import { getStudentsOverview, type PaymentFilter } from "@/lib/academies/students-overview";
 import { getActiveCoursesForStudents } from "@/lib/academies/batch-assignments";
 import { canManageFeePeriodPayments, getStudentPaymentSummaries } from "@/lib/academies/fee-periods";
@@ -64,20 +70,40 @@ export default async function AcademyStudentsPage({
   const pageParam = Number.parseInt(get("page"), 10);
   const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
 
-  const overviewResult = await getStudentsOverview(context, { branchId: branchId || undefined });
-  const overview = overviewResult.ok ? overviewResult.overview : null;
-
   const filters: StudentSearchFilters = {
     searchTerm: searchTerm || undefined,
     branchId: branchId || undefined,
     status: statusParam === "active" || statusParam === "archived" ? statusParam : undefined,
     needsEnrollment: statusParam === "needs" || undefined,
     batchId: batchId && batchId !== "none" ? batchId : undefined,
-    studentIds: pay ? (overview?.finance?.paymentIds[pay] ?? []) : undefined,
   };
   if (batchId === "none") filters.needsEnrollment = true;
 
-  const result = await searchStudents(context, filters, { page });
+  // Performance plan P4: the summary, the student search, the branch list
+  // and the enroll options are independent, so they load together. The one
+  // dependency is kept: a Payment filter (`pay`) searches within the
+  // overview's own id lists, so only then does the search wait for it.
+  // `canManage` for the enroll options comes from the same gate result and
+  // permission rule searchStudents uses (the gate is cached per request).
+  const access = await checkAcademyAccessForContext(context);
+  const canManageByRole =
+    access.level !== "blocked" && canManageStudents(getAcademyPermissionLevel(access.membershipRole, STUDENTS_PERMISSION_ACTION));
+  const overviewPromise = getStudentsOverview(context, { branchId: branchId || undefined });
+  const [overviewResult, result, branchesResult, enrollOptions] = await Promise.all([
+    overviewPromise,
+    pay
+      ? overviewPromise.then((overviewForPay) =>
+          searchStudents(
+            context,
+            { ...filters, studentIds: overviewForPay.ok ? (overviewForPay.overview.finance?.paymentIds[pay] ?? []) : [] },
+            { page },
+          ),
+        )
+      : searchStudents(context, filters, { page }),
+    listBranches(context),
+    canManageByRole ? getEnrollBatchOptions(context) : Promise.resolve({ canEnroll: false, batches: [] }),
+  ]);
+  const overview = overviewResult.ok ? overviewResult.overview : null;
 
   if (!result.ok) {
     return (
@@ -98,12 +124,10 @@ export default async function AcademyStudentsPage({
   // listBranches applies its own scoping (assigned branches for
   // branch-limited roles), so it serves both the Branch filter (academy-wide
   // roles only) and the registration dialog's branch choice.
-  const branchesResult = await listBranches(context);
   const branchOptions = branchesResult.ok ? branchesResult.branches.filter((branch) => branch.status === "active") : [];
 
   const hasActiveFilters = Boolean(searchTerm || branchId || statusParam || batchId || pay);
 
-  const access = await checkAcademyAccessForContext(context);
   const academyId = access.level !== "blocked" ? access.academyId : null;
   // Record payment needs the fee-periods "manage" gate (the permission
   // recordFeePeriodPayment itself requires), independent of student edit.
@@ -111,26 +135,25 @@ export default async function AcademyStudentsPage({
     access.level !== "blocked" &&
     canManageFeePeriodPayments(getAcademyPermissionLevel(access.membershipRole, ACADEMY_FEE_PERIODS_ACTION));
 
-  const [coursesByStudent, paymentSummaries] = academyId
-    ? await Promise.all([
-        getActiveCoursesForStudents(academyId, data.rows.map((s) => s.id)),
-        getStudentPaymentSummaries(academyId, data.rows.map((s) => s.id)),
-      ])
-    : [new Map(), new Map()];
-
   // Signed photo URLs are resolved server-side (R2 credentials never reach
   // the browser); a missing entry falls back to initials.
-  const photoEntries = await Promise.all(
-    data.rows
-      .filter((student) => student.profileImageRef)
-      .map(async (student) => {
-        const url = await getStudentPhotoUrl(student.profileImageRef);
-        return url ? ([student.id, url] as const) : null;
-      }),
-  );
+  const [[coursesByStudent, paymentSummaries], photoEntries] = await Promise.all([
+    academyId
+      ? Promise.all([
+          getActiveCoursesForStudents(academyId, data.rows.map((s) => s.id)),
+          getStudentPaymentSummaries(academyId, data.rows.map((s) => s.id)),
+        ])
+      : Promise.resolve([new Map(), new Map()] as const),
+    Promise.all(
+      data.rows
+        .filter((student) => student.profileImageRef)
+        .map(async (student) => {
+          const url = await getStudentPhotoUrl(student.profileImageRef);
+          return url ? ([student.id, url] as const) : null;
+        }),
+    ),
+  ]);
   const photoUrlByStudentId = new Map(photoEntries.filter((entry): entry is readonly [string, string] => entry !== null));
-
-  const enrollOptions = canManage ? await getEnrollBatchOptions(context) : { canEnroll: false, batches: [] };
 
   const description = isTrainer
     ? "Showing students enrolled in the batches you teach."
@@ -147,6 +170,7 @@ export default async function AcademyStudentsPage({
           <>
             {canManage && branchOptions.length > 0 && (
               <RegisterStudentButton
+                openedByUrl={get("register") === "1"}
                 branches={branchOptions.map((branch) => ({ id: branch.id, name: branch.name }))}
                 enrollBatches={enrollOptions.batches}
               />
@@ -268,6 +292,7 @@ export default async function AcademyStudentsPage({
         enrollBatches={enrollOptions.batches}
         canEnroll={enrollOptions.canEnroll}
         hasActiveFilters={hasActiveFilters}
+        canRegister={canManage && branchOptions.length > 0}
       />
 
       <PaginationNav page={data.page} pageSize={data.pageSize} totalCount={data.totalCount} searchParams={params} />

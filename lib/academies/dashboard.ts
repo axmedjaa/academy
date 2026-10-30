@@ -1,16 +1,17 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { academies, batches, students } from "@/lib/db/schema";
+import { batches, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { getStudentReports, type EnrollmentTrendPoint } from "@/lib/academies/student-reports";
-import { listStaff } from "@/lib/academies/staff";
-import { listExams } from "@/lib/academies/exams";
+import { branchScopeCondition, getBranchScope } from "@/lib/academies/branch-access";
+import { getStudentDashboardCounts, type EnrollmentTrendPoint } from "@/lib/academies/student-reports";
+import { listStaffSummaries } from "@/lib/academies/staff";
+import { listUpcomingExams } from "@/lib/academies/exams";
 import { listBranches } from "@/lib/academies/branches";
 import {
   listPendingApprovalRequests,
   type ApprovalRequestEntityType,
 } from "@/lib/academies/approval-requests";
-import { getFinanceReports, type AmountByCurrency } from "@/lib/academies/finance-reports";
+import { getStudentPaymentTotals, type AmountByCurrency } from "@/lib/academies/finance-reports";
 import { getOverdueFeeSummary, type OverdueFeeSummary } from "@/lib/academies/fee-periods";
 import { getOwnAcademyUsage, type OwnAcademyUsageLimits, type OwnAcademyUsageMetrics } from "@/lib/academies/settings";
 import { listStudentPayments, type StudentPaymentRecord } from "@/lib/academies/student-payments";
@@ -137,6 +138,9 @@ export async function getAcademyDashboardData(
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
   const { academyId, membershipRole } = access;
+  // Multi-branch: every figure below is limited to the caller's branches
+  // when they don't have all-branch access (lib/academies/branch-access.ts).
+  const scope = await getBranchScope(access, actorContext.userId);
 
   const branchesResult = await listBranches(actorContext);
   const branchOptions: DashboardBranchOption[] = branchesResult.ok
@@ -148,41 +152,44 @@ export async function getAcademyDashboardData(
   const selectedBranch = branchOptions.find((branch) => branch.id === options.branchId) ?? null;
   const branchId = selectedBranch?.id;
 
+  // Performance plan P5: each figure comes from a purpose-built read with the
+  // same gate, permission rule and scope as the full report it replaced
+  // (getStudentReports, listStaff, listExams, getFinanceReports), computing
+  // only what this page shows. The academy name comes from the access
+  // gate's own academy row.
+  const today = todayIsoDate();
   const [
-    studentReportsResult,
+    studentCountsResult,
     staffResult,
     examsResult,
     financeResult,
     usageResult,
     paymentsResult,
     pendingApprovalRequests,
-    academyRow,
   ] = await Promise.all([
-    getStudentReports(actorContext, branchId ? { branchId } : {}),
-    listStaff(actorContext),
-    listExams(actorContext),
-    getFinanceReports(actorContext, branchId ? { branchId } : {}),
+    getStudentDashboardCounts(actorContext, branchId ? { branchId } : {}),
+    listStaffSummaries(actorContext),
+    listUpcomingExams(actorContext, today),
+    getStudentPaymentTotals(actorContext, branchId ? { branchId } : {}),
     getOwnAcademyUsage(actorContext),
     listStudentPayments(actorContext, { limit: RECENT_PAYMENTS_LIMIT, branchId }),
-    CAN_SEE_APPROVALS_ROLES.has(membershipRole) ? listPendingApprovalRequests(academyId) : Promise.resolve(null),
-    getOwnAcademyName(academyId),
+    CAN_SEE_APPROVALS_ROLES.has(membershipRole) ? listPendingApprovalRequests(academyId, undefined, undefined, scope) : Promise.resolve(null),
   ]);
+  const academyRow = access.academy.name || "Your academy";
 
-  const totalStudents = studentReportsResult.ok ? studentReportsResult.report.totalStudents : null;
-  const activeStudents = studentReportsResult.ok
-    ? (studentReportsResult.report.statusBreakdown.find((row) => row.status === "active")?.count ?? 0)
+  const totalStudents = studentCountsResult.ok ? studentCountsResult.counts.totalStudents : null;
+  const activeStudents = studentCountsResult.ok
+    ? (studentCountsResult.counts.statusBreakdown.find((row) => row.status === "active")?.count ?? 0)
     : null;
-  const enrollmentTrend = studentReportsResult.ok ? studentReportsResult.report.enrollmentTrend : null;
+  const enrollmentTrend = studentCountsResult.ok ? studentCountsResult.counts.enrollmentTrend : null;
   const activeStaffCount = staffResult.ok
     ? staffResult.staff.filter((member) => member.status === "active").length
     : null;
 
-  const finance =
-    financeResult.ok && financeResult.report.studentPayments.visible ? financeResult.report.studentPayments : null;
+  const finance = financeResult.ok && financeResult.totals.visible ? financeResult.totals : null;
 
   // Upcoming = still scheduled and dated today or later; the batch join
   // supplies both the display name and the branch for the branch filter.
-  const today = todayIsoDate();
   const scheduledExams = examsResult.ok
     ? examsResult.exams.filter(
         (exam): exam is typeof exam & { examDate: string } =>
@@ -207,7 +214,15 @@ export async function getAcademyDashboardData(
           .from(students)
           .where(and(eq(students.academyId, academyId), inArray(students.id, studentIdsForPayments)))
       : Promise.resolve([]),
-    finance ? getOverdueFeeSummary(academyId, branchId) : Promise.resolve(null),
+    finance
+      ? getOverdueFeeSummary(
+          academyId,
+          branchId,
+          scope.academyWide
+            ? undefined
+            : db.select({ id: students.id }).from(students).where(and(eq(students.academyId, academyId), branchScopeCondition(scope, students.branchId))),
+        )
+      : Promise.resolve(null),
   ]);
 
   const batchById = new Map(examBatchRows.map((row) => [row.id, row]));
@@ -267,7 +282,3 @@ export async function getAcademyDashboardData(
   };
 }
 
-async function getOwnAcademyName(academyId: string): Promise<string> {
-  const [row] = await db.select({ name: academies.name }).from(academies).where(eq(academies.id, academyId)).limit(1);
-  return row?.name ?? "Your academy";
-}

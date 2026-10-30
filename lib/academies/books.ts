@@ -1,4 +1,5 @@
 import { and, eq, ilike, or } from "drizzle-orm";
+import { viewOnlyWithoutAllBranches } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { academies, books } from "@/lib/db/schema";
@@ -54,7 +55,12 @@ async function resolveBooksAccess(actorContext: AuthContext): Promise<ResolveBoo
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
-  const permissionLevel = getAcademyPermissionLevel(access.membershipRole, ACADEMY_BOOKS_ACTION);
+  // Multi-branch: the book catalogue and stock are academy-wide — read-only
+  // without all-branch access (sales stay branch-scoped in book-sales.ts).
+  const permissionLevel = viewOnlyWithoutAllBranches(
+    getAcademyPermissionLevel(access.membershipRole, ACADEMY_BOOKS_ACTION),
+    access.academyWide,
+  );
   if (permissionLevel === "none") {
     return { ok: false, error: FORBIDDEN };
   }

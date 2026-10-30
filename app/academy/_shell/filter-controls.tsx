@@ -247,7 +247,8 @@ export function ChipParamFilter({
 }: {
   param: string;
   label: string;
-  options: { value: string; label: string; count?: number }[];
+  /** `icon` is optional; when given it leads the label (e.g. A17's status chips). */
+  options: { value: string; label: string; count?: number; icon?: string }[];
 }) {
   const { write, searchParams } = useParamWriter();
   const current = searchParams.get(param) ?? "";
@@ -265,6 +266,7 @@ export function ChipParamFilter({
               on ? "bg-surface text-brand shadow-card" : "text-[#374151] hover:text-ink"
             }`}
           >
+            {option.icon && <Icon name={option.icon} width={16} height={16} className="mr-1.5" />}
             {option.label}
             {option.count !== undefined && (
               <span className={`ml-1.5 rounded-full px-1.5 text-xs tabular-nums ${on ? "bg-brand-tint" : "bg-surface/70"}`}>{option.count}</span>

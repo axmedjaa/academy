@@ -43,6 +43,7 @@ vi.mock("@/lib/storage/client", () => ({
 }));
 import { getDownloadUrl } from "@/lib/storage/client";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 const getDownloadUrlMock = vi.mocked(getDownloadUrl);
 
 beforeEach(() => {
@@ -102,7 +103,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function addActingUser(academyId: string, role: AcademyRole): Promise<{ userId: string; context: AuthContext }> {

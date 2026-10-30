@@ -57,7 +57,8 @@ function BranchFields({
 }: {
   branch: BranchRecord | null;
   onCancel: () => void;
-  onSaved: () => void;
+  /** `branchId` is set for a newly created branch. */
+  onSaved: (branchId?: string) => void;
 }) {
   const [state, formAction, pending] = useActionState(branch ? guardedUpdateBranch : guardedCreateBranch, initialState);
   const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(RULES);
@@ -65,7 +66,7 @@ function BranchFields({
   useEffect(() => {
     if (state.ok) {
       showSuccessToast(branch ? "Branch updated." : "Branch added.");
-      onSaved();
+      onSaved(state.branchId);
     } else if (state.error) {
       showServerError(state.error.message, SERVER_FIELD_PATTERNS);
     }
@@ -143,7 +144,7 @@ export function BranchFormDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   branch: BranchRecord | null;
-  onSaved?: () => void;
+  onSaved?: (branchId?: string) => void;
 }) {
   return (
     <DesignDialog
@@ -153,7 +154,7 @@ export function BranchFormDialog({
       description={
         branch
           ? `Change the details of ${branch.name}. The code is uppercased automatically.`
-          : "The code is uppercased automatically."
+          : "Adds a regular branch under this academy (the Main Branch stays as it is). The code is uppercased automatically. Next you'll assign its staff."
       }
     >
       {open && (
@@ -161,9 +162,9 @@ export function BranchFormDialog({
           key={branch?.id ?? "new"}
           branch={branch}
           onCancel={() => onOpenChange(false)}
-          onSaved={() => {
+          onSaved={(branchId) => {
             onOpenChange(false);
-            onSaved?.();
+            onSaved?.(branchId);
           }}
         />
       )}

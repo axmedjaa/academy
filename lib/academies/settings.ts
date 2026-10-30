@@ -1,4 +1,5 @@
 import { desc, eq } from "drizzle-orm";
+import { viewOnlyWithoutAllBranches } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import {
@@ -177,9 +178,11 @@ export async function getAcademySettings(
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
 
-  const permissionLevel = getAcademyPermissionLevel(
-    access.membershipRole,
-    ACADEMY_SETTINGS_ACTION,
+  // Multi-branch: the academy profile is academy-wide — read-only without
+  // all-branch access.
+  const permissionLevel = viewOnlyWithoutAllBranches(
+    getAcademyPermissionLevel(access.membershipRole, ACADEMY_SETTINGS_ACTION),
+    access.academyWide,
   );
   if (permissionLevel === "none") {
     return { ok: false, error: FORBIDDEN };
@@ -218,7 +221,7 @@ export async function updateAcademySettings(
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
 
-  if (!hasAcademyPermission(access.membershipRole, ACADEMY_SETTINGS_ACTION)) {
+  if (!hasAcademyPermission(access.membershipRole, ACADEMY_SETTINGS_ACTION) || !access.academyWide) {
     return { ok: false, error: FORBIDDEN };
   }
 

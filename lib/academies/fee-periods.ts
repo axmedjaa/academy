@@ -1,4 +1,5 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQLWrapper } from "drizzle-orm";
+import { getBranchScope, inBranchScope, studentInScopeCondition, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -130,6 +131,9 @@ interface ResolvedFeePeriodsAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  /** Multi-branch: fee periods belong to an enrollment, an enrollment to a
+   * batch, and a batch to a branch — see lib/academies/branch-access.ts. */
+  scope: BranchScope;
 }
 
 type ResolveFeePeriodsAccessResult =
@@ -147,7 +151,12 @@ async function resolveFeePeriodsAccess(actorContext: AuthContext): Promise<Resol
   }
   return {
     ok: true,
-    access: { academyId: access.academyId, membershipRole: access.membershipRole, permissionLevel },
+    access: {
+      academyId: access.academyId,
+      membershipRole: access.membershipRole,
+      permissionLevel,
+      scope: await getBranchScope(access, actorContext.userId),
+    },
   };
 }
 
@@ -324,6 +333,7 @@ async function getScopedEnrollment(
   executor: DbClient,
   enrollmentId: string,
   academyId: string,
+  scope: BranchScope,
   studentId?: string,
 ) {
   const [row] = await executor
@@ -335,6 +345,7 @@ async function getScopedEnrollment(
       status: batchEnrollments.status,
       batchName: batches.name,
       courseName: courses.name,
+      branchId: batches.branchId,
     })
     .from(batchEnrollments)
     .innerJoin(batches, eq(batchEnrollments.batchId, batches.id))
@@ -343,6 +354,8 @@ async function getScopedEnrollment(
     .limit(1);
   if (!row || row.academyId !== academyId) return null;
   if (studentId && row.studentId !== studentId) return null;
+  // Outside the caller's branches: the same "not found" as a missing row.
+  if (!inBranchScope(scope, row.branchId)) return null;
   return row;
 }
 
@@ -425,7 +438,7 @@ export async function setEnrollmentFeeSchedule(
 ): Promise<SetEnrollmentFeeScheduleResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
   if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
 
   const parsed = setEnrollmentFeeScheduleSchema.safeParse(input);
@@ -435,7 +448,7 @@ export async function setEnrollmentFeeSchedule(
   const data = parsed.data;
 
   const result = await db.transaction(async (tx) => {
-    const enrollment = await getScopedEnrollment(tx, data.enrollmentId, academyId);
+    const enrollment = await getScopedEnrollment(tx, data.enrollmentId, academyId, scope);
     if (!enrollment) return { kind: "not_found" as const };
 
     const currency = await resolveCurrency(tx, academyId, data.currency);
@@ -621,12 +634,12 @@ export async function getEnrollmentFeeSchedule(
 ): Promise<GetEnrollmentFeeScheduleResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId } = resolved.access;
+  const { academyId, scope } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(enrollmentId);
   if (!parsedId.success) return { ok: false, error: ENROLLMENT_NOT_FOUND };
 
-  const enrollment = await getScopedEnrollment(db, enrollmentId, academyId);
+  const enrollment = await getScopedEnrollment(db, enrollmentId, academyId, scope);
   if (!enrollment) return { ok: false, error: ENROLLMENT_NOT_FOUND };
 
   const [row] = await db
@@ -715,17 +728,23 @@ export async function generateFeePeriodsForEnrollment(
   enrollmentId: string,
   academyId: string,
 ): Promise<void> {
-  const [schedule] = await executor
-    .select()
-    .from(enrollmentFeeSchedules)
-    .where(eq(enrollmentFeeSchedules.enrollmentId, enrollmentId))
-    .limit(1);
+  // Performance plan P9: the schedule and the existing periods are
+  // independent reads, so they go out together (one round trip instead of
+  // two on the common no-op path). Inside a transaction the same client
+  // simply runs them in order.
+  const [[schedule], existingPeriods] = await Promise.all([
+    executor
+      .select()
+      .from(enrollmentFeeSchedules)
+      .where(eq(enrollmentFeeSchedules.enrollmentId, enrollmentId))
+      .limit(1),
+    executor
+      .select({ periodStart: feePeriods.periodStart })
+      .from(feePeriods)
+      .where(eq(feePeriods.enrollmentId, enrollmentId)),
+  ]);
   if (!schedule) return;
 
-  const existingPeriods = await executor
-    .select({ periodStart: feePeriods.periodStart })
-    .from(feePeriods)
-    .where(eq(feePeriods.enrollmentId, enrollmentId));
   const existingStartDates = new Set(existingPeriods.map((row) => row.periodStart));
 
   let cursor = parseDateOnly(schedule.anchorDate);
@@ -911,12 +930,12 @@ export async function listFeePeriodsForEnrollment(
 ): Promise<ListFeePeriodsResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, scope } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(enrollmentId);
   if (!parsedId.success) return { ok: false, error: ENROLLMENT_NOT_FOUND };
 
-  const enrollment = await getScopedEnrollment(db, enrollmentId, academyId);
+  const enrollment = await getScopedEnrollment(db, enrollmentId, academyId, scope);
   if (!enrollment) return { ok: false, error: ENROLLMENT_NOT_FOUND };
 
   await generateFeePeriodsForEnrollment(db, enrollmentId, academyId);
@@ -971,17 +990,19 @@ export async function listEnrollmentsForStudent(
 ): Promise<ListEnrollmentsForStudentResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId } = resolved.access;
+  const { academyId, scope } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(studentId);
   if (!parsedId.success) return { ok: false, error: STUDENT_NOT_FOUND };
 
   const [student] = await db
-    .select({ id: students.id, academyId: students.academyId })
+    .select({ id: students.id, academyId: students.academyId, branchId: students.branchId })
     .from(students)
     .where(eq(students.id, studentId))
     .limit(1);
-  if (!student || student.academyId !== academyId) return { ok: false, error: STUDENT_NOT_FOUND };
+  if (!student || student.academyId !== academyId || !inBranchScope(scope, student.branchId)) {
+    return { ok: false, error: STUDENT_NOT_FOUND };
+  }
 
   const rows = await db
     .select({
@@ -1080,7 +1101,7 @@ export async function recordFeePeriodPayment(
 ): Promise<RecordFeePeriodPaymentResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
   if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
 
   const parsed = recordFeePeriodPaymentSchema.safeParse(input);
@@ -1099,15 +1120,15 @@ export async function recordFeePeriodPayment(
 
   const result = await db.transaction(async (tx) => {
     const [student] = await tx
-      .select({ id: students.id, academyId: students.academyId })
+      .select({ id: students.id, academyId: students.academyId, branchId: students.branchId })
       .from(students)
       .where(eq(students.id, data.studentId))
       .limit(1);
-    if (!student || student.academyId !== academyId) {
+    if (!student || student.academyId !== academyId || !inBranchScope(scope, student.branchId)) {
       return { kind: "student_not_found" as const };
     }
 
-    const enrollment = await getScopedEnrollment(tx, data.enrollmentId, academyId, data.studentId);
+    const enrollment = await getScopedEnrollment(tx, data.enrollmentId, academyId, scope, data.studentId);
     if (!enrollment) {
       return { kind: "enrollment_not_found" as const };
     }
@@ -1369,9 +1390,11 @@ export async function listFeePeriodPaymentHistory(
 ): Promise<ListFeePeriodPaymentHistoryResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId } = resolved.access;
+  const { academyId, scope } = resolved.access;
 
   const conditions = [eq(studentPayments.academyId, academyId)];
+  const historyScope = studentInScopeCondition(scope, academyId, studentPayments.studentId);
+  if (historyScope) conditions.push(historyScope);
   if (filters.studentId) conditions.push(eq(studentPayments.studentId, filters.studentId));
   if (filters.enrollmentId) conditions.push(eq(feePeriods.enrollmentId, filters.enrollmentId));
   if (filters.paymentIds) {
@@ -1539,12 +1562,12 @@ export async function getEnrollmentPaymentSummary(
 ): Promise<GetEnrollmentPaymentSummaryResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId } = resolved.access;
+  const { academyId, scope } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(enrollmentId);
   if (!parsedId.success) return { ok: false, error: ENROLLMENT_NOT_FOUND };
 
-  const enrollment = await getScopedEnrollment(db, enrollmentId, academyId);
+  const enrollment = await getScopedEnrollment(db, enrollmentId, academyId, scope);
   if (!enrollment) return { ok: false, error: ENROLLMENT_NOT_FOUND };
 
   await generateFeePeriodsForEnrollment(db, enrollmentId, academyId);
@@ -1629,10 +1652,13 @@ export interface StudentPaymentSummaryRow {
  * is simply absent from the returned map. */
 export async function getStudentPaymentSummaries(
   academyId: string,
-  studentIds: string[],
+  /** Explicit ids, or (performance plan P4) a SQL subquery selecting the
+   * caller's already-scoped student ids, so a whole-academy summary never
+   * ships every id over the wire. Either way the same students are matched. */
+  studentIds: string[] | SQLWrapper,
 ): Promise<Map<string, StudentPaymentSummaryRow>> {
   const result = new Map<string, StudentPaymentSummaryRow>();
-  if (studentIds.length === 0) return result;
+  if (Array.isArray(studentIds) && studentIds.length === 0) return result;
 
   const enrollmentRows = await db
     .select({ studentId: batchEnrollments.studentId, enrollmentId: batchEnrollments.id })
@@ -1733,11 +1759,12 @@ export interface OverdueFeeSummary {
 export async function getOverdueFeeSummary(
   academyId: string,
   branchId?: string | null,
-  /** Restrict to these students (e.g. a Trainer's visible set). Omit for
-   * every student in the academy/branch. */
-  studentIds?: string[],
+  /** Restrict to these students (e.g. a Trainer's visible set), as ids or a
+   * SQL subquery of ids (see `getStudentPaymentSummaries`). Omit for every
+   * student in the academy/branch. */
+  studentIds?: string[] | SQLWrapper,
 ): Promise<OverdueFeeSummary> {
-  if (studentIds && studentIds.length === 0) {
+  if (Array.isArray(studentIds) && studentIds.length === 0) {
     return { studentCount: 0, periodCount: 0, totalsByCurrency: [], byStudent: {} };
   }
   const today = todayDateOnly();

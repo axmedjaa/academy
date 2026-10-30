@@ -11,8 +11,8 @@ import {
   students,
 } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { getAssignedBatchIds } from "@/lib/academies/batch-assignments";
-import { createApprovalRequest, decideApprovalRequest } from "@/lib/academies/approval-requests";
+import { getAllowedBatchIds } from "@/lib/academies/exams";
+import { createApprovalRequests, decideApprovalRequest } from "@/lib/academies/approval-requests";
 import {
   ACADEMY_EXAMS_ACTION,
   ACADEMY_RESULTS_ACTION,
@@ -232,9 +232,14 @@ const NO_ACTIVE_GRADE_CONFIG: ResultActionError = {
     "This academy has no active grade configuration yet. Activate one before publishing results.",
 };
 
+/** How many `result.published` notifications publishResults enqueues at
+ * once (same reasoning as approval-requests.ts's bulk enqueue cap). */
+const PUBLISHED_NOTIFICATION_CONCURRENCY = 4;
+
 interface ResolvedResultAccess {
   academyId: string;
   membershipRole: AcademyRole;
+  academyWide: boolean;
 }
 
 type ResolveResultAccessResult =
@@ -248,7 +253,7 @@ async function resolveResultAccess(actorContext: AuthContext): Promise<ResolveRe
   }
   return {
     ok: true,
-    access: { academyId: access.academyId, membershipRole: access.membershipRole },
+    access: { academyId: access.academyId, membershipRole: access.membershipRole, academyWide: access.academyWide },
   };
 }
 
@@ -415,8 +420,8 @@ export async function submitResults(
 
     // Trainer-batch scoping — same mechanism as enterMarks (Item 48), NOT
     // staff_branch_assignments. See this file's module comment.
-    if (membershipRole === "trainer") {
-      const assignedBatchIds = await getAssignedBatchIds(tx, actorContext.userId, academyId);
+    const assignedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (assignedBatchIds) {
       if (!assignedBatchIds.includes(exam.batchId)) {
         return { outcome: "exam_not_found" as const };
       }
@@ -455,30 +460,35 @@ export async function submitResults(
     }
 
     const before: ResultRecord[] = targets.map(toResultRecord);
-    const after: ResultRecord[] = [];
     const now = new Date();
 
-    for (const row of targets) {
-      const [updated] = await tx
-        .update(examResults)
-        .set({ status: "under_review", submittedAt: now, updatedAt: now })
-        .where(eq(examResults.id, row.id))
-        .returning();
-      after.push(toResultRecord(updated));
+    // Performance plan P8: one UPDATE for every target row and one INSERT
+    // for every approval request, instead of both per student. Same values,
+    // same rows (all already locked FOR UPDATE above), same transaction;
+    // `after` keeps the targets' order.
+    const updatedRows = await tx
+      .update(examResults)
+      .set({ status: "under_review", submittedAt: now, updatedAt: now })
+      .where(inArray(examResults.id, targets.map((row) => row.id)))
+      .returning();
+    const updatedById = new Map(updatedRows.map((row) => [row.id, row]));
+    const after: ResultRecord[] = targets.map((row) => toResultRecord(updatedById.get(row.id)!));
 
-      const requestResult = await createApprovalRequest(tx, {
+    const requestResult = await createApprovalRequests(
+      tx,
+      targets.map((row) => ({
         academyId,
-        entityType: "result",
+        entityType: "result" as const,
         entityId: row.id,
         requestedBy: actorContext.userId,
-      });
-      if (!requestResult.ok) {
-        // Same "unreachable in practice" reasoning as
-        // grade-configurations.ts's submitGradeConfigForApproval: the
-        // payload here is built entirely from trusted, already-verified
-        // values. Thrown (and rolled back) rather than left half-applied.
-        throw new Error(`createApprovalRequest failed unexpectedly: ${requestResult.error.message}`);
-      }
+      })),
+    );
+    if (!requestResult.ok) {
+      // Same "unreachable in practice" reasoning as
+      // grade-configurations.ts's submitGradeConfigForApproval: the
+      // payload here is built entirely from trusted, already-verified
+      // values. Thrown (and rolled back) rather than left half-applied.
+      throw new Error(`createApprovalRequest failed unexpectedly: ${requestResult.error.message}`);
     }
 
     await recordAudit(
@@ -577,6 +587,8 @@ export async function approveResult(
       .where(and(eq(examResults.id, resultId), eq(examResults.academyId, academyId)))
       .for("update");
     if (!row) return { kind: "not_found" as const };
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds && !allowedBatchIds.includes(row.batchId)) return { kind: "not_found" as const };
     if (row.status !== "under_review") return { kind: "invalid_state" as const };
 
     const pending = await findPendingApprovalRequest(tx, resultId);
@@ -680,6 +692,8 @@ export async function rejectResult(
       .where(and(eq(examResults.id, resultId), eq(examResults.academyId, academyId)))
       .for("update");
     if (!row) return { kind: "not_found" as const };
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds && !allowedBatchIds.includes(row.batchId)) return { kind: "not_found" as const };
     if (row.status !== "under_review") return { kind: "invalid_state" as const };
 
     const pending = await findPendingApprovalRequest(tx, resultId);
@@ -787,6 +801,8 @@ export async function publishResults(
       .where(and(eq(exams.id, examId), eq(exams.academyId, academyId)))
       .for("update");
     if (!exam) return { outcome: "exam_not_found" as const };
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds && !allowedBatchIds.includes(exam.batchId)) return { outcome: "exam_not_found" as const };
 
     // audit_logs.branch_id is a real FK to branches.id, not batches.id —
     // see submitResults' identical lookup/comment above.
@@ -831,11 +847,22 @@ export async function publishResults(
     }
 
     const before: ResultRecord[] = evaluations.map((entry) => toResultRecord(entry.row));
-    const after: ResultRecord[] = [];
     const now = new Date();
 
+    // Performance plan P8: rows that land in the same grade band get the
+    // same values, so there is one UPDATE per band (a handful) instead of one
+    // per student. Same values per row as before, same locked rows, same
+    // transaction; `after` keeps the evaluation order.
+    const idsByBand = new Map<string, { band: GradeBand; ids: string[] }>();
     for (const { row, band } of evaluations) {
-      const [updated] = await tx
+      const key = `${band.label}\u0000${band.isPass}`;
+      const group = idsByBand.get(key) ?? { band, ids: [] };
+      group.ids.push(row.id);
+      idsByBand.set(key, group);
+    }
+    const updatedById = new Map<string, typeof examResults.$inferSelect>();
+    for (const { band, ids } of idsByBand.values()) {
+      const updatedRows = await tx
         .update(examResults)
         .set({
           gradeConfigurationId: activeConfig.id,
@@ -845,10 +872,11 @@ export async function publishResults(
           publishedAt: now,
           updatedAt: now,
         })
-        .where(eq(examResults.id, row.id))
+        .where(inArray(examResults.id, ids))
         .returning();
-      after.push(toResultRecord(updated));
+      for (const updated of updatedRows) updatedById.set(updated.id, updated);
     }
+    const after: ResultRecord[] = evaluations.map(({ row }) => toResultRecord(updatedById.get(row.id)!));
 
     await recordAudit(
       {
@@ -938,7 +966,11 @@ export async function publishResults(
   // roll back the results transaction, and here it's not even a poisoning
   // risk since publishResults' own transaction has already committed by
   // this point.
-  for (const publishedResult of result.results) {
+  //
+  // Performance plan P8: a few at a time instead of strictly one after
+  // another — each still gets its own notification, idempotency key and
+  // logged failure, and the cap leaves the shared pool for other requests.
+  const enqueuePublished = async (publishedResult: ResultRecord) => {
     try {
       await enqueueNotification({
         eventType: "result.published",
@@ -955,6 +987,9 @@ export async function publishResults(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  };
+  for (let i = 0; i < result.results.length; i += PUBLISHED_NOTIFICATION_CONCURRENCY) {
+    await Promise.all(result.results.slice(i, i + PUBLISHED_NOTIFICATION_CONCURRENCY).map(enqueuePublished));
   }
 
   return { ok: true, results: result.results };
@@ -993,9 +1028,7 @@ export async function listResults(
   }
 
   let allowedBatchIds: string[] | null = null;
-  if (membershipRole === "trainer") {
-    allowedBatchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
-  }
+  allowedBatchIds = await getAllowedBatchIds(db, resolved.access, actorContext.userId);
 
   if (examId !== undefined) {
     const parsedId = z.string().uuid().safeParse(examId);
@@ -1080,8 +1113,8 @@ export async function getResult(actorContext: AuthContext, resultId: string): Pr
     .limit(1);
   if (!row) return { ok: false, error: RESULT_NOT_FOUND };
 
-  if (membershipRole === "trainer") {
-    const assignedBatchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
+  const assignedBatchIds = await getAllowedBatchIds(db, resolved.access, actorContext.userId);
+  if (assignedBatchIds) {
     if (!assignedBatchIds.includes(row.batchId)) return { ok: false, error: RESULT_NOT_FOUND };
   }
 

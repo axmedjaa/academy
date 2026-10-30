@@ -41,10 +41,14 @@ function parseCreateStaffFormData(formData: FormData): CreateStaffInput {
     employeeNumber: String(formData.get("employeeNumber") ?? ""),
     hireDate: String(formData.get("hireDate") ?? ""),
     role: String(formData.get("role") ?? "") as CreateStaffInput["role"],
+    // No "workplace" field (the academy has no branch to choose yet) keeps
+    // createStaff's default; any other value is checked there.
+    workplace: formData.has("workplace") ? (formData.get("workplace") === "all" ? "all" : "specific") : undefined,
+    branchIds: formData.getAll("branchIds").map(String),
   };
 }
 
-/** PLAN.md §4 server action name, form-bound via useActionState for /academy/staff/new. */
+/** PLAN.md §4 server action name, form-bound via useActionState by the Register staff member dialog. */
 export async function createStaff(
   _prevState: CreateStaffFormState,
   formData: FormData,

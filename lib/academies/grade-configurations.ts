@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
+import { viewOnlyWithoutAllBranches } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { approvalRequests, gradeBands, gradeConfigurations } from "@/lib/db/schema";
@@ -301,9 +302,10 @@ async function resolveGradeConfigAccess(
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
 
-  const permissionLevel = getAcademyPermissionLevel(
-    access.membershipRole,
-    ACADEMY_GRADE_BANDS_ACTION,
+  // Multi-branch: academy-wide catalogue — read-only without all-branch access.
+  const permissionLevel = viewOnlyWithoutAllBranches(
+    getAcademyPermissionLevel(access.membershipRole, ACADEMY_GRADE_BANDS_ACTION),
+    access.academyWide,
   );
   if (permissionLevel === "none") {
     return { ok: false, error: FORBIDDEN };

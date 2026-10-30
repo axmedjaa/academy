@@ -1,4 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -11,8 +12,6 @@ import {
   courses,
   examResults,
   exams,
-  staffBranchAssignments,
-  staffProfiles,
   timetables,
 } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
@@ -45,15 +44,6 @@ import type { AcademyRole } from "@/lib/auth/roles";
  * Admissions Officer's "view" level means list/get only, also scoped to
  * their assigned branch(es).
  */
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set([
-  "admissions_officer",
-  "trainer",
-]);
-
-function isBranchLimited(role: AcademyRole): boolean {
-  return BRANCH_LIMITED_ROLES.has(role);
-}
-
 function canManage(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
 }
@@ -204,30 +194,12 @@ async function courseUsedInBatch(executor: DbClient, batchId: string, courseId: 
   return Boolean(exam);
 }
 
-async function getAssignedBranchIds(
-  executor: DbClient,
-  academyId: string,
-  userId: string,
-): Promise<string[]> {
-  const [profile] = await executor
-    .select({ id: staffProfiles.id })
-    .from(staffProfiles)
-    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)))
-    .limit(1);
-  if (!profile) return [];
-
-  const assignments = await executor
-    .select({ branchId: staffBranchAssignments.branchId })
-    .from(staffBranchAssignments)
-    .where(eq(staffBranchAssignments.staffProfileId, profile.id));
-
-  return assignments.map((row) => row.branchId);
-}
 
 interface ResolvedBatchAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  academyWide: boolean;
 }
 
 type ResolveBatchAccessResult =
@@ -253,6 +225,7 @@ async function resolveBatchAccess(actorContext: AuthContext): Promise<ResolveBat
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
+      academyWide: access.academyWide,
       permissionLevel,
     },
   };
@@ -313,10 +286,10 @@ export type ListBatchesResult =
 export async function listBatches(actorContext: AuthContext): Promise<ListBatchesResult> {
   const resolved = await resolveBatchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   let rows: (typeof batches.$inferSelect)[];
-  if (isBranchLimited(membershipRole)) {
+  if (!academyWide) {
     const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
     rows =
       assignedIds.length === 0
@@ -367,7 +340,7 @@ export async function getBatch(
 ): Promise<GetBatchResult> {
   const resolved = await resolveBatchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole } = resolved.access;
+  const { academyId, academyWide } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(batchId);
   if (!parsedId.success) {
@@ -383,7 +356,7 @@ export async function getBatch(
     return { ok: false, error: NOT_FOUND };
   }
 
-  if (isBranchLimited(membershipRole)) {
+  if (!academyWide) {
     const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
     if (!assignedIds.includes(row.branchId)) {
       return { ok: false, error: NOT_FOUND };
@@ -421,7 +394,7 @@ export async function createBatch(
 ): Promise<CreateBatchResult> {
   const resolved = await resolveBatchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -443,7 +416,7 @@ export async function createBatch(
         throw new BranchNotFoundSignal();
       }
 
-      if (isBranchLimited(membershipRole)) {
+      if (!academyWide) {
         const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
         if (!assignedIds.includes(data.branchId)) {
           throw new BranchNotFoundSignal();
@@ -530,7 +503,7 @@ export async function updateBatch(
 ): Promise<UpdateBatchResult> {
   const resolved = await resolveBatchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -559,7 +532,7 @@ export async function updateBatch(
         .limit(1);
       if (!existing) return null;
 
-      if (isBranchLimited(membershipRole)) {
+      if (!academyWide) {
         const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
         if (!assignedIds.includes(existing.branchId)) {
           // Existing batch is outside the caller's scope — IDOR, not_found.
@@ -571,7 +544,7 @@ export async function updateBatch(
       if (!branchOk) {
         throw new BranchNotFoundSignal();
       }
-      if (isBranchLimited(membershipRole)) {
+      if (!academyWide) {
         const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
         if (!assignedIds.includes(data.branchId)) {
           throw new BranchNotFoundSignal();
@@ -682,7 +655,7 @@ export async function archiveBatch(
 ): Promise<ArchiveBatchResult> {
   const resolved = await resolveBatchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -701,7 +674,7 @@ export async function archiveBatch(
       .limit(1);
     if (!existing) return null;
 
-    if (isBranchLimited(membershipRole)) {
+    if (!academyWide) {
       const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
       if (!assignedIds.includes(existing.branchId)) {
         return null;
@@ -748,7 +721,7 @@ export async function restoreBatch(
 ): Promise<ArchiveBatchResult> {
   const resolved = await resolveBatchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -767,7 +740,7 @@ export async function restoreBatch(
       .limit(1);
     if (!existing) return null;
 
-    if (isBranchLimited(membershipRole)) {
+    if (!academyWide) {
       const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
       if (!assignedIds.includes(existing.branchId)) {
         return null;
@@ -959,7 +932,7 @@ export async function getBatchDeletionEligibility(
 ): Promise<GetBatchDeletionEligibilityResult> {
   const resolved = await resolveBatchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canDeleteBatch(membershipRole, permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -971,11 +944,14 @@ export async function getBatchDeletionEligibility(
   }
 
   const [batch] = await db
-    .select({ id: batches.id, name: batches.name })
+    .select({ id: batches.id, name: batches.name, branchId: batches.branchId })
     .from(batches)
     .where(and(eq(batches.id, batchId), eq(batches.academyId, academyId)))
     .limit(1);
   if (!batch) {
+    return { ok: false, error: NOT_FOUND };
+  }
+  if (!academyWide && !(await getAssignedBranchIds(db, academyId, actorContext.userId)).includes(batch.branchId)) {
     return { ok: false, error: NOT_FOUND };
   }
 
@@ -1004,9 +980,9 @@ export type DeleteBatchResult =
  * created between the UI's preview and this call, and this is the check
  * that actually decides whether the delete proceeds. Audited before the
  * row is removed, same convention as deleteAcademy/deleteExam/
- * deleteProgram/deleteCourse. No branch-scoping check is needed here (see
- * `canDeleteBatch`'s own comment) — every role that ever reaches this
- * point is academy-wide, never branch-limited.
+ * deleteProgram/deleteCourse. Multi-branch: a member without all-branch
+ * access may only delete a batch in one of their assigned branches —
+ * anything else is the same NOT_FOUND as a missing batch.
  */
 export async function deleteBatch(
   actorContext: AuthContext,
@@ -1015,7 +991,7 @@ export async function deleteBatch(
 ): Promise<DeleteBatchResult> {
   const resolved = await resolveBatchAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canDeleteBatch(membershipRole, permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -1033,6 +1009,9 @@ export async function deleteBatch(
       .where(and(eq(batches.id, batchId), eq(batches.academyId, academyId)))
       .for("update");
     if (!existing) {
+      return { ok: false, error: NOT_FOUND };
+    }
+    if (!academyWide && !(await getAssignedBranchIds(tx, academyId, actorContext.userId)).includes(existing.branchId)) {
       return { ok: false, error: NOT_FOUND };
     }
 

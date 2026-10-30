@@ -290,6 +290,8 @@ export async function registerAcademy(
           code: data.branchCode,
           address: data.branchAddress,
           phone: data.branchPhone,
+          // The academy's first branch is its Main Branch (Head Office).
+          isMain: true,
         })
         .returning({ id: branches.id });
 

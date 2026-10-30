@@ -366,6 +366,12 @@ export const branches = pgTable(
     status: branchStatusEnum("status").notNull().default("active"),
     address: text("address"),
     phone: text("phone"),
+    // Multi-branch: the academy's Main Branch (Head Office). Exactly one per
+    // academy — the partial unique index below makes a second one
+    // impossible at the database level; migration 0037 marked each existing
+    // academy's oldest branch, and registration creates the first branch
+    // as main. Never settable through the branch forms.
+    isMain: boolean("is_main").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -378,6 +384,9 @@ export const branches = pgTable(
     ),
     // Database Constraints & Indexes: "branches(academy_id)".
     index("branches_academy_id_idx").on(table.academyId),
+    uniqueIndex("branches_one_main_per_academy")
+      .on(table.academyId)
+      .where(sql`${table.isMain}`),
   ],
 );
 
@@ -422,6 +431,14 @@ export const academyMemberships = pgTable(
       .references(() => academies.id),
     role: academyRoleEnum("role").notNull(),
     status: membershipStatusEnum("status").notNull().default("active"),
+    // Multi-branch: all-branch ("academy-wide") access for a non-owner. Off
+    // means the member works only in the branches they are assigned to
+    // (staff_branch_assignments). The academy owner is always all-branch
+    // regardless of this flag. Granted and revoked only by the owner, only
+    // for staff assigned to the Main Branch (lib/academies/branch-access.ts);
+    // migration 0037 set it for every admin, manager and finance officer who
+    // already had all-branch access before branches were scoped.
+    academyWide: boolean("academy_wide").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

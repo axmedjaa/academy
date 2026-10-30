@@ -14,6 +14,7 @@ import {
   checkAcademyAccess,
   checkAcademyAccessForContext,
 } from "./access-gate";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -85,7 +86,7 @@ async function addMembership(
   role: "academy_owner" | "manager" = "academy_owner",
   status: "active" | "removed" = "active",
 ): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status, academyWide: legacyAllBranchAccess(role) });
 }
 
 interface SubscriptionOverrides {

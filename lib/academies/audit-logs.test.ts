@@ -13,6 +13,7 @@ import {
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { getAcademyAuditLogs } from "./audit-logs";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 // Same "one top-level cleanup, every test builds its own fully isolated
 // fixture set" convention as lib/academies/settings.test.ts, plus the
@@ -78,7 +79,7 @@ async function addMembership(
   academyId: string,
   role: AcademyRole,
 ): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function insertAuditLog(

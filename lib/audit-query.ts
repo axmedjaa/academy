@@ -27,6 +27,9 @@ export interface AuditLogFilters {
   action?: string;
   academyId?: string;
   branchId?: string;
+  /** Server-set only (multi-branch): limit to these branches; rows without
+   * a branch are excluded. An empty list matches nothing. */
+  branchIds?: string[];
   result?: AuditResult;
   /** Inclusive lower bound on createdAt. */
   createdFrom?: Date;
@@ -74,6 +77,9 @@ function buildWhereClause(filters: AuditLogFilters): SQL | undefined {
   }
   if (filters.academyId) {
     conditions.push(eq(auditLogs.academyId, filters.academyId));
+  }
+  if (filters.branchIds) {
+    conditions.push(filters.branchIds.length ? inArray(auditLogs.branchId, filters.branchIds) : sql`false`);
   }
   if (filters.branchId) {
     conditions.push(eq(auditLogs.branchId, filters.branchId));

@@ -35,9 +35,14 @@ const HEADER_BUTTON =
 export function BranchActions({
   branch,
   layout,
+  canManageStructure,
 }: {
   branch: BranchRecord & { deletionEligibility: BranchDeletionEligibilitySummary };
   layout: "row" | "header";
+  /** Archive, restore and delete need all-branch access; editing a branch's
+   * details only needs the branches permission for that branch. The Main
+   * Branch is never archived or deleted. */
+  canManageStructure: boolean;
 }) {
   const router = useRouter();
   const [archiveState, archiveAction, archiving] = useActionState(archiveBranch, initialState);
@@ -60,6 +65,7 @@ export function BranchActions({
 
   const buttonClass = layout === "header" ? HEADER_BUTTON : BRANCH_ROW_BUTTON;
   const archived = branch.status === "archived";
+  const canArchive = canManageStructure && !branch.isMain;
 
   return (
     <>
@@ -69,15 +75,17 @@ export function BranchActions({
             Edit branch
           </button>
         )}
-        {archived ? (
-          <button type="button" onClick={() => setRestoreOpen(true)} className={buttonClass}>
-            Restore
-          </button>
-        ) : (
-          <button type="button" disabled={archiving} onClick={archive} className={buttonClass}>
-            {archiving ? "Archiving…" : "Archive"}
-          </button>
-        )}
+        {archived
+          ? canManageStructure && (
+              <button type="button" onClick={() => setRestoreOpen(true)} className={buttonClass}>
+                Restore
+              </button>
+            )
+          : canArchive && (
+              <button type="button" disabled={archiving} onClick={archive} className={buttonClass}>
+                {archiving ? "Archiving…" : "Archive"}
+              </button>
+            )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -98,14 +106,14 @@ export function BranchActions({
                 <DropdownMenuSeparator />
               </>
             )}
-            {branch.deletionEligibility.eligible ? (
+            {!canManageStructure ? null : branch.deletionEligibility.eligible ? (
               <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
                 Delete
               </DropdownMenuItem>
             ) : (
               <DropdownMenuItem
                 disabled
-                title={`This branch cannot be deleted because ${branch.deletionEligibility.reasons.join("; ")}. Archive it instead.`}
+                title={`This branch cannot be deleted because ${branch.deletionEligibility.reasons.join("; ")}.${branch.isMain ? "" : " Archive it instead."}`}
               >
                 Delete
               </DropdownMenuItem>
@@ -116,7 +124,7 @@ export function BranchActions({
 
       <BranchFormDialog open={editOpen} onOpenChange={setEditOpen} branch={branch} onSaved={() => router.refresh()} />
 
-      {archived && (
+      {archived && canManageStructure && (
         <ConfirmButton
           label="Restore"
           variant="success"
@@ -131,7 +139,7 @@ export function BranchActions({
         />
       )}
 
-      {branch.deletionEligibility.eligible && (
+      {branch.deletionEligibility.eligible && canManageStructure && (
         <ConfirmButton
           label="Delete"
           variant="dangerSolid"

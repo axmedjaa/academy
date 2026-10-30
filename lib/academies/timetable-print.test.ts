@@ -22,6 +22,7 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import { createTimetableEntry } from "./timetables";
 import { getTimetablePrintData } from "./timetable-print";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -69,7 +70,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function insertBranchDirect(academyId: string, name = `Branch ${randomUUID()}`): Promise<string> {

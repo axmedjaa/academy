@@ -1,47 +1,11 @@
 import { redirect } from "next/navigation";
-import { getAuthContext } from "@/lib/auth/auth-context";
-import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { ACADEMY_STAFF_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
-import { RegisterStaffCard } from "../register-staff-form";
-import { BackLink, PageMessage } from "@/app/academy/_shell/ui";
 
 /**
- * PLAN.md Item 35 — `/academy/staff/new`. Same gating shape as
- * app/academy/settings/page.tsx: `app/academy/layout.tsx` already checked
- * base subscription/membership access for the whole `/academy/*` subtree,
- * this page resolves its own academyId/role via
- * `checkAcademyAccessForContext` (no channel exists to receive the
- * layout's own resolved values), then additionally checks the
- * `academy.staff` row directly (rather than via `listStaff`, which this
- * page has no other use for) to decide whether to render the create form
- * at all — Trainer's "view" and Admissions/Finance's "none" both see
- * "Access denied" instead.
+ * `/academy/staff/new` — kept only so old links and bookmarks keep working:
+ * registration happens in the Register staff member dialog on the Staff
+ * page, which `?register=1` opens. That page applies the same access checks
+ * as before.
  */
-export default async function NewStaffPage() {
-  const context = await getAuthContext();
-  if (!context) {
-    redirect("/login");
-  }
-
-  const access = await checkAcademyAccessForContext(context);
-  if (access.level === "blocked") {
-    if (access.reason === "not_authenticated") {
-      redirect("/login");
-    }
-    return <PageMessage title="Access unavailable" message={access.message} />;
-  }
-
-  const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION);
-  if (level !== "full" && level !== "manage") {
-    return <PageMessage title="Access denied" message="You don't have permission to add staff members." />;
-  }
-
-  return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
-      <div className="mx-auto max-w-[560px]">
-        <BackLink href="/academy/staff" label="Back to staff" />
-      </div>
-      <RegisterStaffCard />
-    </div>
-  );
+export default function NewStaffPage() {
+  redirect("/academy/staff?register=1");
 }

@@ -3,12 +3,14 @@
 import { startTransition, useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createStaff, type CreateStaffFormState } from "@/lib/academies/staff-actions";
-import { ACADEMY_ROLES } from "@/lib/auth/roles";
+import type { StaffWorkplaceOptions } from "@/lib/academies/staff";
+import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
 import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
 import { showSuccessToast } from "@/lib/ui/toast";
 import {
   DField,
   DesignDialog,
+  useUrlOpenedDialog,
   DialogBody,
   DialogFooter,
   FieldGrid,
@@ -21,6 +23,7 @@ import {
   type DesignFormRule,
 } from "@/app/academy/_shell/design-form";
 import { guardAction } from "@/lib/ui/guard-action";
+import { WorkplaceField } from "./workplace-field";
 
 // Failed requests come back as form errors (see lib/ui/guard-action.ts).
 const guardedCreateStaff = guardAction(createStaff);
@@ -32,6 +35,11 @@ const guardedCreateStaff = guardAction(createStaff);
  * (optional). Every academy role stays assignable as before — the design's
  * role list is not used to add a new restriction. `createStaff` validates,
  * creates or reuses the user account, scopes to the academy and audits.
+ *
+ * Multi-branch: "Where they work" picks all branches (owner only) or
+ * specific branches — only those the creator works in are offered, and
+ * `createStaff` checks the same rule on the server. An academy with no
+ * branch yet shows no such field, which keeps the earlier default.
  */
 
 const initialState: CreateStaffFormState = { ok: false };
@@ -50,6 +58,14 @@ const RULES: DesignFormRule[] = [
     label: "Temporary password",
     check: (value) => (value && value.length < 8 ? "Use at least 8 characters for the temporary password." : null),
   },
+  {
+    name: "branchIds",
+    label: "Branches",
+    check: (_value, data) =>
+      data.get("workplace") === "specific" && data.getAll("branchIds").length === 0
+        ? "Choose at least one branch where this person works."
+        : null,
+  },
 ];
 
 const SERVER_FIELD_PATTERNS: [RegExp, string][] = [
@@ -58,11 +74,21 @@ const SERVER_FIELD_PATTERNS: [RegExp, string][] = [
   [/phone/i, "phone"],
   [/full name/i, "fullName"],
   [/employee/i, "employeeNumber"],
+  [/branch/i, "branchIds"],
 ];
 
-function StaffFields({ onCancel, onCreated }: { onCancel: () => void; onCreated: () => void }) {
+function StaffFields({
+  workplaceOptions,
+  onCancel,
+  onCreated,
+}: {
+  workplaceOptions: StaffWorkplaceOptions | null;
+  onCancel: () => void;
+  onCreated: () => void;
+}) {
   const [state, formAction, pending] = useActionState(guardedCreateStaff, initialState);
   const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(RULES);
+  const [role, setRole] = useState<AcademyRole>("trainer");
 
   useEffect(() => {
     if (state.ok) {
@@ -108,7 +134,12 @@ function StaffFields({ onCancel, onCreated }: { onCancel: () => void; onCreated:
             <PhoneField name="phone" error={errors.phone} onBlur={blur("phone")} />
           </DField>
           <DField label="Role" name="role">
-            <select name="role" defaultValue="trainer" className={controlClass(false)}>
+            <select
+              name="role"
+              value={role}
+              onChange={(event) => setRole(event.target.value as AcademyRole)}
+              className={controlClass(false)}
+            >
               {ACADEMY_ROLES.map((role) => (
                 <option key={role} value={role}>
                   {ACADEMY_ROLE_LABELS[role]}
@@ -138,6 +169,9 @@ function StaffFields({ onCancel, onCreated }: { onCancel: () => void; onCreated:
           <DField label="Hire date (optional)" name="hireDate">
             <input type="date" name="hireDate" className={controlClass(false)} />
           </DField>
+          {workplaceOptions && workplaceOptions.branches.length > 0 && (
+            <WorkplaceField options={workplaceOptions} role={role} error={errors.branchIds} />
+          )}
         </FieldGrid>
         <FormErrorBanner message={banner} />
       </DialogBody>
@@ -149,9 +183,18 @@ function StaffFields({ onCancel, onCreated }: { onCancel: () => void; onCreated:
 const TITLE = "Register staff member";
 const SUBTITLE = "The person signs in with this email and temporary password, and is asked to change it.";
 
-export function RegisterStaffButton() {
+/** Header action on Staff: opens the registration dialog. Also opened by
+ * `/academy/staff?register=1` (the old /academy/staff/new address
+ * redirects there). */
+export function RegisterStaffButton({
+  workplaceOptions,
+  openedByUrl = false,
+}: {
+  workplaceOptions: StaffWorkplaceOptions | null;
+  openedByUrl?: boolean;
+}) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useUrlOpenedDialog(openedByUrl);
   return (
     <>
       <button
@@ -164,6 +207,7 @@ export function RegisterStaffButton() {
       <DesignDialog open={open} onOpenChange={setOpen} title={TITLE} description={SUBTITLE}>
         {open && (
           <StaffFields
+            workplaceOptions={workplaceOptions}
             onCancel={() => setOpen(false)}
             onCreated={() => {
               setOpen(false);
@@ -173,19 +217,5 @@ export function RegisterStaffButton() {
         )}
       </DesignDialog>
     </>
-  );
-}
-
-/** Standalone version for direct visits to /academy/staff/new. */
-export function RegisterStaffCard() {
-  const router = useRouter();
-  return (
-    <div className="mx-auto flex w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-card">
-      <div className="border-b border-border px-6 pb-4 pt-5">
-        <h1 className="text-lg font-bold leading-snug text-ink">{TITLE}</h1>
-        <p className="mt-1 text-[13px] text-muted">{SUBTITLE}</p>
-      </div>
-      <StaffFields onCancel={() => router.push("/academy/staff")} onCreated={() => router.push("/academy/staff")} />
-    </div>
   );
 }

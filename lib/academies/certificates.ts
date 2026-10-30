@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { batchInScopeCondition, getBranchScope, isBatchInScope, type BranchScope } from "@/lib/academies/branch-access";
 import { and, eq, getTableColumns, ilike, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
@@ -304,6 +305,8 @@ interface ResolvedCertificatesAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  /** Multi-branch: a certificate belongs to a batch, a batch to a branch. */
+  scope: BranchScope;
 }
 
 type ResolveCertificatesAccessResult =
@@ -332,6 +335,7 @@ async function resolveCertificatesAccess(
       academyId: access.academyId,
       membershipRole: access.membershipRole,
       permissionLevel,
+      scope: await getBranchScope(access, actorContext.userId),
     },
   };
 }
@@ -449,9 +453,11 @@ export async function listCertificates(
 ): Promise<ListCertificatesResult> {
   const resolved = await resolveCertificatesAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, scope } = resolved.access;
 
   const conditions = [eq(certificates.academyId, academyId)];
+  const certificateScope = batchInScopeCondition(scope, academyId, certificates.batchId);
+  if (certificateScope) conditions.push(certificateScope);
   if (filters.studentId) {
     conditions.push(eq(certificates.studentId, filters.studentId));
   }
@@ -497,7 +503,11 @@ export async function getCertificate(
 
   const [row] = await selectCertificateRows(
     db,
-    and(eq(certificates.id, certificateId), eq(certificates.academyId, academyId)),
+    and(
+      eq(certificates.id, certificateId),
+      eq(certificates.academyId, academyId),
+      batchInScopeCondition(resolved.access.scope, academyId, certificates.batchId),
+    ),
     1,
   );
   if (!row) {
@@ -621,7 +631,7 @@ export async function issueCertificate(
   }
 
   const batchId = await resolveBatchIdOrCode(db, academyId, batchIdOrCode);
-  if (!batchId) {
+  if (!batchId || !(await isBatchInScope(resolved.access.scope, academyId, batchId))) {
     return { ok: false, error: BATCH_NOT_FOUND };
   }
 
@@ -803,7 +813,7 @@ export async function cancelCertificate(
       .from(certificates)
       .where(and(eq(certificates.id, certificateId), eq(certificates.academyId, academyId)))
       .for("update");
-    if (!certificate) {
+    if (!certificate || !(await isBatchInScope(resolved.access.scope, academyId, certificate.batchId, tx))) {
       return { kind: "not_found" as const };
     }
     if (certificate.status === "cancelled") {

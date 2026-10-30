@@ -69,6 +69,9 @@ interface Props {
    * which empty-state copy renders (DESIGN.md §3.1 distinguishes a
    * genuinely empty academy from a filtered search with no results). */
   hasActiveFilters: boolean;
+  /** Whether the empty list offers Register student (can manage, and a
+   * branch exists to register into). */
+  canRegister: boolean;
   /** Only "full"/"manage" callers (Owner, Admin, Manager, Admissions
    * Officer) get edit controls — "view" (Finance Officer, Trainer) is
    * read-only, per the Master Permission Matrix's Full/Full/Manage/
@@ -118,6 +121,7 @@ export function StudentsList({
   students,
   overdueByStudent,
   hasActiveFilters,
+  canRegister,
   canManage,
   canDelete,
   canManagePayments,
@@ -201,8 +205,8 @@ export function StudentsList({
                 <LinkButton href="/academy/students" variant="secondary">
                   Clear filters
                 </LinkButton>
-              ) : canManage ? (
-                <LinkButton href="/academy/students/new">Register student</LinkButton>
+              ) : canRegister ? (
+                <LinkButton href="/academy/students?register=1">Register student</LinkButton>
               ) : undefined
             }
           />

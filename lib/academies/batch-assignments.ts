@@ -1,4 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -14,7 +15,6 @@ import {
   FEE_INTERVAL_MONTHS_OPTIONS,
   feePeriods,
   paymentAllocations,
-  staffBranchAssignments,
   staffProfiles,
   students,
 } from "@/lib/db/schema";
@@ -120,14 +120,6 @@ import type { AcademyRole } from "@/lib/auth/roles";
  * staff_branch_assignments, the set every other branch-limited check in
  * this file uses).
  */
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set([
-  "admissions_officer",
-  "trainer",
-]);
-
-function isBranchLimited(role: AcademyRole): boolean {
-  return BRANCH_LIMITED_ROLES.has(role);
-}
 
 function canManage(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
@@ -193,25 +185,6 @@ function isUniqueViolation(err: unknown): boolean {
 /** Same join pattern as lib/academies/batches.ts's private
  * `getAssignedBranchIds` (each academy-scoped action file keeps its own
  * copy, per that file's own documented convention). */
-async function getAssignedBranchIds(
-  executor: DbClient,
-  academyId: string,
-  userId: string,
-): Promise<string[]> {
-  const [profile] = await executor
-    .select({ id: staffProfiles.id })
-    .from(staffProfiles)
-    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)))
-    .limit(1);
-  if (!profile) return [];
-
-  const assignments = await executor
-    .select({ branchId: staffBranchAssignments.branchId })
-    .from(staffBranchAssignments)
-    .where(eq(staffBranchAssignments.staffProfileId, profile.id));
-
-  return assignments.map((row) => row.branchId);
-}
 
 /**
  * The forward-looking, exported helper — see this file's module comment.
@@ -253,6 +226,7 @@ interface ResolvedScopeAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  academyWide: boolean;
 }
 
 type ResolveScopeAccessResult =
@@ -278,6 +252,7 @@ async function resolveScopeAccess(actorContext: AuthContext): Promise<ResolveSco
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
+      academyWide: access.academyWide,
       permissionLevel,
     },
   };
@@ -290,7 +265,7 @@ async function resolveScopeAccess(actorContext: AuthContext): Promise<ResolveSco
 async function getScopedBatch(
   executor: DbClient,
   academyId: string,
-  membershipRole: AcademyRole,
+  academyWide: boolean,
   userId: string,
   batchId: string,
 ): Promise<typeof batches.$inferSelect | null> {
@@ -301,7 +276,7 @@ async function getScopedBatch(
     .limit(1);
   if (!row) return null;
 
-  if (isBranchLimited(membershipRole)) {
+  if (!academyWide) {
     const assignedIds = await getAssignedBranchIds(executor, academyId, userId);
     if (!assignedIds.includes(row.branchId)) return null;
   }
@@ -360,7 +335,7 @@ export async function assignTrainerToBatch(
 ): Promise<AssignTrainerResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -380,7 +355,7 @@ export async function assignTrainerToBatch(
       const batch = await getScopedBatch(
         tx,
         academyId,
-        membershipRole,
+        academyWide,
         actorContext.userId,
         data.batchId,
       );
@@ -490,7 +465,7 @@ export async function unassignTrainerFromBatch(
 ): Promise<UnassignTrainerResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -515,7 +490,7 @@ export async function unassignTrainerFromBatch(
       .for("update");
     if (!existing) return { outcome: "not_found" as const };
 
-    if (isBranchLimited(membershipRole)) {
+    if (!academyWide) {
       const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
       if (!assignedIds.includes(existing.branchId)) {
         return { outcome: "not_found" as const };
@@ -578,12 +553,12 @@ export async function listBatchTrainerAssignments(
 ): Promise<ListBatchTrainerAssignmentsResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, academyWide } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(batchId);
   if (!parsedId.success) return { ok: false, error: BATCH_NOT_FOUND };
 
-  const batch = await getScopedBatch(db, academyId, membershipRole, actorContext.userId, batchId);
+  const batch = await getScopedBatch(db, academyId, academyWide, actorContext.userId, batchId);
   if (!batch) return { ok: false, error: BATCH_NOT_FOUND };
 
   const rows = await db
@@ -711,7 +686,7 @@ export async function enrollStudentInBatch(
 ): Promise<EnrollStudentResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -731,7 +706,7 @@ export async function enrollStudentInBatch(
       const batch = await getScopedBatch(
         tx,
         academyId,
-        membershipRole,
+        academyWide,
         actorContext.userId,
         data.batchId,
       );
@@ -927,7 +902,7 @@ export async function withdrawStudentFromBatch(
 ): Promise<WithdrawStudentResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -956,7 +931,7 @@ export async function withdrawStudentFromBatch(
       .for("update");
     if (!existing) return { outcome: "not_found" as const };
 
-    if (isBranchLimited(membershipRole)) {
+    if (!academyWide) {
       const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
       if (!assignedIds.includes(existing.branchId)) {
         return { outcome: "not_found" as const };
@@ -1165,7 +1140,7 @@ export async function getEnrollmentDeletionEligibility(
 ): Promise<GetEnrollmentDeletionEligibilityResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canDeleteEnrollment(membershipRole, permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -1185,7 +1160,7 @@ export async function getEnrollmentDeletionEligibility(
   if (!existing) {
     return { ok: false, error: ENROLLMENT_NOT_FOUND };
   }
-  if (isBranchLimited(membershipRole)) {
+  if (!academyWide) {
     const assignedIds = await getAssignedBranchIds(db, academyId, actorContext.userId);
     if (!assignedIds.includes(existing.branchId)) {
       return { ok: false, error: ENROLLMENT_NOT_FOUND };
@@ -1219,7 +1194,7 @@ export async function deleteBatchEnrollment(
 ): Promise<DeleteEnrollmentResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canDeleteEnrollment(membershipRole, permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -1240,7 +1215,7 @@ export async function deleteBatchEnrollment(
     if (!existing) {
       return { ok: false, error: ENROLLMENT_NOT_FOUND };
     }
-    if (isBranchLimited(membershipRole)) {
+    if (!academyWide) {
       const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
       if (!assignedIds.includes(existing.branchId)) {
         return { ok: false, error: ENROLLMENT_NOT_FOUND };
@@ -1317,12 +1292,12 @@ export async function listBatchEnrollments(
 ): Promise<ListBatchEnrollmentsResult> {
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(batchId);
   if (!parsedId.success) return { ok: false, error: BATCH_NOT_FOUND };
 
-  const batch = await getScopedBatch(db, academyId, membershipRole, actorContext.userId, batchId);
+  const batch = await getScopedBatch(db, academyId, academyWide, actorContext.userId, batchId);
   if (!batch) return { ok: false, error: BATCH_NOT_FOUND };
 
   const rows = await db

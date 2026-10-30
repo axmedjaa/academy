@@ -69,7 +69,7 @@ export async function listFeePeriodOverview(
   const pageSize = Math.min(LIST_PAGE_SIZE_MAX, Math.max(1, options.pageSize ?? LIST_PAGE_SIZE_MAX));
   const empty = { ok: true as const, rows: [], totalCount: 0, page, pageSize, canManage };
 
-  const scope = await resolveScope(academyId, membershipRole, actorContext.userId, undefined);
+  const scope = await resolveScope(access, actorContext.userId, undefined);
   if (scope.unreachable) return empty;
 
   const conditions: SQL[] = [
@@ -199,7 +199,7 @@ export async function getFeeCollectionSummary(actorContext: AuthContext): Promis
   if (getAcademyPermissionLevel(membershipRole, ACADEMY_FEE_PERIODS_ACTION) === "none") {
     return { ok: false, error: { code: "forbidden", message: "You don't have permission to view fee periods." } };
   }
-  const scope = await resolveScope(academyId, membershipRole, actorContext.userId, undefined);
+  const scope = await resolveScope(access, actorContext.userId, undefined);
   if (scope.unreachable) return { ok: true, totals: [] };
 
   const periods = await db

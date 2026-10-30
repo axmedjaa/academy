@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { and, eq, ilike, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { staffBranchAssignments, staffProfiles, students, studentIdCards } from "@/lib/db/schema";
+import { students, studentIdCards } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_STUDENT_ID_CARDS_ACTION,
@@ -41,18 +42,6 @@ import type { AcademyRole } from "@/lib/auth/roles";
  */
 export const ACADEMY_ID_CARDS_ACTION = ACADEMY_STUDENT_ID_CARDS_ACTION;
 
-// Same branch-limited-roles set as lib/academies/branches.ts's
-// BRANCH_LIMITED_ROLES (not exported there, so recreated here rather than
-// touching that read-only file) — PLAN.md §6's "further by branch_id for
-// branch-limited roles (Admissions Officer, Trainer)".
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set([
-  "admissions_officer",
-  "trainer",
-]);
-
-function isBranchLimited(role: AcademyRole): boolean {
-  return BRANCH_LIMITED_ROLES.has(role);
-}
 
 function canManage(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
@@ -117,30 +106,12 @@ function toRecord(row: typeof studentIdCards.$inferSelect): IdCardRecord {
  * file is read-only per this item's brief. A caller with no staff_profiles
  * row (or zero assignments) is assigned to nothing.
  */
-async function getAssignedBranchIds(
-  executor: DbClient,
-  academyId: string,
-  userId: string,
-): Promise<string[]> {
-  const [profile] = await executor
-    .select({ id: staffProfiles.id })
-    .from(staffProfiles)
-    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)))
-    .limit(1);
-  if (!profile) return [];
-
-  const assignments = await executor
-    .select({ branchId: staffBranchAssignments.branchId })
-    .from(staffBranchAssignments)
-    .where(eq(staffBranchAssignments.staffProfileId, profile.id));
-
-  return assignments.map((row) => row.branchId);
-}
 
 interface ResolvedIdCardAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  academyWide: boolean;
 }
 
 type ResolveIdCardAccessResult =
@@ -168,6 +139,7 @@ async function resolveIdCardAccess(
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
+      academyWide: access.academyWide,
       permissionLevel,
     },
   };
@@ -194,7 +166,7 @@ async function resolveIdCardAccess(
 async function resolveScopedStudent(
   executor: DbClient,
   academyId: string,
-  membershipRole: AcademyRole,
+  academyWide: boolean,
   userId: string,
   studentIdOrNumber: string,
 ): Promise<{ id: string; branchId: string } | null> {
@@ -215,7 +187,7 @@ async function resolveScopedStudent(
     .limit(1);
   if (!row) return null;
 
-  if (isBranchLimited(membershipRole)) {
+  if (!academyWide) {
     const assignedIds = await getAssignedBranchIds(executor, academyId, userId);
     if (!assignedIds.includes(row.branchId)) return null;
   }
@@ -313,7 +285,7 @@ export async function issueStudentIdCard(
 ): Promise<IssueIdCardResult> {
   const resolved = await resolveIdCardAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -331,7 +303,7 @@ export async function issueStudentIdCard(
   const student = await resolveScopedStudent(
     db,
     academyId,
-    membershipRole,
+    academyWide,
     actorContext.userId,
     data.studentId,
   );
@@ -410,7 +382,7 @@ export async function reprintStudentIdCard(
 ): Promise<ReprintIdCardResult> {
   const resolved = await resolveIdCardAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canManage(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -430,7 +402,7 @@ export async function reprintStudentIdCard(
       .limit(1);
     if (!existing) return null;
 
-    if (isBranchLimited(membershipRole)) {
+    if (!academyWide) {
       const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
       if (!assignedIds.includes(existing.branchId)) return null;
     }
@@ -523,12 +495,12 @@ export async function getIdCard(
 ): Promise<GetIdCardResult> {
   const resolved = await resolveIdCardAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole } = resolved.access;
+  const { academyId, academyWide } = resolved.access;
 
   const student = await resolveScopedStudent(
     db,
     academyId,
-    membershipRole,
+    academyWide,
     actorContext.userId,
     studentId,
   );
@@ -556,8 +528,8 @@ export async function getIdCard(
 export async function getIdCardBranchScope(actorContext: AuthContext): Promise<string[] | null> {
   const resolved = await resolveIdCardAccess(actorContext);
   if (!resolved.ok) return [];
-  const { academyId, membershipRole } = resolved.access;
-  return isBranchLimited(membershipRole) ? getAssignedBranchIds(db, academyId, actorContext.userId) : null;
+  const { academyId, academyWide } = resolved.access;
+  return !academyWide ? getAssignedBranchIds(db, academyId, actorContext.userId) : null;
 }
 
 export type ListLatestCardsResult =
@@ -576,11 +548,11 @@ export async function listLatestCardsForStudents(
 ): Promise<ListLatestCardsResult> {
   const resolved = await resolveIdCardAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole } = resolved.access;
+  const { academyId, academyWide } = resolved.access;
   const ids = studentIds.filter((id) => z.string().uuid().safeParse(id).success);
   if (ids.length === 0) return { ok: true, cards: {} };
   // Branch-limited roles only ever see cards of students in their branches.
-  const branchIds = isBranchLimited(membershipRole) ? await getAssignedBranchIds(db, academyId, actorContext.userId) : null;
+  const branchIds = !academyWide ? await getAssignedBranchIds(db, academyId, actorContext.userId) : null;
   if (branchIds && branchIds.length === 0) return { ok: true, cards: {} };
 
   const rows = await db

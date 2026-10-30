@@ -70,7 +70,7 @@ export default async function AcademyLayout({ children }: LayoutProps<"/academy"
   // Shared console shell (app/_console/console-shell.tsx). Navigation is
   // filtered server-side from the SAME resolved `access.membershipRole`
   // above — see lib/academies/nav-items.ts and lib/console/shell-data.ts.
-  const shellData = await getAcademyConsoleShellData(authContext, access.academyId, access.membershipRole);
+  const shellData = await getAcademyConsoleShellData(authContext, access);
 
   return (
     <ConsoleShell data={shellData} banner={graceBanner}>

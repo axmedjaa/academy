@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -19,6 +19,7 @@ import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
 import { evaluateGradeBand, type ResultRecord } from "@/lib/academies/results";
+import { getAllowedBatchIds } from "@/lib/academies/exams";
 
 /**
  * PLAN.md Phase 3, Item 50b — "`result_corrections` + `requestResultCorrection`
@@ -200,6 +201,7 @@ const CORRECTION_NOT_FOUND: ResultCorrectionActionError = {
 interface ResolvedAccess {
   academyId: string;
   membershipRole: AcademyRole;
+  academyWide: boolean;
 }
 
 type ResolveAccessResult = { ok: true; access: ResolvedAccess } | { ok: false; error: ResultCorrectionActionError };
@@ -211,7 +213,7 @@ async function resolveAccess(actorContext: AuthContext): Promise<ResolveAccessRe
   }
   return {
     ok: true,
-    access: { academyId: access.academyId, membershipRole: access.membershipRole },
+    access: { academyId: access.academyId, membershipRole: access.membershipRole, academyWide: access.academyWide },
   };
 }
 
@@ -314,6 +316,8 @@ export async function requestResultCorrection(
       .where(and(eq(examResults.id, originalResultId), eq(examResults.academyId, academyId)))
       .for("update");
     if (!resultRow) return { kind: "not_found" as const };
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds && !allowedBatchIds.includes(resultRow.batchId)) return { kind: "not_found" as const };
 
     // requestResultCorrection is only valid on a Published result — see
     // the Result Lifecycle table's own "Published -> Correction Requested"
@@ -457,6 +461,8 @@ export async function approveResultCorrection(
       .where(eq(examResults.id, correction.originalResultId))
       .for("update");
     if (!resultRow) return { kind: "not_found" as const };
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds && !allowedBatchIds.includes(resultRow.batchId)) return { kind: "not_found" as const };
     // Defensive — requestResultCorrection only ever creates a request
     // against a published result, and no other code path in this file or
     // results.ts (read-only) can move a result off `published` while a
@@ -663,6 +669,15 @@ export async function rejectResultCorrection(
       .where(and(eq(resultCorrections.id, correctionId), eq(resultCorrections.academyId, academyId)))
       .for("update");
     if (!correction) return { kind: "not_found" as const };
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds) {
+      const [original] = await tx
+        .select({ batchId: examResults.batchId })
+        .from(examResults)
+        .where(eq(examResults.id, correction.originalResultId))
+        .limit(1);
+      if (!original || !allowedBatchIds.includes(original.batchId)) return { kind: "not_found" as const };
+    }
     if (correction.status !== "requested") return { kind: "invalid_state" as const };
 
     const pending = await findPendingApprovalRequest(tx, correction.originalResultId);
@@ -745,9 +760,18 @@ export async function listResultCorrections(
     return { ok: false, error: FORBIDDEN };
   }
 
+  const allowedBatchIds = await getAllowedBatchIds(db, resolved.access, actorContext.userId);
+  const batchScope = allowedBatchIds
+    ? allowedBatchIds.length === 0
+      ? sql`false`
+      : inArray(
+          resultCorrections.originalResultId,
+          db.select({ id: examResults.id }).from(examResults).where(inArray(examResults.batchId, allowedBatchIds)),
+        )
+    : undefined;
   const conditions = originalResultId
-    ? and(eq(resultCorrections.academyId, academyId), eq(resultCorrections.originalResultId, originalResultId))
-    : eq(resultCorrections.academyId, academyId);
+    ? and(eq(resultCorrections.academyId, academyId), eq(resultCorrections.originalResultId, originalResultId), batchScope)
+    : and(eq(resultCorrections.academyId, academyId), batchScope);
 
   const rows = await db.select().from(resultCorrections).where(conditions);
 

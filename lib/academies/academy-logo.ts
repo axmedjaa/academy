@@ -84,7 +84,9 @@ async function resolveAuthorizedAcademy(
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
-  if (!hasAcademyPermission(access.membershipRole, ACADEMY_SETTINGS_ACTION)) {
+  // Multi-branch: the academy logo is academy-wide — changing it needs
+  // all-branch access.
+  if (!hasAcademyPermission(access.membershipRole, ACADEMY_SETTINGS_ACTION) || !access.academyWide) {
     return { ok: false, error: FORBIDDEN };
   }
   return { ok: true, academyId: access.academyId, membershipRole: access.membershipRole };

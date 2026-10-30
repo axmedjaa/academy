@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 // Real Cloudflare R2 is never called from the test suite — same
@@ -53,6 +53,7 @@ import {
   restoreExam,
 } from "./exams";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -107,7 +108,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function insertBranchDirect(academyId: string): Promise<string> {
@@ -532,6 +533,79 @@ describe("enterMarks — (exam_id, student_id) uniqueness: update-in-place", () 
     const result = await enterMarks(context, exam.exam.id, [{ studentId, marksObtained: 70 }]);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("invalid_state");
+  });
+});
+
+describe("enterMarks — batched writes (performance plan P8)", () => {
+  it("enters marks for several students in one call — existing rows updated, a late enrollment inserted — results in entry order", { timeout: 120_000 }, async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const early: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const sid = await insertStudentDirect(academyId, branchId, creatorUserId);
+      await enrollStudentDirect(academyId, batchId, sid);
+      early.push(sid);
+    }
+    const exam = await createExam(context, { batchId, name: "Batch entry", maxMarks: 100 });
+    expect(exam.ok).toBe(true);
+    if (!exam.ok) return;
+    // Enrolled after createExam: has no result row yet.
+    const late = await insertStudentDirect(academyId, branchId, creatorUserId);
+    await enrollStudentDirect(academyId, batchId, late);
+
+    const entries = [
+      { studentId: early[2], marksObtained: 71 },
+      { studentId: late, marksObtained: 64 },
+      { studentId: early[0], marksObtained: 88.5 },
+      { studentId: early[1], marksObtained: 0 },
+    ];
+    const result = await enterMarks(context, exam.exam.id, entries);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.results.map((r) => r.studentId)).toEqual(entries.map((e) => e.studentId));
+    expect(result.results.map((r) => r.marksObtained)).toEqual(entries.map((e) => e.marksObtained));
+    expect(result.results.every((r) => r.status === "marks_entered")).toBe(true);
+
+    const rows = await db.select().from(examResults).where(eq(examResults.examId, exam.exam.id));
+    expect(rows).toHaveLength(4);
+    for (const entry of entries) {
+      const row = rows.find((r) => r.studentId === entry.studentId);
+      expect(Number(row?.marksObtained)).toBe(entry.marksObtained);
+      expect(row?.status).toBe("marks_entered");
+    }
+  });
+
+  it("writes nothing when a later entry fails (no partial, unaudited marks)", { timeout: 120_000 }, async () => {
+    const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy("academy_owner");
+    const first = await insertStudentDirect(academyId, branchId, creatorUserId);
+    await enrollStudentDirect(academyId, batchId, first);
+    const second = await insertStudentDirect(academyId, branchId, creatorUserId);
+    await enrollStudentDirect(academyId, batchId, second);
+    const exam = await createExam(context, { batchId, name: "All or nothing", maxMarks: 100 });
+    expect(exam.ok).toBe(true);
+    if (!exam.ok) return;
+
+    await db
+      .update(examResults)
+      .set({ status: "submitted" })
+      .where(and(eq(examResults.examId, exam.exam.id), eq(examResults.studentId, second)));
+    const [firstBefore] = await db
+      .select()
+      .from(examResults)
+      .where(and(eq(examResults.examId, exam.exam.id), eq(examResults.studentId, first)));
+
+    const result = await enterMarks(context, exam.exam.id, [
+      { studentId: first, marksObtained: 55 },
+      { studentId: second, marksObtained: 70 },
+    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("invalid_state");
+
+    const [firstAfter] = await db
+      .select()
+      .from(examResults)
+      .where(and(eq(examResults.examId, exam.exam.id), eq(examResults.studentId, first)));
+    expect(firstAfter.marksObtained).toBe(firstBefore.marksObtained);
+    expect(firstAfter.status).toBe(firstBefore.status);
   });
 });
 

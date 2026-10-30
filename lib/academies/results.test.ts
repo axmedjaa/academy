@@ -39,6 +39,7 @@ import {
   type ResultRecord,
 } from "./results";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -93,7 +94,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function insertBranchDirect(academyId: string): Promise<string> {
@@ -983,6 +984,89 @@ describe("publishResults — notification wiring", () => {
 // this file may modify marks_obtained/grade_configuration_id/
 // grade_band_label/pass_fail.
 // ---------------------------------------------------------------------------
+describe("submitResults/publishResults — batched writes (performance plan P8)", () => {
+  it("submits several results at once: each moves to under_review with its own pending approval request, results in original order", { timeout: 120_000 }, async () => {
+    const setup = await setupAcademy("academy_owner");
+    const examId = await insertExamDirect(setup.academyId, setup.batchId);
+    const studentIds = [setup.studentId];
+    for (let i = 0; i < 3; i += 1) {
+      const sid = await insertStudentDirect(setup.academyId, setup.branchId, setup.creatorUserId);
+      await enrollStudentDirect(setup.academyId, setup.batchId, sid);
+      studentIds.push(sid);
+    }
+    const resultIds: string[] = [];
+    for (const [i, sid] of studentIds.entries()) {
+      resultIds.push(
+        await insertExamResultDirect(setup.academyId, examId, sid, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId, {
+          status: "marks_entered",
+          marksObtained: 50 + i,
+        }),
+      );
+    }
+
+    const result = await submitResults(setup.context, examId, { studentIds: [...studentIds].reverse() });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.results).toHaveLength(4);
+    expect(result.results.every((r) => r.status === "under_review" && r.submittedAt !== null)).toBe(true);
+
+    for (const resultId of resultIds) {
+      expect((await fetchResultRow(resultId)).status).toBe("under_review");
+      const requests = await db.select().from(approvalRequests).where(eq(approvalRequests.entityId, resultId));
+      expect(requests).toHaveLength(1);
+      expect(requests[0].status).toBe("pending");
+      expect(requests[0].entityType).toBe("result");
+      expect(requests[0].requestedBy).toBe(setup.userId);
+    }
+  });
+
+  it("publishes several results across different bands, each with its own band and pass/fail", { timeout: 120_000 }, async () => {
+    const setup = await setupAcademy("academy_owner", {
+      bands: [
+        { label: "Fail", minMark: 0, maxMark: 49, isPass: false },
+        { label: "Pass", minMark: 50, maxMark: 79, isPass: true },
+        { label: "Distinction", minMark: 80, maxMark: 100, isPass: true },
+      ],
+    });
+    const examId = await insertExamDirect(setup.academyId, setup.batchId);
+    const marks = [85, 40, 65, 90, 10];
+    const expected = [
+      ["Distinction", "pass"],
+      ["Fail", "fail"],
+      ["Pass", "pass"],
+      ["Distinction", "pass"],
+      ["Fail", "fail"],
+    ];
+    const resultIds: string[] = [];
+    for (const [i, mark] of marks.entries()) {
+      const sid = i === 0 ? setup.studentId : await insertStudentDirect(setup.academyId, setup.branchId, setup.creatorUserId);
+      if (i > 0) await enrollStudentDirect(setup.academyId, setup.batchId, sid);
+      resultIds.push(
+        await insertExamResultDirect(setup.academyId, examId, sid, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId, {
+          status: "approved",
+          marksObtained: mark,
+          approvedBy: setup.creatorUserId,
+          approvedAt: new Date(),
+        }),
+      );
+    }
+
+    const result = await publishResults(setup.context, examId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.results).toHaveLength(5);
+    for (const [i, resultId] of resultIds.entries()) {
+      const row = await fetchResultRow(resultId);
+      expect(row.status).toBe("published");
+      expect(row.gradeBandLabel).toBe(expected[i][0]);
+      expect(row.passFail).toBe(expected[i][1]);
+      expect(row.gradeConfigurationId).toBe(setup.activeGradeConfigId);
+      const returned = result.results.find((r) => r.id === resultId);
+      expect(returned?.gradeBandLabel).toBe(expected[i][0]);
+    }
+  });
+});
+
 describe("immutability of a Published result", () => {
   async function setupPublishedResult() {
     const setup = await setupAcademy("academy_owner");

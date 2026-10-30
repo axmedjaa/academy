@@ -260,6 +260,13 @@
       "when": 1792970000000,
       "tag": "0036_student_course_refunds",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1793060000000,
+      "tag": "0037_multi_branch",
+      "breakpoints": true
     }
   ]
 }

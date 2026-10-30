@@ -28,6 +28,7 @@ vi.mock("@/lib/storage/client", () => ({
 }));
 import { deleteObject, getObjectPrefix, getUploadUrl, headObject } from "@/lib/storage/client";
 import { VALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 const headObjectMock = vi.mocked(headObject);
 const getUploadUrlMock = vi.mocked(getUploadUrl);
 const deleteObjectMock = vi.mocked(deleteObject);
@@ -109,7 +110,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function setupAcademy(role: AcademyRole): Promise<{ academyId: string; context: AuthContext }> {

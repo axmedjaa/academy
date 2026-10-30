@@ -1,16 +1,17 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { staffProfiles, users } from "@/lib/db/schema";
-import { getAcademyShellData } from "@/lib/academies/shell";
+import { getAcademyShellIdentity } from "@/lib/academies/shell";
 import { getAcademyLogoUrl } from "@/lib/academies/academy-logo";
 import { getVisibleAcademyNavItems, groupNavItems } from "@/lib/academies/nav-items";
 import { ROLE_LABELS as ACADEMY_ROLE_LABELS } from "@/lib/academies/staff-labels";
 import { getVisiblePlatformNavItems } from "@/lib/platform/nav-items";
 import { hasPermission } from "@/lib/auth/permissions";
 import { ACADEMY_STUDENTS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
-import { listNotificationsForUser } from "@/lib/notifications/list-notifications";
+import { countUnreadNotificationsForUser, listNotificationPreviewForUser } from "@/lib/notifications/list-notifications";
 import { humanizeNotificationLabel } from "@/lib/notifications/humanize-template-id";
 import type { AuthContext } from "@/lib/auth/auth-context";
+import type { AcademyAccessAllowed } from "@/lib/academies/access-gate";
 import type { AcademyRole } from "@/lib/auth/roles";
 
 /**
@@ -74,12 +75,7 @@ async function getEmail(userId: string): Promise<string> {
  * overall hid older unread notifications (and their Mark as read) behind
  * newer read ones while the badge still counted them. */
 async function getNotificationPreview(context: AuthContext) {
-  const [unread, recent] = await Promise.all([
-    listNotificationsForUser(context, { unreadOnly: true, limit: NOTIFICATION_PREVIEW_LIMIT }),
-    listNotificationsForUser(context, { limit: NOTIFICATION_PREVIEW_LIMIT }),
-  ]);
-  const unreadIds = new Set(unread.map((item) => item.id));
-  const latest = [...unread, ...recent.filter((item) => !unreadIds.has(item.id))].slice(0, NOTIFICATION_PREVIEW_LIMIT);
+  const latest = await listNotificationPreviewForUser(context, NOTIFICATION_PREVIEW_LIMIT);
   return latest.map((item) => ({
     id: item.id,
     label: humanizeNotificationLabel(item.templateId),
@@ -88,33 +84,34 @@ async function getNotificationPreview(context: AuthContext) {
   }));
 }
 
+/** `access` is the caller's already-resolved, allowed gate result — the shell
+ * reuses its academy row (name, logo) instead of reading `academies` again. */
 export async function getAcademyConsoleShellData(
   context: AuthContext,
-  academyId: string,
-  role: AcademyRole,
+  access: AcademyAccessAllowed,
 ): Promise<ConsoleShellData> {
-  const [shellData, email, profile, latest] = await Promise.all([
-    getAcademyShellData(context, academyId, role),
-    getEmail(context.userId),
-    db
-      .select({ fullName: staffProfiles.fullName })
-      .from(staffProfiles)
-      .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, context.userId)))
-      .limit(1),
+  const role = access.membershipRole;
+  const [identity, unreadCount, latest, logoUrl] = await Promise.all([
+    getAcademyShellIdentity(context, access.academyId, access.academyWide),
+    countUnreadNotificationsForUser(context),
     getNotificationPreview(context),
+    getAcademyLogoUrl(access.academy.logoRef),
   ]);
-  const logoUrl = await getAcademyLogoUrl(shellData.logoRef);
 
   return {
     console: "academy",
-    brand: { title: shellData.academyName, subtitle: "Academy Console", logoUrl },
+    brand: { title: access.academy.name || "Academy", subtitle: "Academy Console", logoUrl },
     groups: groupNavItems(getVisibleAcademyNavItems(role)).map((group) => ({
       title: group.title,
       items: group.items.map(({ key, label, href, icon, matchPrefixes }) => ({ key, label, href, icon, matchPrefixes })),
     })),
-    user: { name: profile[0]?.fullName ?? nameFromEmail(email), email, roleLabel: ACADEMY_ROLE_LABELS[role] },
+    user: {
+      name: identity.staffFullName ?? nameFromEmail(identity.email),
+      email: identity.email,
+      roleLabel: ACADEMY_ROLE_LABELS[role],
+    },
     notifications: {
-      unreadCount: shellData.unreadNotificationsCount,
+      unreadCount,
       latest,
       viewAllHref: "/academy/notifications",
     },
@@ -125,17 +122,17 @@ export async function getAcademyConsoleShellData(
     // Academy-wide roles see every branch, which says nothing new (the
     // dashboard carries its own working branch filter); branch-limited
     // roles see the branch(es) their data is locked to.
-    contextLabel: shellData.branchChipLabel === "All branches" ? null : shellData.branchChipLabel,
+    contextLabel: identity.branchChipLabel === "All branches" ? null : identity.branchChipLabel,
   };
 }
 
 const PLATFORM_ROLE_LABELS = { platform_owner: "Platform Owner", platform_admin: "Platform Admin" } as const;
 
 export async function getPlatformConsoleShellData(context: AuthContext): Promise<ConsoleShellData> {
-  const [navItems, email, unread, latest, canSearchAcademies, canSearchPayments] = await Promise.all([
+  const [navItems, email, unreadCount, latest, canSearchAcademies, canSearchPayments] = await Promise.all([
     getVisiblePlatformNavItems(context),
     getEmail(context.userId),
-    listNotificationsForUser(context, { unreadOnly: true }),
+    countUnreadNotificationsForUser(context),
     getNotificationPreview(context),
     hasPermission(context, "approveAcademy"),
     hasPermission(context, "recordSubscriptionPayment"),
@@ -161,7 +158,7 @@ export async function getPlatformConsoleShellData(context: AuthContext): Promise
       roleLabel: context.platformRole ? PLATFORM_ROLE_LABELS[context.platformRole] : "Platform staff",
     },
     // The shared account inbox (design S03 in the Platform shell).
-    notifications: { unreadCount: unread.length, latest, viewAllHref: "/account/notifications" },
+    notifications: { unreadCount, latest, viewAllHref: "/account/notifications" },
     search: canSearchAcademies || canSearchPayments ? { placeholder, label: placeholder } : null,
     contextLabel: null,
   };

@@ -8,7 +8,7 @@ import {
   updateStaff,
 } from "@/lib/academies/staff-actions";
 import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
-import type { StaffDeletionEligibilitySummary, StaffListRow } from "@/lib/academies/staff";
+import type { StaffDeletionEligibilitySummary, StaffListRow, StaffWorkplaceOptions } from "@/lib/academies/staff";
 import { Badge, EmptyState, ErrorMessage, PhoneLink, Section, inputClass, trHover } from "@/app/academy/_shell/ui";
 import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
@@ -21,6 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { EditBranchesDialog } from "./edit-branches-dialog";
 
 /** First + last initial, e.g. "Jane Doe" -> "JD" — a small avatar-style
  * identity cue so a row of names is easier to scan at a glance, matching
@@ -34,6 +35,29 @@ function getInitials(fullName: string): string {
   return (first + last).toUpperCase();
 }
 
+/** Multi-branch: where a person works, kept to one short line — "All
+ * branches", or up to two names plus "+N more" (the full list is in the
+ * tooltip; branches the viewer doesn't manage are only counted). */
+function BranchesCell({ row }: { row: StaffListRow }) {
+  if (row.allBranchAccess) return <Badge label="All branches" tone="green" />;
+  const names = row.branches.map((branch) => (branch.isMain ? `${branch.name} (Main)` : branch.name));
+  const total = names.length + row.otherBranchCount;
+  if (total === 0) return <span className="text-muted">No branch</span>;
+  const shown = names.slice(0, 2);
+  const more = total - shown.length;
+  const tooltip = [...names, ...(row.otherBranchCount > 0 ? [`${row.otherBranchCount} other branch${row.otherBranchCount === 1 ? "" : "es"}`] : [])].join(", ");
+  return (
+    <span title={tooltip} className="text-[13px]">
+      {shown.join(", ")}
+      {more > 0 && (
+        <span className="text-muted">
+          {shown.length > 0 ? " " : ""}+{more} {shown.length > 0 ? "more" : more === 1 ? "branch" : "branches"}
+        </span>
+      )}
+    </span>
+  );
+}
+
 interface Props {
   staff: (StaffListRow & { deletionEligibility: StaffDeletionEligibilitySummary })[];
   /** Full/Manage (Owner, Admin, Manager) — Trainer's "View" renders read-only. */
@@ -43,6 +67,8 @@ interface Props {
    * its own prop for symmetry with the other four entities' list
    * components and in case that ever changes. */
   canDelete: boolean;
+  /** Branches the viewer can place staff in (null when they can't manage staff). */
+  workplaceOptions: StaffWorkplaceOptions | null;
 }
 
 /**
@@ -53,7 +79,7 @@ interface Props {
  * since several rows each need their own independent pending state rather
  * than one shared form.
  */
-export function StaffTable({ staff, canManage, canDelete }: Props) {
+export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Props) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   // Which row's "Remove access"/"Delete" confirmation dialog is open — the
@@ -61,6 +87,7 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
   // mode) rather than being its own visible trigger button.
   const [removeAccessRowId, setRemoveAccessRowId] = useState<string | null>(null);
   const [deleteRowId, setDeleteRowId] = useState<string | null>(null);
+  const [branchesRowId, setBranchesRowId] = useState<string | null>(null);
 
   function onRoleChange(userId: string, role: AcademyRole) {
     setError(null);
@@ -116,6 +143,7 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
               <th className={rtTh}>Phone</th>
               <th className={rtTh}>Login email</th>
               <th className={rtTh}>Role</th>
+              <th className={rtTh}>Branches</th>
               <th className={rtTh}>Status</th>
               {canManage && <th className={`${rtTh} text-right`}>Actions</th>}
             </tr>
@@ -161,6 +189,9 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
                     ACADEMY_ROLE_LABELS[row.role]
                   )}
                 </td>
+                <td className={`${rtTd} max-w-[220px]`} data-label="Branches">
+                  <BranchesCell row={row} />
+                </td>
                 <td className={rtTd} data-label="Status">
                   <Badge label={row.status} tone={row.status === "active" ? "green" : "gray"} />
                 </td>
@@ -175,7 +206,7 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
                       >
                         {row.status === "active" ? "Archive" : "Restore"}
                       </button>
-                      {(row.role !== null || canDelete) && (
+                      {(row.role !== null || canDelete || (row.canEditBranches && workplaceOptions)) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <button
@@ -187,6 +218,9 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            {row.canEditBranches && workplaceOptions && (
+                              <DropdownMenuItem onClick={() => setBranchesRowId(row.id)}>Edit branches</DropdownMenuItem>
+                            )}
                             {row.role !== null && (
                               <DropdownMenuItem onClick={() => setRemoveAccessRowId(row.id)}>Remove access</DropdownMenuItem>
                             )}
@@ -208,6 +242,14 @@ export function StaffTable({ staff, canManage, canDelete }: Props) {
                       )}
                     </span>
 
+                    {row.canEditBranches && workplaceOptions && (
+                      <EditBranchesDialog
+                        row={row}
+                        options={workplaceOptions}
+                        open={branchesRowId === row.id}
+                        onOpenChange={(nextOpen) => setBranchesRowId(nextOpen ? row.id : null)}
+                      />
+                    )}
                     {row.role !== null && (
                       <ConfirmButton
                         label="Remove access"

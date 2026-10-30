@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { getBranchScope, inBranchScope, isStudentInScope, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { expenseRecords, incomeRecords, studentCharges, studentCourseRefundPayments, studentPayments } from "@/lib/db/schema";
@@ -227,14 +228,21 @@ function parseReason(reason: string): { ok: true; value: string } | { ok: false 
 async function resolveMembership(
   actorContext: AuthContext,
 ): Promise<
-  | { ok: true; academyId: string; membershipRole: AcademyRole }
+  | { ok: true; academyId: string; membershipRole: AcademyRole; scope: BranchScope }
   | { ok: false; error: FinanceReversalError }
 > {
   const access = await checkAcademyAccessForContext(actorContext);
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
-  return { ok: true, academyId: access.academyId, membershipRole: access.membershipRole };
+  // Multi-branch: a record outside the caller's branches is treated as
+  // missing (lib/academies/branch-access.ts).
+  return {
+    ok: true,
+    academyId: access.academyId,
+    membershipRole: access.membershipRole,
+    scope: await getBranchScope(access, actorContext.userId),
+  };
 }
 
 // ===========================================================================
@@ -284,7 +292,7 @@ async function reverseOrAdjustStudentPaymentInternal(
 ): Promise<ReverseStudentPaymentResult> {
   const membership = await resolveMembership(actorContext);
   if (!membership.ok) return membership;
-  const { academyId, membershipRole } = membership;
+  const { academyId, membershipRole, scope } = membership;
 
   const permissionLevel = getAcademyPermissionLevel(membershipRole, ACADEMY_STUDENT_PAYMENTS_ACTION);
   if (!canCorrectOwnPayment(permissionLevel)) {
@@ -313,7 +321,7 @@ async function reverseOrAdjustStudentPaymentInternal(
       .from(studentPayments)
       .where(and(eq(studentPayments.id, studentPaymentId), eq(studentPayments.academyId, academyId)))
       .for("update");
-    if (!original) return { kind: "not_found" as const };
+    if (!original || !(await isStudentInScope(scope, academyId, original.studentId, tx))) return { kind: "not_found" as const };
     if (original.status !== "approved") return { kind: "invalid_state" as const };
     // Checked on the locked row: a Manager may correct any payment; other
     // recording roles only a payment they recorded themselves.
@@ -466,7 +474,7 @@ async function reverseOrAdjustIncomeRecordInternal(
 ): Promise<ReverseIncomeRecordResult> {
   const membership = await resolveMembership(actorContext);
   if (!membership.ok) return membership;
-  const { academyId, membershipRole } = membership;
+  const { academyId, membershipRole, scope } = membership;
 
   const permissionLevel = getAcademyPermissionLevel(membershipRole, ACADEMY_INCOME_ACTION);
   if (!canReverseIncome(permissionLevel)) {
@@ -495,7 +503,7 @@ async function reverseOrAdjustIncomeRecordInternal(
       .from(incomeRecords)
       .where(and(eq(incomeRecords.id, incomeRecordId), eq(incomeRecords.academyId, academyId)))
       .for("update");
-    if (!original) return { kind: "not_found" as const };
+    if (!original || !inBranchScope(scope, original.branchId)) return { kind: "not_found" as const };
     if (original.status !== "posted") return { kind: "invalid_state" as const };
 
     const [updatedOriginal] = await tx
@@ -612,7 +620,7 @@ async function reverseOrAdjustExpenseRecordInternal(
 ): Promise<ReverseExpenseRecordResult> {
   const membership = await resolveMembership(actorContext);
   if (!membership.ok) return membership;
-  const { academyId, membershipRole } = membership;
+  const { academyId, membershipRole, scope } = membership;
 
   const permissionLevel = getAcademyPermissionLevel(membershipRole, ACADEMY_EXPENSES_ACTION);
   if (!canCorrectOwnExpense(permissionLevel)) {
@@ -641,7 +649,7 @@ async function reverseOrAdjustExpenseRecordInternal(
       .from(expenseRecords)
       .where(and(eq(expenseRecords.id, expenseRecordId), eq(expenseRecords.academyId, academyId)))
       .for("update");
-    if (!original) return { kind: "not_found" as const };
+    if (!original || !inBranchScope(scope, original.branchId)) return { kind: "not_found" as const };
     if (original.status !== "approved") return { kind: "invalid_state" as const };
     // Checked on the locked row: approvers may correct any expense; other
     // submitting roles only an expense they submitted themselves.

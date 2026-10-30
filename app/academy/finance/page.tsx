@@ -286,7 +286,10 @@ export default async function AcademyFinancePage({
     const canManage = paymentsResult.canManage;
 
     const chargeIds = [...new Set(payments.map((p) => p.chargeId).filter((id): id is string => Boolean(id)))];
-    const [{ labels, photos }, staffNames, receipts, history, chargeRows, payable, options] = await Promise.all([
+    // Refunds recorded out of these payments (course withdrawals) load with
+    // everything else that only needs this page's payments (performance
+    // plan P4 — previously a separate stage after this group).
+    const [{ labels, photos }, staffNames, receipts, history, chargeRows, payable, options, refundedByPayment] = await Promise.all([
       studentsById(payments.map((p) => p.studentId)),
       resolveStaffNames(academyId, payments.map((p) => p.recordedBy)),
       listReceiptsForPayments(context, payments.map((p) => p.id)),
@@ -300,10 +303,9 @@ export default async function AcademyFinancePage({
         : Promise.resolve([]),
       canManage ? listStudentCharges(context, { status: ["open", "partially_paid"] }) : Promise.resolve(null),
       canManage ? studentOptions() : Promise.resolve([]),
+      getRefundedAmountsForPayments(academyId, payments.map((p) => p.id)),
     ]);
     const chargeDescription = Object.fromEntries(chargeRows.map((row) => [row.id, row.description]));
-    // Refunds recorded out of these payments (course withdrawals).
-    const refundedByPayment = await getRefundedAmountsForPayments(academyId, payments.map((p) => p.id));
     // One payment can fund several fee periods, even of several courses: it
     // stays one row, labelled with every course it was allocated to.
     const allocationsByPayment = new Map((history.ok ? history.rows : []).map((row) => [row.paymentId, describeAllocations(row.periods)]));

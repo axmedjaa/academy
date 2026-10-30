@@ -23,6 +23,7 @@ import {
   issueStudentIdCard,
   reprintStudentIdCard,
 } from "./id-cards";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -86,7 +87,7 @@ async function addMembership(
   academyId: string,
   role: AcademyRole,
 ): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function insertBranchDirect(academyId: string): Promise<string> {

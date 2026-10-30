@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { academyMemberships, notificationReads, notifications } from "@/lib/db/schema";
@@ -110,51 +110,108 @@ export async function listNotificationsForUser(
   actorContext: AuthContext,
   filters: ListNotificationsFilters = {},
 ): Promise<NotificationListItem[]> {
-  const memberAcademyIds = db
-    .select({ academyId: academyMemberships.academyId })
-    .from(academyMemberships)
-    .where(and(eq(academyMemberships.userId, actorContext.userId), eq(academyMemberships.status, "active")));
-
-  const conditions = [
-    eq(notifications.channel, "in_app"),
-    or(
-      eq(notifications.userId, actorContext.userId),
-      and(isNull(notifications.userId), inArray(notifications.academyId, memberAcademyIds)),
-    ),
-  ];
+  const conditions = [visibleToCaller(actorContext.userId)];
   if (filters.unreadOnly) {
-    conditions.push(
-      or(
-        and(eq(notifications.userId, actorContext.userId), isNull(notifications.readAt)),
-        // `notificationReads` is LEFT JOINed below, already filtered to
-        // this caller's own user_id in its ON clause — a non-matching
-        // shared row therefore reads as NULL here, which is exactly "this
-        // caller hasn't read it yet" (an anti-join expressed via WHERE).
-        and(isNull(notifications.userId), isNull(notificationReads.readAt)),
-      ),
-    );
+    conditions.push(unreadByCaller(actorContext.userId));
   }
 
   const query = db
     .select({ notification: notifications, sharedReadAt: notificationReads.readAt })
     .from(notifications)
-    .leftJoin(
-      notificationReads,
-      and(eq(notificationReads.notificationId, notifications.id), eq(notificationReads.userId, actorContext.userId)),
-    )
+    .leftJoin(notificationReads, callerReadMarker(actorContext.userId))
     .where(and(...conditions))
     .orderBy(desc(notifications.createdAt));
   const rows = filters.limit ? await query.limit(filters.limit) : await query;
 
-  return rows.map(({ notification, sharedReadAt }) => ({
+  return rows.map((row) => toListItem(row, actorContext.userId));
+}
+
+/**
+ * Performance plan P3: the header bell's unread badge as a single
+ * `count(*)` — previously the shell fetched every unread row and used
+ * `.length`. Same visibility and unread rules as `listNotificationsForUser`
+ * with `unreadOnly`, so the badge always equals that list's length.
+ */
+export async function countUnreadNotificationsForUser(actorContext: AuthContext): Promise<number> {
+  const [row] = await db
+    .select({ value: count() })
+    .from(notifications)
+    .leftJoin(notificationReads, callerReadMarker(actorContext.userId))
+    .where(and(visibleToCaller(actorContext.userId), unreadByCaller(actorContext.userId)));
+  return row?.value ?? 0;
+}
+
+/**
+ * Performance plan P3: the header bell's preview in one query — unread
+ * notifications first (newest first), then the newest read ones filling the
+ * remaining slots. Previously two queries (newest unread, newest overall)
+ * merged in JS; the result is the same list.
+ */
+export async function listNotificationPreviewForUser(
+  actorContext: AuthContext,
+  limit: number,
+): Promise<NotificationListItem[]> {
+  const rows = await db
+    .select({ notification: notifications, sharedReadAt: notificationReads.readAt })
+    .from(notifications)
+    .leftJoin(notificationReads, callerReadMarker(actorContext.userId))
+    .where(visibleToCaller(actorContext.userId))
+    .orderBy(sql`case when ${unreadByCaller(actorContext.userId)} then 0 else 1 end`, desc(notifications.createdAt))
+    .limit(limit);
+
+  return rows.map((row) => toListItem(row, actorContext.userId));
+}
+
+/** in_app rows addressed to the caller, or shared (null user_id) rows for
+ * an academy the caller is an active member of — see this file's module
+ * comment. */
+function visibleToCaller(userId: string): SQL {
+  const memberAcademyIds = db
+    .select({ academyId: academyMemberships.academyId })
+    .from(academyMemberships)
+    .where(and(eq(academyMemberships.userId, userId), eq(academyMemberships.status, "active")));
+
+  return and(
+    eq(notifications.channel, "in_app"),
+    or(
+      eq(notifications.userId, userId),
+      and(isNull(notifications.userId), inArray(notifications.academyId, memberAcademyIds)),
+    ),
+  )!;
+}
+
+/** The caller's own read marker for shared rows — the LEFT JOIN condition
+ * every read in this file uses. */
+function callerReadMarker(userId: string): SQL {
+  return and(eq(notificationReads.notificationId, notifications.id), eq(notificationReads.userId, userId))!;
+}
+
+/** Unread from this caller's point of view. Requires `notificationReads`
+ * LEFT JOINed via `callerReadMarker`. */
+function unreadByCaller(userId: string): SQL {
+  return or(
+    and(eq(notifications.userId, userId), isNull(notifications.readAt)),
+    // `notificationReads` is LEFT JOINed, already filtered to this
+    // caller's own user_id in its ON clause — a non-matching shared row
+    // therefore reads as NULL here, which is exactly "this caller hasn't
+    // read it yet" (an anti-join expressed via WHERE).
+    and(isNull(notifications.userId), isNull(notificationReads.readAt)),
+  )!;
+}
+
+function toListItem(
+  { notification, sharedReadAt }: { notification: typeof notifications.$inferSelect; sharedReadAt: Date | null },
+  userId: string,
+): NotificationListItem {
+  return {
     id: notification.id,
     academyId: notification.academyId,
     eventType: notification.eventType,
     templateId: notification.templateId,
     status: notification.status,
-    readAt: notification.userId === actorContext.userId ? notification.readAt : sharedReadAt,
+    readAt: notification.userId === userId ? notification.readAt : sharedReadAt,
     createdAt: notification.createdAt,
-  }));
+  };
 }
 
 export interface NotificationActionError {

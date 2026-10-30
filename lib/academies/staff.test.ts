@@ -35,6 +35,7 @@ import {
   type CreateStaffInput,
 } from "./staff";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 // Same "one top-level cleanup, every test builds its own fully isolated
 // fixture set" convention as lib/academies/settings.test.ts, plus the same
@@ -97,7 +98,7 @@ async function addMembership(
   academyId: string,
   role: AcademyRole,
 ): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 /** Full fixture: a fresh academy, one active plan/subscription (maxStaff

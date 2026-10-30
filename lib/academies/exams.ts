@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getAssignedBatchIds } from "@/lib/academies/batch-assignments";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { getStudentPhotoUrl } from "@/lib/academies/students";
 import {
   ACADEMY_EXAMS_ACTION,
@@ -207,6 +208,7 @@ interface ResolvedExamAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  academyWide: boolean;
 }
 
 type ResolveExamAccessResult =
@@ -230,8 +232,32 @@ async function resolveExamAccess(actorContext: AuthContext): Promise<ResolveExam
       academyId: access.academyId,
       membershipRole: access.membershipRole,
       permissionLevel,
+      academyWide: access.academyWide,
     },
   };
+}
+
+/**
+ * The batches whose exams this caller may see or act on — `null` means
+ * every batch in the academy. A Trainer keeps the batches they teach (see
+ * this file's module comment); multi-branch: any other member without
+ * all-branch access is limited to batches of their assigned branches
+ * (lib/academies/branch-access.ts).
+ */
+export async function getAllowedBatchIds(
+  executor: DbClient,
+  access: { academyId: string; membershipRole: AcademyRole; academyWide: boolean },
+  userId: string,
+): Promise<string[] | null> {
+  if (access.membershipRole === "trainer") return getAssignedBatchIds(executor, userId, access.academyId);
+  if (access.academyWide) return null;
+  const branchIds = await getAssignedBranchIds(executor, access.academyId, userId);
+  if (branchIds.length === 0) return [];
+  const rows = await executor
+    .select({ id: batches.id })
+    .from(batches)
+    .where(and(eq(batches.academyId, access.academyId), inArray(batches.branchId, branchIds)));
+  return rows.map((row) => row.id);
 }
 
 /** Resolves the academy's one `active` grade_configuration, or `null` if it
@@ -394,6 +420,8 @@ export async function createExam(
       .where(and(eq(batches.id, data.batchId), eq(batches.academyId, academyId)))
       .limit(1);
     if (!batch) return { outcome: "batch_not_found" as const };
+    const allowedForCreate = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedForCreate && !allowedForCreate.includes(batch.id)) return { outcome: "batch_not_found" as const };
 
     // The exam's course must be one of the batch's courses; a batch with a
     // single course needs no choice.
@@ -559,8 +587,8 @@ export async function enterMarks(
       // Trainer-batch scoping — see this file's module comment: NOT
       // staff_branch_assignments, but batch_trainer_assignments via the
       // exact helper Item 44 built for this purpose.
-      if (membershipRole === "trainer") {
-        const assignedBatchIds = await getAssignedBatchIds(tx, actorContext.userId, academyId);
+      const assignedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+      if (assignedBatchIds) {
         if (!assignedBatchIds.includes(exam.batchId)) {
           // Same generic not_found as a nonexistent/cross-academy exam —
           // an IDOR-safe response, never a distinguishing "forbidden".
@@ -575,16 +603,45 @@ export async function enterMarks(
         }
       }
 
-      const before: ExamResultRecord[] = [];
-      const after: ExamResultRecord[] = [];
-
-      for (const entry of entries) {
-        const [existing] = await tx
+      // Performance plan P8: everything this call needs is read up front —
+      // the entries' existing results (locked FOR UPDATE, as before), which
+      // of the students are actively enrolled in the exam's batch course, and
+      // the active grade configuration — instead of two to four queries per
+      // student. Entries are then checked in their original order with the
+      // same rules and the same first-failure outcome, and the writes happen
+      // only once every entry has passed: one UPDATE for existing results and
+      // one INSERT for late enrollments. (Previously a failure part-way
+      // through returned after the earlier entries' marks had already been
+      // written, committing them without this call's audit row; now a failed
+      // call writes nothing.)
+      const entryStudentIds = entries.map((entry) => entry.studentId);
+      const [existingRows, enrolledRows, activeGradeConfigurationId] = await Promise.all([
+        tx
           .select()
           .from(examResults)
-          .where(and(eq(examResults.examId, examId), eq(examResults.studentId, entry.studentId)))
-          .for("update");
+          .where(and(eq(examResults.examId, examId), inArray(examResults.studentId, entryStudentIds)))
+          .for("update"),
+        tx
+          .select({ studentId: batchEnrollments.studentId })
+          .from(batchEnrollments)
+          .where(
+            and(
+              eq(batchEnrollments.batchId, exam.batchId),
+              eq(batchEnrollments.courseId, exam.courseId),
+              inArray(batchEnrollments.studentId, entryStudentIds),
+              eq(batchEnrollments.status, "active"),
+            ),
+          ),
+        getActiveGradeConfigurationId(tx, academyId),
+      ]);
+      const existingByStudent = new Map(existingRows.map((row) => [row.studentId, row]));
+      const enrolledStudentIds = new Set(enrolledRows.map((row) => row.studentId));
 
+      const before: ExamResultRecord[] = [];
+      const updates: { id: string; marks: string }[] = [];
+      const inserts: (typeof examResults.$inferInsert)[] = [];
+      for (const entry of entries) {
+        const existing = existingByStudent.get(entry.studentId);
         if (existing) {
           if (existing.status !== "draft" && existing.status !== "marks_entered") {
             return {
@@ -593,59 +650,55 @@ export async function enterMarks(
               status: existing.status,
             };
           }
-
           before.push(toResultRecord(existing));
-          const [updated] = await tx
-            .update(examResults)
-            .set({
-              marksObtained: String(entry.marksObtained),
-              status: "marks_entered",
-              enteredBy: actorContext.userId,
-              updatedAt: new Date(),
-            })
-            .where(eq(examResults.id, existing.id))
-            .returning();
-          after.push(toResultRecord(updated));
+          updates.push({ id: existing.id, marks: String(entry.marksObtained) });
           continue;
         }
 
         // Late-enrollment edge case — see this file's module comment.
-        const [enrollment] = await tx
-          .select({ id: batchEnrollments.id })
-          .from(batchEnrollments)
-          .where(
-            and(
-              eq(batchEnrollments.batchId, exam.batchId),
-              eq(batchEnrollments.courseId, exam.courseId),
-              eq(batchEnrollments.studentId, entry.studentId),
-              eq(batchEnrollments.status, "active"),
-            ),
-          )
-          .limit(1);
-        if (!enrollment) {
+        if (!enrolledStudentIds.has(entry.studentId)) {
           return { outcome: "student_not_enrolled" as const, studentId: entry.studentId };
         }
-
-        const activeGradeConfigurationId = await getActiveGradeConfigurationId(tx, academyId);
         if (!activeGradeConfigurationId) {
           return { outcome: "no_active_grade_config" as const };
         }
-
-        const [inserted] = await tx
-          .insert(examResults)
-          .values({
-            academyId,
-            examId,
-            studentId: entry.studentId,
-            batchId: exam.batchId,
-            marksObtained: String(entry.marksObtained),
-            gradeConfigurationId: activeGradeConfigurationId,
-            status: "marks_entered",
-            enteredBy: actorContext.userId,
-          })
-          .returning();
-        after.push(toResultRecord(inserted));
+        inserts.push({
+          academyId,
+          examId,
+          studentId: entry.studentId,
+          batchId: exam.batchId,
+          marksObtained: String(entry.marksObtained),
+          gradeConfigurationId: activeGradeConfigurationId,
+          status: "marks_entered",
+          enteredBy: actorContext.userId,
+        });
       }
+
+      const rowsById = new Map<string, typeof examResults.$inferSelect>();
+      if (updates.length > 0) {
+        const values = sql.join(
+          updates.map((update) => sql`(${update.id}::uuid, ${update.marks}::numeric)`),
+          sql`, `,
+        );
+        await tx.execute(sql`
+          update ${examResults}
+          set marks_obtained = v.marks, status = 'marks_entered', entered_by = ${actorContext.userId}, updated_at = ${new Date()}
+          from (values ${values}) as v(id, marks)
+          where ${examResults.id} = v.id
+        `);
+        const refreshed = await tx
+          .select()
+          .from(examResults)
+          .where(inArray(examResults.id, updates.map((update) => update.id)));
+        for (const row of refreshed) rowsById.set(row.id, row);
+      }
+      const insertedByStudent = new Map(
+        (inserts.length > 0 ? await tx.insert(examResults).values(inserts).returning() : []).map((row) => [row.studentId, row]),
+      );
+      const after: ExamResultRecord[] = entries.map((entry) => {
+        const existing = existingByStudent.get(entry.studentId);
+        return toResultRecord(existing ? rowsById.get(existing.id)! : insertedByStudent.get(entry.studentId)!);
+      });
 
       // A light touch on the exam's own status — see this file's module
       // comment. Never downgrades marks_entry/completed/archived.
@@ -734,12 +787,10 @@ export async function listExams(
 ): Promise<ListExamsResult> {
   const resolved = await resolveExamAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel } = resolved.access;
 
   let allowedBatchIds: string[] | null = null;
-  if (membershipRole === "trainer") {
-    allowedBatchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
-  }
+  allowedBatchIds = await getAllowedBatchIds(db, resolved.access, actorContext.userId);
 
   if (batchId !== undefined) {
     const parsedId = z.string().uuid().safeParse(batchId);
@@ -785,6 +836,31 @@ export async function listExams(
   };
 }
 
+export type ListUpcomingExamsResult = { ok: true; exams: ExamRecord[] } | { ok: false; error: ExamActionError };
+
+/**
+ * Performance plan P5: the academy dashboard's "upcoming exams" — exams
+ * still scheduled and dated `today` or later — without loading every exam
+ * and every exam's result flags. Same gate (`resolveExamAccess`) and the
+ * same Trainer assigned-batch visibility as `listExams`; the date and
+ * status filters are applied in SQL instead of in the caller.
+ */
+export async function listUpcomingExams(actorContext: AuthContext, today: string): Promise<ListUpcomingExamsResult> {
+  const resolved = await resolveExamAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId } = resolved.access;
+
+  let allowedBatchIds: string[] | null = null;
+  allowedBatchIds = await getAllowedBatchIds(db, resolved.access, actorContext.userId);
+
+  const rows = await db
+    .select()
+    .from(exams)
+    .where(and(eq(exams.academyId, academyId), eq(exams.status, "scheduled"), gte(exams.examDate, today)));
+  const visible = allowedBatchIds ? rows.filter((row) => allowedBatchIds!.includes(row.batchId)) : rows;
+  return { ok: true, exams: visible.map(toExamRecord) };
+}
+
 export type GetExamResult =
   | { ok: true; exam: ExamRecord; canManage: boolean; canEnterMarks: boolean }
   | { ok: false; error: ExamActionError };
@@ -795,7 +871,7 @@ export type GetExamResult =
 export async function getExam(actorContext: AuthContext, examId: string): Promise<GetExamResult> {
   const resolved = await resolveExamAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(examId);
   if (!parsedId.success) return { ok: false, error: EXAM_NOT_FOUND };
@@ -807,8 +883,8 @@ export async function getExam(actorContext: AuthContext, examId: string): Promis
     .limit(1);
   if (!row) return { ok: false, error: EXAM_NOT_FOUND };
 
-  if (membershipRole === "trainer") {
-    const assignedBatchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
+  const assignedBatchIds = await getAllowedBatchIds(db, resolved.access, actorContext.userId);
+  if (assignedBatchIds) {
     if (!assignedBatchIds.includes(row.batchId)) return { ok: false, error: EXAM_NOT_FOUND };
   }
 
@@ -847,7 +923,7 @@ export async function listExamResults(
 ): Promise<ListExamResultsResult> {
   const resolved = await resolveExamAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(examId);
   if (!parsedId.success) return { ok: false, error: EXAM_NOT_FOUND };
@@ -859,8 +935,8 @@ export async function listExamResults(
     .limit(1);
   if (!examRow) return { ok: false, error: EXAM_NOT_FOUND };
 
-  if (membershipRole === "trainer") {
-    const assignedBatchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
+  const assignedBatchIds = await getAllowedBatchIds(db, resolved.access, actorContext.userId);
+  if (assignedBatchIds) {
     if (!assignedBatchIds.includes(examRow.batchId)) return { ok: false, error: EXAM_NOT_FOUND };
   }
 
@@ -940,6 +1016,8 @@ export async function archiveExam(
       .where(and(eq(exams.id, examId), eq(exams.academyId, academyId)))
       .limit(1);
     if (!existing) return null;
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds && !allowedBatchIds.includes(existing.exam.batchId)) return null;
 
     const [updated] = await tx
       .update(exams)
@@ -999,6 +1077,8 @@ export async function restoreExam(
       .where(and(eq(exams.id, examId), eq(exams.academyId, academyId)))
       .limit(1);
     if (!existing) return null;
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds && !allowedBatchIds.includes(existing.exam.batchId)) return null;
 
     const [updated] = await tx
       .update(exams)
@@ -1078,7 +1158,7 @@ export async function getExamDeletionEligibility(
 ): Promise<GetExamDeletionEligibilityResult> {
   const resolved = await resolveExamAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole } = resolved.access;
+  const { academyId } = resolved.access;
 
   const parsedId = z.string().uuid().safeParse(examId);
   if (!parsedId.success) return { ok: false, error: EXAM_NOT_FOUND };
@@ -1090,8 +1170,8 @@ export async function getExamDeletionEligibility(
     .limit(1);
   if (!existing) return { ok: false, error: EXAM_NOT_FOUND };
 
-  if (membershipRole === "trainer") {
-    const assignedBatchIds = await getAssignedBatchIds(db, actorContext.userId, academyId);
+  const assignedBatchIds = await getAllowedBatchIds(db, resolved.access, actorContext.userId);
+  if (assignedBatchIds) {
     if (!assignedBatchIds.includes(existing.batchId)) return { ok: false, error: EXAM_NOT_FOUND };
   }
 
@@ -1138,6 +1218,10 @@ export async function deleteExam(actorContext: AuthContext, examId: string): Pro
       .where(and(eq(exams.id, examId), eq(exams.academyId, academyId)))
       .for("update");
     if (!existing) {
+      return { ok: false, error: EXAM_NOT_FOUND };
+    }
+    const allowedBatchIds = await getAllowedBatchIds(tx, resolved.access, actorContext.userId);
+    if (allowedBatchIds && !allowedBatchIds.includes(existing.exam.batchId)) {
       return { ok: false, error: EXAM_NOT_FOUND };
     }
 

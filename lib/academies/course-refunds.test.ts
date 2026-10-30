@@ -46,6 +46,7 @@ import {
   withdrawStudentWithRefund,
   type WithdrawWithRefundInput,
 } from "./course-refunds";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -84,7 +85,7 @@ async function createPlan(): Promise<string> {
 
 async function addActingUser(academyId: string, role: AcademyRole): Promise<{ userId: string; context: AuthContext }> {
   const userId = await createUser();
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
   return { userId, context: { userId, branchIds: [], academyWide: false } };
 }
 

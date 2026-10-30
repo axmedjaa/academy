@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { branchScopeCondition, getBranchScope, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { academies, branches, incomeRecords } from "@/lib/db/schema";
@@ -155,6 +156,8 @@ interface ResolvedIncomeAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  /** Multi-branch: see lib/academies/branch-access.ts. */
+  scope: BranchScope;
 }
 
 type ResolveIncomeAccessResult =
@@ -177,6 +180,7 @@ async function resolveIncomeAccess(actorContext: AuthContext): Promise<ResolveIn
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
+      scope: await getBranchScope(access, actorContext.userId),
       permissionLevel,
     },
   };
@@ -192,9 +196,12 @@ export type ListIncomeRecordsResult =
 export async function listIncomeRecords(actorContext: AuthContext): Promise<ListIncomeRecordsResult> {
   const resolved = await resolveIncomeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, permissionLevel } = resolved.access;
+  const { academyId, permissionLevel, scope } = resolved.access;
 
-  const rows = await db.select().from(incomeRecords).where(eq(incomeRecords.academyId, academyId));
+  const rows = await db
+    .select()
+    .from(incomeRecords)
+    .where(and(eq(incomeRecords.academyId, academyId), branchScopeCondition(scope, incomeRecords.branchId)));
 
   return { ok: true, records: rows.map(toRecord), canCreate: canCreate(permissionLevel) };
 }
@@ -214,7 +221,7 @@ export async function createIncomeRecord(
 ): Promise<CreateIncomeRecordResult> {
   const resolved = await resolveIncomeAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
   if (!canCreate(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -238,6 +245,11 @@ export async function createIncomeRecord(
       if (!branchOk) {
         return { outcome: "invalid_branch" as const };
       }
+    }
+    // Multi-branch: a member without all-branch access records income only
+    // for one of their own branches (never an academy-level record).
+    if (!scope.academyWide && (data.branchId === undefined || !scope.branchIds.includes(data.branchId))) {
+      return { outcome: "invalid_branch" as const };
     }
 
     const currency = await resolveCurrency(tx, academyId, data.currency);

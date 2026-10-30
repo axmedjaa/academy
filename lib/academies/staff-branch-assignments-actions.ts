@@ -5,6 +5,11 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   assignStaffBranches as assignStaffBranchesForActor,
   listAssignedBranches as listAssignedBranchesForActor,
+  setAllBranchAccess as setAllBranchAccessForActor,
+  setStaffWorkplace as setStaffWorkplaceForActor,
+  type SetAllBranchAccessResult,
+  type SetStaffWorkplaceResult,
+  type StaffWorkplaceInput,
   type StaffBranchActionError,
 } from "@/lib/academies/staff-branch-assignments";
 
@@ -32,6 +37,7 @@ export async function assignStaffBranches(
   const result = await assignStaffBranchesForActor(context, staffProfileId, branchIds);
   if (result.ok) {
     revalidatePath("/academy/staff");
+    revalidatePath("/academy/branches", "layout");
   }
   return result;
 }
@@ -46,4 +52,37 @@ export async function getAssignedBranches(
   }
 
   return listAssignedBranchesForActor(context, staffProfileId);
+}
+
+/** Owner-only: grant or revoke a staff member's access to all branches. */
+export async function setAllBranchAccess(staffProfileId: string, enabled: boolean): Promise<SetAllBranchAccessResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await setAllBranchAccessForActor(context, staffProfileId, enabled);
+  if (result.ok) {
+    revalidatePath("/academy/staff");
+    revalidatePath("/academy/branches", "layout");
+  }
+  return result;
+}
+
+/** "Where they work" for an existing staff member (staff list's Edit branches dialog). */
+export async function setStaffWorkplace(
+  staffProfileId: string,
+  input: StaffWorkplaceInput,
+): Promise<SetStaffWorkplaceResult> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+
+  const result = await setStaffWorkplaceForActor(context, staffProfileId, input);
+  if (result.ok) {
+    revalidatePath("/academy/staff");
+    revalidatePath("/academy/branches", "layout");
+  }
+  return result;
 }

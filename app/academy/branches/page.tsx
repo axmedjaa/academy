@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listBranches } from "@/lib/academies/branches";
+import { getBranchComparison } from "@/lib/academies/branch-overview";
 import { BranchesList } from "./branches-list";
 import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 
@@ -21,7 +22,7 @@ export default async function AcademyBranchesPage() {
     redirect("/login");
   }
 
-  const result = await listBranches(context);
+  const [result, comparison] = await Promise.all([listBranches(context), getBranchComparison(context)]);
 
   if (!result.ok) {
     return (
@@ -34,7 +35,13 @@ export default async function AcademyBranchesPage() {
 
   return (
     <div className={PAGE_WRAP}>
-      <BranchesList branches={result.branches} canManage={result.canManage} />
+      <BranchesList
+        branches={result.branches}
+        canManage={result.canManage}
+        canManageStructure={result.canManageStructure}
+        allBranchAccess={result.allBranchAccess}
+        comparison={comparison.ok ? comparison.rows : null}
+      />
     </div>
   );
 }

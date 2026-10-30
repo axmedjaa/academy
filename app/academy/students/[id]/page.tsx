@@ -69,13 +69,63 @@ export default async function StudentDetailPage({
     );
   }
   const { student } = studentResult;
-  const photoUrl = await getStudentPhotoUrl(student.profileImageRef);
 
-  const enrollmentsResult = await listEnrollmentsForStudent(context, studentId);
+  // Performance plan P4: the page loads in three stages instead of eight.
+  // Stage 1 above is `getStudent` alone — it is the view-access check
+  // (including a Trainer's taught-batch scope), so nothing else starts until
+  // it passes. Stage 2 is every read that needs only the student id; stage 3
+  // is every read that needs stage 2's enrollments, payments or refunds. Each
+  // call is unchanged and still applies its own permission and tenant checks.
+  const [
+    photoUrl,
+    enrollmentsResult,
+    chargesResult,
+    paymentsResult,
+    feePeriodHistoryResult,
+    branchesResult,
+    enrollOptions,
+    access,
+    refundsResult,
+    deletionResult,
+    resolvedSearchParams,
+  ] = await Promise.all([
+    getStudentPhotoUrl(student.profileImageRef),
+    listEnrollmentsForStudent(context, studentId),
+    listStudentCharges(context, { studentId }),
+    listStudentPayments(context, { studentId }),
+    listFeePeriodPaymentHistory(context, { studentId }),
+    listBranches(context),
+    getEnrollBatchOptions(context),
+    checkAcademyAccessForContext(context),
+    listStudentRefunds(context, studentId),
+    getStudentDeletionEligibility(context, studentId),
+    searchParams,
+  ]);
+
   const enrollments = enrollmentsResult.ok ? enrollmentsResult.enrollments : [];
   const activeEnrollments = enrollments.filter((enrollment) => enrollment.status === "active");
+  const pastEnrollments = enrollments.filter((enrollment) => enrollment.status !== "active");
+  const payments = paymentsResult.ok ? paymentsResult.payments : [];
+  // Refunds recorded on withdrawal (their own records, never payments).
+  const refunds = refundsResult.ok ? refundsResult.refunds : null;
 
-  const [enrollmentSummaries, chargesResult, paymentsResult, feePeriodHistoryResult] = await Promise.all([
+  // Display-only "recorded by" label — every recordedBy id here already
+  // came from a payment row listStudentPayments already tenant-scoped and
+  // authorized, so this is a display-field fetch on already-authorized
+  // ids, not a fresh authorization decision (same reasoning as
+  // app/academy/finance/page.tsx's own studentLabels lookup). Resolves to
+  // the recorder's current role in this academy (e.g. "Manager"), falling
+  // back to their email if their membership no longer exists.
+  const recorderIds = payments.map((payment) => payment.recordedBy);
+  const [
+    enrollmentSummaries,
+    receiptsByPayment,
+    refundedByPayment,
+    recorderLabelById,
+    refundRecorderLabels,
+    timetableResult,
+    withdrawals,
+  ] = await Promise.all([
     Promise.all(
       activeEnrollments.map(async (enrollment) => {
         const [scheduleResult, summaryResult] = await Promise.all([
@@ -89,13 +139,17 @@ export default async function StudentDetailPage({
         };
       }),
     ),
-    listStudentCharges(context, { studentId }),
-    listStudentPayments(context, { studentId }),
-    listFeePeriodPaymentHistory(context, { studentId }),
+    listReceiptsForPayments(context, payments.map((payment) => payment.id)),
+    getRefundedAmountsForPayments(student.academyId, payments.map((payment) => payment.id)),
+    resolveStaffLabels(student.academyId, recorderIds),
+    refunds?.length
+      ? resolveStaffLabels(student.academyId, refunds.map((refund) => refund.recordedBy))
+      : Promise.resolve(new Map<string, string>()),
+    listTimetableForBatches(context, activeEnrollments.map((enrollment) => enrollment.batchId)),
+    listEnrollmentWithdrawals(context, pastEnrollments.map((enrollment) => enrollment.id)),
   ]);
 
   const charges = chargesResult.ok ? chargesResult.charges : [];
-  const payments = paymentsResult.ok ? paymentsResult.payments : [];
   const canManagePayments = chargesResult.ok ? chargesResult.canManage : false;
   const canReversePayments = paymentsResult.ok ? paymentsResult.canReverse : false;
   const paymentsSectionVisible = chargesResult.ok || paymentsResult.ok;
@@ -104,18 +158,6 @@ export default async function StudentDetailPage({
     (feePeriodHistoryResult.ok ? feePeriodHistoryResult.rows : []).map((row) => [row.paymentId, row]),
   );
   const chargeById = new Map(charges.map((charge) => [charge.id, charge]));
-  const receiptsByPayment = await listReceiptsForPayments(context, payments.map((payment) => payment.id));
-
-  // Display-only "recorded by" label — every recordedBy id here already
-  // came from a payment row listStudentPayments already tenant-scoped and
-  // authorized, so this is a display-field fetch on already-authorized
-  // ids, not a fresh authorization decision (same reasoning as
-  // app/academy/finance/page.tsx's own studentLabels lookup). Resolves to
-  // the recorder's current role in this academy (e.g. "Manager"), falling
-  // back to their email if their membership no longer exists.
-  const recorderIds = payments.map((payment) => payment.recordedBy);
-  const refundedByPayment = await getRefundedAmountsForPayments(student.academyId, payments.map((payment) => payment.id));
-  const recorderLabelById = await resolveStaffLabels(student.academyId, recorderIds);
 
   const historyRows: PaymentHistoryRow[] = payments
     .map((payment) => {
@@ -158,22 +200,6 @@ export default async function StudentDetailPage({
     })
     .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
 
-  // Header and tab data: branch name, edit rights (same gate updateStudent
-  // checks) and the enroll options (scoped batches with their courses).
-  const pastEnrollments = enrollments.filter((enrollment) => enrollment.status !== "active");
-  const [branchesResult, enrollOptions, access, timetableResult, withdrawals, refundsResult] = await Promise.all([
-    listBranches(context),
-    getEnrollBatchOptions(context),
-    checkAcademyAccessForContext(context),
-    listTimetableForBatches(context, activeEnrollments.map((enrollment) => enrollment.batchId)),
-    listEnrollmentWithdrawals(context, pastEnrollments.map((enrollment) => enrollment.id)),
-    listStudentRefunds(context, studentId),
-  ]);
-  // Refunds recorded on withdrawal (their own records, never payments).
-  const refunds = refundsResult.ok ? refundsResult.refunds : null;
-  const refundRecorderLabels = refunds?.length
-    ? await resolveStaffLabels(student.academyId, refunds.map((refund) => refund.recordedBy))
-    : new Map<string, string>();
   const refundRows: RefundHistoryRow[] = (refunds ?? []).map((refund) => ({
     id: refund.id,
     refundedAt: refund.refundedAt,
@@ -188,7 +214,6 @@ export default async function StudentDetailPage({
   }));
   // Same gate and rules as the Students list's Delete: refused (null here)
   // for roles that may not delete; otherwise eligible or the reasons why not.
-  const deletionResult = await getStudentDeletionEligibility(context, studentId);
   const deletion = deletionResult.ok
     ? { eligible: deletionResult.eligibility.eligible, reasons: deletionResult.eligibility.reasons }
     : null;
@@ -251,7 +276,7 @@ export default async function StudentDetailPage({
   return (
     <div className={PAGE_WRAP}>
       <StudentDetail
-        initialTab={(await searchParams).tab === "fees" ? "fees" : (await searchParams).tab === "payments" ? "payments" : "overview"}
+        initialTab={resolvedSearchParams.tab === "fees" ? "fees" : resolvedSearchParams.tab === "payments" ? "payments" : "overview"}
         student={student}
         photoUrl={photoUrl}
         branchName={branchName}

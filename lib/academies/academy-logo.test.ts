@@ -30,6 +30,7 @@ import {
 } from "./academy-logo";
 import { getAcademyLogoKey } from "@/lib/storage/keys";
 import { VALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const getUploadUrlMock = vi.mocked(getUploadUrl);
 const headObjectMock = vi.mocked(headObject);
@@ -89,7 +90,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function setupAcademy(role: AcademyRole): Promise<{ academyId: string; userId: string; context: AuthContext }> {

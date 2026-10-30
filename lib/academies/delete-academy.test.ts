@@ -36,6 +36,7 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import { deleteObject } from "@/lib/storage/client";
 import { deleteAcademy, getAcademyDeletionEligibility } from "./delete-academy";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const deleteObjectMock = vi.mocked(deleteObject);
 
@@ -199,7 +200,7 @@ describe("deleteAcademy — authorization", () => {
       const creatorId = await createUser();
       const academyId = await createBareAcademy(creatorId);
       const staffUserId = await createUser();
-      await db.insert(academyMemberships).values({ userId: staffUserId, academyId, role, status: "active" });
+      await db.insert(academyMemberships).values({ userId: staffUserId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 
       // This context has an academy role but NO platformRole — exactly what
       // hasPermission() checks for this ungrantable capability.

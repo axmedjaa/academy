@@ -10,8 +10,7 @@ import type {
   FeePeriodRecord,
   StudentEnrollmentOption,
 } from "@/lib/academies/fee-periods";
-import { listFeePeriodsForEnrollmentAction } from "@/lib/academies/fee-periods-actions";
-import { getCourseRefundPositionAction, withdrawStudentWithRefundAction } from "@/lib/academies/course-refunds-actions";
+import { getWithdrawDialogDataAction, withdrawStudentWithRefundAction } from "@/lib/academies/course-refunds-actions";
 import type { CourseRefundPosition } from "@/lib/academies/course-refunds";
 import { checkRefundAmount } from "@/lib/academies/course-refund-rules";
 import { outstandingCents } from "@/lib/ui/fee-allocation";
@@ -701,13 +700,12 @@ function WithdrawDialog({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    if (entry?.schedule) {
-      listFeePeriodsForEnrollmentAction(enrollment.id).then((result) => {
-        if (!cancelled) setPeriods(result.ok ? result.periods : "unavailable");
-      });
-    }
-    getCourseRefundPositionAction(enrollment.id).then((result) => {
-      if (!cancelled) setPosition(result.ok ? result.position : "unavailable");
+    // One request for both: client-called Server Actions run one at a time,
+    // so two separate calls here always waited on each other.
+    getWithdrawDialogDataAction(enrollment.id, Boolean(entry?.schedule)).then(({ periods: ledger, position: refund }) => {
+      if (cancelled) return;
+      if (ledger) setPeriods(ledger.ok ? ledger.periods : "unavailable");
+      setPosition(refund.ok ? refund.position : "unavailable");
     });
     return () => {
       cancelled = true;

@@ -2,9 +2,9 @@ import { cache } from "react";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
-import { platformMemberships } from "@/lib/db/schema";
+import { platformMemberships, sessions } from "@/lib/db/schema";
 import type { PlatformRole } from "@/lib/auth/roles";
-import { SESSION_COOKIE_NAME, validateSessionToken } from "@/lib/auth/session";
+import { SESSION_COOKIE_NAME, hashSessionToken, validateSessionToken } from "@/lib/auth/session";
 
 /**
  * PLAN.md Cross-Cutting Architecture Decisions: "every server action
@@ -89,11 +89,42 @@ export const getAuthContext = cache(async (): Promise<AuthContext | null> => {
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (!token) return null;
 
-  const session = await validateSessionToken(token);
-  if (!session) return null;
-
-  return resolveAuthContext(session.userId);
+  return resolveAuthContextForSessionToken(token);
 });
+
+/**
+ * Performance plan P2: `validateSessionToken` + `resolveAuthContext` in ONE
+ * round trip instead of two sequential ones (the platform-role lookup
+ * needed the session's userId first). `platform_memberships.user_id` is
+ * unique, so the LEFT JOIN yields at most one row per session. The
+ * revoked/expired checks are exactly `validateSessionToken`'s, applied to
+ * the same row on every request — nothing is cached across requests.
+ * Separate from `getAuthContext` (no next/headers) so it stays testable.
+ */
+export async function resolveAuthContextForSessionToken(token: string): Promise<AuthContext | null> {
+  const [row] = await db
+    .select({
+      userId: sessions.userId,
+      expiresAt: sessions.expiresAt,
+      revokedAt: sessions.revokedAt,
+      platformRole: platformMemberships.role,
+    })
+    .from(sessions)
+    .leftJoin(platformMemberships, eq(platformMemberships.userId, sessions.userId))
+    .where(eq(sessions.tokenHash, hashSessionToken(token)))
+    .limit(1);
+
+  if (!row) return null;
+  if (row.revokedAt !== null) return null;
+  if (row.expiresAt.getTime() <= Date.now()) return null;
+
+  return {
+    userId: row.userId,
+    platformRole: row.platformRole ?? undefined,
+    branchIds: [],
+    academyWide: false,
+  };
+}
 
 /**
  * Item 16: identifies which session in /account/security's list is "this

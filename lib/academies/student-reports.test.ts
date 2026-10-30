@@ -24,6 +24,7 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import * as studentReportsModule from "./student-reports";
 import { getStudentReports } from "./student-reports";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -78,7 +79,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function insertBranchDirect(academyId: string): Promise<string> {
@@ -404,6 +405,10 @@ describe("getStudentReports — permission gating", () => {
 describe("getStudentReports — module surface", () => {
   it("exports exactly the documented runtime functions (no accidental extra surface)", () => {
     const exported = Object.keys(studentReportsModule).sort();
-    expect(exported).toEqual(["getAssignedBranchIds", "getStudentReports", "studentReportFiltersSchema"].sort());
+    // getStudentDashboardCounts: the academy dashboard's three-figure read
+    // (performance plan P5), same gate, scope and queries as getStudentReports.
+    expect(exported).toEqual(
+      ["getAssignedBranchIds", "getStudentDashboardCounts", "getStudentReports", "studentReportFiltersSchema"].sort(),
+    );
   });
 });

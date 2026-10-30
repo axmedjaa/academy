@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState, useTransition, type FormEvent, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { Icon } from "./icons";
 import { ChatActions } from "./chat-actions";
@@ -97,6 +98,29 @@ export function DesignDialog({
 }
 
 /** Scrollable dialog body. */
+/**
+ * Open state for a create dialog that a link can also open, through
+ * `?register=1` on the list page (Register student, Register staff
+ * member). Closing it drops that parameter, so a refresh or the back button
+ * doesn't reopen it.
+ */
+export function useUrlOpenedDialog(openedByUrl: boolean, param = "register") {
+  const router = useRouter();
+  const [open, setOpen] = useState(openedByUrl);
+  const onOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(next);
+      if (next) return;
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has(param)) return;
+      url.searchParams.delete(param);
+      router.replace(url.pathname + url.search, { scroll: false });
+    },
+    [router, param],
+  );
+  return [open, onOpenChange] as const;
+}
+
 export function DialogBody({ children }: { children: ReactNode }) {
   // `relative` makes this scroller the containing block for absolutely
   // positioned descendants (the `sr-only` inputs behind course, batch and

@@ -1,7 +1,8 @@
 import { and, eq, sql } from "drizzle-orm";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { branches, staffBranchAssignments, staffProfiles, students } from "@/lib/db/schema";
+import { branches, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { verifyStudentPhotoUpload } from "@/lib/academies/students";
 import {
@@ -50,18 +51,6 @@ import type { AcademyRole } from "@/lib/auth/roles";
  * role hitting an unassigned branch (never a distinguishing "forbidden",
  * which would itself confirm the branch exists).
  */
-// Same branch-limited role set as lib/academies/branches.ts (kept as its
-// own copy here rather than imported/exported from that file — it is a
-// read-only reference per this item's brief, not a shared module to
-// extend).
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set([
-  "admissions_officer",
-  "trainer",
-]);
-
-function isBranchLimited(role: AcademyRole): boolean {
-  return BRANCH_LIMITED_ROLES.has(role);
-}
 
 function canRegister(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
@@ -198,30 +187,12 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
  * (or zero assignments) means "assigned to nothing" — an empty list, not
  * an error.
  */
-async function getAssignedBranchIds(
-  executor: DbClient,
-  academyId: string,
-  userId: string,
-): Promise<string[]> {
-  const [profile] = await executor
-    .select({ id: staffProfiles.id })
-    .from(staffProfiles)
-    .where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.userId, userId)))
-    .limit(1);
-  if (!profile) return [];
-
-  const assignments = await executor
-    .select({ branchId: staffBranchAssignments.branchId })
-    .from(staffBranchAssignments)
-    .where(eq(staffBranchAssignments.staffProfileId, profile.id));
-
-  return assignments.map((row) => row.branchId);
-}
 
 interface ResolvedStudentAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  academyWide: boolean;
 }
 
 type ResolveStudentAccessResult =
@@ -249,6 +220,7 @@ async function resolveStudentAccess(
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
+      academyWide: access.academyWide,
       permissionLevel,
     },
   };
@@ -403,7 +375,7 @@ export async function registerStudent(
 ): Promise<RegisterStudentResult> {
   const resolved = await resolveStudentAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
 
   if (!canRegister(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -455,7 +427,7 @@ export async function registerStudent(
           throw new BranchNotFoundSignal();
         }
 
-        if (isBranchLimited(membershipRole)) {
+        if (!academyWide) {
           const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
           if (!assignedIds.includes(data.branchId)) {
             throw new BranchNotFoundSignal();

@@ -81,7 +81,7 @@
  * row themselves when it differs from what's stored").
  */
 import { cache } from "react";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { academies, academyMemberships, academySubscriptions } from "@/lib/db/schema";
 import { recordAudit } from "@/lib/audit";
@@ -119,6 +119,18 @@ export interface AcademyAccessAllowed {
   academyId: string;
   membershipRole: AcademyRole;
   subscriptionStatus: SubscriptionStatus;
+  /** Display fields from the same academy row the gate already reads
+   * (performance plan P3: the console shell uses these instead of
+   * re-reading `academies`). Presentation only — never an authorization
+   * input. */
+  academy: { name: string; logoRef: string | null };
+  /** Multi-branch: true when this member may work in every branch of the
+   * academy — always for the owner, otherwise only with the owner-granted
+   * `academy_memberships.academy_wide` flag. False means the member is
+   * limited to the branches they are assigned to (see
+   * lib/academies/branch-access.ts, which every branch-scoped read and
+   * write uses). */
+  academyWide: boolean;
   /** Only set at the "grace" level — the persistent banner copy (DESIGN.md §11.1). */
   message?: string;
   /** Only set at the "grace" level, when the subscription's `ends_at` is known. */
@@ -202,11 +214,13 @@ function resolveAccessForStatus(
   membershipRole: AcademyRole,
   endsAt: Date | null,
   now: Date,
+  academy: AcademyAccessAllowed["academy"],
+  academyWide: boolean,
 ): AcademyAccessResult {
   switch (status) {
     case "trial":
     case "active":
-      return { level: "full", academyId, membershipRole, subscriptionStatus: status };
+      return { level: "full", academyId, membershipRole, subscriptionStatus: status, academy, academyWide };
 
     case "past_due": {
       const daysRemaining = graceDaysRemaining(endsAt, now);
@@ -219,6 +233,8 @@ function resolveAccessForStatus(
         academyId,
         membershipRole,
         subscriptionStatus: status,
+        academy,
+        academyWide,
         graceDaysRemaining: daysRemaining ?? undefined,
         message,
       };
@@ -286,19 +302,63 @@ export async function checkAcademyAccess(
       )
     : and(eq(academyMemberships.userId, userId), eq(academyMemberships.status, "active"));
 
+  // "Current" subscription = the most recently started row for this
+  // academy. There is no explicit "current"/"is_active" flag on
+  // academy_subscriptions and no created_at column on that table (see
+  // schema.ts's comment on it) — PLAN.md's Cancelled row is the only
+  // documented case where an academy can accumulate more than one
+  // subscription row over time ("resuming service requires a NEW
+  // academy_subscriptions row"), so ordering by starts_at descending
+  // picks the newest one, which is always the one created most recently
+  // by createAcademySubscription. Judgment call: PLAN.md never states
+  // this ordering rule explicitly because it never needed to name a
+  // "current subscription" lookup before this item.
+  const latestSubscription = db
+    .select({
+      id: academySubscriptions.id,
+      status: academySubscriptions.status,
+      trialEndsAt: academySubscriptions.trialEndsAt,
+      endsAt: academySubscriptions.endsAt,
+    })
+    .from(academySubscriptions)
+    .where(eq(academySubscriptions.academyId, academyMemberships.academyId))
+    .orderBy(desc(academySubscriptions.startsAt))
+    .limit(1)
+    .as("latest_subscription");
+
+  // Performance plan P2: membership, the academy's closedAt, and its
+  // current subscription in ONE round trip (previously a membership query
+  // followed by a parallel academy/subscription pair — two sequential
+  // round trips on every /academy/* request and server action). Both joins
+  // are LEFT joins so each active membership still yields exactly one row
+  // (the lateral subquery is LIMIT 1), keeping the membership count — and
+  // therefore the ambiguous-academy decision below — identical. Every
+  // decision is still made in the same order as before; the academy and
+  // subscription columns are only read once a single membership is chosen.
   const memberships = await db
     .select({
       academyId: academyMemberships.academyId,
       role: academyMemberships.role,
+      academyWideGrant: academyMemberships.academyWide,
+      academyRowId: academies.id,
+      closedAt: academies.closedAt,
+      academyName: academies.name,
+      academyLogoRef: academies.logoRef,
+      subscriptionId: latestSubscription.id,
+      subscriptionStatus: latestSubscription.status,
+      subscriptionTrialEndsAt: latestSubscription.trialEndsAt,
+      subscriptionEndsAt: latestSubscription.endsAt,
     })
     .from(academyMemberships)
+    .leftJoin(academies, eq(academies.id, academyMemberships.academyId))
+    .leftJoinLateral(latestSubscription, sql`true`)
     .where(membershipWhere);
 
   if (memberships.length === 0) {
     return NOT_A_MEMBER;
   }
 
-  let membership: { academyId: string; role: AcademyRole };
+  let membership: (typeof memberships)[number];
   if (academyId) {
     membership = memberships[0];
   } else if (memberships.length === 1) {
@@ -311,45 +371,16 @@ export async function checkAcademyAccess(
   }
 
   const resolvedAcademyId = membership.academyId;
-
-  // The academy's closedAt and its current subscription row are both
-  // looked up by `resolvedAcademyId` alone — neither depends on the
-  // other's result, so there is no reason to pay for them as two
-  // sequential round trips. Perf investigation (Afoogy slow-dashboard
-  // task): this function is the single most frequently repeated query in
-  // the app (every /academy/* page calls checkAcademyAccessForContext, and
-  // several of its own downstream reads call it again independently —
-  // see that export's own `cache()` wrapper above), so halving its own
-  // round-trip count compounds with that fix rather than overlapping it.
-  const [[academy], [subscription]] = await Promise.all([
-    db
-      .select({ closedAt: academies.closedAt })
-      .from(academies)
-      .where(eq(academies.id, resolvedAcademyId))
-      .limit(1),
-    // "Current" subscription = the most recently started row for this
-    // academy. There is no explicit "current"/"is_active" flag on
-    // academy_subscriptions and no created_at column on that table (see
-    // schema.ts's comment on it) — PLAN.md's Cancelled row is the only
-    // documented case where an academy can accumulate more than one
-    // subscription row over time ("resuming service requires a NEW
-    // academy_subscriptions row"), so ordering by starts_at descending
-    // picks the newest one, which is always the one created most recently
-    // by createAcademySubscription. Judgment call: PLAN.md never states
-    // this ordering rule explicitly because it never needed to name a
-    // "current subscription" lookup before this item.
-    db
-      .select({
-        id: academySubscriptions.id,
-        status: academySubscriptions.status,
-        trialEndsAt: academySubscriptions.trialEndsAt,
-        endsAt: academySubscriptions.endsAt,
-      })
-      .from(academySubscriptions)
-      .where(eq(academySubscriptions.academyId, resolvedAcademyId))
-      .orderBy(desc(academySubscriptions.startsAt))
-      .limit(1),
-  ]);
+  const academy = membership.academyRowId === null ? null : { closedAt: membership.closedAt };
+  const subscription =
+    membership.subscriptionId === null || membership.subscriptionStatus === null
+      ? null
+      : {
+          id: membership.subscriptionId,
+          status: membership.subscriptionStatus,
+          trialEndsAt: membership.subscriptionTrialEndsAt,
+          endsAt: membership.subscriptionEndsAt,
+        };
 
   // Defensive: academyId is a real FK on academy_memberships, so this
   // should be unreachable, but never trust a lookup to short-circuit
@@ -402,6 +433,9 @@ export async function checkAcademyAccess(
     membership.role,
     subscription.endsAt,
     now,
+    // academyRowId is non-null here (checked above), so name is too.
+    { name: membership.academyName ?? "", logoRef: membership.academyLogoRef },
+    membership.role === "academy_owner" || membership.academyWideGrant,
   );
 }
 

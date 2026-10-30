@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { approvalRequests } from "@/lib/db/schema";
+import { approvalRequests, batches, examResults, expenseRecords, studentPayments } from "@/lib/db/schema";
+import { studentInScopeCondition, type BranchScope } from "@/lib/academies/branch-access";
 import { enqueueNotification } from "@/lib/notifications/notifications";
 import type { NotificationTemplateId } from "@/lib/notifications/templates";
 import { logger } from "@/lib/logger";
@@ -216,31 +217,92 @@ export async function createApprovalRequest(
     })
     .returning();
 
-  // Item 58b — non-critical side effect; never allowed to fail this
-  // function. See the module comment above ("Why enqueueNotification is
-  // called with the default db client") for why `db`, not `executor`, is
-  // used here.
+  await enqueueApprovalRequestedNotification(row);
+
+  return { ok: true, request: toRecord(row) };
+}
+
+/**
+ * Item 58b — non-critical side effect; never allowed to fail the caller.
+ * See the module comment above ("Why enqueueNotification is called with the
+ * default db client") for why `db`, not `executor`, is used here.
+ */
+async function enqueueApprovalRequestedNotification(row: typeof approvalRequests.$inferSelect): Promise<void> {
   try {
-    const bucket = notificationBucketForEntityType(data.entityType);
+    const bucket = notificationBucketForEntityType(row.entityType);
     const templateId: NotificationTemplateId =
       bucket === "result" ? "result.approval_requested" : "finance.approval_requested";
     await enqueueNotification({
-      eventType: `${data.entityType}.approval_requested`,
+      eventType: `${row.entityType}.approval_requested`,
       entityId: row.id,
       templateId,
-      academyId: data.academyId,
+      academyId: row.academyId,
       userId: null,
     });
   } catch (err) {
     logger.error("Failed to enqueue approval_requested notification", {
       approvalRequestId: row.id,
-      entityType: data.entityType,
-      academyId: data.academyId,
+      entityType: row.entityType,
+      academyId: row.academyId,
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
 
-  return { ok: true, request: toRecord(row) };
+/** How many approval_requested notifications are enqueued at once by the
+ * bulk variant below — enough to overlap their round trips, small enough to
+ * leave the shared connection pool (lib/db, `max: 10`) for other requests. */
+const BULK_NOTIFICATION_CONCURRENCY = 4;
+
+export type CreateApprovalRequestsResult =
+  | { ok: true; requests: ApprovalRequestRecord[] }
+  | { ok: false; error: ApprovalRequestError };
+
+/**
+ * Performance plan P8: `createApprovalRequest` for many entities at once —
+ * one multi-row INSERT instead of one per entity. Every input is validated
+ * with the same schema first (nothing is inserted if any is invalid), each
+ * row gets the same approval_requested notification with the same
+ * idempotency key, and the result lists the requests in input order.
+ */
+export async function createApprovalRequests(
+  executor: DbClient,
+  inputs: CreateApprovalRequestInput[],
+): Promise<CreateApprovalRequestsResult> {
+  const parsedInputs = [];
+  for (const input of inputs) {
+    const parsed = createApprovalRequestInputSchema.safeParse(input);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid input." },
+      };
+    }
+    parsedInputs.push(parsed.data);
+  }
+  if (parsedInputs.length === 0) return { ok: true, requests: [] };
+
+  const inserted = await executor
+    .insert(approvalRequests)
+    .values(
+      parsedInputs.map((data) => ({
+        academyId: data.academyId,
+        entityType: data.entityType,
+        entityId: data.entityId,
+        requestedBy: data.requestedBy,
+        reason: data.reason,
+      })),
+    )
+    .returning();
+  // RETURNING order is not guaranteed by SQL; restore input order by entity.
+  const byEntity = new Map(inserted.map((row) => [`${row.entityType}:${row.entityId}`, row]));
+  const rows = parsedInputs.map((data) => byEntity.get(`${data.entityType}:${data.entityId}`)!);
+
+  for (let i = 0; i < rows.length; i += BULK_NOTIFICATION_CONCURRENCY) {
+    await Promise.all(rows.slice(i, i + BULK_NOTIFICATION_CONCURRENCY).map(enqueueApprovalRequestedNotification));
+  }
+
+  return { ok: true, requests: rows.map(toRecord) };
 }
 
 const decideApprovalRequestInputSchema = z.object({
@@ -383,6 +445,11 @@ export async function listPendingApprovalRequests(
   academyId: string,
   entityType?: ApprovalRequestEntityType,
   executor: DbClient = db,
+  /** Multi-branch: when given and not all-branch, only requests for records
+   * in those branches — results (via their batch), expenses (their branch)
+   * and student payments (via the student). Academy-level grade
+   * configuration requests are left out for branch-limited callers. */
+  scope?: BranchScope,
 ): Promise<ApprovalRequestRecord[]> {
   const parsedAcademyId = z.string().uuid().safeParse(academyId);
   if (!parsedAcademyId.success) {
@@ -392,6 +459,44 @@ export async function listPendingApprovalRequests(
   const conditions = [eq(approvalRequests.academyId, academyId), eq(approvalRequests.status, "pending")];
   if (entityType) {
     conditions.push(eq(approvalRequests.entityType, entityType));
+  }
+  if (scope && !scope.academyWide) {
+    if (scope.branchIds.length === 0) return [];
+    conditions.push(
+      or(
+        and(
+          eq(approvalRequests.entityType, "result"),
+          inArray(
+            approvalRequests.entityId,
+            db
+              .select({ id: examResults.id })
+              .from(examResults)
+              .innerJoin(batches, eq(batches.id, examResults.batchId))
+              .where(and(eq(batches.academyId, academyId), inArray(batches.branchId, scope.branchIds))),
+          ),
+        ),
+        and(
+          eq(approvalRequests.entityType, "expense"),
+          inArray(
+            approvalRequests.entityId,
+            db
+              .select({ id: expenseRecords.id })
+              .from(expenseRecords)
+              .where(and(eq(expenseRecords.academyId, academyId), inArray(expenseRecords.branchId, scope.branchIds))),
+          ),
+        ),
+        and(
+          eq(approvalRequests.entityType, "student_payment"),
+          inArray(
+            approvalRequests.entityId,
+            db
+              .select({ id: studentPayments.id })
+              .from(studentPayments)
+              .where(and(eq(studentPayments.academyId, academyId), studentInScopeCondition(scope, academyId, studentPayments.studentId) ?? sql`true`)),
+          ),
+        ),
+      )!,
+    );
   }
 
   const rows = await executor

@@ -10,6 +10,7 @@ import { StudentPhotoField } from "./student-photo-field";
 import {
   DField,
   DesignDialog,
+  useUrlOpenedDialog,
   DialogBody,
   DialogFooter,
   FieldGrid,
@@ -333,9 +334,11 @@ function RegisterStudentFields({
 const TITLE = "Register student";
 const SUBTITLE = "A student number like STD-000123 is created automatically.";
 
-/** Header action on Students: opens the registration dialog. */
-export function RegisterStudentButton(props: RegisterStudentOptions) {
-  const [open, setOpen] = useState(false);
+/** Header action on Students: opens the registration dialog. Also opened by
+ * `/academy/students?register=1` (the empty list's link, and the old
+ * /academy/students/new address, which redirects there). */
+export function RegisterStudentButton({ openedByUrl = false, ...props }: RegisterStudentOptions & { openedByUrl?: boolean }) {
+  const [open, setOpen] = useUrlOpenedDialog(openedByUrl);
   return (
     <>
       <button
@@ -349,20 +352,5 @@ export function RegisterStudentButton(props: RegisterStudentOptions) {
         {open && <RegisterStudentFields {...props} onCancel={() => setOpen(false)} />}
       </DesignDialog>
     </>
-  );
-}
-
-/** Standalone version for direct visits to /academy/students/new: the same
- * form in the dialog's card chrome, Cancel returning to the list. */
-export function RegisterStudentCard(props: RegisterStudentOptions) {
-  const router = useRouter();
-  return (
-    <div className="mx-auto flex w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-card">
-      <div className="border-b border-border px-6 pb-4 pt-5">
-        <h1 className="text-lg font-bold leading-snug text-ink">{TITLE}</h1>
-        <p className="mt-1 text-[13px] text-muted">{SUBTITLE}</p>
-      </div>
-      <RegisterStudentFields {...props} onCancel={() => router.push("/academy/students")} />
-    </div>
   );
 }

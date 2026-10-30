@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { academies, academyMemberships, users } from "@/lib/db/schema";
 import type { AcademyRole } from "@/lib/auth/roles";
 import { resolveStaffLabels } from "./staff-labels";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -34,7 +35,7 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 afterAll(async () => {

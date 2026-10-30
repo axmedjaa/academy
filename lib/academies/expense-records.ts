@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { branchScopeCondition, getBranchScope, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { academies, approvalRequests, branches, expenseRecords } from "@/lib/db/schema";
@@ -219,6 +220,8 @@ interface ResolvedExpenseAccess {
   academyId: string;
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
+  /** Multi-branch: see lib/academies/branch-access.ts. */
+  scope: BranchScope;
 }
 
 type ResolveExpenseAccessResult =
@@ -241,6 +244,7 @@ async function resolveExpenseAccess(actorContext: AuthContext): Promise<ResolveE
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
+      scope: await getBranchScope(access, actorContext.userId),
       permissionLevel,
     },
   };
@@ -273,9 +277,12 @@ export type ListExpenseRecordsResult =
 export async function listExpenseRecords(actorContext: AuthContext): Promise<ListExpenseRecordsResult> {
   const resolved = await resolveExpenseAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
-  const rows = await db.select().from(expenseRecords).where(eq(expenseRecords.academyId, academyId));
+  const rows = await db
+    .select()
+    .from(expenseRecords)
+    .where(and(eq(expenseRecords.academyId, academyId), branchScopeCondition(scope, expenseRecords.branchId)));
 
   return {
     ok: true,
@@ -299,7 +306,7 @@ export async function createExpenseRecord(
 ): Promise<CreateExpenseRecordResult> {
   const resolved = await resolveExpenseAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
   if (!canCreate(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -323,6 +330,11 @@ export async function createExpenseRecord(
       if (!branchOk) {
         return { outcome: "invalid_branch" as const };
       }
+    }
+    // Multi-branch: a member without all-branch access records expenses only
+    // for one of their own branches (never an academy-level record).
+    if (!scope.academyWide && (data.branchId === undefined || !scope.branchIds.includes(data.branchId))) {
+      return { outcome: "invalid_branch" as const };
     }
 
     const currency = await resolveCurrency(tx, academyId, data.currency);
@@ -384,7 +396,7 @@ export async function submitExpenseForApproval(
 ): Promise<SubmitExpenseForApprovalResult> {
   const resolved = await resolveExpenseAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
   if (!canCreate(permissionLevel)) {
     return { ok: false, error: FORBIDDEN };
@@ -399,7 +411,7 @@ export async function submitExpenseForApproval(
     const [expense] = await tx
       .select()
       .from(expenseRecords)
-      .where(and(eq(expenseRecords.id, expenseRecordId), eq(expenseRecords.academyId, academyId)))
+      .where(and(eq(expenseRecords.id, expenseRecordId), eq(expenseRecords.academyId, academyId), branchScopeCondition(scope, expenseRecords.branchId)))
       .limit(1);
     if (!expense) {
       return { kind: "not_found" as const };
@@ -514,7 +526,7 @@ export async function approveExpense(
 ): Promise<ApproveExpenseResult> {
   const resolved = await resolveExpenseAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
   const hasGeneralApprove = canApprove(permissionLevel);
   const isSelfApproveRole = SELF_APPROVE_ROLES.has(membershipRole);
@@ -531,7 +543,7 @@ export async function approveExpense(
     const [expense] = await tx
       .select()
       .from(expenseRecords)
-      .where(and(eq(expenseRecords.id, expenseRecordId), eq(expenseRecords.academyId, academyId)))
+      .where(and(eq(expenseRecords.id, expenseRecordId), eq(expenseRecords.academyId, academyId), branchScopeCondition(scope, expenseRecords.branchId)))
       .limit(1);
     if (!expense) {
       return { kind: "not_found" as const };
@@ -628,7 +640,7 @@ export async function rejectExpense(
 ): Promise<RejectExpenseResult> {
   const resolved = await resolveExpenseAccess(actorContext);
   if (!resolved.ok) return resolved;
-  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  const { academyId, membershipRole, permissionLevel, scope } = resolved.access;
 
   const hasGeneralApprove = canApprove(permissionLevel);
   const isSelfApproveRole = SELF_APPROVE_ROLES.has(membershipRole);
@@ -656,7 +668,7 @@ export async function rejectExpense(
     const [expense] = await tx
       .select()
       .from(expenseRecords)
-      .where(and(eq(expenseRecords.id, expenseRecordId), eq(expenseRecords.academyId, academyId)))
+      .where(and(eq(expenseRecords.id, expenseRecordId), eq(expenseRecords.academyId, academyId), branchScopeCondition(scope, expenseRecords.branchId)))
       .limit(1);
     if (!expense) {
       return { kind: "not_found" as const };

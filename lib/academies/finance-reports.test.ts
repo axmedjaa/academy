@@ -22,6 +22,7 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import * as financeReportsModule from "./finance-reports";
 import { getFinanceReports } from "./finance-reports";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -76,7 +77,7 @@ async function createAcademy(creatorUserId: string, defaultCurrency = "USD"): Pr
 }
 
 async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function insertBranchDirect(academyId: string): Promise<string> {
@@ -645,6 +646,8 @@ describe("getFinanceReports — role coverage matches the underlying entities' o
 describe("getFinanceReports — module surface", () => {
   it("exports exactly the documented functions/types (no accidental extra surface)", () => {
     const exported = Object.keys(financeReportsModule).sort();
-    expect(exported).toEqual(["financeReportFiltersSchema", "getFinanceReports"].sort());
+    // getStudentPaymentTotals: the academy dashboard's two-figure read
+    // (performance plan P5), same gate and computations as getFinanceReports.
+    expect(exported).toEqual(["financeReportFiltersSchema", "getFinanceReports", "getStudentPaymentTotals"].sort());
   });
 });

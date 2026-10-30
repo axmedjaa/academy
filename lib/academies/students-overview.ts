@@ -65,27 +65,59 @@ export async function getStudentsOverview(
   const empty: StudentsOverview = {
     total: 0, active: 0, archived: 0, enrolled: 0, needsEnrollment: 0, batches: [], noBatch: 0, byBranch: {}, finance: null,
   };
-  const scope = await resolveScope(academyId, membershipRole, actorContext.userId, options.branchId || undefined);
+  const scope = await resolveScope(access, actorContext.userId, options.branchId || undefined);
   if (scope.unreachable) return { ok: true, overview: empty };
 
-  const rows = await db
-    .select({ id: students.id, status: students.status, branchId: students.branchId })
-    .from(students)
-    .where(and(...scope.conditions));
-  if (rows.length === 0) return { ok: true, overview: empty };
-  const ids = rows.map((row) => row.id);
+  // Performance plan P4: the caller's scoped students stay in SQL. Counts are
+  // aggregated by the database, and the batch counts and money summaries
+  // take a subquery of the scoped ids instead of every id in the academy
+  // shipped as query parameters. Same students, same rules, one fewer
+  // sequential round trip.
+  const scopeWhere = and(...scope.conditions);
+  const scopedStudentIds = db.select({ id: students.id }).from(students).where(scopeWhere);
 
   const canSeeFees = getAcademyPermissionLevel(membershipRole, ACADEMY_FEE_PERIODS_ACTION) !== "none";
   const canSeeCharges = getAcademyPermissionLevel(membershipRole, ACADEMY_STUDENT_PAYMENTS_ACTION) !== "none";
 
-  const [enrollRows, summaries, overdue, chargeRows] = await Promise.all([
+  // "Enrolled" = has an active enrollment in this academy whose batch also
+  // belongs to this academy — the same join the batch counts below use.
+  const hasActiveEnrollment = sql<boolean>`exists (
+    select 1 from ${batchEnrollments}
+    inner join ${batches} on ${batches.id} = ${batchEnrollments.batchId} and ${batches.academyId} = ${academyId}
+    where ${batchEnrollments.studentId} = ${students.id}
+      and ${batchEnrollments.academyId} = ${academyId}
+      and ${batchEnrollments.status} = 'active'
+  )`;
+
+  const [countRows, batchRows, summaries, overdue, chargeRows] = await Promise.all([
     db
-      .select({ studentId: batchEnrollments.studentId, batchId: batchEnrollments.batchId, batchName: batches.name })
+      .select({
+        status: students.status,
+        branchId: students.branchId,
+        total: sql<number>`count(*)::int`,
+        enrolled: sql<number>`count(*) filter (where ${hasActiveEnrollment})::int`,
+      })
+      .from(students)
+      .where(scopeWhere)
+      .groupBy(students.status, students.branchId),
+    db
+      .select({
+        batchId: batchEnrollments.batchId,
+        batchName: batches.name,
+        count: sql<number>`count(distinct ${batchEnrollments.studentId})::int`,
+      })
       .from(batchEnrollments)
       .innerJoin(batches, and(eq(batches.id, batchEnrollments.batchId), eq(batches.academyId, academyId)))
-      .where(and(eq(batchEnrollments.academyId, academyId), eq(batchEnrollments.status, "active"), inArray(batchEnrollments.studentId, ids))),
-    canSeeFees ? getStudentPaymentSummaries(academyId, ids) : Promise.resolve(null),
-    canSeeFees ? getOverdueFeeSummary(academyId, null, ids) : Promise.resolve(null),
+      .where(
+        and(
+          eq(batchEnrollments.academyId, academyId),
+          eq(batchEnrollments.status, "active"),
+          inArray(batchEnrollments.studentId, scopedStudentIds),
+        ),
+      )
+      .groupBy(batchEnrollments.batchId, batches.name),
+    canSeeFees ? getStudentPaymentSummaries(academyId, scopedStudentIds) : Promise.resolve(null),
+    canSeeFees ? getOverdueFeeSummary(academyId, null, scopedStudentIds) : Promise.resolve(null),
     canSeeFees && canSeeCharges
       ? db
           .select({
@@ -97,34 +129,39 @@ export async function getStudentsOverview(
           .where(
             and(
               eq(studentCharges.academyId, academyId),
-              inArray(studentCharges.studentId, ids),
+              inArray(studentCharges.studentId, scopedStudentIds),
               inArray(studentCharges.status, ["open", "partially_paid"]),
             ),
           )
       : Promise.resolve([]),
   ]);
 
-  const enrolledIds = new Set(enrollRows.map((row) => row.studentId));
-  const batchCounts = new Map<string, { id: string; name: string; students: Set<string> }>();
-  for (const row of enrollRows) {
-    const entry = batchCounts.get(row.batchId) ?? { id: row.batchId, name: row.batchName, students: new Set<string>() };
-    entry.students.add(row.studentId);
-    batchCounts.set(row.batchId, entry);
-  }
+  let total = 0;
+  let active = 0;
+  let activeEnrolled = 0;
+  let enrolledAnyStatus = 0;
   const byBranch: Record<string, number> = {};
-  for (const row of rows) byBranch[row.branchId] = (byBranch[row.branchId] ?? 0) + 1;
+  for (const row of countRows) {
+    total += row.total;
+    enrolledAnyStatus += row.enrolled;
+    if (row.status === "active") {
+      active += row.total;
+      activeEnrolled += row.enrolled;
+    }
+    byBranch[row.branchId] = (byBranch[row.branchId] ?? 0) + row.total;
+  }
+  if (total === 0) return { ok: true, overview: empty };
 
-  const activeRows = rows.filter((row) => row.status === "active");
   const overview: StudentsOverview = {
-    total: rows.length,
-    active: activeRows.length,
-    archived: rows.length - activeRows.length,
-    enrolled: activeRows.filter((row) => enrolledIds.has(row.id)).length,
-    needsEnrollment: activeRows.filter((row) => !enrolledIds.has(row.id)).length,
-    batches: [...batchCounts.values()]
-      .map((entry) => ({ id: entry.id, name: entry.name, count: entry.students.size }))
+    total,
+    active,
+    archived: total - active,
+    enrolled: activeEnrolled,
+    needsEnrollment: active - activeEnrolled,
+    batches: batchRows
+      .map((row) => ({ id: row.batchId, name: row.batchName, count: row.count }))
       .sort((a, b) => a.name.localeCompare(b.name)),
-    noBatch: rows.filter((row) => !enrolledIds.has(row.id)).length,
+    noBatch: total - enrolledAnyStatus,
     byBranch,
     finance: null,
   };

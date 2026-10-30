@@ -6,12 +6,35 @@ import { listBatches, type BatchRecord } from "@/lib/academies/batches";
 import { listCourses } from "@/lib/academies/courses";
 import { listAcademyTimetable } from "@/lib/academies/timetables";
 import { getStudentsOverview } from "@/lib/academies/students-overview";
+import { listBranchStaff } from "@/lib/academies/branch-overview";
+import { searchStudents } from "@/lib/academies/students";
+import { getFinanceReports, type AmountByCurrency } from "@/lib/academies/finance-reports";
+import { formatMoney } from "@/lib/ui/money";
 import { DAYS_OF_WEEK, DAY_LABELS, formatTimetableTime } from "@/lib/academies/timetable-constants";
 import { formatDate } from "@/lib/ui/date";
 import { Badge, BackLink, LinkButton, PAGE_WRAP, PageHeader, PageMessage, humanizeStatus, trHover } from "@/app/academy/_shell/ui";
-import { BlockTitle, DataTable, KvCard, NoteBlock, StatBento, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { BlockTitle, DataTable, KvCard, NoteBlock, StatBento, TabLinks, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { ChatActions } from "@/app/academy/_shell/chat-actions";
 import { BranchActions } from "../branch-actions";
+import { BranchStaffPanel } from "./branch-staff-panel";
+
+/** Multi-branch: the branch's own dashboard, one tab per area. Each tab only
+ * loads its own data, through the same scoped reads as the matching list
+ * pages, so a tab never shows records from another branch. */
+const BRANCH_TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "staff", label: "Staff" },
+  { key: "students", label: "Students" },
+  { key: "courses", label: "Courses" },
+  { key: "finance", label: "Finance" },
+  { key: "reports", label: "Reports" },
+] as const;
+type BranchTab = (typeof BRANCH_TABS)[number]["key"];
+
+function moneyLine(totals: AmountByCurrency[]): string {
+  if (totals.length === 0) return formatMoney(0, "USD");
+  return totals.map((row) => formatMoney(row.amountCents, row.currency)).join(" + ");
+}
 
 /**
  * One branch: its details, who studies there, the batches it runs and its
@@ -30,8 +53,16 @@ const BATCH_TONE: Record<BatchRecord["status"], "blue" | "green" | "slate" | "gr
   archived: "gray",
 };
 
-export default async function BranchDetailPage({ params }: { params: Promise<{ branchId: string }> }) {
-  const { branchId } = await params;
+export default async function BranchDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ branchId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const [{ branchId }, query] = await Promise.all([params, searchParams]);
+  const tabParam = typeof query.tab === "string" ? query.tab : "";
+  const tab: BranchTab = BRANCH_TABS.some((t) => t.key === tabParam) ? (tabParam as BranchTab) : "overview";
   const context = await getAuthContext();
   if (!context) redirect("/login");
 
@@ -47,11 +78,14 @@ export default async function BranchDetailPage({ params }: { params: Promise<{ b
   const branch = branchesResult.branches.find((row) => row.id === branchId);
   if (!branch) notFound();
 
-  const [overviewResult, batchesResult, coursesResult, timetableResult] = await Promise.all([
+  const [overviewResult, batchesResult, coursesResult, timetableResult, staffResult, studentsResult, financeResult] = await Promise.all([
     getStudentsOverview(context, { branchId: branch.id }),
     listBatches(context),
     listCourses(context),
     listAcademyTimetable(context),
+    tab === "staff" ? listBranchStaff(context, branch.id) : Promise.resolve(null),
+    tab === "students" ? searchStudents(context, { branchId: branch.id }, { page: 1, pageSize: 10 }) : Promise.resolve(null),
+    tab === "finance" ? getFinanceReports(context, { branchId: branch.id }) : Promise.resolve(null),
   ]);
 
   const overview = overviewResult.ok ? overviewResult.overview : null;
@@ -87,15 +121,142 @@ export default async function BranchDetailPage({ params }: { params: Promise<{ b
           branch.code,
           humanizeStatus(branch.status),
           `${branchBatches.length} batch${branchBatches.length === 1 ? "" : "es"}`,
+          ...(branch.isMain ? ["Main Branch (Head Office)"] : []),
         ].join(" · ")}
         actions={
           <>
             {overview && <LinkButton href={studentsHref}>View students</LinkButton>}
-            {branchesResult.canManage && <BranchActions branch={branch} layout="header" />}
+            {branchesResult.canManage && (
+              <BranchActions branch={branch} layout="header" canManageStructure={branchesResult.canManageStructure} />
+            )}
           </>
         }
       />
 
+      <TabLinks
+        tabs={BRANCH_TABS.map((t) => ({ key: t.key, label: t.label, href: `/academy/branches/${branch.id}?tab=${t.key}` }))}
+        current={tab}
+        label="Branch sections"
+      />
+
+      {tab === "staff" &&
+        (staffResult && staffResult.ok ? (
+          <BranchStaffPanel
+            branchId={branch.id}
+            branchName={branch.name}
+            isMain={branch.isMain}
+            staff={staffResult.staff}
+            canAssign={staffResult.canAssign}
+            canGrantAllBranches={staffResult.canGrantAllBranches}
+            justCreated={query.new === "1"}
+          />
+        ) : (
+          <EmptyBlock message={staffResult && !staffResult.ok ? staffResult.error.message : "Staff are not available."} />
+        ))}
+
+      {tab === "students" && (
+        <>
+          <BlockTitle
+            actions={
+              <Link href={studentsHref} className="text-sm font-semibold !text-brand no-underline hover:underline">
+                Open all students at this branch
+              </Link>
+            }
+          >
+            Latest students
+          </BlockTitle>
+          {!studentsResult || !studentsResult.ok ? (
+            <EmptyBlock message={studentsResult && !studentsResult.ok ? studentsResult.error.message : "Students are not available."} />
+          ) : studentsResult.data.rows.length === 0 ? (
+            <EmptyBlock message="No students registered at this branch yet." />
+          ) : (
+            <DataTable stackBelow={760}>
+              <thead>
+                <tr>
+                  <th className={rtTh}>Student</th>
+                  <th className={rtTh}>Number</th>
+                  <th className={rtTh}>Status</th>
+                  <th className={rtTh}>Registered</th>
+                </tr>
+              </thead>
+              <tbody>
+                {studentsResult.data.rows.map((student) => (
+                  <tr key={student.id} className={trHover}>
+                    <td className={`${rtTd} font-semibold`} data-label="Student">
+                      <Link href={`/academy/students/${student.id}`} className="!text-brand no-underline hover:underline">
+                        {student.fullName}
+                      </Link>
+                    </td>
+                    <td className={`${rtTd} tabular-nums`} data-label="Number">
+                      {student.studentNumber}
+                    </td>
+                    <td className={rtTd} data-label="Status">
+                      <Badge label={student.status} tone={student.status === "archived" ? "gray" : "green"} />
+                    </td>
+                    <td className={`${rtTd} tabular-nums`} data-label="Registered">
+                      {formatDate(student.createdAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </>
+      )}
+
+      {tab === "finance" &&
+        (!financeResult || !financeResult.ok ? (
+          <EmptyBlock message={financeResult && !financeResult.ok ? financeResult.error.message : "Finance is not available."} />
+        ) : (
+          <>
+            <KvCard
+              title="Finance at this branch"
+              rows={[
+                ...(financeResult.report.studentPayments.visible
+                  ? ([
+                      [
+                        "Payments received",
+                        `${moneyLine(financeResult.report.studentPayments.paymentsReceived.totalsByCurrency)} (${financeResult.report.studentPayments.paymentsReceived.count} payments)`,
+                      ],
+                      [
+                        "Outstanding charges",
+                        `${moneyLine(financeResult.report.studentPayments.outstandingCharges.totalsByCurrency)} (${financeResult.report.studentPayments.outstandingCharges.count} charges)`,
+                      ],
+                      ["Refunds recorded", moneyLine(financeResult.report.studentPayments.refundsRecorded.totalsByCurrency)],
+                    ] as [string, string][])
+                  : []),
+                ...(financeResult.report.income.visible
+                  ? ([["Income", moneyLine(financeResult.report.income.totalsByCurrency)]] as [string, string][])
+                  : []),
+                ...(financeResult.report.expenses.visible
+                  ? ([
+                      ["Expenses", moneyLine(financeResult.report.expenses.totalsByCurrency)],
+                      ["Expenses awaiting approval", String(financeResult.report.expenses.pendingApprovalsCount)],
+                    ] as [string, string][])
+                  : []),
+                ...(overview?.finance
+                  ? ([["Overdue fees", `${moneyLine(overview.finance.overdueTotals.map((t) => ({ ...t, count: 0 })))} from ${overview.finance.overdueStudentCount} students`]] as [string, string][])
+                  : []),
+              ]}
+            />
+            <NoteBlock>All time, for students and records of this branch only. Academy-level records without a branch are not included.</NoteBlock>
+          </>
+        ))}
+
+      {tab === "reports" && (
+        <>
+          <BlockTitle>Reports for this branch</BlockTitle>
+          <div className="mb-8 flex flex-wrap gap-3">
+            <LinkButton href={`/academy/reports?tab=student&branchId=${branch.id}`}>Student report</LinkButton>
+            <LinkButton href={`${studentsHref}&status=needs`}>Students who need enrollment</LinkButton>
+            <LinkButton href={`/academy/branches/${branch.id}?tab=finance`}>Branch finance</LinkButton>
+            <LinkButton href="/academy/branches">Compare branches</LinkButton>
+          </div>
+        </>
+      )}
+
+      {tab === "overview" && (
+      <>
       <KvCard
         title="Branch"
         rows={[
@@ -114,6 +275,7 @@ export default async function BranchDetailPage({ params }: { params: Promise<{ b
             ),
           ],
           ["Added", formatDate(branch.createdAt)],
+          ["Type", branch.isMain ? "Main Branch (Head Office)" : "Branch"],
         ]}
       />
 
@@ -139,6 +301,22 @@ export default async function BranchDetailPage({ params }: { params: Promise<{ b
             { label: "Weekly classes", hint: "On the timetable", value: classRows.length, icon: "calendar", tone: "slate" },
           ]}
         />
+      )}
+      </>
+      )}
+
+      {tab === "courses" && (
+      <>
+      <BlockTitle>Courses taught here</BlockTitle>
+      {branchBatches.length === 0 ? (
+        <EmptyBlock message="No courses are taught at this branch yet." />
+      ) : (
+        <p className="mb-8 text-[15px] text-ink">
+          {[...new Set(branchBatches.flatMap((batch) => batch.courseIds))]
+            .map((id) => courseName.get(id) ?? "Unavailable course")
+            .sort((a, b) => a.localeCompare(b))
+            .join(", ")}
+        </p>
       )}
 
       <BlockTitle>Batches at this branch</BlockTitle>
@@ -241,11 +419,15 @@ export default async function BranchDetailPage({ params }: { params: Promise<{ b
           )}
         </>
       )}
+      </>
+      )}
 
       <NoteBlock>
-        {branch.deletionEligibility.eligible
-          ? "Nothing references this branch yet, so it can still be deleted. Deleting is blocked once a student or batch uses it."
-          : "Deleting a branch is blocked while any student or batch references it. Archive it instead."}
+        {branch.isMain
+          ? "This is the academy's Main Branch (Head Office). It can't be archived or deleted."
+          : branch.deletionEligibility.eligible
+            ? "Nothing references this branch yet, so it can still be deleted. Deleting is blocked once a student or batch uses it."
+            : "Deleting a branch is blocked while any student or batch references it. Archive it instead."}
       </NoteBlock>
     </div>
   );

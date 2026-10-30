@@ -32,6 +32,7 @@ import { hashPassword } from "@/lib/auth/password";
 import { enrollMfaForUser, verifyMfaEnrollmentForUser } from "@/lib/auth/mfa";
 import type { AcademyRole } from "@/lib/auth/roles";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 // PLAN.md "Seed & Demonstration Data": guarded, refuses to run in
 // production. This is the Phase 0 seed — just the one MFA-enrolled
@@ -253,9 +254,11 @@ async function getOrCreateBranch(
     .limit(1);
   if (existingBranch) return existingBranch.id;
 
+  // The academy's first branch is its Main Branch, as at registration.
+  const [anyBranch] = await db.select({ id: branches.id }).from(branches).where(eq(branches.academyId, academyId)).limit(1);
   const [created] = await db
     .insert(branches)
-    .values({ academyId, name, code, address: `${name}, Demo City`, phone: "+1-555-0102" })
+    .values({ academyId, name, code, address: `${name}, Demo City`, phone: "+1-555-0102", isMain: !anyBranch })
     .returning({ id: branches.id });
   return created.id;
 }
@@ -274,7 +277,7 @@ async function ensureMembership(
     .limit(1);
   if (existingMembership) return;
 
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active" });
+  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
 }
 
 async function ensureSubscription(

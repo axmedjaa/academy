@@ -13,7 +13,7 @@ import { formatDate } from "@/lib/ui/date";
 import { showSuccessToast } from "@/lib/ui/toast";
 import { Button } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
-import { ROW_BTN_DANGER } from "@/app/academy/_shell/page-blocks";
+import { ROW_BTN } from "@/app/academy/_shell/page-blocks";
 import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
 import { ActionDialog, DField, ReasonField, controlClass, invalidProps } from "@/app/academy/_shell/design-form";
 
@@ -61,7 +61,7 @@ export function VerifyCertificateCard() {
     <section className="mb-8 rounded-card border border-border bg-surface p-5 shadow-card sm:p-6" aria-labelledby="verify-title">
       <div className="flex items-start gap-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-tint text-brand">
-          <Icon name="check_circle" />
+          <Icon name="workspace_premium" />
         </span>
         <div className="min-w-0">
           <h2 id="verify-title" className="text-[17px] font-bold text-ink">
@@ -291,7 +291,7 @@ export function CancelCertificateButton({ certificateId, code, studentName }: { 
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button type="button" className={ROW_BTN_DANGER} onClick={() => setOpen(true)}>
+      <button type="button" className={ROW_BTN} onClick={() => setOpen(true)}>
         Cancel
       </button>
       <ActionDialog

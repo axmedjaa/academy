@@ -1,4 +1,5 @@
 import { and, asc, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
+import { branchScopeCondition, getBranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { batchCourses, batchEnrollments, batches, branches, courses, students } from "@/lib/db/schema";
@@ -217,7 +218,7 @@ export async function getStudentReports(
     return { ok: false, error: FORBIDDEN };
   }
 
-  const scope = await resolveScope(academyId, membershipRole, actorContext.userId, filters.branchId);
+  const scope = await resolveScope(access, actorContext.userId, filters.branchId);
   if (scope.unreachable) {
     return { ok: true, report: emptyReport(academyId, filters) };
   }
@@ -304,6 +305,8 @@ export async function getStudentReports(
             and(
               eq(batches.academyId, academyId),
               filters.branchId ? eq(batches.branchId, filters.branchId) : undefined,
+              // Multi-branch: only batches of the caller's branches.
+              branchScopeCondition(await getBranchScope(access, actorContext.userId), batches.branchId),
             ),
           );
   const batchMap = new Map<string, Omit<EnrollmentByBatchRow, "courseNames">>();
@@ -352,6 +355,91 @@ export async function getStudentReports(
       enrollmentStatusBreakdown,
       studentStatus: { enrolled: splitRow?.enrolled ?? 0, applied: splitRow?.applied ?? 0, archived: splitRow?.archived ?? 0 },
       enrollmentByBatch,
+    },
+  };
+}
+
+export interface StudentDashboardCounts {
+  totalStudents: number;
+  statusBreakdown: StatusCount[];
+  enrollmentTrend: EnrollmentTrendPoint[];
+}
+
+export type GetStudentDashboardCountsResult =
+  | { ok: true; counts: StudentDashboardCounts }
+  | { ok: false; error: StudentReportsActionError };
+
+/**
+ * Performance plan P5: the three figures the academy dashboard shows from
+ * `getStudentReports` (total, status breakdown, monthly enrollment trend),
+ * without the report's other five queries. Same gate, same filter
+ * validation, same permission rule, same `resolveScope`, and the same two
+ * queries as `getStudentReports` (no date filters — the dashboard passes
+ * only `branchId`), so the numbers are identical to the full report's.
+ */
+export async function getStudentDashboardCounts(
+  actorContext: AuthContext,
+  filtersInput: Pick<StudentReportFiltersInput, "branchId"> = {},
+): Promise<GetStudentDashboardCountsResult> {
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level === "blocked") {
+    return { ok: false, error: { code: "blocked", message: access.message } };
+  }
+
+  const parsed = studentReportFiltersSchema.safeParse(filtersInput);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid filters." },
+    };
+  }
+  const { membershipRole } = access;
+
+  if (getAcademyPermissionLevel(membershipRole, ACADEMY_STUDENTS_ACTION) === "none") {
+    return { ok: false, error: FORBIDDEN };
+  }
+
+  const scope = await resolveScope(access, actorContext.userId, parsed.data.branchId);
+  if (scope.unreachable) {
+    return {
+      ok: true,
+      counts: {
+        totalStudents: 0,
+        statusBreakdown: STUDENT_STATUSES.map((status) => ({ status, count: 0 })),
+        enrollmentTrend: [],
+      },
+    };
+  }
+
+  const where = and(...scope.conditions);
+  const [statusRows, trendRows] = await Promise.all([
+    db
+      .select({ status: students.status, count: sql<number>`count(*)::int` })
+      .from(students)
+      .where(where)
+      .groupBy(students.status),
+    db
+      .select({
+        period: sql<string>`to_char(${batchEnrollments.enrolledAt}, 'YYYY-MM')`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(batchEnrollments)
+      .innerJoin(students, eq(batchEnrollments.studentId, students.id))
+      .where(where)
+      .groupBy(sql`to_char(${batchEnrollments.enrolledAt}, 'YYYY-MM')`)
+      .orderBy(sql`to_char(${batchEnrollments.enrolledAt}, 'YYYY-MM')`),
+  ]);
+
+  const statusBreakdown: StatusCount[] = STUDENT_STATUSES.map((status) => ({
+    status,
+    count: statusRows.find((row) => row.status === status)?.count ?? 0,
+  }));
+  return {
+    ok: true,
+    counts: {
+      totalStudents: statusBreakdown.reduce((sum, row) => sum + row.count, 0),
+      statusBreakdown,
+      enrollmentTrend: trendRows.map((row) => ({ period: row.period, count: row.count })),
     },
   };
 }

@@ -62,7 +62,6 @@ const FORBIDDEN: CourseRefundError = {
 };
 const NOT_FOUND: CourseRefundError = { code: "not_found", message: "Enrollment not found." };
 
-const BRANCH_LIMITED_ROLES: ReadonlySet<AcademyRole> = new Set(["admissions_officer", "trainer"]);
 
 /** The approved refund authority: Academy Owner, or Manager. */
 export function canRecordCourseRefund(role: AcademyRole): boolean {
@@ -161,7 +160,7 @@ export async function getCourseRefundPosition(actorContext: AuthContext, enrollm
     .where(and(eq(batchEnrollments.id, enrollmentId), eq(batchEnrollments.academyId, academyId)))
     .limit(1);
   if (!enrollment) return { ok: false, error: NOT_FOUND };
-  if (BRANCH_LIMITED_ROLES.has(membershipRole)) {
+  if (!access.academyWide) {
     const assigned = await getAssignedBranchIds(db, academyId, actorContext.userId);
     if (!assigned.includes(enrollment.branchId)) return { ok: false, error: NOT_FOUND };
   }
@@ -420,7 +419,7 @@ export async function listStudentRefunds(actorContext: AuthContext, studentId: s
   if (!z.string().uuid().safeParse(studentId).success) return { ok: true, refunds: [] };
 
   const conditions = [eq(studentCourseRefunds.academyId, academyId), eq(studentCourseRefunds.studentId, studentId)];
-  if (BRANCH_LIMITED_ROLES.has(membershipRole)) {
+  if (!access.academyWide) {
     const assigned = await getAssignedBranchIds(db, academyId, actorContext.userId);
     if (assigned.length === 0) return { ok: true, refunds: [] };
     conditions.push(inArray(studentCourseRefunds.branchId, assigned));

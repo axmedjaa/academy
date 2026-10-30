@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   academies,
@@ -174,37 +174,33 @@ function trailingMonthKeys(count: number): string[] {
 export async function getActiveAcademyTrend(
   trendMonths = 12,
 ): Promise<ActiveAcademyTrendPoint[]> {
-  const rows = await db
-    .select({
-      academyId: academySubscriptions.academyId,
-      activatedAt: academySubscriptions.activatedAt,
-    })
+  // Performance plan P7: one activation month per academy (its latest
+  // activation among currently-"active" rows, same dedup as before),
+  // counted per UTC month by the database instead of returning every row.
+  const latestByAcademy = db
+    .select({ activatedAt: sql<Date>`max(${academySubscriptions.activatedAt})`.as("activated_at") })
     .from(academySubscriptions)
     .where(
       and(
         eq(academySubscriptions.status, "active"),
         isNotNull(academySubscriptions.activatedAt),
       ),
-    );
-
-  // Dedup to one activation date per academy (keep the latest), guarding
-  // against an academy somehow carrying more than one currently-"active" row.
-  const latestByAcademy = new Map<string, Date>();
-  for (const row of rows) {
-    if (!row.activatedAt) continue;
-    const existing = latestByAcademy.get(row.academyId);
-    if (!existing || row.activatedAt > existing) {
-      latestByAcademy.set(row.academyId, row.activatedAt);
-    }
-  }
-  const activationDates = [...latestByAcademy.values()];
-  const activationMonthKeys = activationDates.map(monthKey);
+    )
+    .groupBy(academySubscriptions.academyId)
+    .as("latest_activation");
+  const monthRows = await db
+    .select({
+      month: sql<string>`to_char(${latestByAcademy.activatedAt} at time zone 'UTC', 'YYYY-MM')`,
+      academies: sql<number>`count(*)::int`,
+    })
+    .from(latestByAcademy)
+    .groupBy(sql`1`);
 
   return trailingMonthKeys(trendMonths).map((key) => ({
     month: key,
-    newlyActivated: activationMonthKeys.filter((k) => k === key).length,
+    newlyActivated: monthRows.filter((row) => row.month === key).reduce((n, row) => n + row.academies, 0),
     // "YYYY-MM" strings compare lexicographically the same as chronologically.
-    cumulativeActive: activationMonthKeys.filter((k) => k <= key).length,
+    cumulativeActive: monthRows.filter((row) => row.month <= key).reduce((n, row) => n + row.academies, 0),
   }));
 }
 
@@ -215,26 +211,27 @@ export async function getActiveAcademyTrend(
  * subscription row are left out. Sorted by count, largest first.
  */
 export async function getAcademiesByPlan(): Promise<AcademiesByPlanRow[]> {
-  const rows = await db
-    .select({
+  // Performance plan P7: "first row per academy by starts_at desc" is
+  // DISTINCT ON in SQL, and the per-plan count is a GROUP BY — the database
+  // returns one row per plan instead of every subscription.
+  const current = db
+    .selectDistinctOn([academySubscriptions.academyId], {
       academyId: academySubscriptions.academyId,
-      planName: subscriptionPlans.name,
+      planName: sql<string>`${subscriptionPlans.name}`.as("plan_name"),
     })
     .from(academySubscriptions)
     .innerJoin(academies, eq(academies.id, academySubscriptions.academyId))
     .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
     .where(isNull(academies.closedAt))
-    .orderBy(desc(academySubscriptions.startsAt));
+    .orderBy(academySubscriptions.academyId, desc(academySubscriptions.startsAt))
+    .as("current_subscription");
+  const rows = await db
+    .select({ planName: current.planName, academyCount: sql<number>`count(*)::int` })
+    .from(current)
+    .groupBy(current.planName);
 
-  const seen = new Set<string>();
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    if (seen.has(row.academyId)) continue; // first row per academy = latest
-    seen.add(row.academyId);
-    counts.set(row.planName, (counts.get(row.planName) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([planName, academyCount]) => ({ planName, academyCount }))
+  return rows
+    .map((row) => ({ planName: row.planName, academyCount: row.academyCount }))
     .sort((a, b) => b.academyCount - a.academyCount || a.planName.localeCompare(b.planName));
 }
 
@@ -329,64 +326,41 @@ export async function getExpiringSubscriptions(
   return { rows: classified, totalCount: Number(totalCount) };
 }
 
-interface PaymentGroupSource {
-  receivedAt: Date;
-  paymentMethod: string;
-  academyId: string;
-  academyName: string;
-  planId: string;
-  planName: string;
-}
-
-interface SubscriptionGroupSource {
-  endsAt: Date;
-  academyId: string;
-  academyName: string;
-  planId: string;
-  planName: string;
-}
-
 const NOT_YET_PAID_KEY = "__not_yet_paid__";
 const NOT_YET_PAID_LABEL = "Not yet paid (method unknown)";
 
-function paymentGroupKeyLabel(
-  dimension: RevenueGroupBy,
-  row: PaymentGroupSource,
-): { key: string; label: string } {
+/** Group key and label per dimension — months are UTC "YYYY-MM", the same
+ * buckets `monthKey` produces. */
+function paymentGroupColumns(dimension: RevenueGroupBy): { key: SQL<string>; label: SQL<string> } {
   switch (dimension) {
     case "month": {
-      const key = monthKey(row.receivedAt);
-      return { key, label: key };
+      const month = sql<string>`to_char(${subscriptionPayments.receivedAt} at time zone 'UTC', 'YYYY-MM')`;
+      return { key: month, label: month };
     }
     case "plan":
-      return { key: row.planId, label: row.planName };
+      return { key: sql<string>`${academySubscriptions.planId}::text`, label: sql<string>`${subscriptionPlans.name}` };
     case "academy":
-      return { key: row.academyId, label: row.academyName };
+      return { key: sql<string>`${subscriptionPayments.academyId}::text`, label: sql<string>`${academies.name}` };
     case "method":
-      return { key: row.paymentMethod, label: row.paymentMethod };
+      return {
+        key: sql<string>`${subscriptionPayments.paymentMethod}::text`,
+        label: sql<string>`${subscriptionPayments.paymentMethod}::text`,
+      };
   }
 }
 
-// Expected/pending revenue has no payment method yet (it hasn't been paid),
-// so the "method" dimension can't attribute it to a real method — every
-// expected-revenue row collapses into one synthetic "not yet paid" bucket
-// for that dimension only, kept separate from the real per-method collected
-// rows (documented in the module-level comment above).
-function subscriptionGroupKeyLabel(
-  dimension: RevenueGroupBy,
-  row: SubscriptionGroupSource,
-): { key: string; label: string } {
+function subscriptionGroupColumns(dimension: RevenueGroupBy): { key: SQL<string>; label: SQL<string> } {
   switch (dimension) {
     case "month": {
-      const key = monthKey(row.endsAt);
-      return { key, label: key };
+      const month = sql<string>`to_char(${academySubscriptions.endsAt} at time zone 'UTC', 'YYYY-MM')`;
+      return { key: month, label: month };
     }
     case "plan":
-      return { key: row.planId, label: row.planName };
+      return { key: sql<string>`${academySubscriptions.planId}::text`, label: sql<string>`${subscriptionPlans.name}` };
     case "academy":
-      return { key: row.academyId, label: row.academyName };
+      return { key: sql<string>`${academySubscriptions.academyId}::text`, label: sql<string>`${academies.name}` };
     case "method":
-      return { key: NOT_YET_PAID_KEY, label: NOT_YET_PAID_LABEL };
+      return { key: sql<string>`${NOT_YET_PAID_KEY}::text`, label: sql<string>`${NOT_YET_PAID_LABEL}::text` };
   }
 }
 
@@ -403,16 +377,19 @@ function subscriptionGroupKeyLabel(
 export async function getRevenueBreakdown(
   groupBy: RevenueGroupBy = "month",
 ): Promise<RevenueBreakdownResult> {
+  // Performance plan P7: the database groups and sums per dimension and
+  // returns one row per group, instead of every verified payment and every
+  // non-cancelled subscription being summed here. Same filters, same joins,
+  // same keys and labels; groups are merged below exactly as before
+  // (payments first, then subscriptions).
+  const paymentCols = paymentGroupColumns(groupBy);
+  const subscriptionCols = subscriptionGroupColumns(groupBy);
   const [paymentRows, subscriptionRows] = await Promise.all([
     db
       .select({
-        amountCents: subscriptionPayments.amountCents,
-        receivedAt: subscriptionPayments.receivedAt,
-        paymentMethod: subscriptionPayments.paymentMethod,
-        academyId: subscriptionPayments.academyId,
-        academyName: academies.name,
-        planId: academySubscriptions.planId,
-        planName: subscriptionPlans.name,
+        key: paymentCols.key,
+        label: paymentCols.label,
+        cents: sql<string>`coalesce(sum(${subscriptionPayments.amountCents}), 0)::bigint`,
       })
       .from(subscriptionPayments)
       .innerJoin(
@@ -421,16 +398,14 @@ export async function getRevenueBreakdown(
       )
       .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
       .innerJoin(academies, eq(academies.id, subscriptionPayments.academyId))
-      .where(eq(subscriptionPayments.status, "verified")),
+      .where(eq(subscriptionPayments.status, "verified"))
+      .groupBy(paymentCols.key, paymentCols.label),
 
     db
       .select({
-        academyId: academySubscriptions.academyId,
-        academyName: academies.name,
-        planId: academySubscriptions.planId,
-        planName: subscriptionPlans.name,
-        priceAmountCents: subscriptionPlans.priceAmountCents,
-        endsAt: academySubscriptions.endsAt,
+        key: subscriptionCols.key,
+        label: subscriptionCols.label,
+        cents: sql<string>`coalesce(sum(${subscriptionPlans.priceAmountCents}), 0)::bigint`,
       })
       .from(academySubscriptions)
       .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
@@ -440,26 +415,22 @@ export async function getRevenueBreakdown(
           ne(academySubscriptions.status, "cancelled"),
           isNotNull(academySubscriptions.endsAt),
         ),
-      ),
+      )
+      .groupBy(subscriptionCols.key, subscriptionCols.label),
   ]);
 
   const groups = new Map<string, { label: string; collectedCents: number; expectedCents: number }>();
 
   for (const row of paymentRows) {
-    const { key, label } = paymentGroupKeyLabel(groupBy, row);
-    const entry = groups.get(key) ?? { label, collectedCents: 0, expectedCents: 0 };
-    entry.collectedCents += row.amountCents;
-    groups.set(key, entry);
+    const entry = groups.get(row.key) ?? { label: row.label, collectedCents: 0, expectedCents: 0 };
+    entry.collectedCents += Number(row.cents);
+    groups.set(row.key, entry);
   }
 
   for (const row of subscriptionRows) {
-    const { key, label } = subscriptionGroupKeyLabel(groupBy, {
-      ...row,
-      endsAt: row.endsAt as Date,
-    });
-    const entry = groups.get(key) ?? { label, collectedCents: 0, expectedCents: 0 };
-    entry.expectedCents += row.priceAmountCents;
-    groups.set(key, entry);
+    const entry = groups.get(row.key) ?? { label: row.label, collectedCents: 0, expectedCents: 0 };
+    entry.expectedCents += Number(row.cents);
+    groups.set(row.key, entry);
   }
 
   const rows: RevenueBreakdownRow[] = [...groups.entries()]

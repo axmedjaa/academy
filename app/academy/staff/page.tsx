@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
-import { listStaff } from "@/lib/academies/staff";
+import { getStaffWorkplaceOptions, listStaff } from "@/lib/academies/staff";
 import { StaffTable } from "./staff-table";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { RegisterStaffButton } from "./register-staff-form";
@@ -16,13 +16,21 @@ import { RegisterStaffButton } from "./register-staff-form";
  * function's own doc comment: branch assignment/filtering is Item 36's
  * job, out of scope here.
  */
-export default async function StaffPage() {
+export default async function StaffPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const context = await getAuthContext();
   if (!context) {
     redirect("/login");
   }
 
-  const result = await listStaff(context);
+  const [result, workplace, params] = await Promise.all([
+    listStaff(context),
+    getStaffWorkplaceOptions(context),
+    searchParams,
+  ]);
   if (!result.ok) {
     return (
       <PageMessage
@@ -38,10 +46,20 @@ export default async function StaffPage() {
     <div className={PAGE_WRAP}>
       <PageHeader
         title="Staff"
-        description="People who work at this academy. Roles and status are edited on the row; there is no staff detail page."
-        actions={canManage ? <RegisterStaffButton /> : undefined}
+        description="People who work at this academy. Roles, branches and status are edited on the row; there is no staff detail page."
+        actions={canManage ? (
+            <RegisterStaffButton
+              workplaceOptions={workplace.ok ? workplace.options : null}
+              openedByUrl={params.register === "1"}
+            />
+          ) : undefined}
       />
-      <StaffTable staff={result.staff} canManage={canManage} canDelete={result.canDelete} />
+      <StaffTable
+        staff={result.staff}
+        canManage={canManage}
+        canDelete={result.canDelete}
+        workplaceOptions={workplace.ok ? workplace.options : null}
+      />
     </div>
   );
 }

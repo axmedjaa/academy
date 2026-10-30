@@ -1,4 +1,5 @@
 import { and, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
+import { getBranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { expenseRecords, incomeRecords, studentCharges, studentCourseRefunds, studentPayments, students } from "@/lib/db/schema";
@@ -176,7 +177,12 @@ export const financeReportFiltersSchema = z.object({
 });
 
 export type FinanceReportFiltersInput = z.input<typeof financeReportFiltersSchema>;
-type ParsedFinanceReportFilters = z.infer<typeof financeReportFiltersSchema>;
+type ParsedFinanceReportFilters = z.infer<typeof financeReportFiltersSchema> & {
+  /** Multi-branch, server-set only (never from input): the caller's branches
+   * when they don't have all-branch access. Every figure is limited to them;
+   * academy-level income/expense rows (no branch) are left out. */
+  scopeBranchIds?: string[];
+};
 
 export interface FinanceReportsActionError {
   code: "blocked" | "validation";
@@ -283,6 +289,7 @@ async function computeOutstandingCharges(
   if (filters.dateFrom) conditions.push(gte(studentCharges.createdAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(studentCharges.createdAt, filters.dateTo));
   if (filters.branchId) conditions.push(eq(students.branchId, filters.branchId));
+  if (filters.scopeBranchIds) conditions.push(filters.scopeBranchIds.length ? inArray(students.branchId, filters.scopeBranchIds) : sql`false`);
 
   const rows = await db
     .select({
@@ -309,6 +316,7 @@ async function computeRefundsRecorded(
   if (filters.dateFrom) conditions.push(gte(studentCourseRefunds.refundedAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(studentCourseRefunds.refundedAt, filters.dateTo));
   if (filters.branchId) conditions.push(eq(studentCourseRefunds.branchId, filters.branchId));
+  if (filters.scopeBranchIds) conditions.push(filters.scopeBranchIds.length ? inArray(studentCourseRefunds.branchId, filters.scopeBranchIds) : sql`false`);
   const rows = await db
     .select({
       currency: studentCourseRefunds.currency,
@@ -336,6 +344,7 @@ async function computePaymentsReceived(
   if (filters.dateFrom) conditions.push(gte(studentPayments.receivedAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(studentPayments.receivedAt, filters.dateTo));
   if (filters.branchId) conditions.push(eq(students.branchId, filters.branchId));
+  if (filters.scopeBranchIds) conditions.push(filters.scopeBranchIds.length ? inArray(students.branchId, filters.scopeBranchIds) : sql`false`);
 
   const amount = sql<number>`coalesce(sum(${studentPayments.amountCents}), 0)::int`;
   const count = sql<number>`count(*)::int`;
@@ -381,6 +390,7 @@ async function computeIncomeTotals(
   const status: IncomeRecordStatus = matchesEnum(filters.status, INCOME_RECORD_STATUSES) ?? "posted";
   const conditions: SQL[] = [eq(incomeRecords.academyId, academyId), eq(incomeRecords.status, status)];
   if (filters.branchId) conditions.push(eq(incomeRecords.branchId, filters.branchId));
+  if (filters.scopeBranchIds) conditions.push(filters.scopeBranchIds.length ? inArray(incomeRecords.branchId, filters.scopeBranchIds) : sql`false`);
   if (filters.dateFrom) conditions.push(gte(incomeRecords.createdAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(incomeRecords.createdAt, filters.dateTo));
 
@@ -406,6 +416,7 @@ async function computeExpenseTotals(
   const status: ExpenseRecordStatus = matchesEnum(filters.status, EXPENSE_RECORD_STATUSES) ?? "approved";
   const conditions: SQL[] = [eq(expenseRecords.academyId, academyId), eq(expenseRecords.status, status)];
   if (filters.branchId) conditions.push(eq(expenseRecords.branchId, filters.branchId));
+  if (filters.scopeBranchIds) conditions.push(filters.scopeBranchIds.length ? inArray(expenseRecords.branchId, filters.scopeBranchIds) : sql`false`);
   if (filters.dateFrom) conditions.push(gte(expenseRecords.createdAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(expenseRecords.createdAt, filters.dateTo));
 
@@ -437,6 +448,7 @@ async function computePendingExpenseApprovals(
     eq(expenseRecords.status, "pending_approval"),
   ];
   if (filters.branchId) conditions.push(eq(expenseRecords.branchId, filters.branchId));
+  if (filters.scopeBranchIds) conditions.push(filters.scopeBranchIds.length ? inArray(expenseRecords.branchId, filters.scopeBranchIds) : sql`false`);
   if (filters.dateFrom) conditions.push(gte(expenseRecords.createdAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(expenseRecords.createdAt, filters.dateTo));
 
@@ -456,6 +468,54 @@ async function computePendingExpenseApprovals(
  * lib/academies/student-payments.ts's `listStudentCharges`/
  * `listStudentPayments`, etc. — only mutations are audited).
  */
+export type GetStudentPaymentTotalsResult =
+  | {
+      ok: true;
+      totals:
+        | { visible: false }
+        | { visible: true; outstandingCharges: OutstandingChargesSection; paymentsReceived: PaymentsReceivedSection };
+    }
+  | { ok: false; error: FinanceReportsActionError };
+
+/**
+ * Performance plan P5: only the two student-payment figures the academy
+ * dashboard shows (outstanding charges, payments received), computed by the
+ * exact same `computeOutstandingCharges` / `computePaymentsReceived` calls
+ * `getFinanceReports` makes, behind the same gate, filter validation and
+ * `academy.student_payments` permission check. The report's refunds, income
+ * and expense sections — never shown on the dashboard — are not computed.
+ */
+export async function getStudentPaymentTotals(
+  actorContext: AuthContext,
+  filtersInput: FinanceReportFiltersInput = {},
+): Promise<GetStudentPaymentTotalsResult> {
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level === "blocked") {
+    return { ok: false, error: { code: "blocked", message: access.message } };
+  }
+
+  const parsed = financeReportFiltersSchema.safeParse(filtersInput);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid filters." },
+    };
+  }
+
+  if (getAcademyPermissionLevel(access.membershipRole, ACADEMY_STUDENT_PAYMENTS_ACTION) === "none") {
+    return { ok: true, totals: { visible: false } };
+  }
+  const totalsScope = await getBranchScope(access, actorContext.userId);
+  const scopedFilters: ParsedFinanceReportFilters = totalsScope.academyWide
+    ? parsed.data
+    : { ...parsed.data, scopeBranchIds: totalsScope.branchIds };
+  const [outstandingCharges, paymentsReceived] = await Promise.all([
+    computeOutstandingCharges(access.academyId, scopedFilters),
+    computePaymentsReceived(access.academyId, scopedFilters),
+  ]);
+  return { ok: true, totals: { visible: true, outstandingCharges, paymentsReceived } };
+}
+
 export async function getFinanceReports(
   actorContext: AuthContext,
   filtersInput: FinanceReportFiltersInput = {},
@@ -472,7 +532,10 @@ export async function getFinanceReports(
       error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid filters." },
     };
   }
-  const filters = parsed.data;
+  const reportScope = await getBranchScope(access, actorContext.userId);
+  const filters: ParsedFinanceReportFilters = reportScope.academyWide
+    ? parsed.data
+    : { ...parsed.data, scopeBranchIds: reportScope.branchIds };
   const { academyId, membershipRole } = access;
 
   const studentPaymentsLevel = getAcademyPermissionLevel(membershipRole, ACADEMY_STUDENT_PAYMENTS_ACTION);

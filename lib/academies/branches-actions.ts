@@ -23,6 +23,8 @@ const UNAUTHENTICATED: BranchActionError = {
 export interface BranchFormState {
   ok: boolean;
   error?: BranchActionError;
+  /** Set by createBranch so the UI can open the new branch. */
+  branchId?: string;
 }
 
 /**
@@ -57,7 +59,7 @@ export async function createBranch(
   }
 
   revalidatePath("/academy/branches");
-  return { ok: true };
+  return { ok: true, branchId: result.branch.id };
 }
 
 /** PLAN.md §4 server action name. Branch id is read from the form itself

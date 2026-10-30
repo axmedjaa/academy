@@ -1,9 +1,11 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
   academyMemberships,
   batchTrainerAssignments,
+  branches,
   courses,
   staffBranchAssignments,
   staffDocuments,
@@ -120,9 +122,53 @@ export const createStaffSchema = z.object({
   // column).
   hireDate: optionalText(20),
   role: z.enum(ACADEMY_ROLES),
+  // Multi-branch: where the person works. "all" = all-branch access (owner
+  // only; the person is placed on the Main Branch, which that grant
+  // requires). "specific" = only `branchIds`, each of which the creator
+  // must be able to work in. Omitted keeps the earlier default: no branch
+  // for an all-branch creator, the creator's own branches otherwise.
+  workplace: z.enum(["all", "specific"]).optional(),
+  branchIds: z.array(z.string().uuid("Choose a valid branch")).max(200).optional(),
 });
 
 export type CreateStaffInput = z.input<typeof createStaffSchema>;
+
+export interface StaffWorkplaceOptions {
+  /** Only the owner can give a new staff member all-branch access. */
+  canGrantAllBranches: boolean;
+  /** Active branches the creator can place staff in (their own branches unless all-branch). */
+  branches: { id: string; name: string; isMain: boolean }[];
+}
+
+/** The branches offered by the "Where they work" field when registering staff. */
+export async function getStaffWorkplaceOptions(
+  actorContext: AuthContext,
+): Promise<{ ok: true; options: StaffWorkplaceOptions } | { ok: false; error: StaffActionError }> {
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level === "blocked") {
+    return { ok: false, error: { code: "blocked", message: access.message } };
+  }
+  if (!canManageStaff(getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION))) {
+    return { ok: false, error: FORBIDDEN };
+  }
+  const conditions = [eq(branches.academyId, access.academyId), eq(branches.status, "active")];
+  if (!access.academyWide) {
+    const own = await getAssignedBranchIds(db, access.academyId, actorContext.userId);
+    if (own.length === 0) {
+      return { ok: true, options: { canGrantAllBranches: false, branches: [] } };
+    }
+    conditions.push(inArray(branches.id, own));
+  }
+  const rows = await db
+    .select({ id: branches.id, name: branches.name, isMain: branches.isMain })
+    .from(branches)
+    .where(and(...conditions))
+    .orderBy(desc(branches.isMain), asc(branches.name));
+  return {
+    ok: true,
+    options: { canGrantAllBranches: access.membershipRole === "academy_owner", branches: rows },
+  };
+}
 
 export interface StaffRecord {
   id: string;
@@ -159,6 +205,8 @@ class AllowanceExceeded extends Error {
 }
 
 class AlreadyStaff extends Error {}
+
+class OutsideOwnBranches extends Error {}
 
 /**
  * PLAN.md §4: `createStaff` (`checkAllowance('staff')`). Gated by the new
@@ -216,6 +264,21 @@ export async function createStaff(
   // entirely new owner account from scratch, bypassing that same guard.
   if (data.role === "academy_owner" && access.membershipRole !== "academy_owner") {
     return { ok: false, error: { code: "forbidden", message: "Only an academy owner can grant ownership." } };
+  }
+
+  // Where the person works. An owner already has every branch through the
+  // role itself, so the choice only matters for the other roles.
+  const workplace = data.role === "academy_owner" ? undefined : data.workplace;
+  const grantAllBranches = workplace === "all";
+  if (grantAllBranches && access.membershipRole !== "academy_owner") {
+    return {
+      ok: false,
+      error: { code: "forbidden", message: "Only the academy owner can give someone access to all branches." },
+    };
+  }
+  const chosenBranchIds = workplace === "specific" ? [...new Set(data.branchIds ?? [])] : [];
+  if (workplace === "specific" && chosenBranchIds.length === 0) {
+    return { ok: false, error: { code: "validation", message: "Choose at least one branch where this person works." } };
   }
 
   try {
@@ -300,10 +363,53 @@ export async function createStaff(
         userId = newUser.id;
       }
 
+      // Resolve the branches before any membership write. A re-hired
+      // person's earlier all-branch access is never carried over: it is set
+      // from this request's choice alone.
+      let assignedBranchIds: string[] = [];
+      if (grantAllBranches) {
+        // All-branch access is only for Main Branch staff.
+        const [main] = await tx
+          .select({ id: branches.id })
+          .from(branches)
+          .where(and(eq(branches.academyId, academyId), eq(branches.isMain, true)))
+          .limit(1);
+        if (!main) {
+          throw new Error("validation:This academy has no Main Branch yet. Add a branch first.");
+        }
+        assignedBranchIds = [main.id];
+      } else if (workplace === "specific") {
+        const found = await tx
+          .select({ id: branches.id })
+          .from(branches)
+          .where(
+            and(
+              eq(branches.academyId, academyId),
+              eq(branches.status, "active"),
+              inArray(branches.id, chosenBranchIds),
+            ),
+          );
+        if (found.length !== chosenBranchIds.length) {
+          throw new Error("validation:One of the chosen branches is not available. Refresh and try again.");
+        }
+        if (!access.academyWide) {
+          const own = new Set(await getAssignedBranchIds(tx, academyId, actorContext.userId));
+          if (!chosenBranchIds.every((id) => own.has(id))) {
+            throw new OutsideOwnBranches();
+          }
+        }
+        assignedBranchIds = chosenBranchIds;
+      } else if (!access.academyWide) {
+        // Earlier default: staff added by someone without all-branch access
+        // start in that person's own branches (otherwise they could never
+        // see or manage the person they just added).
+        assignedBranchIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
+      }
+
       if (removedMembershipId) {
         await tx
           .update(academyMemberships)
-          .set({ role: data.role, status: "active" })
+          .set({ role: data.role, status: "active", academyWide: grantAllBranches })
           .where(eq(academyMemberships.id, removedMembershipId));
       } else {
         await tx.insert(academyMemberships).values({
@@ -311,6 +417,7 @@ export async function createStaff(
           academyId,
           role: data.role,
           status: "active",
+          academyWide: grantAllBranches,
         });
       }
 
@@ -327,6 +434,13 @@ export async function createStaff(
         })
         .returning();
 
+      // Multi-branch: the branches resolved above, recorded in the audit row below.
+      if (assignedBranchIds.length > 0) {
+        await tx
+          .insert(staffBranchAssignments)
+          .values(assignedBranchIds.map((branchId) => ({ academyId, staffProfileId: profile.id, branchId })));
+      }
+
       // Same-transaction audit write (Cross-Cutting Architecture Decisions:
       // "a sensitive mutation cannot succeed if its audit write fails").
       // Never includes the password/hash.
@@ -338,7 +452,13 @@ export async function createStaff(
           action: "createStaff",
           entityType: "staff_profile",
           entityId: profile.id,
-          after: { ...toRecord(profile), role: data.role, email: data.email },
+          after: {
+            ...toRecord(profile),
+            role: data.role,
+            email: data.email,
+            branchIds: assignedBranchIds,
+            allBranchAccess: grantAllBranches,
+          },
         },
         tx,
       );
@@ -358,6 +478,12 @@ export async function createStaff(
               ? `Staff allowance limit reached (${err.current}/${err.limit}). Archive an existing staff member or upgrade your plan.`
               : "Staff allowance could not be verified for this academy.",
         },
+      };
+    }
+    if (err instanceof OutsideOwnBranches) {
+      return {
+        ok: false,
+        error: { code: "forbidden", message: "You can only add staff to the branches you work in." },
       };
     }
     if (err instanceof AlreadyStaff) {
@@ -428,6 +554,10 @@ export async function updateStaff(
   const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION);
   if (!canManageStaff(level)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  // Multi-branch: only staff the caller can see (same rule as listStaff).
+  if (!(await isStaffProfileInScope(access, actorContext.userId, staffProfileId))) {
+    return { ok: false, error: { code: "not_found", message: "Staff member not found." } };
   }
 
   const parsed = updateStaffSchema.safeParse(input);
@@ -536,6 +666,9 @@ export async function assignStaffRole(
   const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION);
   if (!canManageStaff(level)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  if (!(await isStaffUserInScope(access, actorContext.userId, targetUserId))) {
+    return { ok: false, error: { code: "not_found", message: "Staff member not found." } };
   }
 
   const parsedRole = z.enum(ACADEMY_ROLES).safeParse(role);
@@ -675,6 +808,9 @@ export async function removeStaffMembership(
   if (!canManageStaff(level)) {
     return { ok: false, error: FORBIDDEN };
   }
+  if (!(await isStaffUserInScope(access, actorContext.userId, targetUserId))) {
+    return { ok: false, error: { code: "not_found", message: "Staff member not found." } };
+  }
 
   const parsedTargetId = z.string().uuid().safeParse(targetUserId);
   if (!parsedTargetId.success) {
@@ -720,9 +856,11 @@ export async function removeStaffMembership(
       }
     }
 
+    // Multi-branch: a removed membership never keeps all-branch access, so
+    // nothing carries over if the person is ever re-hired.
     await tx
       .update(academyMemberships)
-      .set({ status: "removed" })
+      .set({ status: "removed", academyWide: false })
       .where(eq(academyMemberships.id, existing.id));
 
     await recordAudit(
@@ -733,8 +871,8 @@ export async function removeStaffMembership(
         action: "removeStaffMembership",
         entityType: "academy_membership",
         entityId: existing.id,
-        before: { status: existing.status, role: existing.role },
-        after: { status: "removed" },
+        before: { status: existing.status, role: existing.role, allBranchAccess: existing.academyWide },
+        after: { status: "removed", allBranchAccess: false },
       },
       tx,
     );
@@ -769,6 +907,16 @@ export async function removeStaffMembership(
 export interface StaffListRow extends StaffRecord {
   role: AcademyRole | null;
   loginEmail: string;
+  /** Multi-branch: the owner, or a member the owner granted all-branch access. */
+  allBranchAccess: boolean;
+  /** Branches they work in that the viewer can see (all of them for an
+   * all-branch viewer, otherwise only the viewer's own), Main first. */
+  branches: { id: string; name: string; isMain: boolean }[];
+  /** Further branches outside the viewer's own, counted but not named. */
+  otherBranchCount: number;
+  /** Whether the viewer may change where this person works (see
+   * `setStaffWorkplace`, which checks the same rules on the server). */
+  canEditBranches: boolean;
 }
 
 export interface StaffDeletionEligibilitySummary {
@@ -843,6 +991,29 @@ async function getViewableStaffProfileIds(
   return Array.from(visible);
 }
 
+async function isStaffProfileInScope(
+  access: { academyId: string; academyWide: boolean },
+  actorUserId: string,
+  staffProfileId: string,
+): Promise<boolean> {
+  if (access.academyWide) return true;
+  return (await getViewableStaffProfileIds(access.academyId, actorUserId)).includes(staffProfileId);
+}
+
+async function isStaffUserInScope(
+  access: { academyId: string; academyWide: boolean },
+  actorUserId: string,
+  targetUserId: string,
+): Promise<boolean> {
+  if (access.academyWide) return true;
+  const [profile] = await db
+    .select({ id: staffProfiles.id })
+    .from(staffProfiles)
+    .where(and(eq(staffProfiles.academyId, access.academyId), eq(staffProfiles.userId, targetUserId)))
+    .limit(1);
+  return Boolean(profile) && (await getViewableStaffProfileIds(access.academyId, actorUserId)).includes(profile.id);
+}
+
 /**
  * PLAN.md §3's `/academy/staff` list. Gated by `canViewStaff` (any
  * non-"none" level: Full, Manage, or Trainer's "View") rather than
@@ -860,7 +1031,21 @@ async function getViewableStaffProfileIds(
  * must be indistinguishable" posture lib/academies/branches.ts uses for its
  * own branch-limited reads.
  */
-export async function listStaff(actorContext: AuthContext): Promise<ListStaffResult> {
+type StaffListScope =
+  | { ok: false; error: StaffActionError }
+  | {
+      ok: true;
+      academyId: string;
+      level: AcademyPermissionLevel;
+      /** null = every staff profile in the academy; otherwise only these. */
+      visibleStaffProfileIds: string[] | null;
+      academyWide: boolean;
+      membershipRole: AcademyRole;
+    };
+
+/** The gate and visibility rule `listStaff` and `listStaffSummaries` share,
+ * so both always return the same set of staff for the same caller. */
+async function resolveStaffListScope(actorContext: AuthContext): Promise<StaffListScope> {
   const access = await checkAcademyAccessForContext(actorContext);
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
@@ -872,22 +1057,68 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
   }
 
   let visibleStaffProfileIds: string[] | null = null;
-  if (!canManageStaff(level)) {
+  // Multi-branch: without all-branch access, staff management is limited to
+  // the caller's own record plus staff sharing one of their branches.
+  if (!canManageStaff(level) || !access.academyWide) {
     // "view" is the only remaining non-"none" level today (Trainer) — see
-    // this function's own doc comment.
+    // listStaff's own doc comment.
     visibleStaffProfileIds = await getViewableStaffProfileIds(
       access.academyId,
       actorContext.userId,
     );
-    if (visibleStaffProfileIds.length === 0) {
-      return { ok: true, permissionLevel: level, staff: [], canDelete: canManageStaff(level) };
-    }
+  }
+  return {
+    ok: true,
+    academyId: access.academyId,
+    level,
+    visibleStaffProfileIds,
+    academyWide: access.academyWide,
+    membershipRole: access.membershipRole,
+  };
+}
+
+export type ListStaffSummariesResult =
+  | { ok: true; staff: Pick<StaffRecord, "id" | "fullName" | "status">[] }
+  | { ok: false; error: StaffActionError };
+
+/**
+ * Performance plan P4/P5: the same staff `listStaff` returns for this caller
+ * (same gate, same visibility rule, same academy scope), but only id, name
+ * and status — for pickers and counts that never show deletion eligibility,
+ * so the three dependency-count queries `listStaff` runs are skipped.
+ */
+export async function listStaffSummaries(actorContext: AuthContext): Promise<ListStaffSummariesResult> {
+  const scope = await resolveStaffListScope(actorContext);
+  if (!scope.ok) return scope;
+  const { academyId, visibleStaffProfileIds } = scope;
+  if (visibleStaffProfileIds && visibleStaffProfileIds.length === 0) return { ok: true, staff: [] };
+
+  const staff = await db
+    .select({ id: staffProfiles.id, fullName: staffProfiles.fullName, status: staffProfiles.status })
+    .from(staffProfiles)
+    .innerJoin(users, eq(users.id, staffProfiles.userId))
+    .where(
+      visibleStaffProfileIds
+        ? and(eq(staffProfiles.academyId, academyId), inArray(staffProfiles.id, visibleStaffProfileIds))
+        : eq(staffProfiles.academyId, academyId),
+    );
+  return { ok: true, staff };
+}
+
+export async function listStaff(actorContext: AuthContext): Promise<ListStaffResult> {
+  const scope = await resolveStaffListScope(actorContext);
+  if (!scope.ok) return scope;
+  const { level, visibleStaffProfileIds } = scope;
+  const access = { academyId: scope.academyId };
+  if (visibleStaffProfileIds && visibleStaffProfileIds.length === 0) {
+    return { ok: true, permissionLevel: level, staff: [], canDelete: false };
   }
 
   const rows = await db
     .select({
       profile: staffProfiles,
       role: academyMemberships.role,
+      academyWide: academyMemberships.academyWide,
       loginEmail: users.email,
     })
     .from(staffProfiles)
@@ -915,12 +1146,42 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
     );
 
   const staffProfileIds = rows.map((row) => row.profile.id);
-  const referenceCountsByProfileId = await countStaffReferencesBulk(staffProfileIds);
+  const [referenceCountsByProfileId, assignmentRows, viewerBranchIds] = await Promise.all([
+    countStaffReferencesBulk(staffProfileIds),
+    staffProfileIds.length === 0
+      ? Promise.resolve([])
+      : db
+          .select({
+            staffProfileId: staffBranchAssignments.staffProfileId,
+            id: branches.id,
+            name: branches.name,
+            isMain: branches.isMain,
+          })
+          .from(staffBranchAssignments)
+          .innerJoin(branches, eq(branches.id, staffBranchAssignments.branchId))
+          .where(
+            and(
+              eq(staffBranchAssignments.academyId, access.academyId),
+              eq(branches.academyId, access.academyId),
+              inArray(staffBranchAssignments.staffProfileId, staffProfileIds),
+            ),
+          )
+          .orderBy(desc(branches.isMain), asc(branches.name)),
+    scope.academyWide ? Promise.resolve(null) : getAssignedBranchIds(db, access.academyId, actorContext.userId),
+  ]);
+  const viewerBranches = viewerBranchIds ? new Set(viewerBranchIds) : null;
+  const branchesByProfileId = new Map<string, { visible: StaffListRow["branches"]; hidden: number }>();
+  for (const { staffProfileId, ...branch } of assignmentRows) {
+    const entry = branchesByProfileId.get(staffProfileId) ?? { visible: [], hidden: 0 };
+    if (!viewerBranches || viewerBranches.has(branch.id)) entry.visible.push(branch);
+    else entry.hidden += 1;
+    branchesByProfileId.set(staffProfileId, entry);
+  }
 
   return {
     ok: true,
     permissionLevel: level,
-    canDelete: canManageStaff(level),
+    canDelete: canManageStaff(level) && scope.academyWide,
     staff: rows.map((row) => {
       const referenceCounts = referenceCountsByProfileId.get(row.profile.id) ?? {
         instructorCourseCount: 0,
@@ -932,10 +1193,24 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
       // "this person currently has active academy access," with no extra
       // query needed.
       const reasons = buildStaffDeletionReasons({ hasActiveMembership: row.role !== null, ...referenceCounts });
+      const placed = branchesByProfileId.get(row.profile.id) ?? { visible: [], hidden: 0 };
+      const isOwner = row.role === "academy_owner";
+      const holdsGrant = row.role !== null && !isOwner && row.academyWide === true;
       return {
         ...toRecord(row.profile),
         role: row.role,
         loginEmail: row.loginEmail,
+        allBranchAccess: isOwner || holdsGrant,
+        branches: placed.visible,
+        otherBranchCount: placed.hidden,
+        // Only the owner changes where someone with all-branch access works;
+        // a branch-limited viewer only staff in one of their branches.
+        canEditBranches:
+          canManageStaff(level) &&
+          row.role !== null &&
+          !isOwner &&
+          (!holdsGrant || scope.membershipRole === "academy_owner") &&
+          (scope.academyWide || placed.visible.length > 0),
         deletionEligibility: { eligible: reasons.length === 0, reasons },
       };
     }),
@@ -1112,6 +1387,9 @@ export async function getStaffDeletionEligibility(
   if (!canManageStaff(level)) {
     return { ok: false, error: FORBIDDEN };
   }
+  if (!access.academyWide) {
+    return { ok: false, error: { code: "forbidden", message: "Only someone with access to all branches can permanently delete a staff member." } };
+  }
 
   const parsedId = z.string().uuid().safeParse(staffProfileId);
   if (!parsedId.success) {
@@ -1167,6 +1445,9 @@ export async function deleteStaff(
   const level = getAcademyPermissionLevel(access.membershipRole, ACADEMY_STAFF_ACTION);
   if (!canManageStaff(level)) {
     return { ok: false, error: FORBIDDEN };
+  }
+  if (!access.academyWide) {
+    return { ok: false, error: { code: "forbidden", message: "Only someone with access to all branches can permanently delete a staff member." } };
   }
 
   const parsedId = z.string().uuid().safeParse(staffProfileId);

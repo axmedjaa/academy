@@ -29,7 +29,20 @@ const pool =
   new Pool({
     connectionString: env.DATABASE_URL,
     max: 10,
-    idleTimeoutMillis: 30_000,
+    // Performance plan P1 (PERFORMANCE_OPTIMIZATION_PLAN.md): a new Neon
+    // connection costs ~1.4s (TLS + SCRAM channel binding), and at 30s the
+    // pool emptied between ordinary page views, so the next request paid that
+    // again on every connection it opened (dashboard 7.4s vs 2.7s warm).
+    // 4 minutes stays under Neon's 5-minute compute auto-suspend, which drops
+    // connections anyway (handled by the 'error' listener below). Idle
+    // clients are still reaped — no `min` — so the pool can drain fully.
+    idleTimeoutMillis: 240_000,
+    // TCP keep-alive on each pooled socket (pg passes these to
+    // socket.setKeepAlive), probing after 10s idle instead of the OS default
+    // (~2h), so a socket silently dropped by a NAT/router is detected and
+    // errors out rather than hanging the next query.
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
     connectionTimeoutMillis: 10_000,
   });
 

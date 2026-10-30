@@ -1,4 +1,5 @@
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { getBranchScope } from "@/lib/academies/branch-access";
 import { ACADEMY_AUDIT_LOG_ACTION, hasAcademyPermission } from "@/lib/auth/academy-permissions";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
@@ -45,7 +46,7 @@ export interface AcademyAuditLogActionError {
  * that column is hard-set below to the academy resolved by
  * `checkAcademyAccessForContext`.
  */
-export type AcademyAuditLogFilters = Omit<AuditLogFilters, "academyId">;
+export type AcademyAuditLogFilters = Omit<AuditLogFilters, "academyId" | "branchIds">;
 
 export type AcademyAuditLogsResult =
   | { ok: true; data: AuditLogQueryResult }
@@ -80,8 +81,11 @@ export async function getAcademyAuditLogs(
     return { ok: false, error: { code: "forbidden", message: FORBIDDEN_MESSAGE } };
   }
 
+  // Multi-branch: without all-branch access, only entries about the
+  // caller's own branches (lib/academies/branch-access.ts).
+  const scope = await getBranchScope(access, actorContext.userId);
   const data = await fetchAuditLogs(
-    { ...filters, academyId: access.academyId },
+    { ...filters, academyId: access.academyId, ...(scope.academyWide ? {} : { branchIds: scope.branchIds }) },
     pagination,
   );
 

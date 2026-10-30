@@ -5,11 +5,11 @@ import { db } from "@/lib/db";
 import { batchCourses, batches, courses, programs, students } from "@/lib/db/schema";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listCertificates } from "@/lib/academies/certificates";
-import { getStudentPhotoUrlsByIds, searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
+import { searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
 import { listBatches } from "@/lib/academies/batches";
 import { formatDate } from "@/lib/ui/date";
 import { Badge, EmptyState, PAGE_WRAP, PageHeader, PageMessage, Section, trHover } from "@/app/academy/_shell/ui";
-import { DataTable, NoteBlock, PersonCell, ROW_BTN, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { ChipParamFilter, ClearFilters, FilterBar, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
 import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
@@ -54,7 +54,7 @@ export default async function AcademyCertificatesPage({
   const batchIds = [...new Set(certificates.map((c) => c.batchId))];
   const courseIds = [...new Set(certificates.map((c) => c.courseId))];
 
-  const [studentRows, batchRows, courseRows, photos] = await Promise.all([
+  const [studentRows, batchRows, courseRows] = await Promise.all([
     academyId && studentIds.length
       ? db
           .select({ id: students.id, fullName: students.fullName, studentNumber: students.studentNumber })
@@ -74,7 +74,6 @@ export default async function AcademyCertificatesPage({
           .innerJoin(programs, eq(programs.id, courses.programId))
           .where(and(eq(courses.academyId, academyId), inArray(courses.id, courseIds)))
       : Promise.resolve([]),
-    getStudentPhotoUrlsByIds(context, studentIds),
   ]);
   const studentById = new Map(studentRows.map((row) => [row.id, row]));
   const batchById = new Map(batchRows.map((row) => [row.id, row]));
@@ -150,19 +149,19 @@ export default async function AcademyCertificatesPage({
 
       <VerifyCertificateCard />
 
-      <div className="mb-4">
+      {/* Design A17: search, status chips, year and batch share one row and
+          wrap onto their own lines on narrow screens. */}
+      <FilterBar>
+        <SearchField placeholder="Search student, batch or code" />
         <ChipParamFilter
           param="status"
           label="Filter by status"
           options={[
-            { value: "", label: "All", count: base.length },
-            { value: "issued", label: "Issued", count: base.filter((c) => c.status === "issued").length },
-            { value: "cancelled", label: "Cancelled", count: base.filter((c) => c.status === "cancelled").length },
+            { value: "", label: "All", icon: "layers" },
+            { value: "issued", label: "Issued", count: base.filter((c) => c.status === "issued").length, icon: "check_circle" },
+            { value: "cancelled", label: "Cancelled", count: base.filter((c) => c.status === "cancelled").length, icon: "warning" },
           ]}
         />
-      </div>
-      <FilterBar>
-        <SearchField placeholder="Search student, course, batch or code" />
         <FilterDropdown
           param="year"
           label="Year"
@@ -209,11 +208,12 @@ export default async function AcademyCertificatesPage({
           <thead>
             <tr>
               <th className={rtTh}>Student</th>
-              <th className={rtTh}>Course</th>
+              <th className={rtTh}>Program</th>
               <th className={rtTh}>Batch</th>
               <th className={rtTh}>Code</th>
               <th className={rtTh}>Issued</th>
               <th className={rtTh}>Status</th>
+              <th className={rtTh}>Certificate</th>
               <th className={rtTh}>
                 <span className="sr-only">Actions</span>
               </th>
@@ -223,30 +223,32 @@ export default async function AcademyCertificatesPage({
             {rows.map((certificate) => {
               const student = studentById.get(certificate.studentId);
               const batch = batchById.get(certificate.batchId);
+              const course = courseById.get(certificate.courseId);
               const issued = certificate.status === "issued";
               return (
                 <tr key={certificate.id} className={trHover}>
                   <td className={rtTd} data-label="Student">
-                    <PersonCell
-                      name={student?.fullName ?? "Student"}
-                      sub={student?.studentNumber}
+                    <Link
                       href={`/academy/students/${certificate.studentId}`}
-                      photoUrl={photos.get(certificate.studentId) ?? null}
-                    />
+                      className="font-semibold text-ink no-underline hover:text-brand hover:underline"
+                    >
+                      {student?.fullName ?? "Student"}
+                    </Link>
                   </td>
-                  <td className={rtTd} data-label="Course">
-                    {courseById.get(certificate.courseId) ? (
+                  <td className={rtTd} data-label="Program">
+                    {course ? (
                       <>
-                        <span className="font-semibold">{courseById.get(certificate.courseId)?.name}</span>
-                        <span className="block text-xs text-muted">{courseById.get(certificate.courseId)?.programName}</span>
+                        {course.programName}
+                        {/* Certificates are per completed course, so the
+                            course stays visible under its program. */}
+                        <span className="block text-xs text-muted">{course.name}</span>
                       </>
                     ) : (
                       <span className="text-muted">Not recorded</span>
                     )}
                   </td>
-                  <td className={rtTd} data-label="Batch">
-                    <span className="font-semibold">{batch?.code ?? "Batch"}</span>
-                    {batch && <span className="block text-xs text-muted">{batch.name}</span>}
+                  <td className={`${rtTd} whitespace-nowrap`} data-label="Batch">
+                    {batch?.code ?? "Batch"}
                   </td>
                   <td className={`${rtTd} whitespace-nowrap font-mono text-[13px]`} data-label="Code">
                     {certificate.certificateCode}
@@ -255,34 +257,32 @@ export default async function AcademyCertificatesPage({
                     {formatDate(certificate.issuedAt)}
                   </td>
                   <td className={rtTd} data-label="Status">
-                    <Badge label={issued ? "Issued" : "Cancelled"} tone={issued ? "green" : "slate"} />
+                    <Badge label={issued ? "Issued" : "Cancelled"} tone={issued ? "green" : "red"} />
                     {!issued && certificate.cancellationReason && (
                       <span className="mt-1 block max-w-[24ch] text-xs text-muted [overflow-wrap:anywhere]">{certificate.cancellationReason}</span>
                     )}
                   </td>
+                  <td className={rtTd} data-label="Certificate">
+                    {/* The print view carries the PDF download. */}
+                    {issued ? (
+                      <Link
+                        href={`/academy/certificates/${certificate.id}/print`}
+                        className="font-semibold !text-brand no-underline hover:underline"
+                      >
+                        View
+                      </Link>
+                    ) : (
+                      <span className="text-[13px] text-muted">Unavailable</span>
+                    )}
+                  </td>
                   <td className={`${rtTd} text-right`} data-actions="">
-                    <span className="inline-flex flex-wrap items-center justify-end gap-2">
-                      {issued ? (
-                        <>
-                          <Link href={`/academy/certificates/${certificate.id}/print`} className={ROW_BTN}>
-                            <Icon name="workspace_premium" width={16} height={16} />
-                            View
-                          </Link>
-                          <a href={`/academy/certificates/${certificate.id}/pdf`} download className={ROW_BTN}>
-                            PDF
-                          </a>
-                          {result.canManage && (
-                            <CancelCertificateButton
-                              certificateId={certificate.id}
-                              code={certificate.certificateCode}
-                              studentName={student?.fullName ?? "Student"}
-                            />
-                          )}
-                        </>
-                      ) : (
-                        <span className="text-[13px] text-muted">Unavailable</span>
-                      )}
-                    </span>
+                    {issued && result.canManage && (
+                      <CancelCertificateButton
+                        certificateId={certificate.id}
+                        code={certificate.certificateCode}
+                        studentName={student?.fullName ?? "Student"}
+                      />
+                    )}
                   </td>
                 </tr>
               );
@@ -291,11 +291,6 @@ export default async function AcademyCertificatesPage({
         </DataTable>
       )}
 
-      <NoteBlock>
-        A certificate is issued once per student and completed course, so a batch with several courses can give a student
-        several certificates. Each needs a published, passing result in that course. Cancelling needs a reason and cannot
-        be undone; the code then verifies as cancelled.
-      </NoteBlock>
     </div>
   );
 }

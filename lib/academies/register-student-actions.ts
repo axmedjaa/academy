@@ -79,8 +79,8 @@ export async function requestNewStudentPhotoUploadUrlAction(
 }
 
 /**
- * PLAN.md §4 server action name, form-bound via useActionState for
- * /academy/students/new. `batchId` is a new, optional field added for the
+ * PLAN.md §4 server action name, form-bound via useActionState by the
+ * Register student dialog. `batchId` is a new, optional field added for the
  * simple course/enrollment workflow: the admin picks the course (really a
  * specific batch of it — see student-form.tsx's module comment on why) at
  * registration time, and this action enrolls the newly-created student

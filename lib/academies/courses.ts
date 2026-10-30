@@ -1,4 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { viewOnlyWithoutAllBranches } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -314,9 +315,10 @@ async function resolveCourseAccess(
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
 
-  const permissionLevel = getAcademyPermissionLevel(
-    access.membershipRole,
-    ACADEMY_COURSES_BATCHES_ACTION,
+  // Multi-branch: academy-wide catalogue — read-only without all-branch access.
+  const permissionLevel = viewOnlyWithoutAllBranches(
+    getAcademyPermissionLevel(access.membershipRole, ACADEMY_COURSES_BATCHES_ACTION),
+    access.academyWide,
   );
   if (permissionLevel === "none") {
     return { ok: false, error: FORBIDDEN };
