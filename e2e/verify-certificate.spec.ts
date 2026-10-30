@@ -7,8 +7,8 @@ test.describe("Public certificate verification (/verify/[certificateCode])", () 
   test("a valid code shows certificate details, unauthenticated", async ({ page }) => {
     await page.goto(`/verify/${ACADEMY_A.certificateCode}`);
 
-    await expect(page.getByRole("heading", { name: "Certificate Verification" })).toBeVisible();
-    await expect(page.getByText("Valid", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Verify Certificate" })).toBeVisible();
+    await expect(page.getByText("Valid Certificate")).toBeVisible();
     await expect(page.getByText(ACADEMY_A.studentName)).toBeVisible();
     await expect(page.getByText(ACADEMY_A.programName)).toBeVisible();
 
@@ -31,14 +31,14 @@ test.describe("Public certificate verification (/verify/[certificateCode])", () 
     const bogusCode = `does-not-exist-${Date.now()}`;
     await page.goto(`/verify/${bogusCode}`);
 
-    await expect(page.getByRole("heading", { name: "Certificate Verification" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Verify Certificate" })).toBeVisible();
     await expect(
       page.getByText(/no certificate was found for this code/i),
     ).toBeVisible();
 
     // Never renders the Valid/Cancelled status UI for a code that doesn't
     // resolve to anything.
-    await expect(page.getByText("Valid", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Cancelled", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Valid Certificate")).toHaveCount(0);
+    await expect(page.getByText("Certificate Cancelled")).toHaveCount(0);
   });
 });

@@ -8,9 +8,11 @@ test.describe("Auth flow", () => {
     await page.getByLabel("Password").fill(ACADEMY_A.ownerPassword);
     await page.getByRole("button", { name: "Sign in" }).click();
 
-    await page.waitForURL((url) => url.pathname === "/");
-    await expect(page.getByText(`Signed in as ${ACADEMY_A.ownerEmail}.`)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+    // An academy owner lands on the academy console's dashboard.
+    await page.waitForURL((url) => url.pathname === "/academy/dashboard");
+    await expect(page.getByRole("heading", { name: "Dashboard", level: 1 })).toBeVisible();
+    const cookies = await page.context().cookies();
+    expect(cookies.some((c) => c.name === "session")).toBe(true);
   });
 
   test("invalid credentials show an error and grant no session", async ({ page }) => {
