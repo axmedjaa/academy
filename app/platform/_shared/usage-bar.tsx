@@ -20,16 +20,43 @@ function barTone(current: number, limit: number): string {
   return "bg-success";
 }
 
-export function UsageBar({ label, current, limit, format = String }: { label: string; current: number; limit: number; format?: (value: number) => string }) {
+/**
+ * `limit` null = unlimited: the figure reads "used / Unlimited" and there is
+ * no meter. Usage above the limit (after a plan's limits were lowered) is
+ * spelled out as "Over limit", never only shown in red.
+ */
+export function UsageBar({
+  label,
+  current,
+  limit,
+  format = String,
+}: {
+  label: string;
+  current: number;
+  limit: number | null;
+  format?: (value: number) => string;
+}) {
+  if (limit === null) {
+    return (
+      <div>
+        <div className="mb-1 flex items-baseline justify-between gap-3 text-[13px]">
+          <span className="text-[#374151]">{label}</span>
+          <span className="tabular-nums text-[#374151]">{format(current)} / Unlimited</span>
+        </div>
+        <div className="h-1.5 w-full rounded-full bg-[#EEF0F3]" aria-hidden="true" />
+      </div>
+    );
+  }
   const percent = limit > 0 ? Math.min(100, (current / limit) * 100) : 100;
   const atLimit = current >= limit;
+  const over = current > limit;
   return (
     <div>
       <div className="mb-1 flex items-baseline justify-between gap-3 text-[13px]">
         <span className="text-[#374151]">{label}</span>
         <span className={`tabular-nums ${atLimit ? "font-semibold text-danger" : "text-[#374151]"}`}>
           {format(current)} / {format(limit)}
-          {atLimit && <span className="sr-only"> (at limit)</span>}
+          {over ? " · Over limit" : atLimit ? <span className="sr-only"> (at limit)</span> : null}
         </span>
       </div>
       <div
@@ -45,4 +72,3 @@ export function UsageBar({ label, current, limit, format = String }: { label: st
     </div>
   );
 }
-

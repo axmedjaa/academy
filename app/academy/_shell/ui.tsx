@@ -707,15 +707,28 @@ export function PhoneLink({ phone, who }: { phone: string | null | undefined; wh
  * richer per-resource table with its own inline bar for a different,
  * denser view — this is the compact, single-row version for a quick
  * summary (e.g. a dashboard), not a replacement for that table. */
-export function UsageBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+/** `limit` null = unlimited (plan limits, migration 0040). */
+export function UsageBar({ label, used, limit }: { label: string; used: number; limit: number | null }) {
+  if (limit === null) {
+    return (
+      <div>
+        <div className="flex justify-between text-xs text-muted">
+          <span>{label}</span>
+          <span className="tabular-nums">{used} / Unlimited</span>
+        </div>
+        <div className="mt-1 h-1.5 rounded-full bg-app" aria-hidden="true" />
+      </div>
+    );
+  }
   const ratio = limit > 0 ? Math.min(1, used / limit) : 0;
   const barColorClass = ratio >= 1 ? "bg-danger" : ratio >= 0.8 ? "bg-warning" : "bg-success";
   return (
     <div>
       <div className="flex justify-between text-xs text-muted">
         <span>{label}</span>
-        <span className="tabular-nums">
+        <span className={`tabular-nums ${used > limit ? "font-semibold text-danger" : ""}`}>
           {used} / {limit}
+          {used > limit ? " · Over limit" : ""}
         </span>
       </div>
       <div className="mt-1 h-1.5 rounded-full bg-app">

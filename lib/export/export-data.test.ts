@@ -18,6 +18,7 @@ import {
   gradeConfigurations,
   incomeRecords,
   programs,
+  staffBranchAssignments,
   staffProfiles,
   students,
   studentCharges,
@@ -408,6 +409,7 @@ afterAll(async () => {
     await db.delete(incomeRecords).where(eq(incomeRecords.academyId, academyId));
     await db.delete(expenseRecords).where(eq(expenseRecords.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(staffBranchAssignments).where(eq(staffBranchAssignments.academyId, academyId));
     await db.delete(staffProfiles).where(eq(staffProfiles.academyId, academyId));
     await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
@@ -465,7 +467,14 @@ describe("exportData — finance_report", () => {
   });
 
   it("a role with partial visibility (trainer: payments+expenses, not income) never exports the income section", async () => {
-    const { academyId, studentId, creatorUserId, context } = await setupAcademy("trainer");
+    const { academyId, branchId, studentId, creatorUserId, context } = await setupAcademy("trainer");
+    // Multi-branch: a trainer sees its own branches' payments only, so it
+    // works in the student's branch here.
+    const [profile] = await db
+      .insert(staffProfiles)
+      .values({ academyId, userId: context.userId, fullName: "Export Trainer", phone: "+1-555-0100" })
+      .returning({ id: staffProfiles.id });
+    await db.insert(staffBranchAssignments).values({ academyId, staffProfileId: profile.id, branchId });
     await insertPaymentDirect(academyId, studentId, creatorUserId, "approved");
     await insertIncomeDirect(academyId, creatorUserId);
     await insertExpenseDirect(academyId, creatorUserId);

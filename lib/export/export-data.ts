@@ -1,4 +1,5 @@
 import { recordAudit } from "@/lib/audit";
+import { requireFeature } from "@/lib/subscriptions/entitlements";
 import type { AuditLogRow } from "@/lib/audit-query";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
@@ -132,7 +133,7 @@ export interface ExportDataError {
   // same story for StudentActionError's newer deleteStudent-only code —
   // searchStudents/exportStudentList never produce it either, but it must
   // still typecheck against this union for the same reason.
-  code: "blocked" | "forbidden" | "validation" | "not_found" | "too_many_rows" | "ineligible";
+  code: "blocked" | "forbidden" | "validation" | "not_found" | "too_many_rows" | "ineligible" | "feature_unavailable" | "allowance";
   message: string;
 }
 
@@ -546,6 +547,13 @@ export async function exportData(
   filters: unknown,
   format: ExportFormat = "csv",
 ): Promise<ExportDataResult> {
+  // Data exports are a plan feature (lib/subscriptions/entitlements.ts),
+  // checked here so every academy export path is covered.
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level !== "blocked") {
+    const entitled = await requireFeature(access.academyId, "exports");
+    if (!entitled.ok) return { ok: false, error: entitled.error };
+  }
   switch (entityType) {
     case "finance_report":
       return exportFinanceReport(actorContext, filters as FinanceReportFiltersInput, format);

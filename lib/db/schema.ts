@@ -503,24 +503,37 @@ export const subscriptionPlans = pgTable(
     id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
     name: text("name").notNull(),
     description: text("description"),
-    priceAmountCents: integer("price_amount_cents").notNull(),
+    // NULL = price not set yet; such a plan can't be active
+    // (subscription_plans_active_requires_price, migration 0040).
+    priceAmountCents: integer("price_amount_cents"),
     currency: text("currency").notNull(),
     billingPeriod: billingPeriodEnum("billing_period").notNull(),
-    maxBranches: integer("max_branches").notNull(),
-    maxStudents: integer("max_students").notNull(),
-    maxStaff: integer("max_staff").notNull(),
-    maxCourses: integer("max_courses").notNull(),
+    // Resource limits: NULL = unlimited (migration 0040). Enforced by
+    // lib/subscriptions/usage.ts's checkAllowance.
+    maxBranches: integer("max_branches"),
+    maxStudents: integer("max_students"),
+    maxStaff: integer("max_staff"),
+    maxCourses: integer("max_courses"),
     // bigint, not integer: a plain 4-byte Postgres integer caps at
     // ~2.1 billion, i.e. ~2GB — far too small for a per-academy storage
     // allowance expressed in bytes (a realistic plan tier is tens/hundreds
     // of GB or more). mode: "number" keeps this a plain JS number in app
     // code (safe up to 2^53 bytes, ~9 petabytes — nowhere near a plan
     // limit) rather than forcing bigint arithmetic everywhere it's used.
-    maxStorageBytes: bigint("max_storage_bytes", { mode: "number" }).notNull(),
+    maxStorageBytes: bigint("max_storage_bytes", { mode: "number" }),
+    // Feature entitlements (lib/subscriptions/entitlements.ts registers each
+    // one with its server-side check).
     smsEnabled: boolean("sms_enabled").notNull().default(false),
-    emailEnabled: boolean("email_enabled").notNull().default(false),
+    emailEnabled: boolean("email_enabled").notNull().default(true),
+    exportsEnabled: boolean("exports_enabled").notNull().default(true),
+    advancedReportsEnabled: boolean("advanced_reports_enabled").notNull().default(true),
+    // Retained, no longer read: certificates are a core feature on every
+    // plan, and advanced reports moved to advanced_reports_enabled
+    // (migration 0040). Kept so nothing reading old rows breaks.
     certificateEnabled: boolean("certificate_enabled").notNull().default(false),
     reportsLevel: reportsLevelEnum("reports_level").notNull(),
+    /** Display order on Platform -> Plans and the landing page. */
+    sortOrder: integer("sort_order").notNull().default(0),
     // Archive & Deactivation Rules' project-wide "archive, never delete"
     // posture (Planning Gaps Resolution §12), applied here via is_active
     // rather than a status enum since is_active is the exact field name
@@ -549,6 +562,7 @@ export const subscriptionPlans = pgTable(
     check("subscription_plans_max_staff_nonnegative", sql`${table.maxStaff} >= 0`),
     check("subscription_plans_max_courses_nonnegative", sql`${table.maxCourses} >= 0`),
     check("subscription_plans_max_storage_bytes_nonnegative", sql`${table.maxStorageBytes} >= 0`),
+    check("subscription_plans_active_requires_price", sql`NOT ${table.isActive} OR ${table.priceAmountCents} IS NOT NULL`),
   ],
 );
 
@@ -3064,5 +3078,66 @@ export const studentCourseRefundPayments = pgTable(
     unique("student_course_refund_payments_once").on(table.refundId, table.studentPaymentId),
     index("student_course_refund_payments_payment_idx").on(table.studentPaymentId),
     check("student_course_refund_payments_amount_cents_positive", sql`${table.amountCents} > 0`),
+  ],
+);
+
+// Public website contact settings (Platform -> Website settings -> Contact
+// information; lib/marketing/website-settings.ts). Platform-level, outside
+// every academy tenant. Exactly one row: the primary key is a boolean that
+// can only ever be true, so a second settings record is impossible at the
+// database level. Every contact field is optional; the public page shows
+// only what is set.
+export const platformWebsiteSettings = pgTable(
+  "platform_website_settings",
+  {
+    id: boolean("id").primaryKey().default(true),
+    supportEmail: text("support_email"),
+    phone: text("phone"),
+    whatsappNumber: text("whatsapp_number"),
+    officeAddress: text("office_address"),
+    businessHours: text("business_hours"),
+    facebookUrl: text("facebook_url"),
+    linkedinUrl: text("linkedin_url"),
+    instagramUrl: text("instagram_url"),
+    xUrl: text("x_url"),
+    youtubeUrl: text("youtube_url"),
+    tiktokUrl: text("tiktok_url"),
+    contactFormEnabled: boolean("contact_form_enabled").notNull().default(false),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedBy: uuid("updated_by").references(() => users.id),
+  },
+  (table) => [check("platform_website_settings_singleton", sql`${table.id}`)],
+);
+
+export const contactSubmissionStatusEnum = pgEnum("contact_submission_status", ["new", "read", "archived"]);
+
+// Messages sent through the public website contact form. Readable only by
+// the platform owner (lib/marketing/contact-submissions.ts). `dedupe_key`
+// (a hash of sender, subject, message and day) makes an accidental
+// double-submit store one row, not two.
+export const contactSubmissions = pgTable(
+  "contact_submissions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    fullName: text("full_name").notNull(),
+    email: text("email").notNull(),
+    // So the team can call the sender back. Required by the form; nullable
+    // only because messages stored before migration 0039 have none.
+    phone: text("phone"),
+    subject: text("subject").notNull(),
+    message: text("message").notNull(),
+    status: contactSubmissionStatusEnum("status").notNull().default("new"),
+    dedupeKey: text("dedupe_key").notNull(),
+    // Set only when the email provider confirmed it accepted the
+    // notification to the support address.
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("contact_submissions_dedupe_key_unique").on(table.dedupeKey),
+    index("contact_submissions_status_created_idx").on(table.status, table.createdAt),
   ],
 );

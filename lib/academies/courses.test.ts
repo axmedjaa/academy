@@ -28,6 +28,8 @@ import { courseOfBatch } from "@/lib/academies/test-batch-course";
 // `isCourseImageKey` deliberately skip R2 entirely for), so mocking this
 // module is safe to add without touching any pre-existing test's behavior.
 vi.mock("@/lib/storage/client", () => ({
+  // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
+  sumObjectSizesByPrefix: vi.fn(async () => ({ ok: true as const, totalBytes: 0 })),
   getUploadUrl: vi.fn(),
   getDownloadUrl: vi.fn(),
   deleteObject: vi.fn(),

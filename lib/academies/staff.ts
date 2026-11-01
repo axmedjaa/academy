@@ -293,7 +293,7 @@ export async function createStaff(
         throw new AllowanceExceeded(0, 0);
       }
       if (!allowance.result.allowed) {
-        throw new AllowanceExceeded(allowance.result.current, allowance.result.limit);
+        throw new AllowanceExceeded(allowance.result.current, allowance.result.limit ?? 0);
       }
 
       const [existingUser] = await tx
@@ -572,7 +572,9 @@ export async function updateStaff(
   }
   const data = parsed.data;
 
-  const result = await db.transaction(async (tx) => {
+  let result: typeof staffProfiles.$inferSelect | null;
+  try {
+  result = await db.transaction(async (tx) => {
     // Tenant-scoped lookup (IDOR-safe): a staffProfileId from another
     // academy simply doesn't match this WHERE clause, same posture as
     // every other tenant-scoped mutation in this codebase.
@@ -584,6 +586,17 @@ export async function updateStaff(
       )
       .limit(1);
     if (!existing) return null;
+
+    // Restoring archived staff takes a plan slot again: recheck the staff
+    // limit in this transaction (serialized per academy). Nothing is
+    // written when it fails.
+    if (existing.status === "archived" && data.status === "active") {
+      const allowance = await checkAllowance(access.academyId, "staff", tx);
+      if (!allowance.ok) throw new Error(`validation:${allowance.error.message}`);
+      if (!allowance.result.allowed) {
+        throw new AllowanceExceeded(allowance.result.current, allowance.result.limit ?? 0);
+      }
+    }
 
     const [updated] = await tx
       .update(staffProfiles)
@@ -615,6 +628,21 @@ export async function updateStaff(
 
     return updated;
   });
+  } catch (err) {
+    if (err instanceof AllowanceExceeded) {
+      return {
+        ok: false,
+        error: {
+          code: "allowance_exceeded",
+          message: `This academy has reached its plan's staff limit (${err.current}/${err.limit}). Archive another staff member or upgrade the plan before restoring this one.`,
+        },
+      };
+    }
+    if (err instanceof Error && err.message.startsWith("validation:")) {
+      return { ok: false, error: { code: "validation", message: err.message.slice("validation:".length) } };
+    }
+    throw err;
+  }
 
   if (!result) {
     return { ok: false, error: { code: "not_found", message: "Staff member not found." } };

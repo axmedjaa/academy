@@ -1,4 +1,5 @@
 import { and, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
+import { requireFeature } from "@/lib/subscriptions/entitlements";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import { batches, courses, examResults, exams } from "@/lib/db/schema";
@@ -105,7 +106,7 @@ export type AcademicReportFiltersInput = z.input<typeof academicReportFiltersSch
 type ParsedAcademicReportFilters = z.infer<typeof academicReportFiltersSchema>;
 
 export interface AcademicReportsActionError {
-  code: "blocked" | "forbidden" | "validation";
+  code: "blocked" | "forbidden" | "validation" | "feature_unavailable";
   message: string;
 }
 
@@ -213,6 +214,9 @@ export async function getAcademicReports(
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
+  // Advanced reports are a plan feature (lib/subscriptions/entitlements.ts).
+  const entitled = await requireFeature(access.academyId, "advancedReports");
+  if (!entitled.ok) return { ok: false, error: entitled.error };
 
   const parsed = academicReportFiltersSchema.safeParse(filtersInput);
   if (!parsed.success) {

@@ -1,0 +1,99 @@
+/* Landing page motion (design L01). CSS only; everything below is turned
+   off under prefers-reduced-motion. Reveal only starts once JS has marked
+   the page (`.revealOn`), so content is never hidden without it. */
+
+.revealOn [data-rv] {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 0.7s cubic-bezier(0.2, 0.7, 0.2, 1),
+    transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.revealOn [data-rv][data-in] {
+  opacity: 1;
+  transform: none;
+}
+
+.revealOn [data-bar] {
+  transform: scaleY(0);
+  transform-origin: bottom;
+  transition: transform 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) 0.5s;
+}
+
+.revealOn [data-rv][data-in] [data-bar] {
+  transform: scaleY(1);
+}
+
+@keyframes pulseDot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 182, 56, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(245, 182, 56, 0);
+  }
+}
+
+@keyframes menuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes overlayIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialogIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pulse {
+  animation: pulseDot 2.4s ease-in-out infinite;
+}
+
+.menu {
+  animation: menuIn 0.2s ease-out;
+}
+
+.overlay {
+  animation: overlayIn 0.2s ease-out;
+}
+
+.dialog {
+  animation: dialogIn 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .revealOn [data-rv],
+  .revealOn [data-bar] {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+
+  .pulse,
+  .menu,
+  .overlay,
+  .dialog {
+    animation: none !important;
+  }
+}

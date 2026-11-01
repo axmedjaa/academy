@@ -1,4 +1,5 @@
 import { and, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
+import { requireFeature } from "@/lib/subscriptions/entitlements";
 import { getBranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -185,7 +186,7 @@ type ParsedFinanceReportFilters = z.infer<typeof financeReportFiltersSchema> & {
 };
 
 export interface FinanceReportsActionError {
-  code: "blocked" | "validation";
+  code: "blocked" | "validation" | "feature_unavailable";
   message: string;
 }
 
@@ -524,6 +525,9 @@ export async function getFinanceReports(
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
   }
+  // Advanced reports are a plan feature (lib/subscriptions/entitlements.ts).
+  const entitled = await requireFeature(access.academyId, "advancedReports");
+  if (!entitled.ok) return { ok: false, error: entitled.error };
 
   const parsed = financeReportFiltersSchema.safeParse(filtersInput);
   if (!parsed.success) {

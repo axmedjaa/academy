@@ -334,7 +334,7 @@ export default async function AcademyDashboardPage({
     });
   }
   const atLimit =
-    data.usage?.metrics && data.usage.limits && data.usage.limits.maxStudents > 0
+    data.usage?.metrics && data.usage.limits && data.usage.limits.maxStudents !== null && data.usage.limits.maxStudents > 0
       ? data.usage.metrics.activeStudentsCount >= data.usage.limits.maxStudents
       : false;
   if (atLimit) {
@@ -521,7 +521,11 @@ export default async function AcademyDashboardPage({
                     <UsageBar
                       label="Storage (GB)"
                       used={Math.round((data.usage.metrics.storageUsedBytes / 1024 ** 3) * 10) / 10}
-                      limit={Math.round((data.usage.limits.maxStorageBytes / 1024 ** 3) * 10) / 10}
+                      limit={
+                        data.usage.limits.maxStorageBytes === null
+                          ? null
+                          : Math.round((data.usage.limits.maxStorageBytes / 1024 ** 3) * 10) / 10
+                      }
                     />
                     <p className="text-xs text-muted">
                       Calculated {formatShortDate(data.usage.metrics.calculatedAt)}.{" "}

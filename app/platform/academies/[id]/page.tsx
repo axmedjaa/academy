@@ -17,6 +17,11 @@ import { ApproveAcademyButton } from "./approve-academy-button";
 import { OnboardingChecklist } from "./onboarding-checklist";
 import { LifecycleActions } from "./lifecycle-actions";
 import { DeleteAcademySection } from "./delete-academy-section";
+import { ChangePlanButton } from "./change-plan-button";
+import { listOfferablePlans } from "@/lib/subscriptions/plans";
+import { getAcademyLimitStatus } from "@/lib/subscriptions/usage";
+import { CHANGE_PLAN_CAPABILITY } from "@/lib/subscriptions/change-plan";
+import { PLAN_LIMITS, formatLimit } from "@/lib/subscriptions/plan-catalog";
 import { BackLink, Badge, PAGE_WRAP, PageMessage, Section } from "@/app/academy/_shell/ui";
 import { ChatActions } from "@/app/academy/_shell/chat-actions";
 import { approvalLabel, approvalTone, planLabel, subscriptionLabel, subscriptionTone } from "../../_shared/status";
@@ -105,13 +110,18 @@ export default async function AcademyDetailPage({
     );
   }
 
-  const [checklist, subscription, usageOverview, payments, deletionEligibility] = await Promise.all([
+  const [checklist, subscription, usageOverview, payments, deletionEligibility, canChangePlan, limitStatus] = await Promise.all([
     getOnboardingChecklistStatus(academy.id),
     getAcademySubscriptionOverview(academy.id),
     getAcademyUsageOverview(academy.id),
     listAcademyPaymentHistory(academy.id),
     getAcademyDeletionEligibility(context, academy.id),
+    hasPermission(context, CHANGE_PLAN_CAPABILITY),
+    // Live usage against the current plan: which limits are exceeded now.
+    getAcademyLimitStatus(academy.id),
   ]);
+  const planOptions = canChangePlan ? await listOfferablePlans() : [];
+  const overLimitRows = limitStatus ? limitStatus.rows.filter((row) => row.over) : [];
 
   const checklistUnmetReasons = checklist
     ? checklist.items.filter((item) => !item.satisfied).map((item) => item.detail)
@@ -160,7 +170,10 @@ export default async function AcademyDetailPage({
                   ...(academy.approvedAt
                     ? ([["Approved", `${formatDate(academy.approvedAt)}${academy.approvedByEmail ? ` by ${academy.approvedByEmail}` : ""}`]] as KvRow[])
                     : []),
-                  ["Branches", `${academy.branchCount} active${limits ? ` of ${limits.maxBranches} allowed` : ""}`],
+                  [
+                    "Branches",
+                    `${academy.branchCount} active${limits ? (limits.maxBranches === null ? " (unlimited)" : ` of ${limits.maxBranches} allowed`) : ""}`,
+                  ],
                 ]}
               />
               {academy.status === "pending_approval" && (
@@ -251,7 +264,12 @@ export default async function AcademyDetailPage({
                   <div className="mt-3 border-t border-border pt-2">
                     <Kv
                       rows={[
-                        ["Price", `${formatMoney(subscription.priceAmountCents, subscription.currency)} / ${subscription.billingPeriod}`],
+                        [
+                          "Price",
+                          subscription.priceAmountCents === null
+                            ? "Price not set"
+                            : `${formatMoney(subscription.priceAmountCents, subscription.currency)} / ${subscription.billingPeriod}`,
+                        ],
                         ["Started", formatDate(subscription.startsAt)],
                         ["Ends", formatDate(subscription.endsAt)],
                         ...when("Trial ends", subscription.trialEndsAt),
@@ -263,6 +281,32 @@ export default async function AcademyDetailPage({
                       ]}
                     />
                   </div>
+                  {canChangePlan && (
+                    <ChangePlanButton
+                      academyId={academy.id}
+                      currentPlanId={subscription.planId}
+                      options={planOptions.map((plan) => ({
+                        id: plan.id,
+                        name: plan.name,
+                        priceAmountCents: plan.priceAmountCents ?? 0,
+                        currency: plan.currency,
+                        billingPeriod: plan.billingPeriod,
+                        limits: {
+                          maxBranches: plan.maxBranches,
+                          maxStudents: plan.maxStudents,
+                          maxStaff: plan.maxStaff,
+                          maxCourses: plan.maxCourses,
+                          maxStorageBytes: plan.maxStorageBytes,
+                        },
+                        features: {
+                          smsEnabled: plan.smsEnabled,
+                          emailEnabled: plan.emailEnabled,
+                          advancedReportsEnabled: plan.advancedReportsEnabled,
+                          exportsEnabled: plan.exportsEnabled,
+                        },
+                      }))}
+                    />
+                  )}
                 </>
               ) : (
                 <p className="text-sm text-[#4B5563]">No subscription has been created for this academy yet.</p>
@@ -273,6 +317,24 @@ export default async function AcademyDetailPage({
               title="Usage vs. allowances"
               aside={usage ? <span className="text-xs text-[#4B5563]">Snapshot {formatDate(usage.calculatedAt)}</span> : undefined}
             >
+              {overLimitRows.length > 0 && (
+                <div role="status" className="mb-3 rounded-lg border border-[#FDE68A] bg-warning-bg p-3 text-sm text-ink">
+                  <p className="font-semibold text-warning">Above the current plan&apos;s limits</p>
+                  <ul className="mt-1 grid gap-0.5">
+                    {overLimitRows.map((row) => {
+                      const limit = PLAN_LIMITS.find((entry) => entry.resource === row.resource)!;
+                      return (
+                        <li key={row.resource}>
+                          {limit.label}: {formatLimit(limit.unit, row.current)} of {formatLimit(limit.unit, row.limit)}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <p className="mt-1 text-xs text-[#374151]">
+                    Their data is kept. They can&apos;t add more of these until they&apos;re under the limit.
+                  </p>
+                </div>
+              )}
               {usage && limits ? (
                 <div className="flex flex-col gap-3">
                   <UsageBar label="Branches" current={usage.branchCount} limit={limits.maxBranches} />

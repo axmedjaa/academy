@@ -1,12 +1,8 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { getAcademyEntitlements } from "@/lib/subscriptions/entitlements";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import {
-  academySubscriptions,
-  notificationChannelEnum,
-  notifications,
-  subscriptionPlans,
-} from "@/lib/db/schema";
+import { notificationChannelEnum, notifications } from "@/lib/db/schema";
 import { redact } from "@/lib/redact";
 import { NOTIFICATION_TEMPLATE_IDS, type NotificationTemplateId } from "@/lib/notifications/templates";
 import { notificationQueue, type NotificationJobData } from "@/lib/notifications/queue";
@@ -117,17 +113,6 @@ function isUniqueViolation(err: unknown): boolean {
   );
 }
 
-async function isSmsEnabledForAcademy(academyId: string, executor: DbClient): Promise<boolean> {
-  const [row] = await executor
-    .select({ smsEnabled: subscriptionPlans.smsEnabled })
-    .from(academySubscriptions)
-    .innerJoin(subscriptionPlans, eq(academySubscriptions.planId, subscriptionPlans.id))
-    .where(eq(academySubscriptions.academyId, academyId))
-    .orderBy(desc(academySubscriptions.startsAt))
-    .limit(1);
-  return row?.smsEnabled ?? false;
-}
-
 interface InsertChannelRowParams {
   academyId: string | null;
   userId: string | null;
@@ -186,9 +171,17 @@ export async function enqueueNotification(
   const idempotencyKey = `${input.eventType}:${input.entityId}`;
   const redactedPayload = input.payload !== undefined ? redact(input.payload) : null;
 
-  const channels: NotificationChannel[] = ["in_app", "email"];
-  if (academyId && (await isSmsEnabledForAcademy(academyId, executor))) {
-    channels.push("sms");
+  // Plan entitlements (lib/subscriptions/entitlements.ts): an academy's
+  // notifications get an email copy only when its plan includes email, and
+  // SMS only when it includes SMS. Platform-level notifications (no academy)
+  // always get email. Sign-in and security emails don't go through here.
+  const channels: NotificationChannel[] = ["in_app"];
+  if (academyId) {
+    const entitlements = await getAcademyEntitlements(academyId, executor);
+    if (entitlements.email) channels.push("email");
+    if (entitlements.sms) channels.push("sms");
+  } else {
+    channels.push("email");
   }
 
   const results: EnqueuedNotificationChannelResult[] = [];

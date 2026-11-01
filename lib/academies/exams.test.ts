@@ -10,6 +10,8 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 // exercised by them — only the "studentPhotoUrl" describe block below
 // sets a ref and asserts against it.
 vi.mock("@/lib/storage/client", () => ({
+  // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
+  sumObjectSizesByPrefix: vi.fn(async () => ({ ok: true as const, totalBytes: 0 })),
   getUploadUrl: vi.fn(),
   getDownloadUrl: vi.fn(),
   deleteObject: vi.fn(),

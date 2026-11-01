@@ -13,6 +13,8 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 // test file's style in this codebase (lib/email/client.test.ts,
 // lib/storage/client.test.ts).
 vi.mock("@/lib/storage/client", () => ({
+  // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
+  sumObjectSizesByPrefix: vi.fn(async () => ({ ok: true as const, totalBytes: 0 })),
   getUploadUrl: vi.fn(),
   getDownloadUrl: vi.fn(),
   deleteObject: vi.fn(),

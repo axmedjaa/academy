@@ -249,7 +249,8 @@ export async function activateAcademy(
       .where(eq(subscriptionPlans.id, subscription.planId))
       .limit(1);
 
-    if (plan && plan.priceAmountCents > 0) {
+    // An unpriced plan (price not set) is treated as paid: payment is still required.
+    if (plan && (plan.priceAmountCents ?? 1) > 0) {
       const [verifiedPayment] = await tx
         .select({ id: subscriptionPayments.id })
         .from(subscriptionPayments)

@@ -439,7 +439,7 @@ export async function registerStudent(
           throw new AllowanceCheckFailure(allowance.error);
         }
         if (!allowance.result.allowed) {
-          throw new AllowanceLimitReached(allowance.result.current, allowance.result.limit);
+          throw new AllowanceLimitReached(allowance.result.current, allowance.result.limit ?? 0);
         }
 
         const studentNumber = await generateStudentId(tx, academyId);

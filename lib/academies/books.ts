@@ -1,4 +1,5 @@
 import { and, eq, ilike, or } from "drizzle-orm";
+import { checkStorageAllowance, enforceStoredUploadWithinAllowance, storageFullMessage } from "@/lib/subscriptions/usage";
 import { viewOnlyWithoutAllBranches } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
@@ -125,6 +126,12 @@ async function verifyCoverUpload(key: string, academyId: string): Promise<Verify
       return { ok: false, error: verified.error };
     }
     return { ok: false, error: VERIFICATION_FAILED };
+  }
+  // The real authority: the academy's stored total, now including this
+  // object, must be within its plan's storage allowance (deleted if not).
+  const stored = await enforceStoredUploadWithinAllowance(academyId, key);
+  if (!stored.ok) {
+    return { ok: false, error: { code: "validation", message: stored.message } as BookActionError };
   }
   return { ok: true };
 }
@@ -436,6 +443,16 @@ async function requestCoverUploadUrlFor(
   if (!isRasterImageContentType(input.contentType)) return { ok: false, error: INVALID_FORMAT };
   if (!Number.isFinite(input.fileSizeBytes) || input.fileSizeBytes <= 0 || input.fileSizeBytes > MAX_COVER_SIZE_BYTES) {
     return { ok: false, error: TOO_LARGE };
+  }
+
+  // Plan storage allowance, before any file data is accepted (fails
+  // closed when usage can't be measured).
+  const storage = await checkStorageAllowance(academyId, input.fileSizeBytes);
+  if (!storage.ok) {
+    return { ok: false, error: { code: "validation", message: storage.error.message } as BookActionError };
+  }
+  if (!storage.allowed) {
+    return { ok: false, error: { code: "validation", message: storageFullMessage(storage.limitBytes ?? 0) } as BookActionError };
   }
 
   const key = getBookCoverKey({ academyId, extension: RASTER_IMAGE_POLICY.extensionByContentType[input.contentType] });

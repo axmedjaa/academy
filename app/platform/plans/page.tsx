@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
-import { listFilteredSubscriptionPlansPage, parsePlanFilters } from "@/lib/subscriptions/plans";
+import { getPlanSubscriberCounts, listFilteredSubscriptionPlansPage, parsePlanFilters } from "@/lib/subscriptions/plans";
 import { CreatePlanButton, PlansManager } from "./plans-manager";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { NoteBlock } from "@/app/academy/_shell/page-blocks";
@@ -52,24 +52,31 @@ export default async function PlatformPlansPage({
   // in SQL so paging, refresh and links keep them.
   const filters = parsePlanFilters(params);
   const { plans, totalCount, overallCount } = await listFilteredSubscriptionPlansPage(filters, page, PAGE_SIZE);
+  const subscriberCounts = await getPlanSubscriberCounts(plans.map((plan) => plan.id));
+  const filtersActive = Object.keys(filters).length > 0;
 
   return (
     <div className={PAGE_WRAP}>
       <PageHeader
         title="Plans"
-        description="Pricing and allowances. Retired plans stay on existing subscriptions and cannot be chosen for new ones."
+        description="Prices, limits and features for every plan. Active plans with a price appear on the website in this order. Retired plans stay on existing subscriptions and can't be chosen for new ones."
         actions={<CreatePlanButton />}
       />
       <PlansManager
         plans={plans}
-        filtersActive={Object.keys(filters).length > 0}
+        subscriberCounts={subscriberCounts}
+        filtersActive={filtersActive}
+        canReorder={!filtersActive && page === 1 && totalCount <= PAGE_SIZE}
         matchingCount={totalCount}
         overallCount={overallCount}
       />
       <div className="mb-4">
         <PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={totalCount} searchParams={params} showTotal={false} />
       </div>
-      <NoteBlock>Plans are never deleted. Editing a plan never changes whether it is active, and retiring never changes its other fields.</NoteBlock>
+      <NoteBlock>
+        Plans are never deleted. Changing a plan&apos;s limits or features applies at once to every academy on it; lowering a limit
+        never deletes data or suspends anyone. Prices apply from each academy&apos;s next renewal.
+      </NoteBlock>
     </div>
   );
 }

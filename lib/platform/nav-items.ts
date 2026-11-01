@@ -47,6 +47,9 @@ export const PLATFORM_NAV_ITEMS: readonly PlatformNavItem[] = [
   { key: "audit-logs", label: "Audit log", href: "/platform/audit-logs", icon: "history", group: "Insights", requiredCapability: "queryAuditLogs" },
   { key: "staff", label: "Platform staff", href: "/platform/staff", icon: "group", group: "Administration", requiredCapability: "platform.staff.manage" },
   { key: "settings", label: "Settings", href: "/platform/settings", icon: "settings", group: "Administration", requiredCapability: "platform.settings.manage" },
+  // Public website (owner only — platform.website.manage is ungrantable).
+  { key: "website-contact", label: "Contact information", href: "/platform/website/contact", icon: "language", group: "Website settings", requiredCapability: "platform.website.manage" },
+  { key: "website-messages", label: "Contact messages", href: "/platform/website/messages", icon: "mail", group: "Website settings", requiredCapability: "platform.website.manage" },
 ] as const;
 
 export async function getVisiblePlatformNavItems(

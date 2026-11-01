@@ -358,6 +358,19 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
       <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8A2.5 2.5 0 0 1 17.5 16H10l-4.5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5v-8Z" />
     </Base>
   ),
+  // Public website (Visit website, Website settings).
+  language: (props) => (
+    <Base {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+    </Base>
+  ),
+  mail: (props) => (
+    <Base {...props}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3 7 9 6 9-6" />
+    </Base>
+  ),
 };
 
 export function Icon({ name, ...props }: { name: string } & IconProps) {

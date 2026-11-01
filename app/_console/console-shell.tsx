@@ -309,6 +309,21 @@ export function ConsoleShell({
         </nav>
 
         <div className="mt-2 border-t border-border">
+          {/* Back to the public landing page, from either console; also in the
+              mobile drawer. Opens in the same tab. */}
+          <Link
+            href="/"
+            aria-label="Back to Home"
+            className="cs-item group relative mt-2 flex h-11 items-center gap-3 rounded-lg px-2 text-[14px] font-medium !text-ink no-underline transition-colors duration-150 hover:bg-app hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+          >
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-brand-tint text-brand transition-colors duration-150 group-hover:bg-brand group-hover:text-white">
+              <Icon name="language" width={16} height={16} />
+            </span>
+            <span className="cs-label min-w-0 flex-1 truncate whitespace-nowrap">Back to Home</span>
+            <span className="cs-tip" role="tooltip">
+              Back to Home
+            </span>
+          </Link>
           <Link
             href="/account/security"
             className="cs-item flex items-center gap-3 rounded-lg px-1 pt-3 !text-ink no-underline hover:no-underline"
@@ -725,6 +740,10 @@ function AccountMenu({
               {user.roleLabel}
             </span>
           </div>
+          <Link href="/" role="menuitem" className={MENU_ITEM}>
+            <Icon name="language" width={18} height={18} />
+            Back to Home
+          </Link>
           <Link href="/account/security" role="menuitem" className={MENU_ITEM}>
             <Icon name="settings" width={18} height={18} />
             Account settings

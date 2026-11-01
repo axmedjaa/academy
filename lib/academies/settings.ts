@@ -305,11 +305,11 @@ export interface OwnAcademyUsageMetrics {
 }
 
 export interface OwnAcademyUsageLimits {
-  maxBranches: number;
-  maxStudents: number;
-  maxStaff: number;
-  maxCourses: number;
-  maxStorageBytes: number;
+  maxBranches: number | null;
+  maxStudents: number | null;
+  maxStaff: number | null;
+  maxCourses: number | null;
+  maxStorageBytes: number | null;
 }
 
 export type GetOwnAcademyUsageResult =

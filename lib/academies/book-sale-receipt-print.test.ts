@@ -27,6 +27,8 @@ import { getBookSaleReceiptPrintData } from "./book-sale-receipt-print";
 // `createBook` requires a verified cover — same mock pattern as
 // books.test.ts/book-sales.test.ts.
 vi.mock("@/lib/storage/client", () => ({
+  // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
+  sumObjectSizesByPrefix: vi.fn(async () => ({ ok: true as const, totalBytes: 0 })),
   getUploadUrl: vi.fn(),
   deleteObject: vi.fn(),
   getDownloadUrl: vi.fn(),

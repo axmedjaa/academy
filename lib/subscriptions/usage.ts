@@ -13,7 +13,7 @@ import {
 } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
-import { sumObjectSizesByPrefix } from "@/lib/storage/client";
+import { deleteObject, headObject, sumObjectSizesByPrefix } from "@/lib/storage/client";
 import { logger } from "@/lib/logger";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
@@ -232,7 +232,19 @@ export interface CheckAllowanceResult {
   allowed: boolean;
   resource: UsageResource;
   current: number;
-  limit: number;
+  /** null = unlimited on the academy's current plan. */
+  limit: number | null;
+}
+
+/**
+ * Serializes capped-resource creates per academy: a transaction-scoped
+ * advisory lock taken before counting, so two concurrent creates (or a
+ * create and a restore) can't both see "one slot left" and both insert.
+ * Released automatically when the caller's transaction ends; outside a
+ * transaction it is released at once (harmless for read-only callers).
+ */
+async function lockAcademyAllowance(executor: DbClient, academyId: string): Promise<void> {
+  await executor.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`allowance:${academyId}`}, 0))`);
 }
 
 export type CheckAllowanceOutcome =
@@ -289,13 +301,136 @@ export async function checkAllowance(
     };
   }
 
-  const limit = plan[RESOURCE_TO_PLAN_LIMIT_COLUMN[resource]] as number;
+  await lockAcademyAllowance(executor, academyId);
+  const limit = plan[RESOURCE_TO_PLAN_LIMIT_COLUMN[resource]] as number | null;
   const current = await metricCounters[resource](executor, academyId);
 
   return {
     ok: true,
-    result: { allowed: current < limit, resource, current, limit },
+    result: { allowed: limit === null || current < limit, resource, current, limit },
   };
+}
+
+export type StorageAllowanceOutcome =
+  | { ok: true; allowed: boolean; usedBytes: number; limitBytes: number | null }
+  | { ok: false; error: { code: "no_plan" | "unavailable"; message: string } };
+
+const STORAGE_UNAVAILABLE = {
+  code: "unavailable" as const,
+  message: "Storage usage couldn't be checked right now, so the upload was stopped. Please try again.",
+};
+
+/**
+ * Storage allowance for an upload of `incomingBytes`. Fails closed: if usage
+ * can't be measured, the upload is refused. Used before an upload URL is
+ * issued, with the size the browser declares.
+ */
+export async function checkStorageAllowance(academyId: string, incomingBytes: number): Promise<StorageAllowanceOutcome> {
+  const plan = await getCurrentPlanLimits(db, academyId);
+  if (!plan) {
+    return { ok: false, error: { code: "no_plan", message: "This academy has no subscription plan." } };
+  }
+  const limit = plan.maxStorageBytes;
+  if (limit === null) return { ok: true, allowed: true, usedBytes: 0, limitBytes: null };
+  const used = await sumObjectSizesByPrefix(`academies/${academyId}/`);
+  if (!used.ok) return { ok: false, error: STORAGE_UNAVAILABLE };
+  return {
+    ok: true,
+    allowed: used.totalBytes + Math.max(0, incomingBytes) <= limit,
+    usedBytes: used.totalBytes,
+    limitBytes: limit,
+  };
+}
+
+export type StoredUploadAllowanceOutcome = { ok: true } | { ok: false; message: string };
+
+/**
+ * After an upload landed: the academy's total stored bytes (which now
+ * include the new object) must be within its plan's storage allowance —
+ * the real authority, since the browser's declared size can't be trusted.
+ * An object that takes the academy over (or whose usage can't be measured)
+ * is deleted and refused. Existing files are never touched.
+ */
+export async function enforceStoredUploadWithinAllowance(
+  academyId: string,
+  key: string,
+): Promise<StoredUploadAllowanceOutcome> {
+  const plan = await getCurrentPlanLimits(db, academyId);
+  if (plan && plan.maxStorageBytes === null) return { ok: true };
+  let message: string | null = null;
+  if (!plan) {
+    message = "This academy has no subscription plan.";
+  } else {
+    const used = await sumObjectSizesByPrefix(`academies/${academyId}/`);
+    if (!used.ok) message = STORAGE_UNAVAILABLE.message;
+    else if (used.totalBytes > (plan.maxStorageBytes ?? Number.POSITIVE_INFINITY)) {
+      message = storageFullMessage(plan.maxStorageBytes ?? 0);
+    }
+  }
+  if (message === null) return { ok: true };
+  const head = await headObject(key);
+  if (head.ok && head.exists) await deleteObject(key);
+  return { ok: false, message };
+}
+
+export function storageFullMessage(limitBytes: number): string {
+  const gb = limitBytes / 1024 ** 3;
+  const label = gb >= 1 ? `${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB` : `${Math.round(limitBytes / 1024 ** 2)} MB`;
+  return `This upload would take the academy past its ${label} storage allowance. Remove files you no longer need, or ask the platform owner about a larger plan.`;
+}
+
+export interface LimitStatusRow {
+  resource: UsageResource;
+  current: number;
+  limit: number | null;
+  /** Usage is above the limit (possible after a plan's limits were lowered). */
+  over: boolean;
+  /** No more can be added until usage is below the limit. */
+  atOrOver: boolean;
+}
+
+/**
+ * Live usage against the academy's current plan, per resource: the precise
+ * "which limits are exceeded" view behind the over-limit warnings. Storage
+ * is measured live; `storageMeasured: false` when it can't be.
+ */
+export async function getAcademyLimitStatus(
+  academyId: string,
+  executor: DbClient = db,
+): Promise<{ planName: string; rows: LimitStatusRow[]; storageMeasured: boolean } | null> {
+  const plan = await getCurrentPlanLimits(executor, academyId);
+  if (!plan) return null;
+  let storageMeasured = true;
+  const rows = await Promise.all(
+    USAGE_RESOURCES.map(async (resource) => {
+      let current: number;
+      if (resource === "storage") {
+        const used = await sumObjectSizesByPrefix(`academies/${academyId}/`);
+        storageMeasured = used.ok;
+        current = used.ok ? used.totalBytes : 0;
+      } else {
+        current = await metricCounters[resource](executor, academyId);
+      }
+      const limit = plan[RESOURCE_TO_PLAN_LIMIT_COLUMN[resource]] as number | null;
+      return {
+        resource,
+        current,
+        limit,
+        over: limit !== null && current > limit,
+        atOrOver: limit !== null && current >= limit,
+      };
+    }),
+  );
+  return { planName: plan.name, rows, storageMeasured };
+}
+
+/** Live count of one resource (storage excluded), for plan-impact checks. */
+export async function countAcademyResource(
+  executor: DbClient,
+  academyId: string,
+  resource: Exclude<UsageResource, "storage">,
+): Promise<number> {
+  return metricCounters[resource](executor, academyId);
 }
 
 export type RecalculateUsageResult =
@@ -398,12 +533,13 @@ export interface AcademyUsageOverviewRow {
   academyName: string;
   planName: string | null;
   usage: AcademyUsageSnapshot | null;
+  /** null per limit = unlimited. */
   limits: {
-    maxBranches: number;
-    maxStudents: number;
-    maxStaff: number;
-    maxCourses: number;
-    maxStorageBytes: number;
+    maxBranches: number | null;
+    maxStudents: number | null;
+    maxStaff: number | null;
+    maxCourses: number | null;
+    maxStorageBytes: number | null;
   } | null;
 }
 
@@ -466,7 +602,7 @@ export async function listAcademyUsageOverview(): Promise<AcademyUsageOverviewRo
 
 function buildAcademyUsageOverviewRows(
   academyRows: { id: string; name: string }[],
-  latestSubscriptionByAcademy: Map<string, { planName: string; maxBranches: number; maxStudents: number; maxStaff: number; maxCourses: number; maxStorageBytes: number }>,
+  latestSubscriptionByAcademy: Map<string, { planName: string; maxBranches: number | null; maxStudents: number | null; maxStaff: number | null; maxCourses: number | null; maxStorageBytes: number | null }>,
   latestUsageByAcademy: Map<string, AcademyUsageSnapshot>,
 ): AcademyUsageOverviewRow[] {
   return academyRows.map((academy) => {

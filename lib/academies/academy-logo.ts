@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { checkStorageAllowance, enforceStoredUploadWithinAllowance, storageFullMessage } from "@/lib/subscriptions/usage";
 import { db } from "@/lib/db";
 import { academies } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
@@ -126,6 +127,16 @@ export async function requestAcademyLogoUploadUrl(
     return { ok: false, error: TOO_LARGE };
   }
 
+  // Plan storage allowance, before any file data is accepted (fails
+  // closed when usage can't be measured).
+  const storage = await checkStorageAllowance(resolved.academyId, input.fileSizeBytes);
+  if (!storage.ok) {
+    return { ok: false, error: { code: "validation", message: storage.error.message } as AcademyLogoActionError };
+  }
+  if (!storage.allowed) {
+    return { ok: false, error: { code: "validation", message: storageFullMessage(storage.limitBytes ?? 0) } as AcademyLogoActionError };
+  }
+
   const key = getAcademyLogoKey({
     academyId: resolved.academyId,
     extension: RASTER_IMAGE_POLICY.extensionByContentType[input.contentType],
@@ -204,6 +215,13 @@ export async function confirmAcademyLogoUpload(
       return { ok: false, error: verified.error };
     }
     return { ok: false, error: VERIFICATION_FAILED };
+  }
+
+  // The real authority: the academy's stored total, now including this
+  // object, must be within its plan's storage allowance (deleted if not).
+  const stored = await enforceStoredUploadWithinAllowance(resolved.academyId, input.key);
+  if (!stored.ok) {
+    return { ok: false, error: { code: "validation", message: stored.message } as AcademyLogoActionError };
   }
 
   const result = await db.transaction(async (tx) => {

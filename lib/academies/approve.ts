@@ -615,7 +615,7 @@ export interface AcademySubscriptionOverview {
   subscriptionId: string;
   planId: string;
   planName: string;
-  priceAmountCents: number;
+  priceAmountCents: number | null;
   currency: string;
   billingPeriod: string;
   /** Raw, stored status — what lifecycle-actions.tsx gates its buttons on. */
@@ -749,11 +749,11 @@ export interface AcademyUsageOverview {
   usage: AcademyUsageSnapshotView | null;
   /** Null when the academy has no subscription/plan to compare usage against. */
   limits: {
-    maxBranches: number;
-    maxStudents: number;
-    maxStaff: number;
-    maxCourses: number;
-    maxStorageBytes: number;
+    maxBranches: number | null;
+    maxStudents: number | null;
+    maxStaff: number | null;
+    maxCourses: number | null;
+    maxStorageBytes: number | null;
   } | null;
 }
 

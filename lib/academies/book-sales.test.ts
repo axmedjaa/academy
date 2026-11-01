@@ -26,6 +26,8 @@ import { addBookSalePayment, computeBookSalePricing, createBookSale, listBookSal
 // `createBook` (used by `insertBookDirect` below) now requires a verified
 // cover — same mock pattern as lib/academies/books.test.ts.
 vi.mock("@/lib/storage/client", () => ({
+  // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
+  sumObjectSizesByPrefix: vi.fn(async () => ({ ok: true as const, totalBytes: 0 })),
   getUploadUrl: vi.fn(),
   deleteObject: vi.fn(),
   getDownloadUrl: vi.fn(),

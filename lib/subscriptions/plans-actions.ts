@@ -6,9 +6,11 @@ import {
   createSubscriptionPlan as createSubscriptionPlanForActor,
   updateSubscriptionPlan as updateSubscriptionPlanForActor,
   setPlanActive as setPlanActiveForActor,
+  movePlan as movePlanForActor,
   type PlanActionError,
   type PlanInput,
 } from "@/lib/subscriptions/plans";
+import { PLAN_FEATURES, PLAN_LIMITS } from "@/lib/subscriptions/plan-catalog";
 import { dollarsToCents } from "@/lib/ui/money";
 
 const UNAUTHENTICATED: PlanActionError = {
@@ -32,21 +34,28 @@ export interface PlanFormState {
  * screen) — see lib/ui/money.ts's dollarsToCents. */
 function parsePlanFormData(formData: FormData): PlanInput {
   const description = String(formData.get("description") ?? "").trim();
+  const price = String(formData.get("priceDollars") ?? "").trim();
+  // Each limit: "<key>Unlimited" = on means unlimited (null); otherwise the
+  // number field (storage arrives in bytes, converted by the form).
+  const limits = Object.fromEntries(
+    PLAN_LIMITS.map((limit) => [
+      limit.key,
+      formData.get(`${limit.key}Unlimited`) === "on" ? null : Number(formData.get(limit.key)),
+    ]),
+  ) as Pick<PlanInput, (typeof PLAN_LIMITS)[number]["key"]>;
+  const features = Object.fromEntries(
+    PLAN_FEATURES.map((feature) => [feature.column, formData.get(feature.column) === "on"]),
+  ) as Pick<PlanInput, (typeof PLAN_FEATURES)[number]["column"]>;
   return {
     name: String(formData.get("name") ?? ""),
     description: description.length > 0 ? description : null,
-    priceAmountCents: dollarsToCents(String(formData.get("priceDollars") ?? "")) ?? NaN,
+    // Empty = price not set (the plan stays retired until priced).
+    priceAmountCents: price === "" ? null : (dollarsToCents(price) ?? Number.NaN),
     currency: String(formData.get("currency") ?? ""),
     billingPeriod: String(formData.get("billingPeriod") ?? "") as PlanInput["billingPeriod"],
-    maxBranches: Number(formData.get("maxBranches")),
-    maxStudents: Number(formData.get("maxStudents")),
-    maxStaff: Number(formData.get("maxStaff")),
-    maxCourses: Number(formData.get("maxCourses")),
-    maxStorageBytes: Number(formData.get("maxStorageBytes")),
-    smsEnabled: formData.get("smsEnabled") === "on",
-    emailEnabled: formData.get("emailEnabled") === "on",
-    certificateEnabled: formData.get("certificateEnabled") === "on",
-    reportsLevel: String(formData.get("reportsLevel") ?? "") as PlanInput["reportsLevel"],
+    ...limits,
+    ...features,
+    confirmLimitReduction: formData.get("confirmLimitReduction") === "1",
   };
 }
 
@@ -73,6 +82,7 @@ export async function createSubscriptionPlan(
   }
 
   revalidatePath("/platform/plans");
+  revalidatePath("/");
   return { ok: true };
 }
 
@@ -97,6 +107,7 @@ export async function updateSubscriptionPlan(
   }
 
   revalidatePath("/platform/plans");
+  revalidatePath("/");
   return { ok: true };
 }
 
@@ -121,5 +132,23 @@ export async function setPlanActive(
   }
 
   revalidatePath("/platform/plans");
+  revalidatePath("/");
   return { ok: true };
+}
+
+/** Platform -> Plans: move a plan one place up or down (owner only). */
+export async function movePlan(
+  planId: string,
+  direction: "up" | "down",
+): Promise<{ ok: true } | { ok: false; error: PlanActionError }> {
+  const context = await getAuthContext();
+  if (!context) {
+    return { ok: false, error: UNAUTHENTICATED };
+  }
+  const result = await movePlanForActor(context, planId, direction);
+  if (result.ok) {
+    revalidatePath("/platform/plans");
+    revalidatePath("/");
+  }
+  return result;
 }

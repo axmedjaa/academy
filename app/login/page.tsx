@@ -78,6 +78,9 @@ export default function LoginPage() {
       <div style={{ textAlign: "center", marginTop: "1rem" }}>
         <AuthLink href="/forgot-password">Forgot password?</AuthLink>
       </div>
+      <div style={{ textAlign: "center", marginTop: "0.75rem", paddingTop: "0.75rem", borderTop: `1px solid ${color.border}` }}>
+        <AuthLink href="/">← Back to Home</AuthLink>
+      </div>
     </AuthCard>
   );
 }

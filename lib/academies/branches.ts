@@ -372,7 +372,7 @@ export async function createBranch(
         throw new AllowanceCheckFailure(allowance.error);
       }
       if (!allowance.result.allowed) {
-        throw new AllowanceLimitReached(allowance.result.current, allowance.result.limit);
+        throw new AllowanceLimitReached(allowance.result.current, allowance.result.limit ?? 0);
       }
 
       const [row] = await tx
@@ -662,7 +662,7 @@ export async function restoreBranch(
         throw new AllowanceCheckFailure(allowance.error);
       }
       if (!allowance.result.allowed) {
-        throw new AllowanceLimitReached(allowance.result.current, allowance.result.limit);
+        throw new AllowanceLimitReached(allowance.result.current, allowance.result.limit ?? 0);
       }
 
       const [updated] = await tx

@@ -36,6 +36,8 @@ import { getReceiptPrintData } from "./receipt-print";
 // unlike lib/academies/certificates.test.ts's much larger shared file (see
 // certificate-print.test.ts's own comment on why that fix got its own file).
 vi.mock("@/lib/storage/client", () => ({
+  // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
+  sumObjectSizesByPrefix: vi.fn(async () => ({ ok: true as const, totalBytes: 0 })),
   getUploadUrl: vi.fn(),
   deleteObject: vi.fn(),
   getDownloadUrl: vi.fn(),

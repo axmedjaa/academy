@@ -19,6 +19,12 @@ import { planLabel } from "../_shared/status";
  * resource is at or over its limit, and Recalculate. Display only;
  * allowances are enforced live when records are created, never here.
  */
+
+/** At or over a limit; an unlimited (null) limit is never reached. */
+function reached(current: number, limit: number | null): boolean {
+  return limit !== null && current >= limit;
+}
+
 export function UsageManager({ rows }: { rows: AcademyUsageOverviewRow[] }) {
   const [isPending, startTransition] = useTransition();
   const [pendingAcademyId, setPendingAcademyId] = useState<string | null>(null);
@@ -64,11 +70,11 @@ export function UsageManager({ rows }: { rows: AcademyUsageOverviewRow[] }) {
           const { usage, limits } = row;
           const overLimit =
             usage && limits
-              ? usage.branchCount >= limits.maxBranches ||
-                usage.activeStudentsCount >= limits.maxStudents ||
-                usage.activeStaffCount >= limits.maxStaff ||
-                usage.courseCount >= limits.maxCourses ||
-                usage.storageUsedBytes >= limits.maxStorageBytes
+              ? reached(usage.branchCount, limits.maxBranches) ||
+                reached(usage.activeStudentsCount, limits.maxStudents) ||
+                reached(usage.activeStaffCount, limits.maxStaff) ||
+                reached(usage.courseCount, limits.maxCourses) ||
+                reached(usage.storageUsedBytes, limits.maxStorageBytes)
               : false;
           const working = isPending && pendingAcademyId === row.academyId;
           // calculatedAt crosses the server->client boundary as a string.

@@ -55,8 +55,11 @@ export function AuthLogo() {
   const height = Math.round(width / LOGO_ASPECT_RATIO);
   return (
     <div style={{ display: "flex", justifyContent: "center", marginBottom: spacing.lg }}>
-      {/* eslint-disable-next-line @next/next/no-img-element -- this codebase renders every image via a plain <img> (see student-avatar.tsx), no next/image usage anywhere */}
-      <img src="/dardar-logo.png" alt="Dardar School System" width={width} height={height} style={{ display: "block" }} />
+      {/* The logo returns to the public website (/). */}
+      <Link href="/" aria-label="Dardar School System home" style={{ display: "block", borderRadius: radius.control }}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- this codebase renders every image via a plain <img> (see student-avatar.tsx), no next/image usage anywhere */}
+        <img src="/dardar-logo.png" alt="Dardar School System" width={width} height={height} style={{ display: "block" }} />
+      </Link>
     </div>
   );
 }

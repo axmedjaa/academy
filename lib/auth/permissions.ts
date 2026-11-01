@@ -38,6 +38,9 @@ export const UNGRANTABLE_CAPABILITIES = new Set([
   "platform.revenue.view",
   "platform.staff.manage",
   "platform.settings.manage",
+  // Public website contact settings and the contact messages sent through
+  // the website (lib/marketing/website-settings.ts) — platform_owner only.
+  "platform.website.manage",
   "registerAcademy",
   "approveAcademy",
   "activateAcademy",
@@ -47,6 +50,8 @@ export const UNGRANTABLE_CAPABILITIES = new Set([
   "closeAcademy",
   "deleteAcademy",
   "renewSubscription",
+  // Moving an academy to another plan (lib/subscriptions/change-plan.ts).
+  "changeAcademyPlan",
   "verifySubscriptionPayment",
   "rejectSubscriptionPayment",
   "reverseSubscriptionPayment",

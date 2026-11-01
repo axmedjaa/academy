@@ -14,13 +14,20 @@ const PLAN_LIST_BUTTON =
 const PERIOD_SHORT: Record<string, string> = { monthly: "/mo", quarterly: "/qtr", annual: "/yr" };
 const PERIOD_NOUN: Record<string, string> = { monthly: "month", quarterly: "quarter", annual: "year" };
 
-export function formatPlanBytes(bytes: number): string {
+/** A count limit; null is unlimited (plan limits, migration 0040). */
+function formatCount(value: number | null): string {
+  return value === null ? "Unlimited" : value.toLocaleString("en-US");
+}
+
+export function formatPlanBytes(bytes: number | null): string {
+  if (bytes === null) return "Unlimited";
   if (bytes >= 1_073_741_824) return `${Number((bytes / 1_073_741_824).toFixed(1))} GB`;
   if (bytes >= 1_048_576) return `${Number((bytes / 1_048_576).toFixed(1))} MB`;
   return `${bytes} bytes`;
 }
 
-export function formatPlanPrice(cents: number, currency: string): string {
+export function formatPlanPrice(cents: number | null, currency: string): string {
+  if (cents === null) return "Price not set";
   try {
     return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
   } catch {
@@ -66,10 +73,10 @@ export function PlanPicker({
   const nextBatch = Math.min(MORE_ROWS, remaining);
   const allowances: [string, string][] = selected
     ? [
-        ["Branches", selected.maxBranches.toLocaleString("en-US")],
-        ["Students", selected.maxStudents.toLocaleString("en-US")],
-        ["Staff", selected.maxStaff.toLocaleString("en-US")],
-        ["Courses", selected.maxCourses.toLocaleString("en-US")],
+        ["Branches", formatCount(selected.maxBranches)],
+        ["Students", formatCount(selected.maxStudents)],
+        ["Staff", formatCount(selected.maxStaff)],
+        ["Courses", formatCount(selected.maxCourses)],
         ["Storage", formatPlanBytes(selected.maxStorageBytes)],
       ]
     : [];
@@ -123,7 +130,7 @@ export function PlanPicker({
               <span className="min-w-0 flex-1">
                 <span className="block font-semibold text-ink [overflow-wrap:anywhere]">{plan.name}</span>
                 <span className="block text-xs text-[#374151]">
-                  {plan.maxStudents.toLocaleString("en-US")} students, {plan.maxBranches.toLocaleString("en-US")} branches,{" "}
+                  {formatCount(plan.maxStudents)} students, {formatCount(plan.maxBranches)} branches,{" "}
                   {formatPlanBytes(plan.maxStorageBytes)}
                 </span>
               </span>

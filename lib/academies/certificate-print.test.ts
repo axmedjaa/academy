@@ -39,6 +39,8 @@ import { getCertificatePrintData } from "./certificate-print";
  * put at risk by a module-level mock they don't need.
  */
 vi.mock("@/lib/storage/client", () => ({
+  // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
+  sumObjectSizesByPrefix: vi.fn(async () => ({ ok: true as const, totalBytes: 0 })),
   getUploadUrl: vi.fn(),
   deleteObject: vi.fn(),
   getDownloadUrl: vi.fn(),

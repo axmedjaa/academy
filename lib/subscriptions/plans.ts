@@ -1,7 +1,10 @@
-import { and, count, eq, gte, ilike, lt, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, lt, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { subscriptionPlans } from "@/lib/db/schema";
+import { db, type DbClient } from "@/lib/db";
+import { academies, academySubscriptions, subscriptionPlans } from "@/lib/db/schema";
+import { sumObjectSizesByPrefix } from "@/lib/storage/client";
+import { countAcademyResource, type UsageResource } from "@/lib/subscriptions/usage";
+import { PLAN_LIMITS, type PlanLimitKey, type PlanLimits } from "@/lib/subscriptions/plan-catalog";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
@@ -14,8 +17,21 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 const PLANS_MANAGE_CAPABILITY = "plans.manage";
 
 export interface PlanActionError {
-  code: "forbidden" | "validation" | "not_found";
+  code: "forbidden" | "validation" | "not_found" | "confirmation_required";
   message: string;
+  /** Set with "confirmation_required": the academies a limit reduction
+   * would leave over a limit. */
+  impact?: PlanLimitImpact[];
+}
+
+/** One academy left over one lowered limit by a plan edit. */
+export interface PlanLimitImpact {
+  academyId: string;
+  academyName: string;
+  resource: UsageResource;
+  label: string;
+  current: number;
+  newLimit: number;
 }
 
 const FORBIDDEN: PlanActionError = {
@@ -30,15 +46,16 @@ async function requirePlansManagePermission(
   return allowed ? null : FORBIDDEN;
 }
 
-// PLAN.md's own column list (Phase 1 §2) for subscription_plans. Zod schema
-// mirrors it field-for-field; see lib/db/schema.ts for the judgment calls
-// behind the billing_period/reports_level value sets and the
-// max_storage_bytes bigint choice.
+// Zod mirror of the editable subscription_plans columns (migration 0040):
+// price and every limit may be null (price not set / unlimited); features
+// are the entitlements in lib/subscriptions/plan-catalog.ts. The retired
+// certificate_enabled and reports_level columns are no longer edited.
 const BILLING_PERIODS = ["monthly", "quarterly", "annual"] as const;
-const REPORTS_LEVELS = ["none", "basic", "advanced"] as const;
 
 export type BillingPeriod = (typeof BILLING_PERIODS)[number];
-export type ReportsLevel = (typeof REPORTS_LEVELS)[number];
+
+const limitField = (label: string) =>
+  z.number().int(`${label} must be a whole number`).nonnegative(`${label} cannot be negative`).nullable();
 
 const planInputSchema = z.object({
   name: z.string().trim().min(1, "Plan name is required").max(200),
@@ -49,28 +66,29 @@ const planInputSchema = z.object({
     .optional()
     .nullable()
     .transform((value) => (value ? value : null)),
+  /** null = price not set; the plan stays retired until priced. */
   priceAmountCents: z
     .number()
     .int("Price must be a whole number of cents")
-    .nonnegative("Price cannot be negative"),
+    .nonnegative("Price cannot be negative")
+    .nullable(),
   currency: z
     .string()
     .trim()
     .toUpperCase()
     .length(3, "Currency must be a 3-letter code, e.g. USD"),
   billingPeriod: z.enum(BILLING_PERIODS),
-  maxBranches: z.number().int().nonnegative("Branch limit cannot be negative"),
-  maxStudents: z.number().int().nonnegative("Student limit cannot be negative"),
-  maxStaff: z.number().int().nonnegative("Staff limit cannot be negative"),
-  maxCourses: z.number().int().nonnegative("Course limit cannot be negative"),
-  maxStorageBytes: z
-    .number()
-    .int()
-    .nonnegative("Storage limit cannot be negative"),
+  maxBranches: limitField("Branch limit"),
+  maxStudents: limitField("Student limit"),
+  maxStaff: limitField("Staff limit"),
+  maxCourses: limitField("Course limit"),
+  maxStorageBytes: limitField("Storage limit"),
   smsEnabled: z.boolean(),
   emailEnabled: z.boolean(),
-  certificateEnabled: z.boolean(),
-  reportsLevel: z.enum(REPORTS_LEVELS),
+  exportsEnabled: z.boolean(),
+  advancedReportsEnabled: z.boolean(),
+  /** Edit only: the owner confirmed saving limits below current usage. */
+  confirmLimitReduction: z.boolean().optional(),
 });
 
 export type PlanInput = z.input<typeof planInputSchema>;
@@ -79,19 +97,20 @@ export interface SubscriptionPlanRecord {
   id: string;
   name: string;
   description: string | null;
-  priceAmountCents: number;
+  priceAmountCents: number | null;
   currency: string;
   billingPeriod: BillingPeriod;
-  maxBranches: number;
-  maxStudents: number;
-  maxStaff: number;
-  maxCourses: number;
-  maxStorageBytes: number;
+  maxBranches: number | null;
+  maxStudents: number | null;
+  maxStaff: number | null;
+  maxCourses: number | null;
+  maxStorageBytes: number | null;
   smsEnabled: boolean;
   emailEnabled: boolean;
-  certificateEnabled: boolean;
-  reportsLevel: ReportsLevel;
+  exportsEnabled: boolean;
+  advancedReportsEnabled: boolean;
   isActive: boolean;
+  sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -113,9 +132,10 @@ function toRecord(
     maxStorageBytes: row.maxStorageBytes,
     smsEnabled: row.smsEnabled,
     emailEnabled: row.emailEnabled,
-    certificateEnabled: row.certificateEnabled,
-    reportsLevel: row.reportsLevel as ReportsLevel,
+    exportsEnabled: row.exportsEnabled,
+    advancedReportsEnabled: row.advancedReportsEnabled,
     isActive: row.isActive,
+    sortOrder: row.sortOrder,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -135,7 +155,7 @@ export async function listSubscriptionPlans(): Promise<
   const rows = await db
     .select()
     .from(subscriptionPlans)
-    .orderBy(subscriptionPlans.createdAt);
+    .orderBy(asc(subscriptionPlans.sortOrder), subscriptionPlans.createdAt);
 
   return rows.map(toRecord);
 }
@@ -170,7 +190,7 @@ export async function listSubscriptionPlansPage(
     db
       .select()
       .from(subscriptionPlans)
-      .orderBy(subscriptionPlans.createdAt)
+      .orderBy(asc(subscriptionPlans.sortOrder), subscriptionPlans.createdAt)
       .limit(pageSize)
       .offset(offset),
     db.select({ value: count() }).from(subscriptionPlans),
@@ -254,7 +274,7 @@ export async function listFilteredSubscriptionPlansPage(
       .select()
       .from(subscriptionPlans)
       .where(where)
-      .orderBy(subscriptionPlans.createdAt, subscriptionPlans.id)
+      .orderBy(asc(subscriptionPlans.sortOrder), subscriptionPlans.createdAt, subscriptionPlans.id)
       .limit(pageSize)
       .offset(offset),
     db.select({ value: count() }).from(subscriptionPlans).where(where),
@@ -288,12 +308,22 @@ export async function createSubscriptionPlan(
       },
     };
   }
-  const data = parsed.data;
+  const { confirmLimitReduction: _unused, ...data } = parsed.data;
+  void _unused;
 
   const plan = await db.transaction(async (tx) => {
+    const [last] = await tx
+      .select({ max: sql<number | null>`max(${subscriptionPlans.sortOrder})` })
+      .from(subscriptionPlans);
     const [row] = await tx
       .insert(subscriptionPlans)
-      .values(data)
+      .values({
+        ...data,
+        // Retired column, no longer read (migration 0040).
+        reportsLevel: "basic",
+        sortOrder: (last?.max ?? 0) + 1,
+        isActive: data.priceAmountCents !== null,
+      })
       .returning();
 
     // Same-transaction audit write (Cross-Cutting Architecture Decisions:
@@ -359,17 +389,28 @@ export async function updateSubscriptionPlan(
       },
     };
   }
-  const data = parsed.data;
+  const { confirmLimitReduction, ...data } = parsed.data;
 
   const result = await db.transaction(async (tx) => {
     const [existing] = await tx
       .select()
       .from(subscriptionPlans)
       .where(eq(subscriptionPlans.id, planId))
+      .for("update")
       .limit(1);
 
     if (!existing) {
-      return null;
+      return { kind: "not_found" as const };
+    }
+    if (existing.isActive && data.priceAmountCents === null) {
+      return { kind: "needs_price" as const };
+    }
+
+    // Lowered limits: who would be left over? Nothing is deleted or
+    // suspended either way; this only asks the owner to confirm.
+    const impact = await computeLimitImpact(tx, planId, limitsOf(existing), limitsOf(data));
+    if (impact.length > 0 && !confirmLimitReduction) {
+      return { kind: "confirm" as const, impact };
     }
 
     const [updated] = await tx
@@ -387,21 +428,183 @@ export async function updateSubscriptionPlan(
         entityId: planId,
         before: toRecord(existing),
         after: data,
+        context:
+          impact.length > 0
+            ? { limitReductionConfirmed: true, academiesOverLimit: impact.map(({ academyId, resource, current, newLimit }) => ({ academyId, resource, current, newLimit })) }
+            : undefined,
       },
       tx,
     );
 
-    return updated;
+    return { kind: "ok" as const, plan: updated };
   });
 
-  if (!result) {
+  if (result.kind === "not_found") {
+    return { ok: false, error: { code: "not_found", message: "Plan not found." } };
+  }
+  if (result.kind === "needs_price") {
     return {
       ok: false,
-      error: { code: "not_found", message: "Plan not found." },
+      error: { code: "validation", message: "An active plan needs a price. Retire the plan first to clear its price." },
+    };
+  }
+  if (result.kind === "confirm") {
+    const academiesCount = new Set(result.impact.map((row) => row.academyId)).size;
+    return {
+      ok: false,
+      error: {
+        code: "confirmation_required",
+        message: `${academiesCount} ${academiesCount === 1 ? "academy is" : "academies are"} already above the new limits. They keep all their data but can't add more until they're under the limit.`,
+        impact: result.impact,
+      },
     };
   }
 
-  return { ok: true, plan: toRecord(result) };
+  return { ok: true, plan: toRecord(result.plan) };
+}
+
+function limitsOf(row: Record<PlanLimitKey, number | null>): PlanLimits {
+  return Object.fromEntries(PLAN_LIMITS.map((limit) => [limit.key, row[limit.key]])) as PlanLimits;
+}
+
+/**
+ * Academies whose current subscription is on this plan (the latest one by
+ * starts_at, the same rule checkAllowance uses).
+ */
+async function academiesCurrentlyOnPlan(executor: DbClient, planId: string): Promise<{ id: string; name: string }[]> {
+  const current = executor
+    .selectDistinctOn([academySubscriptions.academyId], {
+      academyId: academySubscriptions.academyId,
+      planId: academySubscriptions.planId,
+    })
+    .from(academySubscriptions)
+    .orderBy(academySubscriptions.academyId, desc(academySubscriptions.startsAt))
+    .as("current_subscription");
+  return executor
+    .select({ id: academies.id, name: academies.name })
+    .from(current)
+    .innerJoin(academies, eq(academies.id, current.academyId))
+    .where(eq(current.planId, planId));
+}
+
+/** Who a limit change would leave above a lowered limit (live counts). */
+async function computeLimitImpact(
+  executor: DbClient,
+  planId: string,
+  before: PlanLimits,
+  after: PlanLimits,
+): Promise<PlanLimitImpact[]> {
+  const lowered = PLAN_LIMITS.filter((limit) => {
+    const next = after[limit.key];
+    const prev = before[limit.key];
+    return next !== null && (prev === null || next < prev);
+  });
+  if (lowered.length === 0) return [];
+  const onPlan = await academiesCurrentlyOnPlan(executor, planId);
+  const impact: PlanLimitImpact[] = [];
+  for (const academy of onPlan) {
+    for (const limit of lowered) {
+      const newLimit = after[limit.key] as number;
+      let current: number;
+      if (limit.resource === "storage") {
+        const used = await sumObjectSizesByPrefix(`academies/${academy.id}/`);
+        if (!used.ok) continue;
+        current = used.totalBytes;
+      } else {
+        current = await countAcademyResource(executor, academy.id, limit.resource);
+      }
+      if (current > newLimit) {
+        impact.push({ academyId: academy.id, academyName: academy.name, resource: limit.resource, label: limit.label, current, newLimit });
+      }
+    }
+  }
+  return impact;
+}
+
+/** How many academies are currently subscribed to each plan. */
+export async function getPlanSubscriberCounts(planIds: string[]): Promise<Record<string, number>> {
+  if (planIds.length === 0) return {};
+  const current = db
+    .selectDistinctOn([academySubscriptions.academyId], {
+      academyId: academySubscriptions.academyId,
+      planId: academySubscriptions.planId,
+    })
+    .from(academySubscriptions)
+    .orderBy(academySubscriptions.academyId, desc(academySubscriptions.startsAt))
+    .as("current_subscription");
+  const rows = await db
+    .select({ planId: current.planId, n: count() })
+    .from(current)
+    .where(inArray(current.planId, planIds))
+    .groupBy(current.planId);
+  return Object.fromEntries(rows.map((row) => [row.planId, row.n]));
+}
+
+/**
+ * Plans that can be offered to new subscribers: active and priced, in the
+ * owner's order. The landing page and Change plan use this.
+ */
+export async function listOfferablePlans(executor: DbClient = db): Promise<SubscriptionPlanRecord[]> {
+  const rows = await executor
+    .select()
+    .from(subscriptionPlans)
+    .where(and(eq(subscriptionPlans.isActive, true), isNotNull(subscriptionPlans.priceAmountCents)))
+    .orderBy(asc(subscriptionPlans.sortOrder), asc(subscriptionPlans.priceAmountCents), subscriptionPlans.name);
+  return rows.map(toRecord);
+}
+
+export type MovePlanResult = { ok: true } | { ok: false; error: PlanActionError };
+
+/**
+ * Moves a plan one place up or down in the display order (Platform ->
+ * Plans and the landing page). Renumbers the whole order so ties from
+ * older plans resolve deterministically. Owner only, audited.
+ */
+export async function movePlan(
+  actorContext: AuthContext,
+  planId: string,
+  direction: "up" | "down",
+): Promise<MovePlanResult> {
+  const forbidden = await requirePlansManagePermission(actorContext);
+  if (forbidden) return { ok: false, error: forbidden };
+  if (!z.string().uuid().safeParse(planId).success || (direction !== "up" && direction !== "down")) {
+    return { ok: false, error: { code: "validation", message: "Invalid input." } };
+  }
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('subscription_plans:order', 0))`);
+    const ordered = await tx
+      .select({ id: subscriptionPlans.id, sortOrder: subscriptionPlans.sortOrder })
+      .from(subscriptionPlans)
+      .orderBy(asc(subscriptionPlans.sortOrder), subscriptionPlans.createdAt, subscriptionPlans.id);
+    const index = ordered.findIndex((row) => row.id === planId);
+    if (index === -1) return { ok: false as const, error: { code: "not_found" as const, message: "Plan not found." } };
+    const target = direction === "up" ? index - 1 : index + 1;
+    if (target < 0 || target >= ordered.length) return { ok: true as const };
+    const ids = ordered.map((row) => row.id);
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    const changed = ids
+      .map((id, position) => ({ id, order: position + 1 }))
+      .filter(({ id, order }) => ordered.find((row) => row.id === id)?.sortOrder !== order);
+    if (changed.length > 0) {
+      await tx.execute(sql`
+        update subscription_plans as p set sort_order = v.ord
+        from unnest(${sql.raw(`ARRAY[${changed.map((c) => `'${c.id}'`).join(",")}]::uuid[]`)}, ${sql.raw(`ARRAY[${changed.map((c) => c.order).join(",")}]::int[]`)}) as v(id, ord)
+        where p.id = v.id`);
+    }
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: actorContext.platformRole,
+        action: "reorderSubscriptionPlan",
+        entityType: "subscription_plan",
+        entityId: planId,
+        before: { position: index + 1 },
+        after: { position: target + 1 },
+      },
+      tx,
+    );
+    return { ok: true as const };
+  });
 }
 
 export type SetPlanActiveResult =
@@ -449,6 +652,9 @@ export async function setPlanActive(
     if (!existing) {
       return null;
     }
+    if (isActive && existing.priceAmountCents === null) {
+      return "needs_price" as const;
+    }
 
     const [updated] = await tx
       .update(subscriptionPlans)
@@ -477,6 +683,9 @@ export async function setPlanActive(
       ok: false,
       error: { code: "not_found", message: "Plan not found." },
     };
+  }
+  if (result === "needs_price") {
+    return { ok: false, error: { code: "validation", message: "Set a price before activating this plan." } };
   }
 
   return { ok: true, plan: toRecord(result) };

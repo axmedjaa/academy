@@ -7,7 +7,9 @@ import { db } from "@/lib/db";
 // shared boundary lets these tests verify the logo-cleanup integration
 // (lib/academies/academy-logo.ts's own object key) without any real
 // network call, same convention as lib/academies/academy-logo.test.ts.
-vi.mock("@/lib/storage/client", () => ({ deleteObject: vi.fn() }));
+vi.mock("@/lib/storage/client", () => ({
+  // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
+  sumObjectSizesByPrefix: vi.fn(async () => ({ ok: true as const, totalBytes: 0 })), deleteObject: vi.fn() }));
 import {
   batchCourses,
   academies,

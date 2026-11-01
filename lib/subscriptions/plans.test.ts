@@ -34,8 +34,8 @@ function validPlanInput(overrides: Partial<PlanInput> = {}): PlanInput {
     maxStorageBytes: 1_073_741_824,
     smsEnabled: false,
     emailEnabled: true,
-    certificateEnabled: false,
-    reportsLevel: "basic",
+    exportsEnabled: true,
+    advancedReportsEnabled: true,
     ...overrides,
   };
 }
