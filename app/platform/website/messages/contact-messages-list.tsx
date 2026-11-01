@@ -155,11 +155,6 @@ export function ContactMessagesList({
                       >
                         Reply by email
                       </a>
-                      {row.status !== "new" && (
-                        <button type="button" disabled={pending} onClick={() => setStatus(row.id, "new", "Marked as new.")} className={ACTION}>
-                          Mark as new
-                        </button>
-                      )}
                       {row.status !== "archived" ? (
                         <button type="button" disabled={pending} onClick={() => setStatus(row.id, "archived", "Message archived.")} className={ACTION}>
                           Archive
