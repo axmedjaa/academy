@@ -21,6 +21,11 @@ interface Props {
    * page.tsx's own comment) — never the raw object key, never stored,
    * always freshly generated per render. `null` when no logo is set. */
   currentLogoUrl: string | null;
+  /** False for a read-only viewer (e.g. a Manager limited to some branches —
+   * `getAcademySettings`' `permissionLevel` is "view"). The server refuses
+   * every logo action for them anyway; this only stops offering controls
+   * that can never succeed. */
+  canEdit?: boolean;
 }
 
 type Status = "idle" | "uploading" | "confirming" | "success" | "error";
@@ -90,7 +95,7 @@ function uploadFileWithProgress(url: string, file: File, onProgress: (percent: n
  * the presigned URL itself — only a preview image and plain-language
  * status text, per this task's explicit UI requirement.
  */
-export function AcademyLogoUpload({ currentLogoUrl }: Props) {
+export function AcademyLogoUpload({ currentLogoUrl, canEdit = true }: Props) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -203,6 +208,11 @@ export function AcademyLogoUpload({ currentLogoUrl }: Props) {
           )}
         </div>
 
+        {!canEdit ? (
+          <p className="min-w-0 flex-1 text-sm text-[#374151]">
+            Only the academy owner, or a member with access to all branches, can change the logo.
+          </p>
+        ) : (
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">
           <div className="flex flex-wrap items-center gap-2">
             <label className="relative inline-flex h-11 cursor-pointer items-center gap-2 rounded-lg border border-dashed border-brand px-4 text-sm font-semibold text-brand hover:bg-brand-tint">
@@ -237,6 +247,7 @@ export function AcademyLogoUpload({ currentLogoUrl }: Props) {
           {selectedFile && !busy && <p className="text-xs text-muted">{selectedFile.name} is ready to upload.</p>}
           {error && <ErrorMessage message={error} />}
         </div>
+        )}
       </div>
     </section>
   );

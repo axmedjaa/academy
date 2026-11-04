@@ -1,8 +1,8 @@
 import { cache } from "react";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
-import { platformMemberships, sessions } from "@/lib/db/schema";
+import { platformMemberships, sessions, users } from "@/lib/db/schema";
 import type { PlatformRole } from "@/lib/auth/roles";
 import { SESSION_COOKIE_NAME, hashSessionToken, validateSessionToken } from "@/lib/auth/session";
 
@@ -24,14 +24,18 @@ export interface AuthContext {
   academyWide: boolean;
 }
 
-/** Used by signIn (Item 14) to decide the MFA branch before any session exists. */
+/**
+ * Used by signIn (Item 14) to decide the MFA branch before any session exists.
+ * An archived membership (platform_memberships.archived_at set) grants no
+ * platform role at all — see lib/platform-staff/staff.ts archivePlatformStaff.
+ */
 export async function getPlatformRole(
   userId: string,
 ): Promise<PlatformRole | undefined> {
   const [membership] = await db
     .select({ role: platformMemberships.role })
     .from(platformMemberships)
-    .where(eq(platformMemberships.userId, userId))
+    .where(and(eq(platformMemberships.userId, userId), isNull(platformMemberships.archivedAt)))
     .limit(1);
 
   return membership?.role;
@@ -107,16 +111,28 @@ export async function resolveAuthContextForSessionToken(token: string): Promise<
       userId: sessions.userId,
       expiresAt: sessions.expiresAt,
       revokedAt: sessions.revokedAt,
+      userStatus: users.status,
       platformRole: platformMemberships.role,
     })
     .from(sessions)
-    .leftJoin(platformMemberships, eq(platformMemberships.userId, sessions.userId))
+    .innerJoin(users, eq(users.id, sessions.userId))
+    // Archived platform memberships grant no role (same rule as
+    // getPlatformRole above), checked on every request.
+    .leftJoin(
+      platformMemberships,
+      and(eq(platformMemberships.userId, sessions.userId), isNull(platformMemberships.archivedAt)),
+    )
     .where(eq(sessions.tokenHash, hashSessionToken(token)))
     .limit(1);
 
   if (!row) return null;
   if (row.revokedAt !== null) return null;
   if (row.expiresAt.getTime() <= Date.now()) return null;
+  // PLAN.md Account & Membership Lifecycle: "A disabled users.status account
+  // cannot obtain a session." Sign-in already refuses disabled accounts; this
+  // also rejects any session that existed before the account was disabled
+  // (defense in depth alongside the session revocation archiving performs).
+  if (row.userStatus !== "active") return null;
 
   return {
     userId: row.userId,

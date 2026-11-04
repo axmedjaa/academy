@@ -31,6 +31,7 @@ import {
   requestAcademyLogoUploadUrl,
 } from "./academy-logo";
 import { getAcademyLogoKey } from "@/lib/storage/keys";
+import { getAcademySettings } from "./settings";
 import { VALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
@@ -174,6 +175,36 @@ describe("requestAcademyLogoUploadUrl — authorization", () => {
       expect(result.ok).toBe(true);
     },
   );
+
+  // Members added after migration 0037 start branch-limited
+  // (academy_wide = false). Settings shows them read-only, and the logo
+  // stays refused on the server: the logo is academy-wide. The Settings page
+  // hides the logo/profile controls when getAcademySettings says "view".
+  it("refuses a branch-limited manager, whom Settings shows read-only", async () => {
+    const { context, userId, academyId } = await setupAcademy("manager");
+    await db
+      .update(academyMemberships)
+      .set({ academyWide: false })
+      .where(and(eq(academyMemberships.userId, userId), eq(academyMemberships.academyId, academyId)));
+
+    const settings = await getAcademySettings(context);
+    expect(settings.ok).toBe(true);
+    if (settings.ok) expect(settings.permissionLevel).toBe("view");
+
+    const result = await requestAcademyLogoUploadUrl(context, { contentType: "image/png", fileSizeBytes: 1000 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+    expect(getUploadUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("an academy-wide manager gets an editable Settings level and may upload", async () => {
+    const { context } = await setupAcademy("manager");
+    const settings = await getAcademySettings(context);
+    expect(settings.ok).toBe(true);
+    if (settings.ok) expect(settings.permissionLevel).not.toBe("view");
+    const result = await requestAcademyLogoUploadUrl(context, { contentType: "image/png", fileSizeBytes: 1000 });
+    expect(result.ok).toBe(true);
+  });
 
   it("scopes the generated key to the caller's own academy — there is no way to request one for a different academy", async () => {
     const a = await setupAcademy("academy_owner");

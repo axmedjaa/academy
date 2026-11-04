@@ -3,11 +3,14 @@ import { db } from "@/lib/db";
 import {
   academies,
   academySubscriptions,
+  staffProfiles,
+  students,
   subscriptionPayments,
   subscriptionPlans,
 } from "@/lib/db/schema";
 import { hasPermission } from "@/lib/auth/permissions";
-import { computeLazySubscriptionStatus, GRACE_PERIOD_DAYS } from "@/lib/subscriptions/state-machine";
+import { computeLazySubscriptionStatus, GRACE_PERIOD_DAYS, type SubscriptionStatus } from "@/lib/subscriptions/state-machine";
+import { getAcademyStatusCounts, type AcademyStatusCounts } from "@/lib/academies/approve";
 import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
@@ -82,14 +85,21 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 export const REPORTS_VIEW_CAPABILITY = "getPlatformReports";
 export const REVENUE_VIEW_CAPABILITY = "platform.revenue.view";
 
-export type RevenueGroupBy = "month" | "plan" | "academy" | "method";
+export type RevenueGroupBy = "month" | "plan" | "academy" | "method" | "billing_period";
 
 export const REVENUE_GROUP_BY_OPTIONS: readonly RevenueGroupBy[] = [
   "month",
   "plan",
   "academy",
   "method",
+  "billing_period",
 ] as const;
+
+/** Owner-only academy lifecycle counts (approved / pending / closed) and
+ * registrations — the same capability the platform dashboard already uses
+ * to show its "Total academies" figure, so the reports page never shows an
+ * academy total to an account the dashboard would hide it from. */
+const ACADEMY_LIFECYCLE_CAPABILITY = "approveAcademy";
 
 export interface RevenueBreakdownRow {
   groupKey: string;
@@ -100,6 +110,9 @@ export interface RevenueBreakdownRow {
 
 export interface RevenueBreakdownResult {
   groupBy: RevenueGroupBy;
+  /** Lower bound (inclusive) applied to both sides, or null for all time:
+   * collected by `received_at`, expected by the term's `ends_at`. */
+  since: Date | null;
   rows: RevenueBreakdownRow[];
   totals: { collectedCents: number; expectedCents: number };
 }
@@ -132,15 +145,56 @@ export interface ExpiringSubscriptions {
 }
 
 export interface AcademiesByPlanRow {
+  planId: string;
   planName: string;
   academyCount: number;
 }
 
+/**
+ * Open academies counted by the *effective* status (state machine, lazy) of
+ * their current subscription — the same "latest starts_at wins" row
+ * getAcademiesByPlan uses. `none` counts open academies with no
+ * subscription row at all.
+ */
+export interface SubscriptionStatusCounts {
+  openAcademies: number;
+  byStatus: Record<SubscriptionStatus | "none", number>;
+}
+
+/** Live platform-wide totals across open academies, counted exactly the
+ * way lib/subscriptions/usage.ts's per-academy counters count them
+ * (status = 'active'), never read from cached usage snapshots. */
+export interface PlatformPopulationTotals {
+  activeStudents: number;
+  activeStaff: number;
+}
+
+export interface AcademyRegistrationPoint {
+  /** "YYYY-MM", UTC. */
+  month: string;
+  registered: number;
+}
+
 export interface PlatformReportsResult {
+  /** Months covered by the trend series (the page's date range). */
+  trendMonths: number;
+  /** Lower bound applied to revenue, or null for all time. */
+  revenueSince: Date | null;
   activeAcademyTrend: ActiveAcademyTrendPoint[];
   expiringSubscriptions: ExpiringSubscriptions;
   /** Open (not closed) academies counted by their current plan. */
   academiesByPlan: AcademiesByPlanRow[];
+  subscriptionStatus: SubscriptionStatusCounts;
+  population: PlatformPopulationTotals;
+  /** null unless the actor holds ACADEMY_LIFECYCLE_CAPABILITY (owner only). */
+  academyLifecycle: AcademyStatusCounts | null;
+  /** Academies registered per month over the trend window; null under the
+   * same condition as `academyLifecycle`. */
+  academyRegistrations: AcademyRegistrationPoint[] | null;
+  /** Monthly collected/expected over the range; null whenever `revenue` is. */
+  revenueTrend: RevenueBreakdownResult | null;
+  /** Revenue per plan over the range; null whenever `revenue` is. */
+  revenueByPlan: RevenueBreakdownResult | null;
   /**
    * null whenever the actor lacks REVENUE_VIEW_CAPABILITY — the section is
    * meant to be entirely absent, not merely hidden, so there is no payload
@@ -217,6 +271,7 @@ export async function getAcademiesByPlan(): Promise<AcademiesByPlanRow[]> {
   const current = db
     .selectDistinctOn([academySubscriptions.academyId], {
       academyId: academySubscriptions.academyId,
+      planId: sql<string>`${subscriptionPlans.id}::text`.as("plan_id"),
       planName: sql<string>`${subscriptionPlans.name}`.as("plan_name"),
     })
     .from(academySubscriptions)
@@ -226,13 +281,93 @@ export async function getAcademiesByPlan(): Promise<AcademiesByPlanRow[]> {
     .orderBy(academySubscriptions.academyId, desc(academySubscriptions.startsAt))
     .as("current_subscription");
   const rows = await db
-    .select({ planName: current.planName, academyCount: sql<number>`count(*)::int` })
+    .select({ planId: current.planId, planName: current.planName, academyCount: sql<number>`count(*)::int` })
     .from(current)
-    .groupBy(current.planName);
+    .groupBy(current.planId, current.planName);
 
   return rows
-    .map((row) => ({ planName: row.planName, academyCount: row.academyCount }))
+    .map((row) => ({ planId: row.planId, planName: row.planName, academyCount: row.academyCount }))
     .sort((a, b) => b.academyCount - a.academyCount || a.planName.localeCompare(b.planName));
+}
+
+/**
+ * Open academies by the effective status of their current subscription
+ * (see `SubscriptionStatusCounts`). One row per open academy comes back
+ * (DISTINCT ON, the same current-subscription rule as getAcademiesByPlan)
+ * and is classified with the state machine's own
+ * `computeLazySubscriptionStatus`, never the stored status alone: a stored
+ * "active" row past its grace period counts as Suspended here, exactly as
+ * the access gate treats it.
+ */
+export async function getSubscriptionStatusCounts(now: Date = new Date()): Promise<SubscriptionStatusCounts> {
+  const [currentRows, [{ value: openAcademies }]] = await Promise.all([
+    db
+      .selectDistinctOn([academySubscriptions.academyId], {
+        status: academySubscriptions.status,
+        trialEndsAt: academySubscriptions.trialEndsAt,
+        endsAt: academySubscriptions.endsAt,
+      })
+      .from(academySubscriptions)
+      .innerJoin(academies, eq(academies.id, academySubscriptions.academyId))
+      .where(isNull(academies.closedAt))
+      .orderBy(academySubscriptions.academyId, desc(academySubscriptions.startsAt)),
+    db.select({ value: count() }).from(academies).where(isNull(academies.closedAt)),
+  ]);
+
+  const byStatus: SubscriptionStatusCounts["byStatus"] = {
+    draft: 0,
+    trial: 0,
+    active: 0,
+    past_due: 0,
+    suspended: 0,
+    expired: 0,
+    cancelled: 0,
+    none: 0,
+  };
+  for (const row of currentRows) {
+    byStatus[computeLazySubscriptionStatus(row, now)] += 1;
+  }
+  const open = Number(openAcademies);
+  byStatus.none = Math.max(0, open - currentRows.length);
+  return { openAcademies: open, byStatus };
+}
+
+/** See `PlatformPopulationTotals`. Two COUNT(*)s, open academies only. */
+export async function getPlatformPopulationTotals(): Promise<PlatformPopulationTotals> {
+  const [[studentRow], [staffRow]] = await Promise.all([
+    db
+      .select({ value: sql<number>`count(*)::int` })
+      .from(students)
+      .innerJoin(academies, eq(academies.id, students.academyId))
+      .where(and(eq(students.status, "active"), isNull(academies.closedAt))),
+    db
+      .select({ value: sql<number>`count(*)::int` })
+      .from(staffProfiles)
+      .innerJoin(academies, eq(academies.id, staffProfiles.academyId))
+      .where(and(eq(staffProfiles.status, "active"), isNull(academies.closedAt))),
+  ]);
+  return { activeStudents: studentRow?.value ?? 0, activeStaff: staffRow?.value ?? 0 };
+}
+
+/** Academies registered (academies.created_at, UTC month) in each month of
+ * the trailing window: every academy, whatever its later status. */
+export async function getAcademyRegistrations(trendMonths = 12): Promise<AcademyRegistrationPoint[]> {
+  const keys = trailingMonthKeys(trendMonths);
+  const monthExpr = sql<string>`to_char(${academies.createdAt} at time zone 'UTC', 'YYYY-MM')`;
+  const rows = await db
+    .select({ month: monthExpr, registered: sql<number>`count(*)::int` })
+    .from(academies)
+    .where(gte(academies.createdAt, trailingWindowStart(trendMonths)))
+    .groupBy(monthExpr);
+  const byMonth = new Map(rows.map((row) => [row.month, row.registered]));
+  return keys.map((key) => ({ month: key, registered: byMonth.get(key) ?? 0 }));
+}
+
+/** First instant of the UTC month `months - 1` months before this one: the
+ * start of a trailing `months`-month window that includes the current month
+ * (the same months `trailingMonthKeys(months)` lists). */
+export function trailingWindowStart(months: number, now: Date = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1));
 }
 
 /** Default cap on `getExpiringSubscriptions`'s row count — the date window
@@ -346,6 +481,8 @@ function paymentGroupColumns(dimension: RevenueGroupBy): { key: SQL<string>; lab
         key: sql<string>`${subscriptionPayments.paymentMethod}::text`,
         label: sql<string>`${subscriptionPayments.paymentMethod}::text`,
       };
+    case "billing_period":
+      return { key: sql<string>`${subscriptionPlans.billingPeriod}::text`, label: sql<string>`${subscriptionPlans.billingPeriod}::text` };
   }
 }
 
@@ -361,6 +498,8 @@ function subscriptionGroupColumns(dimension: RevenueGroupBy): { key: SQL<string>
       return { key: sql<string>`${academySubscriptions.academyId}::text`, label: sql<string>`${academies.name}` };
     case "method":
       return { key: sql<string>`${NOT_YET_PAID_KEY}::text`, label: sql<string>`${NOT_YET_PAID_LABEL}::text` };
+    case "billing_period":
+      return { key: sql<string>`${subscriptionPlans.billingPeriod}::text`, label: sql<string>`${subscriptionPlans.billingPeriod}::text` };
   }
 }
 
@@ -376,6 +515,7 @@ function subscriptionGroupColumns(dimension: RevenueGroupBy): { key: SQL<string>
  */
 export async function getRevenueBreakdown(
   groupBy: RevenueGroupBy = "month",
+  { since = null }: { since?: Date | null } = {},
 ): Promise<RevenueBreakdownResult> {
   // Performance plan P7: the database groups and sums per dimension and
   // returns one row per group, instead of every verified payment and every
@@ -398,7 +538,12 @@ export async function getRevenueBreakdown(
       )
       .innerJoin(subscriptionPlans, eq(subscriptionPlans.id, academySubscriptions.planId))
       .innerJoin(academies, eq(academies.id, subscriptionPayments.academyId))
-      .where(eq(subscriptionPayments.status, "verified"))
+      .where(
+        and(
+          eq(subscriptionPayments.status, "verified"),
+          since ? gte(subscriptionPayments.receivedAt, since) : undefined,
+        ),
+      )
       .groupBy(paymentCols.key, paymentCols.label),
 
     db
@@ -414,6 +559,7 @@ export async function getRevenueBreakdown(
         and(
           ne(academySubscriptions.status, "cancelled"),
           isNotNull(academySubscriptions.endsAt),
+          since ? gte(academySubscriptions.endsAt, since) : undefined,
         ),
       )
       .groupBy(subscriptionCols.key, subscriptionCols.label),
@@ -445,14 +591,26 @@ export async function getRevenueBreakdown(
     { collectedCents: 0, expectedCents: 0 },
   );
 
-  return { groupBy, rows, totals };
+  return { groupBy, since, rows, totals };
 }
 
 export interface GetPlatformReportsParams {
   groupBy?: RevenueGroupBy;
   trendMonths?: number;
   expiringWithinDays?: number;
+  /**
+   * The page's date range, in trailing months including the current one.
+   * Drives the trend windows (unless `trendMonths` is given) and limits
+   * revenue to that window. null = all time: revenue unbounded, trends over
+   * ALL_TIME_TREND_MONTHS. Omitted = the previous behavior (all-time
+   * revenue, 12-month trend), so existing callers such as the dashboard
+   * are unchanged.
+   */
+  rangeMonths?: number | null;
 }
+
+/** Trend length shown for the "All time" range. */
+export const ALL_TIME_TREND_MONTHS = 24;
 
 export interface PlatformReportsError {
   code: "forbidden";
@@ -493,25 +651,73 @@ export async function getPlatformReports(
   }
 
   const groupBy = params.groupBy ?? "month";
-  const trendMonths = params.trendMonths ?? 12;
+  const rangeMonths = params.rangeMonths;
+  const trendMonths = params.trendMonths ?? (rangeMonths === undefined ? 12 : (rangeMonths ?? ALL_TIME_TREND_MONTHS));
   const expiringWithinDays = params.expiringWithinDays ?? 30;
+  const revenueSince = rangeMonths ? trailingWindowStart(rangeMonths) : null;
 
-  // `getRevenueBreakdown` only ever depended on `canViewRevenue` (a cheap
-  // permission lookup), never on `activeAcademyTrend`/`expiringSubscriptions`
-  // — but previously sat in a second, sequential `await` after a Promise.all
-  // that already contained that permission check, so it paid for the other
-  // two reads' time before it could even start. Resolving the permission
-  // check on its own first (cheap) lets all three real reads run together.
-  const canViewRevenue = await hasPermission(actorContext, REVENUE_VIEW_CAPABILITY);
+  // Permission lookups are cheap; resolving them first lets every real
+  // read below run together in one Promise.all (previously the revenue
+  // read waited on the others before it could start).
+  const [canViewRevenue, canViewLifecycle] = await Promise.all([
+    hasPermission(actorContext, REVENUE_VIEW_CAPABILITY),
+    hasPermission(actorContext, ACADEMY_LIFECYCLE_CAPABILITY),
+  ]);
 
-  const [activeAcademyTrend, expiringSubscriptions, academiesByPlan, revenue] = await Promise.all([
+  // The selected breakdown reuses the month or plan series when it is one
+  // of them, so no grouping is queried twice in one call.
+  const revenueOptions = { since: revenueSince };
+  const revenueTrendPromise = canViewRevenue ? getRevenueBreakdown("month", revenueOptions) : Promise.resolve(null);
+  const revenueByPlanPromise = canViewRevenue ? getRevenueBreakdown("plan", revenueOptions) : Promise.resolve(null);
+  const revenuePromise = !canViewRevenue
+    ? Promise.resolve(null)
+    : groupBy === "month"
+      ? revenueTrendPromise
+      : groupBy === "plan"
+        ? revenueByPlanPromise
+        : getRevenueBreakdown(groupBy, revenueOptions);
+
+  const [
+    activeAcademyTrend,
+    expiringSubscriptions,
+    academiesByPlan,
+    subscriptionStatus,
+    population,
+    academyLifecycle,
+    academyRegistrations,
+    revenue,
+    revenueTrend,
+    revenueByPlan,
+  ] = await Promise.all([
     getActiveAcademyTrend(trendMonths),
     getExpiringSubscriptions(expiringWithinDays),
     getAcademiesByPlan(),
-    canViewRevenue ? getRevenueBreakdown(groupBy) : Promise.resolve(null),
+    getSubscriptionStatusCounts(),
+    getPlatformPopulationTotals(),
+    canViewLifecycle ? getAcademyStatusCounts() : Promise.resolve(null),
+    canViewLifecycle ? getAcademyRegistrations(trendMonths) : Promise.resolve(null),
+    revenuePromise,
+    revenueTrendPromise,
+    revenueByPlanPromise,
   ]);
 
-  return { ok: true, data: { activeAcademyTrend, expiringSubscriptions, academiesByPlan, revenue } };
+  return {
+    ok: true,
+    data: {
+      trendMonths,
+      revenueSince,
+      activeAcademyTrend,
+      expiringSubscriptions,
+      academiesByPlan,
+      subscriptionStatus,
+      population,
+      academyLifecycle,
+      academyRegistrations,
+      revenue,
+      revenueTrend,
+      revenueByPlan,
+    },
+  };
 }
 
 /**

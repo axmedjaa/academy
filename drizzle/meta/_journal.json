@@ -288,6 +288,13 @@
       "when": 1793330000000,
       "tag": "0040_dynamic_plans",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1793420000000,
+      "tag": "0041_platform_staff_archive",
+      "breakpoints": true
     }
   ]
 }

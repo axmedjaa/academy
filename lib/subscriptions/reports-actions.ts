@@ -7,7 +7,9 @@ import {
   getPlatformReports,
   getRevenueBreakdown,
   revenueBreakdownToCsv,
+  REVENUE_GROUP_BY_OPTIONS,
   REVENUE_VIEW_CAPABILITY,
+  trailingWindowStart,
   type GetPlatformReportsParams,
   type PlatformReportsResult,
   type RevenueGroupBy,
@@ -17,10 +19,15 @@ import {
 // per Cross-Cutting Architecture Decisions ("every server action has a Zod
 // schema for its input") — same shape/convention as
 // lib/audit-query-actions.ts's filtersSchema/paginationSchema.
+const groupBySchema = z.enum(REVENUE_GROUP_BY_OPTIONS as unknown as [RevenueGroupBy, ...RevenueGroupBy[]]);
+/** Trailing months including the current one; null = all time. */
+const rangeMonthsSchema = z.number().int().min(1).max(36).nullable();
+
 const paramsSchema = z.object({
-  groupBy: z.enum(["month", "plan", "academy", "method"]).optional(),
+  groupBy: groupBySchema.optional(),
   trendMonths: z.number().int().min(1).max(36).optional(),
   expiringWithinDays: z.number().int().min(1).max(365).optional(),
+  rangeMonths: rangeMonthsSchema.optional(),
 });
 
 export type PlatformReportsActionError =
@@ -98,6 +105,7 @@ export type ExportRevenueReportCsvActionState =
  */
 export async function exportRevenueReportCsvAction(
   groupBy?: RevenueGroupBy,
+  rangeMonths: number | null = null,
 ): Promise<ExportRevenueReportCsvActionState> {
   const context = await getAuthContext();
   if (!context) {
@@ -118,17 +126,25 @@ export async function exportRevenueReportCsvAction(
     };
   }
 
-  const parsedGroupBy = z
-    .enum(["month", "plan", "academy", "method"])
-    .optional()
-    .safeParse(groupBy);
+  const parsedGroupBy = groupBySchema.optional().safeParse(groupBy);
   if (!parsedGroupBy.success) {
     return {
       ok: false,
       error: { code: "VALIDATION_ERROR", message: "Invalid group-by dimension." },
     };
   }
+  const parsedRange = rangeMonthsSchema.safeParse(rangeMonths);
+  if (!parsedRange.success) {
+    return {
+      ok: false,
+      error: { code: "VALIDATION_ERROR", message: "Invalid date range." },
+    };
+  }
 
-  const revenue = await getRevenueBreakdown(parsedGroupBy.data);
+  // Same window the page applies to its revenue section, so the file
+  // matches what is on screen.
+  const revenue = await getRevenueBreakdown(parsedGroupBy.data, {
+    since: parsedRange.data ? trailingWindowStart(parsedRange.data) : null,
+  });
   return { ok: true, csv: revenueBreakdownToCsv(revenue) };
 }

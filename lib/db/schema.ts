@@ -131,7 +131,17 @@ export const platformMemberships = pgTable(
       .notNull()
       .references(() => users.id),
     role: platformRoleEnum("role").notNull(),
+    // Display name for the Platform -> Staff list. Nullable: memberships
+    // created before 0041 have none and the UI falls back to the email.
+    fullName: text("full_name"),
+    // NULL = active. Set = archived (lib/platform-staff/staff.ts): the
+    // membership grants no platform role (lib/auth/auth-context.ts ignores
+    // it) and every session was revoked when it was archived.
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
@@ -141,6 +151,7 @@ export const platformMemberships = pgTable(
     // | platform_admin)" — one role, not a set) — a user has at most one
     // platform-level role.
     uniqueIndex("platform_memberships_user_id_unique").on(table.userId),
+    index("platform_memberships_archived_at_idx").on(table.archivedAt),
   ],
 );
 

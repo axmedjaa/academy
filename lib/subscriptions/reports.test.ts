@@ -14,12 +14,16 @@ import {
 } from "@/lib/db/schema";
 import { resolveAuthContext } from "@/lib/auth/auth-context";
 import {
+  ALL_TIME_TREND_MONTHS,
   getAcademiesByPlan,
+  getAcademyRegistrations,
   getActiveAcademyTrend,
   getExpiringSubscriptions,
   getPlatformReports,
   getRevenueBreakdown,
+  getSubscriptionStatusCounts,
   revenueBreakdownToCsv,
+  trailingWindowStart,
 } from "./reports";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -632,6 +636,7 @@ describe("revenueBreakdownToCsv", () => {
   it("formats rows and a totals line as CSV, converting cents to a fixed-point decimal", () => {
     const csv = revenueBreakdownToCsv({
       groupBy: "academy",
+      since: null,
       rows: [
         { groupKey: "a1", label: "Academy One", collectedCents: 150_000, expectedCents: 100_000 },
         { groupKey: "a2", label: "Academy, Two", collectedCents: 0, expectedCents: 50_000 },
@@ -645,5 +650,117 @@ describe("revenueBreakdownToCsv", () => {
     // A label containing a comma must be quoted.
     expect(lines[2]).toBe('"Academy, Two",0.00,500.00');
     expect(lines[3]).toBe("Total,1500.00,1500.00");
+  });
+});
+
+describe("getRevenueBreakdown — date range", () => {
+  it("limits collected by received_at and expected by ends_at to the window", async () => {
+    // Fixture: academy A's verified payment was received now and its active
+    // term ends in 10 days; academy B's past-due term ended 5 days ago.
+    const result = await getRevenueBreakdown("academy", { since: new Date(now.getTime() - DAY_MS) });
+    const academyARow = result.rows.find((r) => r.groupKey === academyAId);
+    expect(result.since).toEqual(new Date(now.getTime() - DAY_MS));
+    expect(academyARow?.collectedCents).toBe(100_000);
+    expect(academyARow?.expectedCents).toBe(100_000);
+    expect(result.rows.some((r) => r.groupKey === academyBId)).toBe(false);
+  });
+
+  it("returns nothing for a window that starts in the future", async () => {
+    const result = await getRevenueBreakdown("academy", { since: new Date(now.getTime() + 365 * DAY_MS) });
+    expect(result.rows.some((r) => r.groupKey === academyAId || r.groupKey === academyBId)).toBe(false);
+  });
+
+  it("groups by billing period", async () => {
+    const result = await getRevenueBreakdown("billing_period", { since: new Date(now.getTime() - DAY_MS) });
+    const monthly = result.rows.find((r) => r.groupKey === "monthly");
+    // Plan A is monthly: academy A's verified payment and its open term.
+    expect(monthly?.collectedCents ?? 0).toBeGreaterThanOrEqual(100_000);
+    expect(monthly?.expectedCents ?? 0).toBeGreaterThanOrEqual(100_000);
+    expect(monthly?.label).toBe("monthly");
+  });
+});
+
+describe("trailingWindowStart", () => {
+  it("returns the first UTC instant of the month that opens a trailing window", () => {
+    const ref = new Date(Date.UTC(2026, 10, 15, 12));
+    expect(trailingWindowStart(1, ref)).toEqual(new Date(Date.UTC(2026, 10, 1)));
+    expect(trailingWindowStart(3, ref)).toEqual(new Date(Date.UTC(2026, 8, 1)));
+    expect(trailingWindowStart(12, ref)).toEqual(new Date(Date.UTC(2025, 11, 1)));
+  });
+});
+
+describe("getSubscriptionStatusCounts", () => {
+  it("classifies each open academy once, by its current subscription's effective status", { retry: 3 }, async () => {
+    const counts = await getSubscriptionStatusCounts();
+    // Academy A's current row is active (its older cancelled row is
+    // superseded); academy B's is past due, inside the grace period.
+    expect(counts.byStatus.active).toBeGreaterThanOrEqual(1);
+    expect(counts.byStatus.past_due).toBeGreaterThanOrEqual(1);
+    const classified = Object.values(counts.byStatus).reduce((sum, n) => sum + n, 0);
+    expect(classified).toBe(counts.openAcademies);
+  });
+
+  it("uses the lazy state machine, not the stored status", { retry: 3 }, async () => {
+    // Twenty days on, academy B's past-due term is beyond the 7-day grace
+    // period and academy A's term has ended (past due).
+    const later = new Date(now.getTime() + 20 * DAY_MS);
+    const today = await getSubscriptionStatusCounts(now);
+    const future = await getSubscriptionStatusCounts(later);
+    expect(future.byStatus.suspended).toBeGreaterThanOrEqual(today.byStatus.suspended + 1);
+  });
+});
+
+describe("getAcademyRegistrations", () => {
+  it("returns the requested window and counts this month's registrations", async () => {
+    const points = await getAcademyRegistrations(6);
+    expect(points).toHaveLength(6);
+    expect(points.at(-1)?.month).toBe(monthKeyThisMonth);
+    // Academies A and B were created by this file's beforeAll.
+    expect(points.at(-1)?.registered ?? 0).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("getPlatformReports — range and owner-only sections", () => {
+  it("applies rangeMonths to the trend window and the revenue lower bound", async () => {
+    const context = await resolveAuthContext(ownerUserId);
+    if (!context) throw new Error("owner context missing");
+    const result = await getPlatformReports(context, { rangeMonths: 3, groupBy: "plan" });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.data.trendMonths).toBe(3);
+    expect(result.data.activeAcademyTrend).toHaveLength(3);
+    expect(result.data.academyRegistrations).toHaveLength(3);
+    expect(result.data.revenueSince).toEqual(trailingWindowStart(3));
+    expect(result.data.revenue?.since).toEqual(trailingWindowStart(3));
+    expect(result.data.revenueTrend?.groupBy).toBe("month");
+    // groupBy "plan" reuses the per-plan series rather than querying again.
+    expect(result.data.revenue).toBe(result.data.revenueByPlan);
+    expect(result.data.academyLifecycle).not.toBeNull();
+  });
+
+  it("treats null as all time and omitted as the previous defaults", async () => {
+    const context = await resolveAuthContext(ownerUserId);
+    if (!context) throw new Error("owner context missing");
+    const allTime = await getPlatformReports(context, { rangeMonths: null });
+    const legacy = await getPlatformReports(context);
+    if (!allTime.ok || !legacy.ok) throw new Error("expected ok");
+    expect(allTime.data.trendMonths).toBe(ALL_TIME_TREND_MONTHS);
+    expect(allTime.data.revenueSince).toBeNull();
+    expect(legacy.data.trendMonths).toBe(12);
+    expect(legacy.data.revenue?.since).toBeNull();
+  });
+
+  it("withholds revenue and academy lifecycle sections from a granted platform_admin", async () => {
+    const context = await resolveAuthContext(grantedAdminUserId);
+    if (!context) throw new Error("admin context missing");
+    const result = await getPlatformReports(context, { rangeMonths: 6 });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.data.revenue).toBeNull();
+    expect(result.data.revenueTrend).toBeNull();
+    expect(result.data.revenueByPlan).toBeNull();
+    expect(result.data.academyLifecycle).toBeNull();
+    expect(result.data.academyRegistrations).toBeNull();
+    // The non-financial sections are still present.
+    expect(result.data.subscriptionStatus.openAcademies).toBeGreaterThanOrEqual(2);
+    expect(result.data.population.activeStudents).toBeGreaterThanOrEqual(0);
   });
 });

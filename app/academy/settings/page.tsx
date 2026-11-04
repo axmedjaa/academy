@@ -72,6 +72,12 @@ export default async function AcademySettingsPage() {
   }
 
   const academy = settingsResult.academy;
+  // "view" = can see Settings but not change them: a role whose settings
+  // level is edit-capable but who lacks all-branch access (the academy
+  // profile and logo are academy-wide — see viewOnlyWithoutAllBranches).
+  // updateAcademySettings and every logo action refuse such a member on the
+  // server; this only stops offering controls that can never succeed.
+  const canEdit = settingsResult.permissionLevel !== "view";
   const orNone = (value: string | null) => value || <span className="text-muted">Not set</span>;
 
   return (
@@ -79,10 +85,10 @@ export default async function AcademySettingsPage() {
       <PageHeader
         title="Settings"
         description="Academy profile, usage and notification preferences."
-        actions={<EditProfileButton academy={academy} />}
+        actions={canEdit ? <EditProfileButton academy={academy} /> : undefined}
       />
 
-      <AcademyLogoUpload currentLogoUrl={logoUrl} />
+      <AcademyLogoUpload currentLogoUrl={logoUrl} canEdit={canEdit} />
 
       <KvCard
         title="Academy profile"
@@ -118,7 +124,11 @@ export default async function AcademySettingsPage() {
         <NotificationPreferencesSection academyId={academy.id} preferences={preferencesResult.preferences} />
       ) : null}
 
-      <NoteBlock>Profile changes save immediately; there is no approval step. Slug and default currency cannot be changed here.</NoteBlock>
+      <NoteBlock>
+        {canEdit
+          ? "Profile changes save immediately; there is no approval step. Slug and default currency cannot be changed here."
+          : "You can view these settings. Only the academy owner, or a member the owner has given access to all branches, can change them."}
+      </NoteBlock>
     </div>
   );
 }

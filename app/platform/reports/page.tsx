@@ -3,7 +3,13 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT, getPlatformReports, REPORTS_VIEW_CAPABILITY } from "@/lib/subscriptions/reports";
 import { ReportsManager } from "./reports-manager";
-import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
+import { rangeToMonths, type ReportRange } from "./range";
+import { PageMessage } from "@/app/academy/_shell/ui";
+
+/** The report opens on the trailing 12 months, revenue grouped by plan
+ * (the month view is always shown as its own chart). */
+const DEFAULT_RANGE: ReportRange = "12";
+const DEFAULT_GROUP_BY = "plan" as const;
 
 // PLAN.md line 807 / Item 32b: "/platform/reports (revenue breakdowns,
 // expected vs. collected)." DESIGN.md's route table: "Entirely absent for
@@ -30,7 +36,10 @@ export default async function PlatformReportsPage() {
     return <PageMessage title="Access denied" message="You don't have permission to view this page." />;
   }
 
-  const result = await getPlatformReports(context);
+  const result = await getPlatformReports(context, {
+    groupBy: DEFAULT_GROUP_BY,
+    rangeMonths: rangeToMonths(DEFAULT_RANGE),
+  });
 
   if (!result.ok) {
     // Unreachable in practice given the check above (same context, same
@@ -40,12 +49,11 @@ export default async function PlatformReportsPage() {
   }
 
   return (
-    <div className={PAGE_WRAP}>
-      <PageHeader
-        title="Reports"
-        description="Revenue, academy growth and upcoming expiries."
-      />
-      <ReportsManager initialData={result.data} expiringCap={EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT} />
-    </div>
+    <ReportsManager
+      initialData={result.data}
+      initialRange={DEFAULT_RANGE}
+      initialGroupBy={DEFAULT_GROUP_BY}
+      expiringCap={EXPIRING_SUBSCRIPTIONS_DEFAULT_LIMIT}
+    />
   );
 }
