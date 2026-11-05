@@ -2876,6 +2876,11 @@ export const books = pgTable(
     author: text("author"),
     isbn: text("isbn"),
     category: text("category"),
+    // Book Management redesign (migration 0042): the subject and class a
+    // book is for, shown on the catalogue cards and used by its filters.
+    // Nullable so books created before the redesign keep working.
+    subject: text("subject"),
+    classLevel: text("class_level"),
     priceCents: integer("price_cents").notNull(),
     currency: text("currency").notNull(),
     stockQuantity: integer("stock_quantity").notNull().default(0),
@@ -3015,6 +3020,268 @@ export const bookSaleRefunds = pgTable(
     index("book_sale_refunds_book_sale_id_idx").on(table.bookSaleId),
     check("book_sale_refunds_amount_cents_positive", sql`${table.amountCents} > 0`),
     check("book_sale_refunds_returned_quantity_nonnegative", sql`${table.returnedQuantity} >= 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Book pre-orders (migration 0042). Demand for books that have NOT arrived
+// yet, kept apart from ordinary sales: an order never touches
+// books.stock_quantity. Copies received for a campaign form that campaign's
+// own pool (usable = received - damaged); books are given to students from
+// that pool only, never beyond it. See lib/academies/book-preorders.ts.
+// Every write carries a client idempotency key (unique per academy) so a
+// double submit cannot create a second order, payment, delivery or handover.
+// ---------------------------------------------------------------------------
+
+export const bookPreorderCampaignStatusEnum = pgEnum("book_preorder_campaign_status", [
+  "draft",
+  "scheduled",
+  "open",
+  "closed",
+  "receiving",
+  "completed",
+  "cancelled",
+]);
+
+export const bookPreorderCampaigns = pgTable(
+  "book_preorder_campaigns",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    name: text("name").notNull(),
+    opensOn: date("opens_on").notNull(),
+    closesOn: date("closes_on").notNull(),
+    expectedArrivalOn: date("expected_arrival_on").notNull(),
+    status: bookPreorderCampaignStatusEnum("status").notNull().default("draft"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("book_preorder_campaigns_academy_id_idx").on(table.academyId),
+    check("book_preorder_campaigns_closes_after_opens", sql`${table.closesOn} >= ${table.opensOn}`),
+    check("book_preorder_campaigns_arrival_after_closes", sql`${table.expectedArrivalOn} >= ${table.closesOn}`),
+  ],
+);
+
+export const bookPreorderCampaignBooks = pgTable(
+  "book_preorder_campaign_books",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    campaignId: uuid("campaign_id")
+      .notNull()
+      .references(() => bookPreorderCampaigns.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    // Optional cap on copies ordered across all students. NULL = no limit.
+    quantityLimit: integer("quantity_limit"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_preorder_campaign_books_campaign_book_unique").on(table.campaignId, table.bookId),
+    index("book_preorder_campaign_books_academy_id_idx").on(table.academyId),
+    check("book_preorder_campaign_books_limit_positive", sql`${table.quantityLimit} IS NULL OR ${table.quantityLimit} > 0`),
+  ],
+);
+
+// Who an order is for (migration 0043): an existing student, or another
+// person (a parent, a teacher, someone outside the academy) recorded by name
+// with an optional phone and the branch that handles the order.
+export const bookPreorderBuyerTypeEnum = pgEnum("book_preorder_buyer_type", ["student", "other_person"]);
+
+export const bookPreorders = pgTable(
+  "book_preorders",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    // The order's branch scope: the student's branch at order time, or the
+    // branch chosen for an other-person order.
+    branchId: uuid("branch_id")
+      .notNull()
+      .references(() => branches.id),
+    campaignId: uuid("campaign_id")
+      .notNull()
+      .references(() => bookPreorderCampaigns.id),
+    buyerType: bookPreorderBuyerTypeEnum("buyer_type").notNull().default("student"),
+    // Set for student orders only.
+    studentId: uuid("student_id").references(() => students.id),
+    // Set for other-person orders only (phone optional).
+    buyerName: text("buyer_name"),
+    buyerPhone: text("buyer_phone"),
+    // PO-<year>-<seq>, unique per academy, fixed once saved.
+    reference: text("reference").notNull(),
+    currency: text("currency").notNull(),
+    subtotalCents: integer("subtotal_cents").notNull(),
+    discountPercent: integer("discount_percent").notNull().default(0),
+    discountAmountCents: integer("discount_amount_cents").notNull().default(0),
+    totalCents: integer("total_cents").notNull(),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_preorders_academy_reference_unique").on(table.academyId, table.reference),
+    uniqueIndex("book_preorders_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    index("book_preorders_campaign_id_idx").on(table.campaignId),
+    index("book_preorders_student_id_idx").on(table.studentId),
+    index("book_preorders_branch_id_idx").on(table.branchId),
+    check("book_preorders_subtotal_nonnegative", sql`${table.subtotalCents} >= 0`),
+    check("book_preorders_discount_percent_range", sql`${table.discountPercent} BETWEEN 0 AND 100`),
+    check("book_preorders_discount_amount_nonnegative", sql`${table.discountAmountCents} >= 0`),
+    check("book_preorders_total_nonnegative", sql`${table.totalCents} >= 0`),
+    check(
+      "book_preorders_buyer_shape",
+      sql`(${table.buyerType} = 'student' AND ${table.studentId} IS NOT NULL AND ${table.buyerName} IS NULL AND ${table.buyerPhone} IS NULL) OR (${table.buyerType} = 'other_person' AND ${table.studentId} IS NULL AND ${table.buyerName} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const bookPreorderItems = pgTable(
+  "book_preorder_items",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => bookPreorders.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    quantity: integer("quantity").notNull(),
+    // Price snapshot at order time — a later price change never alters it.
+    unitPriceCents: integer("unit_price_cents").notNull(),
+    subtotalCents: integer("subtotal_cents").notNull(),
+    givenQuantity: integer("given_quantity").notNull().default(0),
+  },
+  (table) => [
+    uniqueIndex("book_preorder_items_order_book_unique").on(table.orderId, table.bookId),
+    index("book_preorder_items_book_id_idx").on(table.bookId),
+    check("book_preorder_items_quantity_positive", sql`${table.quantity} > 0`),
+    check("book_preorder_items_unit_price_nonnegative", sql`${table.unitPriceCents} >= 0`),
+    check("book_preorder_items_given_range", sql`${table.givenQuantity} >= 0 AND ${table.givenQuantity} <= ${table.quantity}`),
+  ],
+);
+
+export const bookPreorderPaymentMethodEnum = pgEnum("book_preorder_payment_method", [
+  "cash",
+  "mobile_money",
+  "bank_transfer",
+  "other",
+]);
+
+export const bookPreorderPayments = pgTable(
+  "book_preorder_payments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => bookPreorders.id),
+    amountCents: integer("amount_cents").notNull(),
+    method: bookPreorderPaymentMethodEnum("method").notNull(),
+    reference: text("reference"),
+    paidOn: date("paid_on").notNull(),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    // Recorded payments are unverified until a staff member confirms the
+    // money arrived (design B06). Verification never changes the amount.
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    verifiedBy: uuid("verified_by").references(() => users.id),
+    // Same convention as book_sale_payments: one income row per payment.
+    incomeRecordId: uuid("income_record_id").references(() => incomeRecords.id),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_preorder_payments_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    index("book_preorder_payments_order_id_idx").on(table.orderId),
+    check("book_preorder_payments_amount_positive", sql`${table.amountCents} > 0`),
+  ],
+);
+
+export const bookPreorderReceipts = pgTable(
+  "book_preorder_receipts",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    campaignId: uuid("campaign_id")
+      .notNull()
+      .references(() => bookPreorderCampaigns.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    quantityReceived: integer("quantity_received").notNull(),
+    // Included in quantity_received, never usable.
+    damagedQuantity: integer("damaged_quantity").notNull().default(0),
+    receivedOn: date("received_on").notNull(),
+    note: text("note"),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_preorder_receipts_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    index("book_preorder_receipts_campaign_book_idx").on(table.campaignId, table.bookId),
+    check("book_preorder_receipts_received_positive", sql`${table.quantityReceived} > 0`),
+    check(
+      "book_preorder_receipts_damaged_range",
+      sql`${table.damagedQuantity} >= 0 AND ${table.damagedQuantity} <= ${table.quantityReceived}`,
+    ),
+  ],
+);
+
+export const bookPreorderHandovers = pgTable(
+  "book_preorder_handovers",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => bookPreorders.id),
+    orderItemId: uuid("order_item_id")
+      .notNull()
+      .references(() => bookPreorderItems.id),
+    campaignId: uuid("campaign_id")
+      .notNull()
+      .references(() => bookPreorderCampaigns.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    quantity: integer("quantity").notNull(),
+    givenBy: uuid("given_by")
+      .notNull()
+      .references(() => users.id),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_preorder_handovers_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    index("book_preorder_handovers_order_id_idx").on(table.orderId),
+    index("book_preorder_handovers_campaign_book_idx").on(table.campaignId, table.bookId),
+    check("book_preorder_handovers_quantity_positive", sql`${table.quantity} > 0`),
   ],
 );
 

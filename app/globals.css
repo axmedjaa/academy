@@ -105,6 +105,12 @@
      faster than the entrance (closing should feel instant, not deliberate —
      the user's attention has already moved on). */
   --animate-fade-out: fade-out 0.12s var(--ease-out) both;
+
+  /* Bottom sheet entrance (DesignDialog on phones, design B-series
+     dialogs): the sheet rises from the bottom edge. Slightly longer than
+     scale-in because it travels further; always used behind
+     `motion-safe:`. */
+  --animate-sheet-in: sheet-in 0.22s var(--ease-out) both;
   --animate-scale-out: scale-out 0.12s var(--ease-out) both;
 
   /* Chart addition (app/academy/_shell/charts.tsx) — the one authored
@@ -153,6 +159,15 @@
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
   }
 }
 

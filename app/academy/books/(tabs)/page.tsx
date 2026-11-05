@@ -1,105 +1,105 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getBookCoverUrl } from "@/lib/academies/books";
-import { searchStudents, STUDENTS_MAX_PAGE_SIZE } from "@/lib/academies/students";
-import { EmptyState, PageMessage, Section } from "@/app/academy/_shell/ui";
-import { NoteBlock } from "@/app/academy/_shell/page-blocks";
-import { FilterBar, SearchField } from "@/app/academy/_shell/filter-controls";
-import { Icon } from "@/app/academy/_shell/icons";
+import { CAMPAIGN_STATUS_LABEL } from "@/lib/academies/book-preorder-math";
+import { PageMessage } from "@/app/academy/_shell/ui";
+import { FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
 import { getBooksOverview } from "../books-data";
-import { AddBookButton, BookCard } from "../books-client";
+import { GatedAction, BookCard, ToggleParam } from "../books-sections";
+import { BTN_SECONDARY, EmptyCard, Pager, paginate, readParams } from "../books-ui";
+import { plural } from "../books-view";
+
+const PAGE_SIZE = 6;
 
 /**
- * Books catalogue (design A16, Catalogue tab): the stock and sales bento,
- * search by title, ISBN or author, and a card per book with its cover,
- * price and stock, plus Sell, Activate / Deactivate and cover upload for
- * roles that manage books (`listBooks`'s own `canManage`).
+ * Books (design B01, step 1): the catalogue as cards with cover, subject
+ * and class, current selling price, stock for sale and the campaign the
+ * book is in; Sell Book, View, Edit and Archive / Restore. Filters are URL
+ * params over the scoped `listBooks` result. Archiving keeps the book on
+ * existing sales and orders; it only stops new sales and new campaigns.
  */
-export default async function AcademyBooksPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  // Same cached read as the Books layout above (one query per request).
+export default async function AcademyBooksPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const overview = await getBooksOverview();
   if (!overview) redirect("/login");
-  const { context, booksResult } = overview;
+  const { booksResult, preordersResult } = overview;
   if (!booksResult.ok) {
-    return (
-      <PageMessage
-        title={booksResult.error.code === "blocked" ? "Access unavailable" : "Access denied"}
-        message={booksResult.error.message}
-      />
-    );
+    return <PageMessage title={booksResult.error.code === "blocked" ? "Access unavailable" : "Access denied"} message={booksResult.error.message} />;
   }
   const params = await searchParams;
-  const q = (Array.isArray(params.q) ? params.q[0] : params.q)?.trim().toLowerCase() ?? "";
-  const books = [...booksResult.books].sort(
-    (a, b) => (a.status === b.status ? a.name.localeCompare(b.name) : a.status === "active" ? -1 : 1),
-  );
-  const visible = q
-    ? books.filter((book) => [book.name, book.isbn ?? "", book.author ?? ""].some((field) => field.toLowerCase().includes(q)))
-    : books;
+  const { get, page } = readParams(params);
+  const q = get("q").toLowerCase();
+  const subject = get("subject");
+  const cls = get("class");
+  const showArchived = get("archived") === "1";
 
-  const [coverEntries, studentsResult] = await Promise.all([
-    Promise.all(visible.filter((book) => book.coverRef).map(async (book) => [book.id, await getBookCoverUrl(book.coverRef)] as const)),
-    booksResult.canManage ? searchStudents(context, { status: "active" }, { pageSize: STUDENTS_MAX_PAGE_SIZE }) : Promise.resolve(null),
-  ]);
-  const coverUrls = Object.fromEntries(coverEntries);
-  const studentOptions = studentsResult?.ok
-    ? studentsResult.data.rows.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber, phone: row.phone }))
-    : [];
+  const all = booksResult.books;
+  const subjects = [...new Set(all.map((b) => b.subject).filter((v): v is string => Boolean(v)))].sort();
+  const classes = [...new Set(all.map((b) => b.classLevel).filter((v): v is string => Boolean(v)))].sort();
+  const rows = all
+    .filter((b) => showArchived || b.status === "active")
+    .filter((b) => !subject || b.subject === subject)
+    .filter((b) => !cls || b.classLevel === cls)
+    .filter((b) => !q || [b.name, b.subject ?? "", b.author ?? "", b.isbn ?? ""].some((f) => f.toLowerCase().includes(q)))
+    .sort((a, b) => (a.status === b.status ? a.name.localeCompare(b.name) : a.status === "active" ? -1 : 1));
+  const visible = paginate(rows, page, PAGE_SIZE);
+
+  const campaigns = preordersResult.ok ? preordersResult.overview.campaigns : [];
+  const campaignLine = (bookId: string) => {
+    const list = campaigns.filter((c) => c.status !== "cancelled" && c.books.some((b) => b.bookId === bookId));
+    const pick = list.find((c) => c.status === "open") ?? list[0];
+    if (!pick) return null;
+    return { name: pick.name, sub: CAMPAIGN_STATUS_LABEL[pick.status] + (list.length > 1 ? ` · +${list.length - 1} more` : "") };
+  };
 
   return (
     <>
-      {booksResult.books.length > 0 && (
-        <FilterBar>
-          <SearchField placeholder="Search name, ISBN or author" />
-        </FilterBar>
-      )}
-
-      {visible.length === 0 ? (
-        <Section className="mb-8">
-          {booksResult.books.length > 0 ? (
-            <EmptyState
-              message={`No book matches "${q}". Search looks at the name, ISBN and author.`}
-              icon={<Icon name="book" />}
-              action={
-                <Link href="/academy/books" className="inline-flex min-h-11 items-center rounded-lg border border-border-strong bg-surface px-4 text-sm font-semibold !text-ink no-underline hover:bg-app hover:no-underline">
-                  Clear search
-                </Link>
-              }
-            />
-          ) : booksResult.canManage ? (
-            <EmptyState
-              message="No books yet. Add the first title with its cover, price and copies in stock, then sell it from its card."
-              icon={<Icon name="book" />}
-              action={<AddBookButton />}
-            />
-          ) : (
-            <EmptyState message="No books yet. Staff who manage books add titles here." icon={<Icon name="book" />} />
-          )}
-        </Section>
-      ) : (
-        <div className="@container mb-8">
-          <div className="grid grid-cols-1 gap-5 @[560px]:grid-cols-2 @[880px]:grid-cols-3">
-            {visible.map((book) => (
-              <BookCard
-                key={book.id}
-                book={book}
-                coverUrl={coverUrls[book.id] ?? null}
-                canManage={booksResult.canManage}
-                studentOptions={studentOptions}
-              />
-            ))}
-          </div>
+      {all.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <SearchField placeholder="Search title or subject" />
+          {subjects.length > 0 && <FilterSelect param="subject" label="Subject" options={[{ value: "", label: "All subjects" }, ...subjects.map((s) => ({ value: s, label: s }))]} />}
+          {classes.length > 0 && <FilterSelect param="class" label="Class" options={[{ value: "", label: "All classes" }, ...classes.map((s) => ({ value: s, label: s }))]} />}
+          <ToggleParam param="archived" label="Show archived" />
+          <span className="text-[13px] text-muted">
+            {plural(rows.length, "book", "books")}
+            {showArchived ? ", including archived" : ""}
+          </span>
+          <Link href="/academy/books/stock" className="ml-auto text-sm font-semibold">
+            Stock table
+          </Link>
         </div>
       )}
 
-      <NoteBlock>
-        Initials show until a book has a cover. A book is changed only by activating or deactivating it and by its cover;
-        stock changes through sales and refunds. Book sale payments are cash or mobile money only.
-      </NoteBlock>
+      {visible.length === 0 ? (
+        all.length === 0 ? (
+          <EmptyCard
+            title="No books in the catalog"
+            description="Add the first book to start selling and building pre-order campaigns."
+            action={
+              <GatedAction need="canManageBooks" dialog={{ kind: "addBook" }} variant="secondary">
+                Add book
+              </GatedAction>
+            }
+          />
+        ) : (
+          <EmptyCard
+            title="No books match"
+            description="Try a different search or clear the filters."
+            action={
+              <Link href="/academy/books" className={BTN_SECONDARY}>
+                Clear filters
+              </Link>
+            }
+          />
+        )
+      ) : (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-4">
+          {visible.map((book) => (
+            <BookCard key={book.id} book={book} campaign={campaignLine(book.id)} />
+          ))}
+        </div>
+      )}
+      <div className="mt-4">
+        <Pager page={page} pageSize={PAGE_SIZE} total={rows.length} params={params} />
+      </div>
     </>
   );
 }

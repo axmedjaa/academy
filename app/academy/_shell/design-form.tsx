@@ -49,14 +49,18 @@ export function DesignDialog({
   title: string;
   description?: ReactNode;
   children: ReactNode;
-  width?: 560 | 640 | 720;
+  width?: 560 | 640 | 720 | 1040;
 }) {
-  const maxWidth = width === 720 ? "max-w-[720px]" : width === 640 ? "max-w-[640px]" : "max-w-[560px]";
+  const maxWidth =
+    width === 1040 ? "max-w-[1040px]" : width === 720 ? "max-w-[720px]" : width === 640 ? "max-w-[640px]" : "max-w-[560px]";
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-[60] bg-[rgba(17,24,39,0.5)] animate-fade-in" />
-        <div className="pointer-events-none fixed inset-0 z-[61] flex items-center justify-center p-4">
+        {/* Phones: a bottom sheet (full width, rounded top, rises from the
+            bottom edge), as the design draws its dialogs below 640px.
+            Larger screens: a centred dialog. */}
+        <div className="pointer-events-none fixed inset-0 z-[61] flex items-end justify-center p-0 sm:items-center sm:p-4">
           <DialogPrimitive.Content
             onOpenAutoFocus={(event) => {
               // Start on the first field, as the design's form does, rather
@@ -69,7 +73,7 @@ export function DesignDialog({
                 field.focus();
               }
             }}
-            className={`pointer-events-auto flex max-h-[92dvh] w-full ${maxWidth} flex-col overflow-hidden rounded-2xl bg-surface shadow-[0_24px_48px_rgba(17,24,39,0.32)] animate-scale-in focus:outline-none`}
+            className={`pointer-events-auto flex max-h-[92dvh] w-full ${maxWidth} flex-col overflow-hidden rounded-t-2xl bg-surface pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_32px_rgba(17,24,39,0.24)] focus:outline-none max-sm:motion-safe:animate-sheet-in sm:rounded-2xl sm:pb-0 sm:shadow-[0_24px_48px_rgba(17,24,39,0.32)] sm:animate-scale-in`}
           >
             <div className="flex items-start gap-3 border-b border-border px-6 pb-4 pt-5">
               <div className="min-w-0 flex-1">

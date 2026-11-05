@@ -59,3 +59,6 @@ next-env.d.ts
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules
+
+# local dev server output
+.dev-server.log

@@ -4,16 +4,16 @@ import type { BookSaleListRow } from "@/lib/academies/book-sales";
 import { formatMoney } from "@/lib/ui/money";
 import { formatDate } from "@/lib/ui/date";
 import { getStatusTone } from "@/lib/ui/status";
-import { Badge, EmptyState, PageMessage, Section, trHover } from "@/app/academy/_shell/ui";
-import { DataTable, NoteBlock, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
-import { ChipParamFilter, ClearFilters, DateParamField, FilterBar, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
+import { Badge, EmptyState, PageMessage, Section } from "@/app/academy/_shell/ui";
+import { ChipParamFilter, ClearFilters, DateParamField, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
 import { Icon } from "@/app/academy/_shell/icons";
-import { PaginationNav } from "@/components/pagination-nav";
 import { getBooksOverview } from "../../books-data";
 import { SaleActions } from "../../books-client";
-import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
+import { GatedAction } from "../../books-sections";
+import { CARD, Pager, SectionHead } from "../../books-ui";
 
-const PAGE_SIZE = LIST_PAGE_SIZE_MAX;
+// The design pages recent sales six at a time.
+const PAGE_SIZE = 6;
 
 const buyerOf = (sale: BookSaleListRow) =>
   sale.buyerType === "student" ? (sale.studentName ?? "Student") : (sale.otherBuyerName ?? "Other person");
@@ -73,49 +73,91 @@ export default async function BookSalesPage({
 
   return (
     <>
-      {all.length > 0 && (
-        <>
-        <div className="mb-4">
-          <ChipParamFilter
-            param="status"
-            label="Filter by payment"
-            options={[
-              { value: "", label: "All" },
-              { value: "owing", label: "Balance due" },
-              { value: "paid", label: "Paid" },
-            ]}
-          />
+      <SectionHead title="Sell Book" description="Two ways to give someone a book. Choose the one that matches whether the book is on your shelf today." />
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="flex flex-col gap-3 rounded-2xl border border-border border-t-4 border-t-brand bg-surface p-5 shadow-card">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-tint text-brand">
+              <Icon name="payments" width={22} height={22} />
+            </span>
+            <h3 className="text-lg font-bold">Sell Book</h3>
+          </div>
+          <p className="leading-normal text-[#4B5563]">
+            <b className="text-ink">The book is in stock now.</b> Pick the buyer and the book, set the quantity and any discount, and record the payment. Stock
+            goes down when the sale is saved.
+          </p>
+          <GatedAction need="canSell" dialog={{ kind: "sell" }} className="self-start px-5">
+            Sell Book
+          </GatedAction>
         </div>
-        <FilterBar>
-          <SearchField placeholder="Search receipt, buyer or book" />
-          <FilterDropdown
-            param="book"
-            label="Book"
-            icon="book"
-            options={[{ value: "", label: "All books" }, ...books.map((book) => ({ value: book.id, label: book.name }))]}
-          />
-          <FilterDropdown
-            param="method"
-            label="Method"
-            icon="payments"
-            options={[
-              { value: "", label: "Any method" },
-              { value: "cash", label: "Cash" },
-              { value: "mobile_money", label: "Mobile money" },
-            ]}
-          />
-          <DateParamField param="from" label="From" />
-          <DateParamField param="to" label="To" />
-          <ClearFilters params={["q", "status", "book", "method", "from", "to"]} />
-        </FilterBar>
-        </>
+        <div className="flex flex-col gap-3 rounded-2xl border border-border border-t-4 border-t-[#F5B638] bg-surface p-5 shadow-card">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-warning-bg text-[#78350F]">
+              <Icon name="autorenew" width={22} height={22} />
+            </span>
+            <h3 className="text-lg font-bold">Pre-Order Book</h3>
+          </div>
+          <p className="leading-normal text-[#4B5563]">
+            <b className="text-ink">The book has not arrived yet.</b> Take an order for an existing student or another person. Stock does not change until
+            you receive the books, and books are given once the order is paid in full and verified.
+          </p>
+          <GatedAction need="canManage" dialog={{ kind: "order" }} variant="secondary" className="self-start px-5">
+            Create Order
+          </GatedAction>
+        </div>
+      </div>
+      <h3 className="mb-3 text-base font-bold">Recent sales</h3>
+      {all.length > 0 && (
+        <div className="mb-4 flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <SearchField placeholder="Search receipt, book or buyer" />
+          </div>
+          {/* The design shows one search field; the existing filters stay
+              available here so no way of finding a sale is lost. */}
+          <details className="group" open={Boolean(status || bookId || method || from || to) || undefined}>
+            <summary className="inline-flex min-h-10 cursor-pointer list-none items-center gap-1.5 rounded-lg px-1 text-[13px] font-semibold text-brand [&::-webkit-details-marker]:hidden">
+              <Icon name="sliders" width={16} height={16} />
+              More filters
+            </summary>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <ChipParamFilter
+                param="status"
+                label="Filter by payment"
+                options={[
+                  { value: "", label: "All" },
+                  { value: "owing", label: "Balance due" },
+                  { value: "paid", label: "Paid" },
+                ]}
+              />
+              <FilterDropdown
+                param="book"
+                label="Book"
+                icon="book"
+                options={[{ value: "", label: "All books" }, ...books.map((book) => ({ value: book.id, label: book.name }))]}
+              />
+              <FilterDropdown
+                param="method"
+                label="Method"
+                icon="payments"
+                options={[
+                  { value: "", label: "Any method" },
+                  { value: "cash", label: "Cash" },
+                  { value: "mobile_money", label: "Mobile money" },
+                ]}
+              />
+              <DateParamField param="from" label="From" />
+              <DateParamField param="to" label="To" />
+              <ClearFilters params={["q", "status", "book", "method", "from", "to"]} />
+            </div>
+          </details>
+        </div>
       )}
 
       {rows.length === 0 ? (
         <Section className="mb-8">
           {all.length > 0 && filteredBy ? (
             <EmptyState
-              message="No sale matches these filters."
+              message="No sales match. Try a different search or clear the filters."
               icon={<Icon name="receipt_long" />}
               action={
                 <Link href="/academy/books/sales" className="inline-flex min-h-11 items-center rounded-lg border border-border-strong bg-surface px-4 text-sm font-semibold !text-ink no-underline hover:bg-app hover:no-underline">
@@ -127,90 +169,67 @@ export default async function BookSalesPage({
             <EmptyState
               message={
                 !salesResult.canManage
-                  ? "No book sales yet. Sales recorded by staff who manage books appear here with their receipts."
+                  ? "No sales yet. Sales recorded by staff who manage books appear here with their receipts."
                   : books.some((book) => book.status === "active" && book.stockQuantity > 0)
-                    ? "No book sales yet. Use Sell on a book in the Catalogue; each sale and payment gets its own receipt."
+                    ? "No sales yet. Sell a book that is in stock and the sale will appear here."
                     : books.length > 0
-                      ? "No book sales yet. No active book has copies in stock, so nothing can be sold right now."
-                      : "No book sales yet. Add a book in the Catalogue first, then sell it from its card."
+                      ? "No sales yet. No active book has copies in stock, so nothing can be sold right now."
+                      : "No sales yet. Add a book in Books first, then sell it."
               }
               icon={<Icon name="receipt_long" />}
-              action={
-                salesResult.canManage ? (
-                  <Link href="/academy/books" className="inline-flex min-h-11 items-center rounded-lg border border-border-strong bg-surface px-4 text-sm font-semibold !text-ink no-underline hover:bg-app hover:no-underline">
-                    Go to Catalogue
-                  </Link>
-                ) : undefined
-              }
             />
           )}
         </Section>
       ) : (
-        <DataTable
-          stackBelow={900}
-          footer={<PaginationNav page={page} pageSize={PAGE_SIZE} totalCount={filtered.length} searchParams={params} />}
-        >
-          <thead>
-            <tr>
-              <th className={rtTh}>Sale</th>
-              <th className={rtTh}>Buyer</th>
-              <th className={`${rtTh} text-right`}>Total</th>
-              <th className={`${rtTh} text-right`}>Paid (net)</th>
-              <th className={`${rtTh} text-right`}>Balance</th>
-              <th className={rtTh}>Status</th>
-              <th className={rtTh}>
-                <span className="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((sale) => (
-              <tr key={sale.id} className={trHover}>
-                <td className={rtTd} data-label="Sale">
-                  <span className="block font-semibold [overflow-wrap:anywhere]">
-                    {sale.bookName} × {sale.quantity}
-                  </span>
-                  <span className="block text-xs text-muted">
-                    {formatDate(sale.createdAt)} · {sale.id.slice(0, 8).toUpperCase()}
-                  </span>
-                </td>
-                <td className={rtTd} data-label="Buyer">
-                  <span className="block">{buyerOf(sale)}</span>
-                  <span className="block text-xs text-muted">
-                    {sale.buyerType === "student" ? "Student" : "Other person"} · Recorded by {sale.recordedByLabel}
-                  </span>
-                </td>
-                <td className={`${rtTd} text-right tabular-nums`} data-label="Total">
-                  {formatMoney(sale.finalAmountCents, sale.currency)}
-                  {sale.discountAmountCents > 0 && (
-                    <span className="block text-xs text-muted">−{formatMoney(sale.discountAmountCents, sale.currency)} discount</span>
-                  )}
-                </td>
-                <td className={`${rtTd} text-right tabular-nums`} data-label="Paid (net)">
-                  {formatMoney(sale.netPaidCents, sale.currency)}
-                  {sale.totalRefundedCents > 0 && (
-                    <span className="block text-xs text-muted">{formatMoney(sale.totalRefundedCents, sale.currency)} refunded</span>
-                  )}
-                </td>
-                <td className={`${rtTd} text-right font-semibold tabular-nums`} data-label="Balance">
-                  {formatMoney(sale.remainingCents, sale.currency)}
-                </td>
-                <td className={rtTd} data-label="Status">
-                  <Badge label={sale.paymentStatus} tone={getStatusTone(sale.paymentStatus)} />
-                </td>
-                <td className={`${rtTd} text-right`} data-actions="">
-                  <SaleActions sale={sale} canManage={salesResult.canManage} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </DataTable>
+        <div className="flex flex-col gap-3">
+          {rows.map((sale) => (
+            <article key={sale.id} className={`${CARD} flex flex-wrap items-center gap-x-6 gap-y-4 px-5 py-4`}>
+              <div className="min-w-0 flex-[1_1_230px]">
+                <p className="font-bold [overflow-wrap:anywhere]">{sale.bookName}</p>
+                <p className="text-xs text-muted">
+                  Receipt {sale.id.slice(0, 8).toUpperCase()} · {formatDate(sale.createdAt)}
+                </p>
+                <p className="text-xs text-muted">
+                  {sale.quantity} × {formatMoney(sale.unitPriceCents, sale.currency)}
+                  {sale.discountAmountCents > 0 ? `, ${formatMoney(sale.discountAmountCents, sale.currency)} discount` : ""}
+                </p>
+              </div>
+              <div className="min-w-0 flex-[1_1_190px]">
+                <p className="text-xs text-muted">Buyer</p>
+                <p className="font-semibold [overflow-wrap:anywhere]">{buyerOf(sale)}</p>
+                <p className="text-xs text-muted">
+                  {sale.buyerType === "student" ? "Student" : `Other person${sale.otherBuyerPhone ? ` · ${sale.otherBuyerPhone}` : ""}`} · Recorded by{" "}
+                  {sale.recordedByLabel}
+                </p>
+              </div>
+              <div className="grid min-w-0 flex-[2_1_300px] grid-cols-3 gap-3">
+                <div>
+                  <p className="text-xs text-muted">Total</p>
+                  <p className="font-bold tabular-nums">{formatMoney(sale.finalAmountCents, sale.currency)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted">Paid</p>
+                  <p className="font-bold tabular-nums">{formatMoney(sale.netPaidCents, sale.currency)}</p>
+                  {sale.totalRefundedCents > 0 && <p className="text-xs text-muted">{formatMoney(sale.totalRefundedCents, sale.currency)} refunded</p>}
+                </div>
+                <div>
+                  <p className="text-xs text-muted">Balance</p>
+                  <p className={`font-bold tabular-nums ${sale.remainingCents > 0 ? "text-[#B91C1C]" : "text-[#166534]"}`}>
+                    {formatMoney(sale.remainingCents, sale.currency)}
+                  </p>
+                </div>
+              </div>
+              <div className="flex min-w-0 flex-[0_1_260px] flex-col items-start gap-2 [&>span:last-child]:justify-start">
+                <Badge label={sale.paymentStatus} tone={getStatusTone(sale.paymentStatus)} />
+                <SaleActions sale={sale} canManage={salesResult.canManage} />
+              </div>
+            </article>
+          ))}
+        </div>
       )}
-
-      <NoteBlock>
-        Paid is net of refunds. Refunds need a reason; money and returned copies are independent, and returned copies go back
-        into stock. Each sale and each follow-up payment has its own receipt.
-      </NoteBlock>
+      <div className="mt-2">
+        <Pager page={page} pageSize={PAGE_SIZE} total={filtered.length} params={params} />
+      </div>
     </>
   );
 }

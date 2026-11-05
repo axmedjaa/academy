@@ -1,20 +1,22 @@
 import { redirect } from "next/navigation";
+import { getBookCoverUrl } from "@/lib/academies/books";
 import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 import { BooksShell } from "../books-shell";
-import { getBooksOverview } from "../books-data";
+import { getBooksOverview, getPreorderBranches, getPreorderStudents } from "../books-data";
 
 /**
- * Books (design A16): one page with Catalogue, Stock and Sales tabs. This
- * layout renders the shared header, summary cards and tab bar once; each
- * tab is its own route (`/academy/books`, `/stock`, `/sales`), so links,
- * refresh and the back button open the right tab, and switching tabs only
- * swaps the content below while this stays mounted. The `(tabs)` group
- * keeps the sale receipt pages (`/sales/[saleId]/...`) outside it.
+ * Book Management (design B01-B12): one page with the four-step roadmap.
+ * This layout renders the hero, roadmap and section tabs once; each section
+ * is its own route (`/academy/books`, `/sales`, `/stock`, `/pre-orders`,
+ * `/orders`, `/orders/[orderId]`, `/payments`, `/receiving`,
+ * `/distribution`, `/reports`), so links, refresh and the back button open
+ * the right section while this stays mounted. The `(tabs)` group keeps the
+ * sale receipt pages (`/sales/[saleId]/...`) outside it.
  */
 export default async function BooksLayout({ children }: { children: React.ReactNode }) {
   const overview = await getBooksOverview();
   if (!overview) redirect("/login");
-  const { booksResult, salesResult } = overview;
+  const { booksResult, salesResult, preordersResult } = overview;
   if (!booksResult.ok) {
     return (
       <PageMessage
@@ -24,9 +26,30 @@ export default async function BooksLayout({ children }: { children: React.ReactN
     );
   }
 
+  const preorders = preordersResult.ok ? preordersResult.overview : null;
+  const [coverEntries, students, branchOptions] = await Promise.all([
+    Promise.all(booksResult.books.filter((book) => book.coverRef).map(async (book) => [book.id, await getBookCoverUrl(book.coverRef)] as const)),
+    preorders?.canManage || (salesResult.ok && salesResult.canManage) ? getPreorderStudents() : Promise.resolve([]),
+    preorders?.canManage ? getPreorderBranches() : Promise.resolve([]),
+  ]);
+  const coverUrls = Object.fromEntries(coverEntries.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
+
   return (
     <div className={PAGE_WRAP}>
-      <BooksShell books={booksResult.books} sales={salesResult.ok ? salesResult.sales : null} canManage={booksResult.canManage}>
+      <BooksShell
+        books={booksResult.books}
+        coverUrls={coverUrls}
+        sales={salesResult.ok ? salesResult.sales : null}
+        preorders={preorders}
+        students={students}
+        branches={branchOptions}
+        permissions={{
+          canManageBooks: booksResult.canManage,
+          canSell: salesResult.ok && salesResult.canManage,
+          canManage: preorders?.canManage ?? false,
+          canManageCampaigns: preorders?.canManageCampaigns ?? false,
+        }}
+      >
         {children}
       </BooksShell>
     </div>

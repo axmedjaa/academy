@@ -1,12 +1,12 @@
-import { SkeletonFilters, SkeletonPanel, SkeletonRegion } from "@/app/academy/_shell/skeletons";
+import { SkeletonRegion } from "@/app/academy/_shell/skeletons";
+import { BooksCatalogSkeleton } from "../books-skeleton";
 
-/** While a Books tab loads: only the tab's content area. The header, summary
- * cards and tab bar come from the layout above and stay on screen. */
-export default function BooksTabLoading() {
+/** While this Book Management section loads (design B11): its own layout
+ * in outline. The hero, roadmap and tabs stay on screen from the layout. */
+export default function Loading() {
   return (
     <SkeletonRegion label="books">
-      <SkeletonFilters />
-      <SkeletonPanel className="h-64" />
+      <BooksCatalogSkeleton />
     </SkeletonRegion>
   );
 }

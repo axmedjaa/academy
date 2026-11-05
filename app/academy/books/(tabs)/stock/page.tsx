@@ -95,7 +95,7 @@ export default async function AcademyBooksStockPage({
               icon={<Icon name="layers" />}
               action={
                 <Link href="/academy/books" className="inline-flex min-h-11 items-center rounded-lg border border-border-strong bg-surface px-4 text-sm font-semibold !text-ink no-underline hover:bg-app hover:no-underline">
-                  Go to Catalogue
+                  Go to Books
                 </Link>
               }
             />

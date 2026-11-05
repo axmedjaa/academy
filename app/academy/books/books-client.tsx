@@ -134,7 +134,33 @@ export function AddBookButton() {
   );
 }
 
-function AddBookForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () => void }) {
+export interface BookSuggestions {
+  subjects: string[];
+  classes: string[];
+}
+
+/** Subject and class are free text (no fixed list exists in the product);
+ * values already used in the catalogue are offered as suggestions. */
+function SubjectClassFields({ suggestions, subject, classLevel }: { suggestions?: BookSuggestions; subject?: string | null; classLevel?: string | null }) {
+  return (
+    <>
+      <DField label="Subject" name="subject" hint="Optional. For example English.">
+        <input type="text" name="subject" maxLength={100} list="book-subjects" defaultValue={subject ?? ""} className={controlClass(false)} />
+        <datalist id="book-subjects">
+          {suggestions?.subjects.map((value) => <option key={value} value={value} />)}
+        </datalist>
+      </DField>
+      <DField label="Class" name="classLevel" hint="Optional. For example Class 3.">
+        <input type="text" name="classLevel" maxLength={100} list="book-classes" defaultValue={classLevel ?? ""} className={controlClass(false)} />
+        <datalist id="book-classes">
+          {suggestions?.classes.map((value) => <option key={value} value={value} />)}
+        </datalist>
+      </DField>
+    </>
+  );
+}
+
+export function AddBookForm({ onCancel, onSaved, suggestions }: { onCancel: () => void; onSaved: () => void; suggestions?: BookSuggestions }) {
   const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(BOOK_RULES);
   const [pending, startTransition] = useTransition();
   // The cover goes to storage as soon as it is chosen (before the book row
@@ -193,6 +219,8 @@ function AddBookForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () 
                 isbn: text("isbn"),
                 category: text("category"),
                 description: text("description"),
+                subject: text("subject"),
+                classLevel: text("classLevel"),
                 priceCents: dollarsToCents(String(data.get("priceDollars") ?? ""))!,
                 stockQuantity: Number(data.get("stockQuantity")),
                 coverRef: coverKey!,
@@ -258,6 +286,7 @@ function AddBookForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () 
           <DField label="Author" name="author" hint="Optional.">
             <input type="text" name="author" maxLength={200} className={controlClass(false)} />
           </DField>
+          <SubjectClassFields suggestions={suggestions} />
           <DField label="ISBN" name="isbn" error={errors.isbn} hint="Optional.">
             <input type="text" name="isbn" maxLength={50} placeholder="978-0-00-000000-0" className={controlClass(Boolean(errors.isbn))} />
           </DField>
@@ -298,28 +327,40 @@ function AddBookForm({ onCancel, onSaved }: { onCancel: () => void; onSaved: () 
 }
 
 /* ------------------------------------------------------------------ */
-/* Book card                                                           */
+/* Edit book                                                           */
 /* ------------------------------------------------------------------ */
 
-export function BookCard({
+const EDIT_RULES: DesignFormRule[] = [
+  { name: "name", label: "Title", required: true },
+  amountRule("priceDollars", "Selling price (USD)", true),
+];
+
+/**
+ * Edit a book's details (design B01 "Book details"). The price change
+ * applies to new sales and new pre-orders only: every saved sale and order
+ * line keeps its own price snapshot. Stock is not edited here; it changes
+ * through sales and refunds. The cover is replaced through the same
+ * verified upload flow as before.
+ */
+export function EditBookForm({
   book,
   coverUrl,
-  canManage,
-  studentOptions,
+  suggestions,
+  onCancel,
+  onSaved,
 }: {
   book: BookRecord;
   coverUrl: string | null;
-  canManage: boolean;
-  studentOptions: StudentPickerOption[];
+  suggestions?: BookSuggestions;
+  onCancel: () => void;
+  onSaved: () => void;
 }) {
   const router = useRouter();
-  const fileRef = useRef<HTMLInputElement>(null);
+  const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(EDIT_RULES);
+  const [pending, startTransition] = useTransition();
   const [uploading, setUploading] = useState(false);
-  const [toggling, startToggle] = useTransition();
-  const [selling, setSelling] = useState(false);
-  const [preview, setPreview] = useState(false);
-  const inactive = book.status !== "active";
-  const sellBlocked = inactive ? "This book is inactive." : book.stockQuantity === 0 ? "Out of stock." : null;
+  const [preview, setPreview] = useState<string | null>(coverUrl);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   async function changeCover(file: File | undefined) {
     if (!file) return;
@@ -338,6 +379,7 @@ export function BookCard({
         showErrorToast(confirmed.error?.message ?? "The cover couldn't be verified.");
         return;
       }
+      setPreview(URL.createObjectURL(file));
       showSuccessToast("Cover updated.");
       router.refresh();
     } catch (err) {
@@ -348,107 +390,98 @@ export function BookCard({
     }
   }
 
-  function toggleStatus() {
-    startToggle(async () => {
-      try {
-        const next = inactive ? "active" : "inactive";
-        const result = await updateBookAction(book.id, { status: next });
-        if (!result.ok) {
-          showErrorToast(result.error?.message ?? "The book couldn't be updated.");
-          return;
-        }
-        showSuccessToast(next === "active" ? "Book activated." : "Book deactivated.");
-        router.refresh();
-      } catch {
-        showErrorToast(NETWORK_ERROR_MESSAGE);
-      }
-    });
-  }
-
-  const sub = [book.author, book.isbn ? `ISBN ${book.isbn}` : null].filter(Boolean).join(" · ");
-
   return (
-    <article className={`flex min-w-0 flex-col gap-4 rounded-card border border-border bg-surface p-[18px] shadow-card ${inactive ? "opacity-80" : ""}`}>
-      <div className="flex items-start gap-4">
-        <button
-          type="button"
-          onClick={() => coverUrl && setPreview(true)}
-          disabled={!coverUrl}
-          aria-label={coverUrl ? `View the cover of ${book.name}` : undefined}
-          className="flex h-[104px] w-[76px] shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-tint to-[#E9C3CC] text-xl font-bold text-brand shadow-[inset_-4px_0_0_rgba(133,0,25,0.18),0_2px_6px_rgba(17,24,39,0.12)] disabled:cursor-default"
-        >
-          {coverUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- short-lived signed storage URL.
-            <img src={coverUrl} alt="" className="h-full w-full object-cover" />
-          ) : (
-            initials(book.name)
-          )}
-        </button>
-        <div className="min-w-0 flex-1">
-          <h3 className="font-semibold leading-snug text-ink [overflow-wrap:anywhere]">{book.name}</h3>
-          {sub && <p className="mt-1 text-xs text-muted [overflow-wrap:anywhere]">{sub}</p>}
-          <p className="mt-2 text-lg font-bold tabular-nums text-ink">{formatMoney(book.priceCents, book.currency)}</p>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className={`text-sm ${book.stockQuantity === 0 ? "font-semibold text-danger" : "text-ink"}`}>
-          {book.stockQuantity === 0 ? "Out of stock" : `${book.stockQuantity} in stock`}
-        </span>
-        <StockBadge quantity={book.stockQuantity} inactive={inactive} />
-      </div>
-      {canManage && (
-        <div className="mt-auto flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={`${ROW_BTN_PRIMARY} flex-1 justify-center`}
-            disabled={Boolean(sellBlocked)}
-            title={sellBlocked ?? undefined}
-            onClick={() => setSelling(true)}
-          >
-            <Icon name="cash" width={16} height={16} />
-            Sell
-          </button>
-          <button type="button" className={`${ROW_BTN} flex-1 justify-center`} disabled={toggling} onClick={toggleStatus}>
-            {toggling ? "Saving…" : inactive ? "Activate" : "Deactivate"}
-          </button>
-          <label className={`${ROW_BTN} relative w-full cursor-pointer justify-center border-dashed !text-brand`}>
-            <Icon name="upload" width={16} height={16} />
-            {uploading ? "Uploading…" : coverUrl ? "Change cover" : "Add cover"}
+    <form
+      ref={formRef}
+      noValidate
+      className="flex min-h-0 flex-1 flex-col"
+      onSubmit={onDesignSubmit(validate, (data) =>
+        startTransition(async () => {
+          const text = (name: string) => String(data.get(name) ?? "").trim();
+          try {
+            const result = await updateBookAction(book.id, {
+              name: text("name"),
+              author: text("author"),
+              subject: text("subject"),
+              classLevel: text("classLevel"),
+              priceCents: dollarsToCents(text("priceDollars"))!,
+            });
+            if (!result.ok) {
+              showServerError(result.error?.message ?? "The book couldn't be saved.", [
+                [/name|title/i, "name"],
+                [/price/i, "priceDollars"],
+              ]);
+              return;
+            }
+            showSuccessToast(`Book saved: ${text("name")}`);
+            onSaved();
+          } catch {
+            showServerError(NETWORK_ERROR_MESSAGE, []);
+          }
+        }),
+      )}
+    >
+      <DialogBody>
+        <FieldGrid>
+          <DField label="Title" name="name" required error={errors.name} full>
             <input
-              ref={fileRef}
-              type="file"
-              accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
-              disabled={uploading}
-              onChange={(event) => changeCover(event.target.files?.[0])}
-              className="absolute inset-0 cursor-pointer opacity-0"
-              aria-label={`${coverUrl ? "Change" : "Add"} the cover of ${book.name}`}
+              type="text"
+              name="name"
+              maxLength={300}
+              defaultValue={book.name}
+              onBlur={blur("name")}
+              className={controlClass(Boolean(errors.name))}
+              {...invalidProps("name", errors.name)}
             />
-          </label>
-        </div>
-      )}
-
-      <DesignDialog open={selling} onOpenChange={setSelling} title="Sell book" description="Price is calculated from the book's current price." width={640}>
-        {selling && (
-          <SellForm
-            book={book}
-            studentOptions={studentOptions}
-            onCancel={() => setSelling(false)}
-            onDone={() => {
-              setSelling(false);
-              router.refresh();
-            }}
-          />
-        )}
-      </DesignDialog>
-      {coverUrl && (
-        <DesignDialog open={preview} onOpenChange={setPreview} title={book.name} description="Book cover">
-          <DialogBody>
-            {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed storage URL. */}
-            <img src={coverUrl} alt={`Cover of ${book.name}`} className="mx-auto max-h-[65vh] rounded-lg object-contain" />
-          </DialogBody>
-        </DesignDialog>
-      )}
-    </article>
+          </DField>
+          <DField label="Author" name="author" hint="Optional.">
+            <input type="text" name="author" maxLength={200} defaultValue={book.author ?? ""} className={controlClass(false)} />
+          </DField>
+          <DField label={`Selling price (${book.currency})`} name="priceDollars" required error={errors.priceDollars} hint="Saved sales and orders keep their own price.">
+            <input
+              type="text"
+              inputMode="decimal"
+              name="priceDollars"
+              defaultValue={centsToDollars(book.priceCents)}
+              onBlur={blur("priceDollars")}
+              className={controlClass(Boolean(errors.priceDollars))}
+              {...invalidProps("priceDollars", errors.priceDollars)}
+            />
+          </DField>
+          <SubjectClassFields suggestions={suggestions} subject={book.subject} classLevel={book.classLevel} />
+          <DField label="Cover image" name="cover" group full>
+            <span className="flex items-center gap-3.5">
+              <span className="flex h-[88px] w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-tint to-[#E9C3CC] text-sm font-bold text-brand">
+                {preview ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- signed storage URL or local preview.
+                  <img src={preview} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  initials(book.name)
+                )}
+              </span>
+              <span className="flex min-w-0 flex-col gap-1.5">
+                <span className="relative inline-flex h-11 w-fit cursor-pointer items-center gap-2 rounded-lg border border-dashed border-brand px-3.5 text-sm font-semibold text-brand hover:bg-brand-tint">
+                  <Icon name="upload" width={16} height={16} />
+                  {uploading ? "Uploading…" : preview ? "Change cover" : "Upload cover"}
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept={RASTER_IMAGE_ACCEPT_ATTRIBUTE}
+                    disabled={uploading}
+                    onChange={(event) => changeCover(event.target.files?.[0])}
+                    className="absolute inset-0 cursor-pointer opacity-0"
+                    aria-label={`Change the cover of ${book.name}`}
+                  />
+                </span>
+                <span className="text-xs font-normal text-muted">The new cover is saved as soon as it uploads.</span>
+              </span>
+            </span>
+          </DField>
+        </FieldGrid>
+        <FormErrorBanner message={banner} />
+      </DialogBody>
+      <DialogFooter onCancel={onCancel} submitLabel="Save book" pendingLabel="Saving…" pending={pending} disabled={uploading} />
+    </form>
   );
 }
 
@@ -456,7 +489,7 @@ export function BookCard({
 /* Sell                                                                */
 /* ------------------------------------------------------------------ */
 
-function SellForm({
+export function SellForm({
   book,
   studentOptions,
   onCancel,

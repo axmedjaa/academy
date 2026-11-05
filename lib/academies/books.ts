@@ -153,6 +153,8 @@ export interface BookRecord {
   author: string | null;
   isbn: string | null;
   category: string | null;
+  subject: string | null;
+  classLevel: string | null;
   priceCents: number;
   currency: string;
   stockQuantity: number;
@@ -171,6 +173,8 @@ function toBookRecord(row: typeof books.$inferSelect): BookRecord {
     author: row.author,
     isbn: row.isbn,
     category: row.category,
+    subject: row.subject,
+    classLevel: row.classLevel,
     priceCents: row.priceCents,
     currency: row.currency,
     stockQuantity: row.stockQuantity,
@@ -197,6 +201,8 @@ export const createBookSchema = z.object({
   author: optionalText(200),
   isbn: optionalText(50),
   category: optionalText(100),
+  subject: optionalText(100),
+  classLevel: optionalText(100),
   priceCents: z.number().int("Price must be a whole number of cents").nonnegative("Price cannot be negative"),
   currency: z.string().trim().toUpperCase().length(3, "Currency must be a 3-letter code, e.g. USD").optional(),
   stockQuantity: z.number().int("Stock must be a whole number").nonnegative("Stock cannot be negative"),
@@ -241,6 +247,8 @@ export async function createBook(actorContext: AuthContext, input: CreateBookInp
         author: data.author,
         isbn: data.isbn,
         category: data.category,
+        subject: data.subject,
+        classLevel: data.classLevel,
         priceCents: data.priceCents,
         currency,
         stockQuantity: data.stockQuantity,
@@ -265,6 +273,8 @@ export const updateBookSchema = z.object({
   author: optionalText(200),
   isbn: optionalText(50),
   category: optionalText(100),
+  subject: optionalText(100),
+  classLevel: optionalText(100),
   priceCents: z.number().int("Price must be a whole number of cents").nonnegative("Price cannot be negative").optional(),
   stockQuantity: z.number().int("Stock must be a whole number").nonnegative("Stock cannot be negative").optional(),
   status: z.enum(["active", "inactive"]).optional(),
@@ -307,6 +317,8 @@ export async function updateBook(actorContext: AuthContext, bookId: string, inpu
         author: data.author !== undefined ? data.author : existing.author,
         isbn: data.isbn !== undefined ? data.isbn : existing.isbn,
         category: data.category !== undefined ? data.category : existing.category,
+        subject: data.subject !== undefined ? data.subject : existing.subject,
+        classLevel: data.classLevel !== undefined ? data.classLevel : existing.classLevel,
         priceCents: data.priceCents ?? existing.priceCents,
         stockQuantity: data.stockQuantity ?? existing.stockQuantity,
         status: data.status ?? existing.status,
