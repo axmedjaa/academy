@@ -5,7 +5,8 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
 import { recordAudit } from "@/lib/audit";
 import { toCsv } from "@/lib/export/csv";
-import { AUDIT_LOG_COLUMNS, EXPORT_MAX_ROWS } from "@/lib/export/export-data";
+import { EXPORT_MAX_ROWS } from "@/lib/export/export-data";
+import { PLATFORM_AUDIT_EXPORT_COLUMNS, toReadableAuditRows } from "@/lib/export/audit-export";
 import {
   AUDIT_LOG_BATCH_PAGE_SIZE,
   AUDIT_LOG_MAX_PAGE_SIZE,
@@ -160,7 +161,9 @@ export async function exportPlatformAuditLogs(
 
   return {
     ok: true,
-    csv: toCsv(rows as unknown as Record<string, unknown>[], [...AUDIT_LOG_COLUMNS]),
+    // Readable rows (names, words, dates), never internal ids or raw JSON —
+    // see lib/export/audit-export.ts.
+    csv: toCsv(await toReadableAuditRows(rows, null), [...PLATFORM_AUDIT_EXPORT_COLUMNS]),
     filename: `platform-audit-log-${new Date().toISOString().slice(0, 10)}.csv`,
   };
 }

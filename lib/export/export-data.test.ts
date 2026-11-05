@@ -33,10 +33,11 @@ import { getAcademicReports } from "@/lib/academies/academic-reports";
 import { getFinanceReports } from "@/lib/academies/finance-reports";
 import { getStudentReports } from "@/lib/academies/student-reports";
 import { searchStudents } from "@/lib/academies/students";
-import { toCsv } from "./csv";
+import { neutralizeFormula, toCsv } from "./csv";
+import { ACADEMY_AUDIT_EXPORT_COLUMNS, toReadableAuditRows } from "./audit-export";
+import { describeChanges, exportDate, exportLabel, exportMoney, exportMonth, exportPercent, recordNameFrom } from "./readable";
 import {
   ACADEMIC_REPORT_COLUMNS,
-  AUDIT_LOG_COLUMNS,
   exportData,
   FINANCE_REPORT_COLUMNS,
   flattenAcademicReport,
@@ -44,6 +45,7 @@ import {
   flattenStudentReport,
   STUDENT_LIST_COLUMNS,
   STUDENT_REPORT_COLUMNS,
+  toReadableStudentRows,
 } from "./export-data";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
@@ -88,10 +90,12 @@ describe("toCsv", () => {
     expect(csv).toBe("a,b,c\n,,0");
   });
 
-  it("formats a Date value as its ISO-8601 string", () => {
+  it("formats a Date value as a readable date and time (academy time zone), never ISO-8601", () => {
     const date = new Date("2026-01-15T10:30:00.000Z");
     const csv = toCsv([{ when: date }]);
-    expect(csv).toBe(`when\n${date.toISOString()}`);
+    // Quoted because the readable date contains commas.
+    expect(csv).toBe('when\n"Jan 15, 2026, 13:30"');
+    expect(csv).not.toContain("T10:30:00");
   });
 
   it("JSON-stringifies a plain object/array value", () => {
@@ -449,9 +453,14 @@ describe("exportData — finance_report", () => {
     if (!result.ok) return;
     expect(result.rowCount).toBe(expectedRows.length);
     expect(result.content).toBe(expectedCsv);
-    expect(result.content).toContain("studentPayments");
-    expect(result.content).toContain("income");
-    expect(result.content).toContain("expenses");
+    expect(result.content).toContain("Student Payments");
+    expect(result.content).toContain("Income");
+    expect(result.content).toContain("Expenses");
+    // Readable headings and money, never cents or code names.
+    expect(result.content.split("\n")[0]).toBe("Section,Metric,Currency,Amount,Count");
+    expect(result.content).toMatch(/\$\d/);
+    expect(result.content).not.toContain("amountCents");
+    expect(result.content).not.toContain("studentPayments");
   });
 
   it("a role with no view rights on any finance section (admissions_officer) exports zero rows, never an error", async () => {
@@ -487,9 +496,9 @@ describe("exportData — finance_report", () => {
     const result = await exportData(context, "finance_report", {}, "csv");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.content).not.toContain("\nincome,");
-    expect(result.content).toContain("studentPayments");
-    expect(result.content).toContain("expenses");
+    expect(result.content).not.toContain("\nIncome,");
+    expect(result.content).toContain("Student Payments");
+    expect(result.content).toContain("Expenses");
   });
 
   it("a caller who isn't a member gets the same 'blocked' error getFinanceReports would", async () => {
@@ -544,7 +553,7 @@ describe("exportData — student_report", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     // Only this academy's own single fixture student -> one "active" row of count 1.
-    expect(result.content).toContain("statusBreakdown,active,active,1");
+    expect(result.content).toContain("Students by Status,Active,1");
   });
 
   it("writes an audit row with entityType 'student_report' on success", async () => {
@@ -583,8 +592,16 @@ describe("exportData — academic_report", () => {
     if (!result.ok) return;
     expect(result.rowCount).toBe(expectedRows.length);
     expect(result.content).toBe(expectedCsv);
-    expect(result.content).toContain("passFailByBatch");
-    expect(result.content).toContain("gradeDistribution");
+    expect(result.content).toContain("Pass and Fail by Batch");
+    expect(result.content).toContain("Grade Distribution");
+    // Batch and course by name, never by id. (The fixture's own batch and
+    // course names contain a random uuid, so check the real ids instead of
+    // a uuid pattern.)
+    for (const r of direct.report.passFailByBatch) {
+      expect(result.content).not.toContain(r.batchId);
+      expect(result.content).not.toContain(r.courseId);
+      expect(result.content).toContain(r.batchName);
+    }
   });
 
   it("a role with no exams/results access (admissions_officer) gets the same 'forbidden' error getAcademicReports would", async () => {
@@ -615,13 +632,16 @@ describe("exportData — audit_log", () => {
     const direct = await getAcademyAuditLogs(context, {}, { page: 1, pageSize: 100 });
     expect(direct.ok).toBe(true);
     if (!direct.ok) return;
-    const expectedCsv = toCsv(direct.data.rows as unknown as Record<string, unknown>[], [...AUDIT_LOG_COLUMNS]);
+    const expectedCsv = toCsv(await toReadableAuditRows(direct.data.rows, academyId), [...ACADEMY_AUDIT_EXPORT_COLUMNS]);
 
     const result = await exportData(context, "audit_log", {}, "csv");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.rowCount).toBe(direct.data.rows.length);
     expect(result.content).toBe(expectedCsv);
+    expect(result.content).toContain("Some action");
+    expect(result.content).not.toContain(academyId);
+    for (const r of direct.data.rows) expect(result.content).not.toContain(r.id);
   });
 
   it("never includes another academy's audit log rows", async () => {
@@ -632,7 +652,7 @@ describe("exportData — audit_log", () => {
     const result = await exportData(context, "audit_log", {}, "csv");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.content).not.toContain("other-academy.action");
+    expect(result.content).not.toContain("Other academy action");
   });
 
   it("a role without academy.audit_log access (manager) gets the same 'forbidden' error getAcademyAuditLogs would", async () => {
@@ -668,15 +688,25 @@ describe("exportData — student_list", () => {
     const direct = await searchStudents(context, {}, { page: 1, pageSize: 100 });
     expect(direct.ok).toBe(true);
     if (!direct.ok) return;
-    const expectedCsv = toCsv(direct.data.rows as unknown as Record<string, unknown>[], [...STUDENT_LIST_COLUMNS]);
+    const expectedCsv = toCsv(await toReadableStudentRows(direct.data.rows, academyId), [...STUDENT_LIST_COLUMNS]);
 
     const result = await exportData(context, "student_list", {}, "csv");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.rowCount).toBe(2);
     expect(result.content).toBe(expectedCsv);
-    expect(result.content).toContain(fixtureStudentId);
-    expect(result.content).toContain(secondStudentId);
+    // Students by student number and name, branch by name, never by id.
+    for (const row of direct.data.rows) {
+      expect(result.content).toContain(row.studentNumber);
+      expect(result.content).not.toContain(row.id);
+      expect(result.content).not.toContain(row.branchId);
+      expect(result.content).not.toContain(row.createdBy);
+    }
+    const [branch] = await db.select({ name: branches.name }).from(branches).where(eq(branches.id, branchId));
+    expect(result.content).toContain(branch.name);
+    expect(result.content).not.toContain(academyId);
+    expect(result.content.split("\n")[0]).toBe(STUDENT_LIST_COLUMNS.join(","));
+    expect([fixtureStudentId, secondStudentId].every((id) => !result.content.includes(id))).toBe(true);
   });
 
   it("an academy owner's export never includes another academy's students", async () => {
@@ -688,6 +718,8 @@ describe("exportData — student_list", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.content).not.toContain(otherStudentId);
+    const [otherStudent] = await db.select({ studentNumber: students.studentNumber }).from(students).where(eq(students.id, otherStudentId));
+    expect(result.content).not.toContain(otherStudent.studentNumber);
   });
 
   it("a caller who isn't a member gets the same 'blocked' error searchStudents would", async () => {
@@ -719,5 +751,54 @@ describe("exportData — json format", () => {
     expect(() => JSON.parse(result.content)).not.toThrow();
     expect(Array.isArray(JSON.parse(result.content))).toBe(true);
     void academyId;
+  });
+});
+
+// ---------------------------------------------------------------------
+// Human-readable export values (lib/export/readable.ts, csv.ts)
+// ---------------------------------------------------------------------
+
+describe("readable export values", () => {
+  it("formats dates, months, money, percentages and status codes as words", () => {
+    expect(exportDate("2026-11-05")).toBe("Nov 5, 2026");
+    expect(exportDate(new Date("2026-11-05T10:30:00.000Z"))).toBe("Nov 5, 2026");
+    expect(exportMonth("2026-10")).toBe("Oct 2026");
+    expect(exportMoney(125_000, "USD")).toBe("$1,250.00");
+    expect(exportPercent(0.875)).toBe("87.5%");
+    expect(exportLabel("partially_paid")).toBe("Partially Paid");
+    expect(exportLabel("fully_paid")).toBe("Fully Paid");
+    expect(exportLabel("pending_verification")).toBe("Awaiting Verification");
+    expect(exportLabel("other_person")).toBe("Other Person");
+  });
+
+  it("names a record from its snapshot, never from an internal id", () => {
+    expect(recordNameFrom({ id: randomUUID(), fullName: "Ayaan Hassan" })).toBe("Ayaan Hassan");
+    expect(recordNameFrom({ reference: "PO-2026-0007" })).toBe("PO-2026-0007");
+    expect(recordNameFrom({ id: randomUUID(), academyId: randomUUID() })).toBe("");
+  });
+
+  it("summarizes changes without internal ids, references or secrets", () => {
+    const id = randomUUID();
+    const text = describeChanges(
+      { id, status: "active", branchId: randomUUID(), phone: "+252 61 000", passwordHash: "x" },
+      { id, status: "archived", branchId: randomUUID(), phone: "+252 63 000", passwordHash: "y", coverRef: "academies/a/b.png" },
+    );
+    expect(text).toBe("Status: Active → Archived; Phone: +252 61 000 → +252 63 000");
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/i);
+    expect(describeChanges(null, { fullName: "New Person", amountCents: 1250 })).toBe("Full Name: New Person; Amount: 12.50");
+  });
+});
+
+describe("CSV spreadsheet formula injection", () => {
+  it("neutralizes text cells that a spreadsheet would run as a formula", () => {
+    for (const evil of ['=HYPERLINK("http://x","Click")', "+cmd|' /C calc'!A0", "-2+3", "@SUM(A1:A2)", "\tTAB", "\rCR"]) {
+      expect(neutralizeFormula(evil)).toBe(`'${evil}`);
+    }
+    const csv = toCsv([{ name: "=1+1" }]);
+    expect(csv).toBe("name\n'=1+1");
+  });
+
+  it("leaves plain numbers and money amounts alone", () => {
+    for (const ok of ["-12", "-12.50", "-$5.00", "$1,250.00", "87.5%", "Ayaan Hassan"]) expect(neutralizeFormula(ok)).toBe(ok);
   });
 });

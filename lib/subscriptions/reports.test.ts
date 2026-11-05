@@ -645,7 +645,7 @@ describe("revenueBreakdownToCsv", () => {
     });
 
     const lines = csv.split("\n");
-    expect(lines[0]).toBe("Group,Collected,Expected");
+    expect(lines[0]).toBe("Academy,Collected,Expected");
     expect(lines[1]).toBe("Academy One,1500.00,1000.00");
     // A label containing a comma must be quoted.
     expect(lines[2]).toBe('"Academy, Two",0.00,500.00');

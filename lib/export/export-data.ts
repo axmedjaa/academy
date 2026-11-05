@@ -28,6 +28,9 @@ import {
 } from "@/lib/academies/students";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { toCsv } from "@/lib/export/csv";
+import { ACADEMY_AUDIT_EXPORT_COLUMNS, toReadableAuditRows } from "@/lib/export/audit-export";
+import { exportDate, exportLabel, exportMoney, exportMonth, exportPercent } from "@/lib/export/readable";
+import { UNKNOWN_BRANCH, resolveBranchNames, resolveStaffNames } from "@/lib/export/resolve-names";
 
 /**
  * PLAN.md Phase 5, Item 60 — `exportData(actorContext, entityType, filters,
@@ -66,6 +69,19 @@ import { toCsv } from "@/lib/export/csv";
  * `blocked`/`forbidden`/`validation` error from the underlying function is
  * returned to the caller completely unchanged — this module never turns a
  * partial result into a full one, or a failure into a success.
+ *
+ * ---------------------------------------------------------------------
+ * Human-readable files
+ * ---------------------------------------------------------------------
+ * Exported files are opened by administrators, managers and accountants
+ * in a spreadsheet, so every column has a plain-language heading and
+ * every value is what the app shows: student, staff, branch, batch and
+ * course names instead of internal ids; readable dates; money in the
+ * record's currency; status words instead of raw codes (see
+ * lib/export/readable.ts). Internal ids are never written to these files.
+ * Names are resolved with grouped, academy-scoped queries
+ * (lib/export/resolve-names.ts); a relationship that can't be resolved
+ * shows an explicit fallback ("Unknown branch") rather than a blank.
  *
  * ---------------------------------------------------------------------
  * Row-count cap (Planning Gaps Resolution — "Pagination, Search & Export
@@ -155,9 +171,17 @@ function serialize(rows: Record<string, unknown>[], columns: readonly string[], 
   return format === "json" ? JSON.stringify(rows, null, 2) : toCsv(rows, [...columns]);
 }
 
+/** Readable file names: "students-2026-11-05.csv". */
+const FILE_NAMES: Record<ExportEntityType, string> = {
+  finance_report: "finance-report",
+  student_report: "student-report",
+  academic_report: "academic-report",
+  audit_log: "audit-log",
+  student_list: "students",
+};
+
 function buildFilename(entityType: ExportEntityType, format: ExportFormat): string {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `${entityType}-${stamp}.${format}`;
+  return `${FILE_NAMES[entityType]}-${new Date().toISOString().slice(0, 10)}.${format}`;
 }
 
 /**
@@ -207,7 +231,15 @@ async function finalize(
 // finance_report -> getFinanceReports
 // ---------------------------------------------------------------------
 
-export const FINANCE_REPORT_COLUMNS = ["section", "metric", "currency", "amountCents", "count"] as const;
+export const FINANCE_REPORT_COLUMNS = ["Section", "Metric", "Currency", "Amount", "Count"] as const;
+
+const financeRow = (section: string, metric: string, currency: string | null, amountCents: number | null, count: number) => ({
+  Section: section,
+  Metric: metric,
+  Currency: currency ?? "",
+  Amount: amountCents === null ? "" : exportMoney(amountCents, currency),
+  Count: count,
+});
 
 /** Exported for export-data.test.ts's row-shape assertions. */
 export function flattenFinanceReport(report: FinanceReportsData): Record<string, unknown>[] {
@@ -215,10 +247,10 @@ export function flattenFinanceReport(report: FinanceReportsData): Record<string,
 
   if (report.studentPayments.visible) {
     for (const t of report.studentPayments.outstandingCharges.totalsByCurrency) {
-      rows.push({ section: "studentPayments", metric: "outstandingCharges", currency: t.currency, amountCents: t.amountCents, count: t.count });
+      rows.push(financeRow("Student Payments", "Outstanding Charges", t.currency, t.amountCents, t.count));
     }
     for (const t of report.studentPayments.paymentsReceived.totalsByCurrency) {
-      rows.push({ section: "studentPayments", metric: "paymentsReceived", currency: t.currency, amountCents: t.amountCents, count: t.count });
+      rows.push(financeRow("Student Payments", "Payments Received", t.currency, t.amountCents, t.count));
     }
     // No pendingApprovalsCount row anymore — student payments have no
     // approval workflow (unlike expenses, below), so this metric no longer
@@ -227,21 +259,15 @@ export function flattenFinanceReport(report: FinanceReportsData): Record<string,
 
   if (report.income.visible) {
     for (const t of report.income.totalsByCurrency) {
-      rows.push({ section: "income", metric: "total", currency: t.currency, amountCents: t.amountCents, count: t.count });
+      rows.push(financeRow("Income", "Total Income", t.currency, t.amountCents, t.count));
     }
   }
 
   if (report.expenses.visible) {
     for (const t of report.expenses.totalsByCurrency) {
-      rows.push({ section: "expenses", metric: "total", currency: t.currency, amountCents: t.amountCents, count: t.count });
+      rows.push(financeRow("Expenses", "Total Expenses", t.currency, t.amountCents, t.count));
     }
-    rows.push({
-      section: "expenses",
-      metric: "pendingApprovalsCount",
-      currency: null,
-      amountCents: null,
-      count: report.expenses.pendingApprovalsCount,
-    });
+    rows.push(financeRow("Expenses", "Awaiting Approval", null, null, report.expenses.pendingApprovalsCount));
   }
 
   return rows;
@@ -261,22 +287,22 @@ async function exportFinanceReport(
 // student_report -> getStudentReports
 // ---------------------------------------------------------------------
 
-export const STUDENT_REPORT_COLUMNS = ["section", "key", "label", "count"] as const;
+export const STUDENT_REPORT_COLUMNS = ["Section", "Item", "Count"] as const;
 
 /** Exported for export-data.test.ts's row-shape assertions. */
 export function flattenStudentReport(report: StudentReportsData): Record<string, unknown>[] {
   const rows: Record<string, unknown>[] = [];
   for (const r of report.statusBreakdown) {
-    rows.push({ section: "statusBreakdown", key: r.status, label: r.status, count: r.count });
+    rows.push({ Section: "Students by Status", Item: exportLabel(r.status), Count: r.count });
   }
   for (const r of report.branchDistribution) {
-    rows.push({ section: "branchDistribution", key: r.branchId, label: r.branchName, count: r.count });
+    rows.push({ Section: "Students by Branch", Item: r.branchName || UNKNOWN_BRANCH, Count: r.count });
   }
   for (const r of report.enrollmentTrend) {
-    rows.push({ section: "enrollmentTrend", key: r.period, label: r.period, count: r.count });
+    rows.push({ Section: "Enrollments by Month", Item: exportMonth(r.period), Count: r.count });
   }
   for (const r of report.enrollmentStatusBreakdown) {
-    rows.push({ section: "enrollmentStatusBreakdown", key: r.status, label: r.status, count: r.count });
+    rows.push({ Section: "Enrollments by Status", Item: exportLabel(r.status), Count: r.count });
   }
   return rows;
 }
@@ -296,17 +322,15 @@ async function exportStudentReport(
 // ---------------------------------------------------------------------
 
 export const ACADEMIC_REPORT_COLUMNS = [
-  "section",
-  "batchId",
-  "batchName",
-  "courseId",
-  "courseName",
-  "passCount",
-  "failCount",
-  "pendingCount",
-  "passRate",
-  "gradeBandLabel",
-  "count",
+  "Section",
+  "Batch",
+  "Course",
+  "Passed",
+  "Failed",
+  "Pending",
+  "Pass Rate",
+  "Grade",
+  "Results",
 ] as const;
 
 /** Exported for export-data.test.ts's row-shape assertions. */
@@ -314,32 +338,28 @@ export function flattenAcademicReport(report: AcademicReportsData): Record<strin
   const rows: Record<string, unknown>[] = [];
   for (const r of report.passFailByBatch) {
     rows.push({
-      section: "passFailByBatch",
-      batchId: r.batchId,
-      batchName: r.batchName,
-      courseId: r.courseId,
-      courseName: r.courseName,
-      passCount: r.passCount,
-      failCount: r.failCount,
-      pendingCount: r.pendingCount,
-      passRate: r.passRate,
-      gradeBandLabel: null,
-      count: null,
+      Section: "Pass and Fail by Batch",
+      Batch: r.batchName,
+      Course: r.courseName,
+      Passed: r.passCount,
+      Failed: r.failCount,
+      Pending: r.pendingCount,
+      "Pass Rate": exportPercent(r.passRate),
+      Grade: null,
+      Results: null,
     });
   }
   for (const r of report.gradeDistribution) {
     rows.push({
-      section: "gradeDistribution",
-      batchId: null,
-      batchName: null,
-      courseId: null,
-      courseName: null,
-      passCount: null,
-      failCount: null,
-      pendingCount: null,
-      passRate: null,
-      gradeBandLabel: r.gradeBandLabel,
-      count: r.count,
+      Section: "Grade Distribution",
+      Batch: null,
+      Course: null,
+      Passed: null,
+      Failed: null,
+      Pending: null,
+      "Pass Rate": null,
+      Grade: r.gradeBandLabel,
+      Results: r.count,
     });
   }
   return rows;
@@ -359,6 +379,9 @@ async function exportAcademicReport(
 // audit_log -> getAcademyAuditLogs (-> fetchAuditLogs)
 // ---------------------------------------------------------------------
 
+/** The raw audit row fields (database order). Not used for exported files
+ * any more — those use ACADEMY_AUDIT_EXPORT_COLUMNS /
+ * PLATFORM_AUDIT_EXPORT_COLUMNS (lib/export/audit-export.ts). */
 export const AUDIT_LOG_COLUMNS = [
   "id",
   "createdAt",
@@ -441,13 +464,9 @@ async function exportAuditLog(
 
   if (!collected.ok) return { ok: false, error: collected.error };
 
-  return finalize(
-    actorContext,
-    "audit_log",
-    collected.rows as unknown as Record<string, unknown>[],
-    AUDIT_LOG_COLUMNS,
-    format,
-  );
+  const access = await checkAcademyAccessForContext(actorContext);
+  const academyId = access.level === "blocked" ? null : access.academyId;
+  return finalize(actorContext, "audit_log", await toReadableAuditRows(collected.rows, academyId), ACADEMY_AUDIT_EXPORT_COLUMNS, format);
 }
 
 // ---------------------------------------------------------------------
@@ -455,22 +474,44 @@ async function exportAuditLog(
 // ---------------------------------------------------------------------
 
 export const STUDENT_LIST_COLUMNS = [
-  "id",
-  "academyId",
-  "branchId",
-  "studentNumber",
-  "fullName",
-  "dateOfBirth",
-  "gender",
-  "phone",
-  "email",
-  "guardianName",
-  "guardianPhone",
-  "status",
-  "createdBy",
-  "createdAt",
-  "updatedAt",
+  "Student Number",
+  "Full Name",
+  "Branch",
+  "Status",
+  "Date of Birth",
+  "Gender",
+  "Phone",
+  "Email",
+  "Guardian Name",
+  "Guardian Phone",
+  "Registered By",
+  "Registered On",
+  "Last Updated",
 ] as const;
+
+/** Student records -> readable rows: branch and registering staff member
+ * by name (academy-scoped lookups), readable dates and status. */
+export async function toReadableStudentRows(students: StudentRecord[], academyId: string | null): Promise<Record<string, unknown>[]> {
+  const [branchNames, staffNames] = await Promise.all([
+    resolveBranchNames(academyId, students.map((s) => s.branchId)),
+    resolveStaffNames(academyId, students.map((s) => s.createdBy)),
+  ]);
+  return students.map((s) => ({
+    "Student Number": s.studentNumber,
+    "Full Name": s.fullName,
+    Branch: branchNames.get(s.branchId) ?? UNKNOWN_BRANCH,
+    Status: exportLabel(s.status),
+    "Date of Birth": exportDate(s.dateOfBirth),
+    Gender: exportLabel(s.gender),
+    Phone: s.phone ?? "",
+    Email: s.email ?? "",
+    "Guardian Name": s.guardianName ?? "",
+    "Guardian Phone": s.guardianPhone ?? "",
+    "Registered By": staffNames.get(s.createdBy) ?? "",
+    "Registered On": exportDate(s.createdAt),
+    "Last Updated": exportDate(s.updatedAt),
+  }));
+}
 
 async function exportStudentList(
   actorContext: AuthContext,
@@ -497,13 +538,9 @@ async function exportStudentList(
 
   if (!collected.ok) return { ok: false, error: collected.error };
 
-  return finalize(
-    actorContext,
-    "student_list",
-    collected.rows as unknown as Record<string, unknown>[],
-    STUDENT_LIST_COLUMNS,
-    format,
-  );
+  const access = await checkAcademyAccessForContext(actorContext);
+  const academyId = access.level === "blocked" ? null : access.academyId;
+  return finalize(actorContext, "student_list", await toReadableStudentRows(collected.rows, academyId), STUDENT_LIST_COLUMNS, format);
 }
 
 // ---------------------------------------------------------------------

@@ -20,7 +20,9 @@ export function downloadExportContent(
   format: "csv" | "json",
 ): void {
   const mimeType = format === "json" ? "application/json;charset=utf-8;" : "text/csv;charset=utf-8;";
-  const blob = new Blob([content], { type: mimeType });
+  // CSV gets a UTF-8 byte-order mark so Excel reads names with accents or
+  // Arabic script correctly instead of showing garbled characters.
+  const blob = new Blob(format === "csv" ? ["﻿", content] : [content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

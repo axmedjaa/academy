@@ -1,3 +1,5 @@
+import { exportDateTime } from "@/lib/export/readable";
+
 /**
  * PLAN.md Phase 5, Item 60 — `exportData`'s CSV serialization helper.
  *
@@ -34,9 +36,9 @@
  * Value formatting
  * ---------------------------------------------------------------------
  * - `null`/`undefined` -> empty cell (never the literal text "null").
- * - `Date` -> `toISOString()`, the same convention every other
- *   Date-crossing-a-serialization-boundary case in this codebase already
- *   uses (e.g. app/academy/audit-logs/page.tsx's `row.createdAt.toISOString()`).
+ * - `Date` -> a readable date and time ("Nov 5, 2026, 13:30"), never an ISO
+ *   timestamp: exports are opened by people in a spreadsheet (see
+ *   lib/export/readable.ts). Callers normally pass already-formatted text.
  * - A plain object/array (e.g. an audit log row's redacted `before`/`after`/
  *   `context` jsonb columns) -> `JSON.stringify(...)`, then quoted like any
  *   other field containing commas/quotes.
@@ -52,20 +54,35 @@
  * consumer of this codebase's CSVs so far is a browser `Blob` download, not
  * a strict RFC 4180 parser that would care about the line-ending choice.
  */
+/**
+ * Spreadsheet formula injection: a cell starting with `=`, `+`, `-`, `@`, a
+ * tab or a carriage return is run as a formula by Excel/Sheets/LibreOffice
+ * (e.g. a student registered as `=HYPERLINK("http://evil","Click")`).
+ * Such text cells get a leading apostrophe, which spreadsheets treat as
+ * "this is text" and don't display. A plain number or money amount
+ * ("-12", "-$5.00") is left alone so it still reads as a number.
+ */
+const FORMULA_START = /^[=+\-@\t\r]/;
+const PLAIN_NUMBER = /^-?[A-Z]{0,3}\s?[$€£]?-?[\d,]+(\.\d+)?%?$/;
+
+export function neutralizeFormula(value: string): string {
+  return FORMULA_START.test(value) && !PLAIN_NUMBER.test(value) ? `'${value}` : value;
+}
+
 export function toCsv(rows: Record<string, unknown>[], columns?: string[]): string {
   const cols = columns ?? (rows.length > 0 ? Object.keys(rows[0]) : []);
   if (cols.length === 0) return "";
 
-  const lines = [cols.map(escapeCsvField).join(",")];
+  const lines = [cols.map((col) => escapeCsvField(neutralizeFormula(col))).join(",")];
   for (const row of rows) {
-    lines.push(cols.map((col) => escapeCsvField(formatCsvValue(row[col]))).join(","));
+    lines.push(cols.map((col) => escapeCsvField(neutralizeFormula(formatCsvValue(row[col])))).join(","));
   }
   return lines.join("\n");
 }
 
 function formatCsvValue(value: unknown): string {
   if (value === null || value === undefined) return "";
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Date) return exportDateTime(value);
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }

@@ -1,5 +1,7 @@
 import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { toCsv } from "@/lib/export/csv";
+import { exportLabel, exportMonth } from "@/lib/export/readable";
 import {
   academies,
   academySubscriptions,
@@ -730,18 +732,29 @@ export async function getPlatformReports(
  * amount_cents is summed in this codebase, e.g. lib/subscriptions/usage.ts).
  */
 export function revenueBreakdownToCsv(result: RevenueBreakdownResult): string {
-  const escape = (value: string): string =>
-    /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-
-  const header = ["Group", "Collected", "Expected"].join(",");
-  const lines = result.rows.map((row) =>
-    [escape(row.label), (row.collectedCents / 100).toFixed(2), (row.expectedCents / 100).toFixed(2)].join(","),
-  );
-  const totalsLine = [
-    "Total",
-    (result.totals.collectedCents / 100).toFixed(2),
-    (result.totals.expectedCents / 100).toFixed(2),
-  ].join(",");
-
-  return [header, ...lines, totalsLine].join("\n");
+  // Readable export (lib/export/readable.ts): the group column is named for
+  // what it groups by, and raw codes/months read as words ("Mobile Money",
+  // "Oct 2026"). Written through the shared CSV writer for its quoting and
+  // spreadsheet formula-injection guard.
+  const heading = REVENUE_GROUP_HEADINGS[result.groupBy];
+  const label = (row: RevenueBreakdownRow) =>
+    result.groupBy === "month"
+      ? exportMonth(row.label)
+      : result.groupBy === "method" || result.groupBy === "billing_period"
+        ? exportLabel(row.label)
+        : row.label;
+  const amount = (cents: number) => (cents / 100).toFixed(2);
+  const rows = [
+    ...result.rows.map((row) => ({ [heading]: label(row), Collected: amount(row.collectedCents), Expected: amount(row.expectedCents) })),
+    { [heading]: "Total", Collected: amount(result.totals.collectedCents), Expected: amount(result.totals.expectedCents) },
+  ];
+  return toCsv(rows, [heading, "Collected", "Expected"]);
 }
+
+const REVENUE_GROUP_HEADINGS: Record<RevenueGroupBy, string> = {
+  month: "Month",
+  plan: "Plan",
+  academy: "Academy",
+  method: "Payment Method",
+  billing_period: "Billing Period",
+};

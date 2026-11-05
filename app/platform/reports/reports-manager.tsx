@@ -155,7 +155,9 @@ function groupLabel(groupBy: RevenueGroupBy, row: RevenueBreakdownRow): string {
 }
 
 function downloadCsv(csv: string, filename: string) {
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  // UTF-8 byte-order mark: Excel then reads names with accents or Arabic
+  // script correctly instead of showing garbled characters.
+  const blob = new Blob(["﻿", csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
