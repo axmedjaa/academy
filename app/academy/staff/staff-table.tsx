@@ -7,7 +7,7 @@ import {
   removeStaffMembership,
   updateStaff,
 } from "@/lib/academies/staff-actions";
-import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
+import { ACADEMY_ROLES, isRetiredAcademyRole, type AcademyRole } from "@/lib/auth/roles";
 import type { StaffDeletionEligibilitySummary, StaffListRow, StaffWorkplaceOptions } from "@/lib/academies/staff";
 import { Badge, EmptyState, ErrorMessage, PhoneLink, Section, inputClass, trHover } from "@/app/academy/_shell/ui";
 import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
@@ -60,7 +60,9 @@ function BranchesCell({ row }: { row: StaffListRow }) {
 
 interface Props {
   staff: (StaffListRow & { deletionEligibility: StaffDeletionEligibilitySummary })[];
-  /** Full/Manage (Owner, Admin, Manager) — Trainer's "View" renders read-only. */
+  /** Full/Manage (Owner, Admin, Manager) — Trainer's "View" renders read-only.
+   * What may be done to each row (role, archive) comes per row from the
+   * server (`canChangeRole`, `canEditRecord`), which enforces the same rules. */
   canManage: boolean;
   /** Owner/Admin/Manager only, same as `canManage` for staff in practice
    * (Trainer's level here is always "view", never full/manage) — kept as
@@ -170,8 +172,10 @@ export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Pr
                 </td>
                 <td className={rtTd} data-label="Role">
                   {row.role === null ? (
-                    <Badge label="No access" tone="gray" />
-                  ) : canManage ? (
+                    <span title="This person has no active access to this academy (it was removed or never granted), so they can't use the academy console.">
+                      <Badge label="No access" tone="gray" />
+                    </span>
+                  ) : row.canChangeRole ? (
                     <select
                       value={row.role}
                       disabled={isPending}
@@ -179,9 +183,12 @@ export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Pr
                       onChange={(event) => onRoleChange(row.userId, event.target.value as AcademyRole)}
                       className={`${inputClass} h-10 !w-auto max-w-full py-1.5 text-[13px]`}
                     >
-                      {ACADEMY_ROLES.map((role) => (
-                        <option key={role} value={role}>
+                      {ACADEMY_ROLES.filter((role) => role === row.role || row.assignableRoles.includes(role)).map((role) => (
+                        // A retired role still shows as the member's current
+                        // role, but can't be picked again.
+                        <option key={role} value={role} disabled={isRetiredAcademyRole(role)}>
                           {ACADEMY_ROLE_LABELS[role]}
+                          {isRetiredAcademyRole(role) ? " (retired)" : ""}
                         </option>
                       ))}
                     </select>
@@ -198,14 +205,16 @@ export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Pr
                 {canManage && (
                   <td className={`${rtTd} text-right`} data-actions="">
                     <span className="inline-flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        disabled={isPending}
-                        onClick={() => onToggleStatus(row)}
-                        className="inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app disabled:opacity-50"
-                      >
-                        {row.status === "active" ? "Archive" : "Restore"}
-                      </button>
+                      {row.canEditRecord && !(row.isSelf && row.status === "active") && (
+                        <button
+                          type="button"
+                          disabled={isPending}
+                          onClick={() => onToggleStatus(row)}
+                          className="inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app disabled:opacity-50"
+                        >
+                          {row.status === "active" ? "Archive" : "Restore"}
+                        </button>
+                      )}
                       {(row.role !== null || canDelete || (row.canEditBranches && workplaceOptions)) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -221,8 +230,13 @@ export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Pr
                             {row.canEditBranches && workplaceOptions && (
                               <DropdownMenuItem onClick={() => setBranchesRowId(row.id)}>Edit branches</DropdownMenuItem>
                             )}
-                            {row.role !== null && (
+                            {row.role !== null && row.canEditRecord && (
                               <DropdownMenuItem onClick={() => setRemoveAccessRowId(row.id)}>Remove access</DropdownMenuItem>
+                            )}
+                            {row.role === null && (
+                              <DropdownMenuItem disabled title="Their academy access was already removed. Use Archive to take the staff record off duty.">
+                                Access already removed
+                              </DropdownMenuItem>
                             )}
                             {canDelete &&
                               (row.deletionEligibility.eligible ? (

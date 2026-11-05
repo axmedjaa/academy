@@ -453,9 +453,9 @@ export default async function AcademyFinancePage({
         />
       )}
       <NoteBlock>
-        Expenses keep an approval workflow: a new expense is a draft until it is submitted for approval. Approved expenses
-        are corrected by reversing or adjusting them, never edited: whoever submitted an expense can correct it, and an
-        Administrator or Manager can correct any expense.
+        A new expense counts as soon as it is recorded; no approval is needed. Recorded expenses are corrected by
+        reversing or adjusting them, never edited: whoever recorded an expense can correct it, and an Administrator or
+        Manager can correct any expense.
       </NoteBlock>
     </div>
   );

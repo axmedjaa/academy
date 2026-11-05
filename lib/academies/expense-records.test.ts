@@ -153,6 +153,31 @@ async function insertBranchDirect(academyId: string): Promise<string> {
   return row.id;
 }
 
+/**
+ * Expenses still in a draft or pending state from before independent
+ * operation. New expenses are recorded `approved` directly, and a recorder
+ * completing their own draft approves it, so the approve/reject paths that
+ * still serve these legacy rows are tested from this state.
+ */
+async function createLegacyDraft(context: AuthContext): Promise<{ ok: true; record: { id: string } }> {
+  const [membership] = await db
+    .select({ academyId: academyMemberships.academyId })
+    .from(academyMemberships)
+    .where(eq(academyMemberships.userId, context.userId));
+  return { ok: true, record: { id: await insertExpenseDirect(membership.academyId, context.userId, "draft") } };
+}
+
+async function submitAsLegacyPending(context: AuthContext, expenseId: string): Promise<{ ok: boolean }> {
+  const [expense] = await db
+    .update(expenseRecords)
+    .set({ status: "pending_approval" })
+    .where(and(eq(expenseRecords.id, expenseId), eq(expenseRecords.status, "draft")))
+    .returning({ academyId: expenseRecords.academyId });
+  if (!expense) return { ok: false };
+  await db.insert(approvalRequests).values({ academyId: expense.academyId, entityType: "expense", entityId: expenseId, requestedBy: context.userId });
+  return { ok: true };
+}
+
 function validInput(overrides: Partial<CreateExpenseRecordInput> = {}): CreateExpenseRecordInput {
   return {
     category: "Office supplies",
@@ -216,14 +241,16 @@ describe("createExpenseRecord — permission matrix", () => {
     },
   );
 
-  it("creates in 'draft' status, writes an audit row, and resolves currency from the academy default", async () => {
+  it("records the expense as 'approved' straight away (no approval needed), writes an audit row, and resolves currency from the academy default", async () => {
     const { academyId, userId, context } = await setupAcademy("finance_officer", "GBP");
     const result = await createExpenseRecord(context, validInput());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.record.status).toBe("draft");
+    expect(result.record.status).toBe("approved");
     expect(result.record.submittedBy).toBe(userId);
     expect(result.record.currency).toBe("GBP");
+    // Independent operation: no approval state is created.
+    expect(await fetchApprovalRequestForExpense(result.record.id)).toBeFalsy();
 
     const [audit] = await db
       .select()
@@ -284,18 +311,31 @@ describe("submitExpenseForApproval — draft -> pending_approval", () => {
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
-  it("flips status to pending_approval and creates a matching pending approval_requests row", async () => {
+  it("a legacy draft recorded by the actor is completed directly: approved, no approval_requests row", async () => {
     const { academyId, userId, context } = await setupAcademy("finance_officer");
     const expenseId = await insertExpenseDirect(academyId, userId, "draft");
 
     const result = await submitExpenseForApproval(context, expenseId);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect(result.record.status).toBe("approved");
+    expect(result.record.approvedBy).toBe(userId);
+    expect(await fetchApprovalRequestForExpense(expenseId)).toBeFalsy();
+  });
+
+  it("someone else's legacy draft, submitted by a role without general approve authority, still goes to pending_approval with a pending approval_requests row", async () => {
+    const { academyId, userId } = await setupAcademy("finance_officer");
+    const expenseId = await insertExpenseDirect(academyId, userId, "draft");
+    const other = await addActingUser(academyId, "academy_owner");
+
+    const result = await submitExpenseForApproval(other.context, expenseId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
     expect(result.record.status).toBe("pending_approval");
 
     const request = await fetchApprovalRequestForExpense(expenseId);
     expect(request?.status).toBe("pending");
-    expect(request?.requestedBy).toBe(userId);
+    expect(request?.requestedBy).toBe(other.userId);
     expect(request?.academyId).toBe(academyId);
   });
 
@@ -339,7 +379,7 @@ describe("approveExpense — pending_approval -> approved", () => {
     async (role, allowed) => {
       const owner = await setupAcademy("finance_officer");
       const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
-      const submitResult = await submitExpenseForApproval(owner.context, expenseId);
+      const submitResult = await submitAsLegacyPending(owner.context, expenseId);
       expect(submitResult.ok).toBe(true);
 
       // A DIFFERENT user of the target role — never the submitter — so a
@@ -355,7 +395,7 @@ describe("approveExpense — pending_approval -> approved", () => {
   it("approves: status -> approved, approved_by/approved_at set, approval_requests row decided, audit before/after recorded", async () => {
     const owner = await setupAcademy("finance_officer");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
-    await submitExpenseForApproval(owner.context, expenseId);
+    await submitAsLegacyPending(owner.context, expenseId);
 
     const admin = await addActingUser(owner.academyId, "academy_admin");
     const result = await approveExpense(admin.context, expenseId);
@@ -390,7 +430,7 @@ describe("approveExpense — pending_approval -> approved", () => {
   it("refuses to approve an already-approved expense with code 'invalid_state'", async () => {
     const owner = await setupAcademy("finance_officer");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
-    await submitExpenseForApproval(owner.context, expenseId);
+    await submitAsLegacyPending(owner.context, expenseId);
     const admin = await addActingUser(owner.academyId, "academy_admin");
     await approveExpense(admin.context, expenseId);
 
@@ -409,7 +449,7 @@ describe("approveExpense — pending_approval -> approved", () => {
   it("rejects a cross-academy expense id with code 'not_found'", async () => {
     const other = await setupAcademy("finance_officer");
     const otherExpenseId = await insertExpenseDirect(other.academyId, other.userId, "draft");
-    await submitExpenseForApproval(other.context, otherExpenseId);
+    await submitAsLegacyPending(other.context, otherExpenseId);
 
     const { context } = await setupAcademy("academy_admin");
     const result = await approveExpense(context, otherExpenseId);
@@ -421,11 +461,11 @@ describe("approveExpense — pending_approval -> approved", () => {
     "%s self-approval is ALLOWED: creates -> submits -> approves their own expense immediately (approved architecture decision)",
     async (role) => {
       const { context, userId } = await setupAcademy(role);
-      const created = await createExpenseRecord(context, validInput());
+      const created = await createLegacyDraft(context);
       expect(created.ok).toBe(true);
       if (!created.ok) return;
 
-      const submitted = await submitExpenseForApproval(context, created.record.id);
+      const submitted = await submitAsLegacyPending(context, created.record.id);
       expect(submitted.ok).toBe(true);
 
       const result = await approveExpense(context, created.record.id);
@@ -442,10 +482,10 @@ describe("approveExpense — pending_approval -> approved", () => {
 
   it("a self-approve-only role (Owner) still cannot approve a DIFFERENT Owner's submission — self-approval is scoped to their own record, not unrestricted authority", async () => {
     const submitterAcademy = await setupAcademy("academy_owner");
-    const created = await createExpenseRecord(submitterAcademy.context, validInput());
+    const created = await createLegacyDraft(submitterAcademy.context);
     expect(created.ok).toBe(true);
     if (!created.ok) return;
-    const submitted = await submitExpenseForApproval(submitterAcademy.context, created.record.id);
+    const submitted = await submitAsLegacyPending(submitterAcademy.context, created.record.id);
     expect(submitted.ok).toBe(true);
 
     // A DIFFERENT Owner in the SAME academy — self-approve-eligible as a
@@ -459,10 +499,10 @@ describe("approveExpense — pending_approval -> approved", () => {
 
   it("a real pending expense id belonging to a DIFFERENT academy is rejected as not_found — never approved, even for a same-role self-approve attempt (tenant isolation)", async () => {
     const other = await setupAcademy("finance_officer");
-    const otherCreated = await createExpenseRecord(other.context, validInput());
+    const otherCreated = await createLegacyDraft(other.context);
     expect(otherCreated.ok).toBe(true);
     if (!otherCreated.ok) return;
-    const otherSubmitted = await submitExpenseForApproval(other.context, otherCreated.record.id);
+    const otherSubmitted = await submitAsLegacyPending(other.context, otherCreated.record.id);
     expect(otherSubmitted.ok).toBe(true);
 
     // A same-role Finance Officer in a completely different academy — must
@@ -488,7 +528,7 @@ describe("rejectExpense — pending_approval -> rejected", () => {
     async (role, allowed) => {
       const owner = await setupAcademy("finance_officer");
       const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
-      await submitExpenseForApproval(owner.context, expenseId);
+      await submitAsLegacyPending(owner.context, expenseId);
 
       const decider = await addActingUser(owner.academyId, role);
       const result = await rejectExpense(decider.context, expenseId, "Missing receipts.");
@@ -500,7 +540,7 @@ describe("rejectExpense — pending_approval -> rejected", () => {
   it("requires a non-empty reason with code 'validation'", async () => {
     const owner = await setupAcademy("finance_officer");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
-    await submitExpenseForApproval(owner.context, expenseId);
+    await submitAsLegacyPending(owner.context, expenseId);
     const manager = await addActingUser(owner.academyId, "manager");
 
     const result = await rejectExpense(manager.context, expenseId, "   ");
@@ -511,7 +551,7 @@ describe("rejectExpense — pending_approval -> rejected", () => {
   it("rejects: status -> rejected, rejection_reason persisted on both the expense row and the approval_requests row", async () => {
     const owner = await setupAcademy("finance_officer");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
-    await submitExpenseForApproval(owner.context, expenseId);
+    await submitAsLegacyPending(owner.context, expenseId);
 
     const manager = await addActingUser(owner.academyId, "manager");
     const result = await rejectExpense(manager.context, expenseId, "Duplicate expense.");
@@ -529,11 +569,11 @@ describe("rejectExpense — pending_approval -> rejected", () => {
     "%s self-rejection is ALLOWED (same approved architecture change as self-approval)",
     async (role) => {
       const { context } = await setupAcademy(role);
-      const created = await createExpenseRecord(context, validInput());
+      const created = await createLegacyDraft(context);
       expect(created.ok).toBe(true);
       if (!created.ok) return;
 
-      const submitted = await submitExpenseForApproval(context, created.record.id);
+      const submitted = await submitAsLegacyPending(context, created.record.id);
       expect(submitted.ok).toBe(true);
 
       const result = await rejectExpense(context, created.record.id, "Changed my mind.");
@@ -544,10 +584,10 @@ describe("rejectExpense — pending_approval -> rejected", () => {
 
   it("a self-approve-only role (Finance Officer) still cannot reject a DIFFERENT Finance Officer's submission", async () => {
     const submitterAcademy = await setupAcademy("finance_officer");
-    const created = await createExpenseRecord(submitterAcademy.context, validInput());
+    const created = await createLegacyDraft(submitterAcademy.context);
     expect(created.ok).toBe(true);
     if (!created.ok) return;
-    const submitted = await submitExpenseForApproval(submitterAcademy.context, created.record.id);
+    const submitted = await submitAsLegacyPending(submitterAcademy.context, created.record.id);
     expect(submitted.ok).toBe(true);
 
     const otherFinanceOfficer = await addActingUser(submitterAcademy.academyId, "finance_officer");

@@ -19,3 +19,23 @@ export const ACADEMY_ROLES = [
   "trainer",
 ] as const;
 export type AcademyRole = (typeof ACADEMY_ROLES)[number];
+
+/**
+ * Roles staff can be given today. Admissions Officer and Finance Officer
+ * are retired: nobody can be created with, or changed to, either one.
+ * They stay in `ACADEMY_ROLES` (and the `academy_role` DB enum) only so
+ * memberships that still hold them keep working, with the same access as
+ * before, until drizzle/0044_retire_admissions_finance_roles.sql moves
+ * them to Manager. Nobody silently loses access in between.
+ */
+export const RETIRED_ACADEMY_ROLES = ["admissions_officer", "finance_officer"] as const satisfies readonly AcademyRole[];
+export type RetiredAcademyRole = (typeof RETIRED_ACADEMY_ROLES)[number];
+
+export const ASSIGNABLE_ACADEMY_ROLES = ACADEMY_ROLES.filter(
+  (role): role is Exclude<AcademyRole, RetiredAcademyRole> => !(RETIRED_ACADEMY_ROLES as readonly string[]).includes(role),
+);
+
+/** True for a role that can no longer be given to anyone. */
+export function isRetiredAcademyRole(role: string): role is RetiredAcademyRole {
+  return (RETIRED_ACADEMY_ROLES as readonly string[]).includes(role);
+}

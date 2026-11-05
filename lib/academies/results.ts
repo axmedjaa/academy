@@ -397,6 +397,13 @@ export async function submitResults(
   if (!canSubmitLevel(level)) {
     return { ok: false, error: FORBIDDEN };
   }
+  // Independent operation: a submitter who may approve results themselves
+  // (Owner/Admin/Manager) completes the review in this same step — the
+  // results go straight to `approved`, ready to publish, with no
+  // approval_requests row. A Trainer, who may enter marks but not approve
+  // or publish results, still sends them for review: that is Trainer's
+  // permission boundary, not an extra approval step.
+  const approvesOwnSubmission = canApproveLevel(getAcademyPermissionLevel(membershipRole, ACADEMY_RESULTS_ACTION));
 
   const parsedExamId = z.string().uuid().safeParse(examId);
   if (!parsedExamId.success) return { ok: false, error: EXAM_NOT_FOUND };
@@ -468,21 +475,27 @@ export async function submitResults(
     // `after` keeps the targets' order.
     const updatedRows = await tx
       .update(examResults)
-      .set({ status: "under_review", submittedAt: now, updatedAt: now })
+      .set(
+        approvesOwnSubmission
+          ? { status: "approved", submittedAt: now, approvedBy: actorContext.userId, approvedAt: now, updatedAt: now }
+          : { status: "under_review", submittedAt: now, updatedAt: now },
+      )
       .where(inArray(examResults.id, targets.map((row) => row.id)))
       .returning();
     const updatedById = new Map(updatedRows.map((row) => [row.id, row]));
     const after: ResultRecord[] = targets.map((row) => toResultRecord(updatedById.get(row.id)!));
 
-    const requestResult = await createApprovalRequests(
-      tx,
-      targets.map((row) => ({
-        academyId,
-        entityType: "result" as const,
-        entityId: row.id,
-        requestedBy: actorContext.userId,
-      })),
-    );
+    const requestResult = approvesOwnSubmission
+      ? ({ ok: true } as const)
+      : await createApprovalRequests(
+          tx,
+          targets.map((row) => ({
+            academyId,
+            entityType: "result" as const,
+            entityId: row.id,
+            requestedBy: actorContext.userId,
+          })),
+        );
     if (!requestResult.ok) {
       // Same "unreachable in practice" reasoning as
       // grade-configurations.ts's submitGradeConfigForApproval: the

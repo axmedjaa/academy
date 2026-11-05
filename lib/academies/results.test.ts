@@ -454,6 +454,13 @@ describe("submitResults — permission matrix (same gate as enterMarks)", () => 
     );
     const result = await submitResults(setup.context, examId);
     expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // Trainer may enter marks but not approve or publish results, so their
+    // submission still goes to review with a pending approval request.
+    expect(result.results[0].status).toBe("under_review");
+    const requests = await db.select().from(approvalRequests).where(eq(approvalRequests.entityId, result.results[0].id));
+    expect(requests).toHaveLength(1);
+    expect(requests[0].status).toBe("pending");
   });
 
   it("refuses a trainer submitting results on a batch they are NOT assigned to (IDOR-safe not_found)", async () => {
@@ -476,8 +483,33 @@ describe("submitResults — permission matrix (same gate as enterMarks)", () => 
 });
 
 describe("submitResults — state machine", () => {
-  it("Marks Entered -> Under Review, stamps submitted_at, and opens a pending approval_requests row", async () => {
-    const setup = await setupAcademy("academy_owner");
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
+    "%s approves while submitting: Marks Entered -> Approved, no approval_requests row, ready to publish",
+    async (role) => {
+      const setup = await setupAcademy(role);
+      const examId = await insertExamDirect(setup.academyId, setup.batchId);
+      const resultId = await insertExamResultDirect(
+        setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId,
+        { status: "marks_entered", marksObtained: 70 },
+      );
+      const result = await submitResults(setup.context, examId);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.results[0].status).toBe("approved");
+      expect(result.results[0].approvedBy).toBe(setup.userId);
+      expect(result.results[0].submittedAt).not.toBeNull();
+      expect(await db.select().from(approvalRequests).where(eq(approvalRequests.entityId, resultId))).toHaveLength(0);
+      const audits = await db.select({ action: auditLogs.action }).from(auditLogs).where(eq(auditLogs.entityId, examId));
+      expect(audits.map((a) => a.action)).toContain("submitResults");
+      const published = await publishResults(setup.context, examId);
+      expect(published.ok).toBe(true);
+    },
+  );
+
+  it("Trainer: Marks Entered -> Under Review, stamps submitted_at, and opens a pending approval_requests row (review kept: Trainer cannot approve results)", async () => {
+    const setup = await setupAcademy("trainer");
+    const staffProfileId = await insertStaffProfile(setup.academyId, setup.userId);
+    await assignTrainerToBatchDirect(setup.academyId, setup.batchId, staffProfileId);
     const examId = await insertExamDirect(setup.academyId, setup.batchId);
     const resultId = await insertExamResultDirect(
       setup.academyId,
@@ -545,7 +577,7 @@ describe("submitResults — state machine", () => {
 
     const row1 = await fetchResultRow(result1);
     const row2 = await fetchResultRow(result2);
-    expect(row1.status).toBe("under_review");
+    expect(row1.status).toBe("approved");
     expect(row2.status).toBe("marks_entered");
   });
 
@@ -985,8 +1017,10 @@ describe("publishResults — notification wiring", () => {
 // grade_band_label/pass_fail.
 // ---------------------------------------------------------------------------
 describe("submitResults/publishResults — batched writes (performance plan P8)", () => {
-  it("submits several results at once: each moves to under_review with its own pending approval request, results in original order", { timeout: 120_000 }, async () => {
-    const setup = await setupAcademy("academy_owner");
+  it("submits several results at once (Trainer): each moves to under_review with its own pending approval request, results in original order", { timeout: 120_000 }, async () => {
+    const setup = await setupAcademy("trainer");
+    const trainerProfileId = await insertStaffProfile(setup.academyId, setup.userId);
+    await assignTrainerToBatchDirect(setup.academyId, setup.batchId, trainerProfileId);
     const examId = await insertExamDirect(setup.academyId, setup.batchId);
     const studentIds = [setup.studentId];
     for (let i = 0; i < 3; i += 1) {
@@ -1151,18 +1185,12 @@ describe("full lifecycle integration", () => {
       { status: "marks_entered", marksObtained: 88 },
     );
 
+    // Independent operation: the Owner may approve results, so submitting
+    // approves them in the same step — no separate approval click.
     const submitted = await submitResults(owner.context, examId);
     expect(submitted.ok).toBe(true);
-
-    // Owner submitted it AND can approve it themselves (architecture
-    // decision — Owner/Academy Administrator/Manager are never blocked
-    // waiting for approval; see the "self-approval is ALLOWED" tests
-    // above). Cross-user approval (a different Manager approving someone
-    // else's submission) is already covered by the permission-matrix tests
-    // above, so this end-to-end test exercises the self-decide path
-    // instead of duplicating that coverage.
-    const approved = await approveResult(owner.context, resultId);
-    expect(approved.ok).toBe(true);
+    if (submitted.ok) expect(submitted.results[0].status).toBe("approved");
+    expect((await fetchResultRow(resultId)).status).toBe("approved");
 
     // publishResults is a plain "approve"-gated action with no requestedBy
     // check at all — any approve-capable role may publish, including a
@@ -1184,9 +1212,10 @@ describe("listResults / getResult", () => {
     const examId = await insertExamDirect(setup.academyId, setup.batchId);
     const resultId = await insertExamResultDirect(
       setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId!, setup.creatorUserId,
-      { status: "marks_entered", marksObtained: 70 },
+      { status: "under_review", marksObtained: 70 },
     );
-    await submitResults(setup.context, examId);
+    // A submission still pending from before independent operation.
+    await db.insert(approvalRequests).values({ academyId: setup.academyId, entityType: "result", entityId: resultId, requestedBy: setup.userId });
 
     const fetched = await getResult(setup.context, resultId);
     expect(fetched.ok).toBe(true);

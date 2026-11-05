@@ -81,9 +81,9 @@
  * row themselves when it differs from what's stored").
  */
 import { cache } from "react";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, notExists, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { academies, academyMemberships, academySubscriptions } from "@/lib/db/schema";
+import { academies, academyMemberships, academySubscriptions, staffProfiles } from "@/lib/db/schema";
 import { recordAudit } from "@/lib/audit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
@@ -294,13 +294,30 @@ export async function checkAcademyAccess(
   academyId?: string,
   now: Date = new Date(),
 ): Promise<AcademyAccessResult> {
+  // An archived staff record suspends that person's access to the academy
+  // (restoring the record gives it back): archiving is how staff are taken
+  // off duty, so it must not leave their login working. A member with no
+  // staff record at all (e.g. the registering owner) is unaffected.
+  const notArchivedStaff = notExists(
+    db
+      .select({ id: staffProfiles.id })
+      .from(staffProfiles)
+      .where(
+        and(
+          eq(staffProfiles.userId, academyMemberships.userId),
+          eq(staffProfiles.academyId, academyMemberships.academyId),
+          eq(staffProfiles.status, "archived"),
+        ),
+      ),
+  );
   const membershipWhere = academyId
     ? and(
         eq(academyMemberships.userId, userId),
         eq(academyMemberships.academyId, academyId),
         eq(academyMemberships.status, "active"),
+        notArchivedStaff,
       )
-    : and(eq(academyMemberships.userId, userId), eq(academyMemberships.status, "active"));
+    : and(eq(academyMemberships.userId, userId), eq(academyMemberships.status, "active"), notArchivedStaff);
 
   // "Current" subscription = the most recently started row for this
   // academy. There is no explicit "current"/"is_active" flag on

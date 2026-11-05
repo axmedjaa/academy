@@ -740,11 +740,11 @@ async function seedDemoData(): Promise<void> {
     AcademyRole,
     string
   >;
+  // Admissions Officer and Finance Officer are retired roles: the seed no
+  // longer creates demo staff with them (their work is done by Manager).
   for (const role of [
     "academy_admin",
     "manager",
-    "admissions_officer",
-    "finance_officer",
     "trainer",
   ] as const) {
     const userId = await getOrCreateUser(DEMO_ROLE_EMAILS[role]);
@@ -837,17 +837,17 @@ async function seedDemoData(): Promise<void> {
       "Tuition Fee — Term 1",
       50000,
       chargeStatus,
-      roleUserIds.finance_officer,
+      roleUserIds.manager,
     );
     if (chargeStatus !== "open") {
       const paidAmount = chargeStatus === "paid" ? 50000 : 25000;
-      await ensureStudentPayment(academyId, studentId, chargeId, paidAmount, roleUserIds.finance_officer);
+      await ensureStudentPayment(academyId, studentId, chargeId, paidAmount, roleUserIds.manager);
     }
   }
 
-  await ensureIncomeRecord(academyId, "Registration Fees", 30000, roleUserIds.finance_officer);
-  await ensureIncomeRecord(academyId, "Facility Rental Income", 15000, roleUserIds.finance_officer);
-  await ensureExpenseRecord(academyId, "Staff Salaries", 200000, roleUserIds.finance_officer);
+  await ensureIncomeRecord(academyId, "Registration Fees", 30000, roleUserIds.manager);
+  await ensureIncomeRecord(academyId, "Facility Rental Income", 15000, roleUserIds.manager);
+  await ensureExpenseRecord(academyId, "Staff Salaries", 200000, roleUserIds.manager);
   await ensureExpenseRecord(academyId, "Utilities", 8000, roleUserIds.manager);
 
   // One issued certificate — student #1, batch A (marks 78, a Pass).

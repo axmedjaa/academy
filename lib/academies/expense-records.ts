@@ -49,6 +49,26 @@ import { createApprovalRequest, decideApprovalRequest } from "@/lib/academies/ap
  *    actually lets `requestedBy === decidedBy` through
  *    `decideApprovalRequest`'s own guard for all four roles.
  *
+ * =====================================================================
+ * Independent operation (staff roles refactor) — SUPERSEDES the draft ->
+ * submit -> approve steps for NEW expenses
+ * =====================================================================
+ * "Permission to perform an action means authority to complete that
+ * action independently." Every role that may record an expense
+ * (`canCreate`: Owner/Admin/Manager, and legacy Finance Officer) already
+ * held the authority to approve the expense they recorded
+ * (`SELF_APPROVE_ROLES`), so the draft/submit/approve round-trip was a
+ * formality. `createExpenseRecord` now writes the expense `approved`
+ * immediately (approvedBy/approvedAt = the recorder) and creates no
+ * approval_requests row. Audit logging is unchanged.
+ *
+ * Expenses created before this change may still sit at `draft` or
+ * `pending_approval`. They keep working: `submitExpenseForApproval`
+ * approves a draft directly when the actor recorded it or holds general
+ * approve authority, and otherwise still routes it for a decision;
+ * `approveExpense`/`rejectExpense` still decide pending ones with the
+ * exact rules below. Reversal/adjustment authority is unchanged.
+ *
  * This is the first entity in this codebase where self-decide is granted
  * to a role (Finance Officer) that never independently reaches the
  * entity's own general "approve" level at all — contrast
@@ -297,9 +317,9 @@ export type CreateExpenseRecordResult =
   | { ok: true; record: ExpenseRecordRecord }
   | { ok: false; error: ExpenseRecordActionError };
 
-/** Finance Lifecycle table: `— -> draft`, originally Finance Officer only —
- * now Owner/Admin/Manager/Finance Officer, per `canCreate`'s widened gate
- * above (approved architecture decision). */
+/** Records an expense, effective immediately: `— -> approved`, with the
+ * recorder as approver (see "Independent operation" above). Gate:
+ * `canCreate` — Owner/Admin/Manager (and legacy Finance Officer). */
 export async function createExpenseRecord(
   actorContext: AuthContext,
   input: CreateExpenseRecordInput,
@@ -349,6 +369,9 @@ export async function createExpenseRecord(
         amountCents: data.amountCents,
         currency,
         submittedBy: actorContext.userId,
+        status: "approved",
+        approvedBy: actorContext.userId,
+        approvedAt: new Date(),
       })
       .returning();
 
@@ -418,6 +441,31 @@ export async function submitExpenseForApproval(
     }
     if (expense.status !== "draft") {
       return { kind: "invalid_state" as const };
+    }
+
+    // A draft left from before independent operation: whoever recorded it,
+    // or anyone with general approve authority, completes it directly —
+    // no approval request. Anyone else's draft still goes for a decision.
+    if (expense.submittedBy === actorContext.userId || canApprove(permissionLevel)) {
+      const [approved] = await tx
+        .update(expenseRecords)
+        .set({ status: "approved", approvedBy: actorContext.userId, approvedAt: new Date(), updatedAt: new Date() })
+        .where(eq(expenseRecords.id, expenseRecordId))
+        .returning();
+      await recordAudit(
+        {
+          actorUserId: actorContext.userId,
+          actorRole: membershipRole,
+          academyId,
+          action: "approveExpense",
+          entityType: "expense_record",
+          entityId: expenseRecordId,
+          before: { status: expense.status },
+          after: { status: approved.status, approvedBy: approved.approvedBy },
+        },
+        tx,
+      );
+      return { kind: "ok" as const, record: approved };
     }
 
     const [updated] = await tx

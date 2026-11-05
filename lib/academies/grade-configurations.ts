@@ -769,6 +769,33 @@ export async function submitGradeConfigForApproval(
       return { kind: "invalid_bands" as const, message: bandProblem };
     }
 
+    // Independent operation: an actor who could approve this configuration
+    // themselves (Owner/Admin/Manager all hold "full") completes it in this
+    // one step — straight to `approved`, ready to activate, with no
+    // approval_requests row. Only a role that may edit but not approve
+    // (none today) still sends it for a decision.
+    if (canApprove(permissionLevel)) {
+      const [approved] = await tx
+        .update(gradeConfigurations)
+        .set({ status: "approved", approvedBy: actorContext.userId, approvedAt: new Date(), updatedAt: new Date() })
+        .where(eq(gradeConfigurations.id, gradeConfigurationId))
+        .returning();
+      await recordAudit(
+        {
+          actorUserId: actorContext.userId,
+          actorRole: membershipRole,
+          academyId,
+          action: "approveGradeConfig",
+          entityType: "grade_configuration",
+          entityId: gradeConfigurationId,
+          before: { status: config.status },
+          after: { status: approved.status, approvedBy: approved.approvedBy },
+        },
+        tx,
+      );
+      return { kind: "ok" as const, configuration: approved };
+    }
+
     const [updated] = await tx
       .update(gradeConfigurations)
       .set({ status: "pending_approval", updatedAt: new Date() })

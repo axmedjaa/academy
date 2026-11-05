@@ -4,7 +4,7 @@ import { startTransition, useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createStaff, type CreateStaffFormState } from "@/lib/academies/staff-actions";
 import type { StaffWorkplaceOptions } from "@/lib/academies/staff";
-import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
+import { ASSIGNABLE_ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
 import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
 import { showSuccessToast } from "@/lib/ui/toast";
 import {
@@ -32,8 +32,9 @@ const guardedCreateStaff = guardAction(createStaff);
  * Register staff member (design A04 form `staff`): Full name, Login email,
  * Phone, Role, Temporary password, on the design's form system. The
  * application's extra Employee number and Hire date fields are kept
- * (optional). Every academy role stays assignable as before — the design's
- * role list is not used to add a new restriction. `createStaff` validates,
+ * (optional). The Role list offers only the roles this person may give
+ * (Owner: any; Admin: any but Owner; Manager: roles below Manager), the
+ * same list `createStaff` enforces on the server. `createStaff` validates,
  * creates or reuses the user account, scopes to the academy and audits.
  *
  * Multi-branch: "Where they work" picks all branches (owner only) or
@@ -140,7 +141,7 @@ function StaffFields({
               onChange={(event) => setRole(event.target.value as AcademyRole)}
               className={controlClass(false)}
             >
-              {ACADEMY_ROLES.map((role) => (
+              {(workplaceOptions?.creatableRoles ?? ASSIGNABLE_ACADEMY_ROLES).map((role) => (
                 <option key={role} value={role}>
                   {ACADEMY_ROLE_LABELS[role]}
                 </option>

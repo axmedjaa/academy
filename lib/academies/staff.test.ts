@@ -744,17 +744,44 @@ describe("assignStaffRole", () => {
     expect(membership.role).toBe("trainer");
   });
 
-  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
+  it.each<AcademyRole>(["academy_owner", "academy_admin"])(
     "allows %s to assign a role",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
       const target = await createTargetStaff(academyId, "trainer");
-      const result = await assignStaffRole(context, target.userId, "finance_officer");
+      const result = await assignStaffRole(context, target.userId, "manager");
       expect(result.ok).toBe(true);
     },
   );
+  // Retired roles: nobody, not even the Owner, can give them again.
+  it.each<[AcademyRole, AcademyRole]>([
+    ["academy_owner", "admissions_officer"],
+    ["academy_owner", "finance_officer"],
+    ["academy_admin", "admissions_officer"],
+    ["academy_admin", "finance_officer"],
+  ])("refuses %s assigning the retired role %s", async (actorRole, retired) => {
+    const { academyId, context } = await setupAcademy(actorRole);
+    const target = await createTargetStaff(academyId, "trainer");
+    const result = await assignStaffRole(context, target.userId, retired);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    const [membership] = await db
+      .select({ role: academyMemberships.role })
+      .from(academyMemberships)
+      .where(and(eq(academyMemberships.userId, target.userId), eq(academyMemberships.academyId, academyId)));
+    expect(membership.role).toBe("trainer");
+  });
+  it.each<AcademyRole>(["admissions_officer", "finance_officer"])(
+    "refuses the Owner creating a new staff member with the retired role %s",
+    async (retired) => {
+      const { context } = await setupAcademy("academy_owner");
+      const result = await createStaffTracked(context, validCreateInput({ role: retired }));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("validation");
+    },
+  );
 
-  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["manager", "admissions_officer", "finance_officer", "trainer"])(
     "refuses %s with code 'forbidden'",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
@@ -805,7 +832,11 @@ describe("assignStaffRole", () => {
     expect(membership.role).toBe("academy_owner");
   });
 
-  it("refuses demoting the last remaining owner, even by another owner", async () => {
+  // The last remaining owner can only ever be demoted by themselves (only an
+  // owner may demote an owner), and self-role changes are refused outright,
+  // so the last owner always keeps the role. removeStaffMembership's own
+  // last-owner test below still exercises the "conflict" safeguard itself.
+  it("refuses demoting the last remaining owner (self-role change is refused)", async () => {
     const { academyId, userId: ownerUserId } = await setupAcademy("academy_owner");
     const owner2UserId = await createUser();
     await addMembership(owner2UserId, academyId, "academy_owner");
@@ -818,7 +849,12 @@ describe("assignStaffRole", () => {
     // Now owner2 is the only remaining owner — demoting them must be refused.
     const lastDemotion = await assignStaffRole(owner2Context, owner2UserId, "manager");
     expect(lastDemotion.ok).toBe(false);
-    if (!lastDemotion.ok) expect(lastDemotion.error.code).toBe("conflict");
+    if (!lastDemotion.ok) expect(lastDemotion.error.code).toBe("forbidden");
+    const [stillOwner] = await db
+      .select({ role: academyMemberships.role })
+      .from(academyMemberships)
+      .where(and(eq(academyMemberships.userId, owner2UserId), eq(academyMemberships.academyId, academyId)));
+    expect(stillOwner.role).toBe("academy_owner");
   });
 });
 

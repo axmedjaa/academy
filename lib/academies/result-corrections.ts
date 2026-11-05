@@ -343,6 +343,38 @@ export async function requestResultCorrection(
       })
       .returning();
 
+    // Independent operation: everyone who may request a correction
+    // (Owner/Admin/Manager, `canRequestOrDecide`) may also decide it, so a
+    // correction that proposes new marks is applied in this same step,
+    // with no approval_requests row. A request without marks has nothing
+    // to apply and is left open, as before.
+    if (correctionRow.proposedMarksObtained !== null) {
+      await recordAudit(
+        {
+          actorUserId: actorContext.userId,
+          actorRole: membershipRole,
+          academyId,
+          action: "requestResultCorrection",
+          entityType: "result_correction",
+          entityId: correctionRow.id,
+          reason: data.reason,
+          before: { originalResultId, status: resultRow.status },
+          after: toCorrectionRecord(correctionRow),
+        },
+        tx,
+      );
+      const applied = await applyCorrection(tx, {
+        correction: correctionRow,
+        resultRow,
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+      });
+      // Nothing is saved when the proposed marks can't be applied.
+      if (applied.kind !== "ok") throw new ApplyRefused(applied.kind);
+      return { kind: "ok" as const, correction: applied.correction };
+    }
+
     // Reuses entityType: "result" — see this file's module comment's
     // "Judgment call, flagged" section for the full reasoning.
     const requestResult = await createApprovalRequest(tx, {
@@ -376,9 +408,13 @@ export async function requestResultCorrection(
     );
 
     return { kind: "ok" as const, correction: correctionRow };
+  }).catch((error: unknown) => {
+    if (error instanceof ApplyRefused) return { kind: "refused" as const, reason: error.kind };
+    throw error;
   });
 
   if (result.kind === "not_found") return { ok: false, error: RESULT_NOT_FOUND };
+  if (result.kind === "refused") return { ok: false, error: applyRefusedError(result.reason) };
   if (result.kind === "invalid_state") {
     return {
       ok: false,
@@ -415,6 +451,113 @@ async function findPendingApprovalRequest(tx: DbClient, originalResultId: string
     )
     .limit(1);
   return pending ?? null;
+}
+
+function applyRefusedError(kind: ApplyRefusedKind): ResultCorrectionActionError {
+  if (kind === "no_grade_config") {
+    return { code: "validation", message: "This result's snapshotted grade configuration no longer exists." };
+  }
+  if (kind === "no_proposed_marks") {
+    return { code: "validation", message: "This correction has no proposedMarksObtained to apply." };
+  }
+  return {
+    code: "validation",
+    message: "The proposed marks don't fall into any grade band of the result's snapshotted configuration.",
+  };
+}
+
+type ApplyRefusedKind = "no_grade_config" | "no_proposed_marks" | "no_matching_band";
+
+/** Thrown inside a transaction to roll it back when a correction can't be
+ * applied, carrying the reason out. */
+class ApplyRefused extends Error {
+  constructor(readonly kind: ApplyRefusedKind) {
+    super(kind);
+  }
+}
+
+/**
+ * Applies a correction to its published result, in the caller's
+ * transaction: re-evaluates the proposed marks against the result's OWN
+ * already-snapshotted grade_configuration_id (not whatever is active today
+ * — see this file's module comment's "Judgment call, flagged" section),
+ * updates the result, marks the correction `applied` and writes the audit
+ * entry. Shared by `approveResultCorrection` and, since independent
+ * operation, by `requestResultCorrection` itself.
+ */
+async function applyCorrection(
+  tx: DbClient,
+  args: {
+    correction: typeof resultCorrections.$inferSelect;
+    resultRow: typeof examResults.$inferSelect;
+    actorUserId: string;
+    actorRole: AcademyRole;
+    academyId: string;
+  },
+) {
+  const { correction, resultRow, actorUserId, actorRole, academyId } = args;
+  const [config] = await tx
+    .select({ id: gradeConfigurations.id })
+    .from(gradeConfigurations)
+    .where(eq(gradeConfigurations.id, resultRow.gradeConfigurationId))
+    .limit(1);
+  if (!config) return { kind: "no_grade_config" as const };
+
+  const bandRows = await tx.select().from(gradeBands).where(eq(gradeBands.gradeConfigurationId, config.id));
+  const bands = bandRows.map((row) => ({
+    label: row.label,
+    minMark: Number(row.minMark),
+    maxMark: Number(row.maxMark),
+    isPass: row.isPass,
+  }));
+
+  const newMarks = correction.proposedMarksObtained !== null ? Number(correction.proposedMarksObtained) : null;
+  if (newMarks === null) return { kind: "no_proposed_marks" as const };
+
+  const band = evaluateGradeBand(newMarks, bands);
+  if (!band) return { kind: "no_matching_band" as const };
+
+  const now = new Date();
+  const [updatedResult] = await tx
+    .update(examResults)
+    .set({
+      marksObtained: String(newMarks),
+      gradeBandLabel: band.label,
+      passFail: band.isPass ? "pass" : "fail",
+      updatedAt: now,
+    })
+    .where(eq(examResults.id, correction.originalResultId))
+    .returning();
+
+  const [updatedCorrection] = await tx
+    .update(resultCorrections)
+    .set({ status: "applied", decidedBy: actorUserId, decidedAt: now, appliedAt: now })
+    .where(eq(resultCorrections.id, correction.id))
+    .returning();
+
+  await recordAudit(
+    {
+      actorUserId,
+      actorRole,
+      academyId,
+      action: "approveResultCorrection",
+      entityType: "result_correction",
+      entityId: correction.id,
+      before: {
+        marksObtained: resultRow.marksObtained !== null ? Number(resultRow.marksObtained) : null,
+        gradeBandLabel: resultRow.gradeBandLabel,
+        passFail: resultRow.passFail,
+      },
+      after: {
+        marksObtained: newMarks,
+        gradeBandLabel: band.label,
+        passFail: band.isPass ? "pass" : "fail",
+      },
+    },
+    tx,
+  );
+
+  return { kind: "ok" as const, correction: updatedCorrection, result: updatedResult };
 }
 
 export type ApproveResultCorrectionResult =
@@ -486,75 +629,19 @@ export async function approveResultCorrection(
     });
     if (!decision.ok) return { kind: "decision_error" as const, error: decision.error };
 
-    // Re-evaluate against the result's OWN already-snapshotted
-    // grade_configuration_id, not whatever is active today — see this
-    // file's module comment's "Judgment call, flagged" section.
-    const [config] = await tx
-      .select({ id: gradeConfigurations.id })
-      .from(gradeConfigurations)
-      .where(eq(gradeConfigurations.id, resultRow.gradeConfigurationId))
-      .limit(1);
-    if (!config) return { kind: "no_grade_config" as const };
-
-    const bandRows = await tx
-      .select()
-      .from(gradeBands)
-      .where(eq(gradeBands.gradeConfigurationId, config.id));
-    const bands = bandRows.map((row) => ({
-      label: row.label,
-      minMark: Number(row.minMark),
-      maxMark: Number(row.maxMark),
-      isPass: row.isPass,
-    }));
-
-    const newMarks =
-      correction.proposedMarksObtained !== null ? Number(correction.proposedMarksObtained) : null;
-    if (newMarks === null) return { kind: "no_proposed_marks" as const };
-
-    const band = evaluateGradeBand(newMarks, bands);
-    if (!band) return { kind: "no_matching_band" as const };
-
-    const now = new Date();
-    const [updatedResult] = await tx
-      .update(examResults)
-      .set({
-        marksObtained: String(newMarks),
-        gradeBandLabel: band.label,
-        passFail: band.isPass ? "pass" : "fail",
-        updatedAt: now,
-      })
-      .where(eq(examResults.id, correction.originalResultId))
-      .returning();
-
-    const [updatedCorrection] = await tx
-      .update(resultCorrections)
-      .set({ status: "applied", decidedBy: actorContext.userId, decidedAt: now, appliedAt: now })
-      .where(eq(resultCorrections.id, correctionId))
-      .returning();
-
-    await recordAudit(
-      {
-        actorUserId: actorContext.userId,
-        actorRole: membershipRole,
-        academyId,
-        action: "approveResultCorrection",
-        entityType: "result_correction",
-        entityId: correctionId,
-        before: {
-          marksObtained: resultRow.marksObtained !== null ? Number(resultRow.marksObtained) : null,
-          gradeBandLabel: resultRow.gradeBandLabel,
-          passFail: resultRow.passFail,
-        },
-        after: {
-          marksObtained: newMarks,
-          gradeBandLabel: band.label,
-          passFail: band.isPass ? "pass" : "fail",
-        },
-      },
-      tx,
-    );
-
-    return { kind: "ok" as const, correction: updatedCorrection, result: updatedResult };
+    const applied = await applyCorrection(tx, {
+      correction,
+      resultRow,
+      actorUserId: actorContext.userId,
+      actorRole: membershipRole,
+      academyId,
+    });
+    // A refused apply rolls back the decision above with it.
+    if (applied.kind !== "ok") throw new ApplyRefused(applied.kind);
+    return { kind: "ok" as const, correction: applied.correction, result: applied.result };
+  }).catch((error: unknown) => {
+    if (error instanceof ApplyRefused) return { kind: "refused" as const, reason: error.kind };
+    throw error;
   });
 
   if (outcome.kind === "not_found") return { ok: false, error: CORRECTION_NOT_FOUND };
@@ -565,30 +652,7 @@ export async function approveResultCorrection(
     };
   }
   if (outcome.kind === "decision_error") return { ok: false, error: mapDecisionError(outcome.error) };
-  if (outcome.kind === "no_grade_config") {
-    return {
-      ok: false,
-      error: {
-        code: "validation",
-        message: "This result's snapshotted grade configuration no longer exists.",
-      },
-    };
-  }
-  if (outcome.kind === "no_proposed_marks") {
-    return {
-      ok: false,
-      error: { code: "validation", message: "This correction has no proposedMarksObtained to apply." },
-    };
-  }
-  if (outcome.kind === "no_matching_band") {
-    return {
-      ok: false,
-      error: {
-        code: "validation",
-        message: "The proposed marks don't fall into any grade band of the result's snapshotted configuration.",
-      },
-    };
-  }
+  if (outcome.kind === "refused") return { ok: false, error: applyRefusedError(outcome.reason) };
 
   return {
     ok: true,

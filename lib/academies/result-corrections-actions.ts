@@ -30,7 +30,7 @@ export async function getResultCorrectionsList(
 export async function requestResultCorrection(
   originalResultId: string,
   input: RequestResultCorrectionInput,
-): Promise<{ ok: true } | { ok: false; error: ResultCorrectionActionError }> {
+): Promise<{ ok: true; applied: boolean } | { ok: false; error: ResultCorrectionActionError }> {
   const context = await getAuthContext();
   if (!context) {
     return { ok: false, error: UNAUTHENTICATED };
@@ -40,7 +40,7 @@ export async function requestResultCorrection(
     return { ok: false, error: result.error };
   }
   revalidatePath("/academy/results");
-  return { ok: true };
+  return { ok: true, applied: result.correction.status === "applied" };
 }
 
 export async function approveResultCorrection(

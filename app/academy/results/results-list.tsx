@@ -211,9 +211,12 @@ export function ResultsList({
                           className={HEAD_BTN}
                           disabled={pending || entered === 0}
                           title={entered === 0 ? "No entered marks to submit." : undefined}
-                          onClick={() => run(() => submitResults(exam.id), `Submitted ${entered} for review.`)}
+                          onClick={() =>
+                            run(() => submitResults(exam.id), canApprove ? `Approved ${entered}. Publish when you're ready.` : `Submitted ${entered} for review.`)
+                          }
                         >
-                          Submit marks for review{entered > 0 ? ` (${entered})` : ""}
+                          {canApprove ? "Approve entered marks" : "Submit marks for review"}
+                          {entered > 0 ? ` (${entered})` : ""}
                         </button>
                       )}
                       {canApprove && (
@@ -522,7 +525,7 @@ function CorrectionDialog({
                 setBanner(outcome.error.message);
                 return;
               }
-              showSuccessToast("Correction requested.");
+              showSuccessToast(outcome.applied ? "Correction applied." : "Correction requested.");
               onDone();
             } catch {
               setBanner(NETWORK_ERROR_MESSAGE);

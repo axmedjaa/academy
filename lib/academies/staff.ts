@@ -23,7 +23,8 @@ import { checkAllowance } from "@/lib/subscriptions/usage";
 import { recordAudit } from "@/lib/audit";
 import { hashPassword, passwordSchema } from "@/lib/auth/password";
 import type { AuthContext } from "@/lib/auth/auth-context";
-import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
+import { canChangeStaffRoles, canModifyStaffWithRole, rolesAssignableBy } from "@/lib/academies/staff-role-rules";
+import { ACADEMY_ROLES, isRetiredAcademyRole, type AcademyRole } from "@/lib/auth/roles";
 
 /**
  * PLAN.md Phase 2, Item 35 — "Staff create/update + role assignment +
@@ -54,6 +55,9 @@ function canManageStaff(level: AcademyPermissionLevel): boolean {
 function canViewStaff(level: AcademyPermissionLevel): boolean {
   return level !== "none";
 }
+
+/** Admissions Officer and Finance Officer are retired (lib/auth/roles.ts). */
+const RETIRED_ROLE_MESSAGE = "This role has been retired. Choose Manager or Trainer instead.";
 
 export interface StaffActionError {
   code:
@@ -138,6 +142,9 @@ export interface StaffWorkplaceOptions {
   canGrantAllBranches: boolean;
   /** Active branches the creator can place staff in (their own branches unless all-branch). */
   branches: { id: string; name: string; isMain: boolean }[];
+  /** Roles this person may give a new staff member (createStaff enforces
+   * the same list; see staff-role-rules.ts). */
+  creatableRoles: AcademyRole[];
 }
 
 /** The branches offered by the "Where they work" field when registering staff. */
@@ -155,7 +162,7 @@ export async function getStaffWorkplaceOptions(
   if (!access.academyWide) {
     const own = await getAssignedBranchIds(db, access.academyId, actorContext.userId);
     if (own.length === 0) {
-      return { ok: true, options: { canGrantAllBranches: false, branches: [] } };
+      return { ok: true, options: { canGrantAllBranches: false, branches: [], creatableRoles: [...rolesAssignableBy(access.membershipRole, "create")] } };
     }
     conditions.push(inArray(branches.id, own));
   }
@@ -166,7 +173,11 @@ export async function getStaffWorkplaceOptions(
     .orderBy(desc(branches.isMain), asc(branches.name));
   return {
     ok: true,
-    options: { canGrantAllBranches: access.membershipRole === "academy_owner", branches: rows },
+    options: {
+      canGrantAllBranches: access.membershipRole === "academy_owner",
+      branches: rows,
+      creatableRoles: [...rolesAssignableBy(access.membershipRole, "create")],
+    },
   };
 }
 
@@ -207,6 +218,13 @@ class AllowanceExceeded extends Error {
 class AlreadyStaff extends Error {}
 
 class OutsideOwnBranches extends Error {}
+
+/** A refusal decided inside a transaction (nothing is written). */
+class StaffUpdateRefused extends Error {
+  constructor(public readonly error: StaffActionError) {
+    super(error.message);
+  }
+}
 
 /**
  * PLAN.md §4: `createStaff` (`checkAllowance('staff')`). Gated by the new
@@ -264,6 +282,20 @@ export async function createStaff(
   // entirely new owner account from scratch, bypassing that same guard.
   if (data.role === "academy_owner" && access.membershipRole !== "academy_owner") {
     return { ok: false, error: { code: "forbidden", message: "Only an academy owner can grant ownership." } };
+  }
+  if (isRetiredAcademyRole(data.role)) {
+    return { ok: false, error: { code: "validation", message: RETIRED_ROLE_MESSAGE } };
+  }
+  // Privilege-escalation guard: creating staff must never hand out a role
+  // the creator couldn't grant by changing a role. A Manager (who can't
+  // change roles at all) may only create roles below Manager — otherwise
+  // they could register an Admin account they control and promote
+  // themselves with it. Applies to brand-new and re-used accounts alike.
+  if (!rolesAssignableBy(access.membershipRole, "create").includes(data.role)) {
+    return {
+      ok: false,
+      error: { code: "forbidden", message: "You can't create staff with this role. Ask the academy owner or an academy admin." },
+    };
   }
 
   // Where the person works. An owner already has every branch through the
@@ -587,6 +619,28 @@ export async function updateStaff(
       .limit(1);
     if (!existing) return null;
 
+    // The target's current academy role (null = no active access).
+    const [targetMembership] = await tx
+      .select({ role: academyMemberships.role })
+      .from(academyMemberships)
+      .where(
+        and(
+          eq(academyMemberships.userId, existing.userId),
+          eq(academyMemberships.academyId, access.academyId),
+          eq(academyMemberships.status, "active"),
+        ),
+      )
+      .limit(1);
+    // Only an Owner edits, archives or restores an Owner's record.
+    if (!canModifyStaffWithRole(access.membershipRole, targetMembership?.role ?? null)) {
+      throw new StaffUpdateRefused({ code: "forbidden", message: "Only an academy owner can change the academy owner's staff record." });
+    }
+    // Archiving ends academy access (see the access gate), so nobody
+    // archives their own record — another manager or the owner does.
+    if (existing.userId === actorContext.userId && data.status === "archived" && existing.status !== "archived") {
+      throw new StaffUpdateRefused({ code: "forbidden", message: "You can't archive your own staff record." });
+    }
+
     // Restoring archived staff takes a plan slot again: recheck the staff
     // limit in this transaction (serialized per academy). Nothing is
     // written when it fails.
@@ -629,6 +683,9 @@ export async function updateStaff(
     return updated;
   });
   } catch (err) {
+    if (err instanceof StaffUpdateRefused) {
+      return { ok: false, error: err.error };
+    }
     if (err instanceof AllowanceExceeded) {
       return {
         ok: false,
@@ -680,6 +737,11 @@ export type AssignStaffRoleResult =
  *   2. An academy may never be left with zero active owners — demoting the
  *      last remaining `academy_owner` membership is refused outright; a
  *      successor must be promoted first.
+ *
+ * Role changes in general are limited to Owner and Academy Admin (see
+ * lib/academies/staff-role-rules.ts). A Manager still adds, edits, archives
+ * and places staff in branches, but cannot change anyone's role, and no one
+ * can change their own role.
  */
 export async function assignStaffRole(
   actorContext: AuthContext,
@@ -695,6 +757,14 @@ export async function assignStaffRole(
   if (!canManageStaff(level)) {
     return { ok: false, error: FORBIDDEN };
   }
+  // Only Owner and Academy Admin change roles (staff-role-rules.ts).
+  if (!canChangeStaffRoles(access.membershipRole)) {
+    return { ok: false, error: { code: "forbidden", message: "Only the academy owner or an academy admin can change staff roles." } };
+  }
+  // Nobody changes their own role, through the page or a direct request.
+  if (targetUserId === actorContext.userId) {
+    return { ok: false, error: { code: "forbidden", message: "You can't change your own role." } };
+  }
   if (!(await isStaffUserInScope(access, actorContext.userId, targetUserId))) {
     return { ok: false, error: { code: "not_found", message: "Staff member not found." } };
   }
@@ -702,6 +772,10 @@ export async function assignStaffRole(
   const parsedRole = z.enum(ACADEMY_ROLES).safeParse(role);
   if (!parsedRole.success) {
     return { ok: false, error: { code: "validation", message: "Invalid role." } };
+  }
+  // Retired roles are never given again, by anyone.
+  if (isRetiredAcademyRole(parsedRole.data)) {
+    return { ok: false, error: { code: "validation", message: RETIRED_ROLE_MESSAGE } };
   }
 
   // Rule 1a: granting ownership itself requires already being an owner.
@@ -945,6 +1019,17 @@ export interface StaffListRow extends StaffRecord {
   /** Whether the viewer may change where this person works (see
    * `setStaffWorkplace`, which checks the same rules on the server). */
   canEditBranches: boolean;
+  /** Whether the viewer may change this person's role (assignStaffRole
+   * enforces the same rules): Owner/Admin, never on themselves, and only an
+   * Owner on an Owner. */
+  canChangeRole: boolean;
+  /** Roles the viewer may switch this person to. */
+  assignableRoles: AcademyRole[];
+  /** Whether the viewer may archive / restore / edit this record
+   * (updateStaff enforces the same rules). */
+  canEditRecord: boolean;
+  /** Whether this row is the viewer's own staff record. */
+  isSelf: boolean;
 }
 
 export interface StaffDeletionEligibilitySummary {
@@ -1224,6 +1309,8 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
       const placed = branchesByProfileId.get(row.profile.id) ?? { visible: [], hidden: 0 };
       const isOwner = row.role === "academy_owner";
       const holdsGrant = row.role !== null && !isOwner && row.academyWide === true;
+      const isSelf = row.profile.userId === actorContext.userId;
+      const mayTouch = canManageStaff(level) && canModifyStaffWithRole(scope.membershipRole, row.role);
       return {
         ...toRecord(row.profile),
         role: row.role,
@@ -1239,6 +1326,10 @@ export async function listStaff(actorContext: AuthContext): Promise<ListStaffRes
           !isOwner &&
           (!holdsGrant || scope.membershipRole === "academy_owner") &&
           (scope.academyWide || placed.visible.length > 0),
+        canChangeRole: mayTouch && !isSelf && row.role !== null && canChangeStaffRoles(scope.membershipRole),
+        assignableRoles: [...rolesAssignableBy(scope.membershipRole, "change")],
+        canEditRecord: mayTouch,
+        isSelf,
         deletionEligibility: { eligible: reasons.length === 0, reasons },
       };
     }),

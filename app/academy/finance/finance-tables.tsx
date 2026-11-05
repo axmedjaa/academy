@@ -525,10 +525,16 @@ export function ExpensesTable({
                         type="button"
                         className={ROW_BTN_PRIMARY}
                         disabled={working}
-                        onClick={() => lifecycle(record.id, () => submitExpenseForApprovalAction(record.id), "Expense submitted for approval.")}
+                        onClick={() =>
+                          lifecycle(
+                            record.id,
+                            () => submitExpenseForApprovalAction(record.id),
+                            own || canApprove ? "Expense recorded." : "Expense submitted for approval.",
+                          )
+                        }
                       >
-                        <Icon name="upload" width={16} height={16} />
-                        {working ? "Submitting…" : "Submit for approval"}
+                        <Icon name={own || canApprove ? "check_circle" : "upload"} width={16} height={16} />
+                        {working ? "Saving…" : own || canApprove ? "Record" : "Submit for approval"}
                       </button>
                     )}
                     {canDecide && record.status === "pending_approval" && (

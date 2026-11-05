@@ -364,8 +364,13 @@ describe("requestResultCorrection — permission matrix", () => {
 });
 
 describe("requestResultCorrection — validation and state", () => {
-  it("creates a requested result_corrections row and a matching pending approval_requests row", async () => {
-    const setup = await setupAcademy("academy_owner");
+  it("applies a correction with proposed marks immediately: correction applied, result updated, no approval_requests row", async () => {
+    const setup = await setupAcademy("academy_owner", {
+      bands: [
+        { label: "Fail", minMark: 0, maxMark: 49, isPass: false },
+        { label: "Pass", minMark: 50, maxMark: 100, isPass: true },
+      ],
+    });
     const examId = await insertExamDirect(setup.academyId, setup.batchId);
     const resultId = await insertExamResultDirect(
       setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
@@ -378,24 +383,54 @@ describe("requestResultCorrection — validation and state", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.correction.status).toBe("requested");
+    expect(result.correction.status).toBe("applied");
     expect(result.correction.originalResultId).toBe(resultId);
     expect(result.correction.proposedMarksObtained).toBe(65);
     expect(result.correction.requestedBy).toBe(setup.userId);
+    expect(result.correction.decidedBy).toBe(setup.userId);
 
-    const [pending] = await db
-      .select()
-      .from(approvalRequests)
-      .where(eq(approvalRequests.entityId, resultId));
-    expect(pending).toBeTruthy();
-    expect(pending.status).toBe("pending");
-    expect(pending.entityType).toBe("result");
-    expect(pending.requestedBy).toBe(setup.userId);
+    // Independent operation: no approval state is created.
+    const requests = await db.select().from(approvalRequests).where(eq(approvalRequests.entityId, resultId));
+    expect(requests).toHaveLength(0);
 
-    // The underlying exam_results row is untouched by the request itself.
     const row = await fetchResultRow(resultId);
     expect(row.status).toBe("published");
-    expect(row.marksObtained).toBe("40");
+    expect(row.marksObtained).toBe("65");
+    expect(row.gradeBandLabel).toBe("Pass");
+    expect(row.passFail).toBe("pass");
+
+    // Both steps stay in the audit log.
+    const audits = await db.select({ action: auditLogs.action }).from(auditLogs).where(eq(auditLogs.entityId, result.correction.id));
+    expect(audits.map((a) => a.action).sort()).toEqual(["approveResultCorrection", "requestResultCorrection"]);
+  });
+
+  it("saves nothing when the proposed marks fall in no grade band", async () => {
+    const setup = await setupAcademy("academy_owner", {
+      bands: [{ label: "Pass", minMark: 50, maxMark: 100, isPass: true }],
+    });
+    const examId = await insertExamDirect(setup.academyId, setup.batchId);
+    const resultId = await insertExamResultDirect(
+      setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
+      { status: "published", marksObtained: 60, gradeBandLabel: "Pass", passFail: "pass" },
+    );
+    const result = await requestResultCorrection(setup.context, resultId, { reason: "Typo", proposedMarksObtained: 10 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    expect(await db.select().from(resultCorrections).where(eq(resultCorrections.originalResultId, resultId))).toHaveLength(0);
+    expect((await fetchResultRow(resultId)).marksObtained).toBe("60");
+  });
+
+  it("a request without proposed marks has nothing to apply and stays open, as before", async () => {
+    const setup = await setupAcademy("academy_owner");
+    const examId = await insertExamDirect(setup.academyId, setup.batchId);
+    const resultId = await insertExamResultDirect(
+      setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
+      { status: "published", marksObtained: 40 },
+    );
+    const result = await requestResultCorrection(setup.context, resultId, { reason: "Please re-check" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.correction.status).toBe("requested");
+    expect((await fetchResultRow(resultId)).marksObtained).toBe("40");
   });
 
   it("requires a non-empty reason", async () => {
@@ -447,6 +482,38 @@ describe("requestResultCorrection — validation and state", () => {
 // ---------------------------------------------------------------------------
 // approveResultCorrection / rejectResultCorrection
 // ---------------------------------------------------------------------------
+/**
+ * A correction still pending from before independent operation (requested
+ * but not yet decided, with its pending approval_requests row). New
+ * requests that propose marks are applied immediately, so the approve and
+ * reject paths that still serve these legacy rows are tested from here.
+ */
+async function insertLegacyPendingCorrection(
+  context: AuthContext,
+  resultId: string,
+  input: { reason: string; proposedMarksObtained?: number | null },
+): Promise<{ ok: true; correction: { id: string } }> {
+  const [result] = await db.select({ academyId: examResults.academyId }).from(examResults).where(eq(examResults.id, resultId));
+  const [row] = await db
+    .insert(resultCorrections)
+    .values({
+      academyId: result.academyId,
+      originalResultId: resultId,
+      requestedBy: context.userId,
+      reason: input.reason,
+      proposedMarksObtained: input.proposedMarksObtained == null ? null : String(input.proposedMarksObtained),
+    })
+    .returning({ id: resultCorrections.id });
+  await db.insert(approvalRequests).values({
+    academyId: result.academyId,
+    entityType: "result",
+    entityId: resultId,
+    requestedBy: context.userId,
+    reason: input.reason,
+  });
+  return { ok: true, correction: { id: row.id } };
+}
+
 describe("approveResultCorrection/rejectResultCorrection — permission matrix", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", true],
@@ -466,7 +533,7 @@ describe("approveResultCorrection/rejectResultCorrection — permission matrix",
       setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
       { status: "published", marksObtained: 40, gradeBandLabel: "Fail", passFail: "fail" },
     );
-    const requested = await requestResultCorrection(requesterContext, resultId, {
+    const requested = await insertLegacyPendingCorrection(requesterContext, resultId, {
       reason: "Transcription error",
       proposedMarksObtained: 65,
     });
@@ -497,7 +564,7 @@ describe("approveResultCorrection — full lifecycle: request -> approve -> appl
       { status: "published", marksObtained: 40, gradeBandLabel: "Fail", passFail: "fail" },
     );
 
-    const requested = await requestResultCorrection(setup.context, resultId, {
+    const requested = await insertLegacyPendingCorrection(setup.context, resultId, {
       reason: "Transcription error, should be 65",
       proposedMarksObtained: 65,
     });
@@ -557,7 +624,7 @@ describe("approveResultCorrection — full lifecycle: request -> approve -> appl
       { label: "Pass (strict)", minMark: 90, maxMark: 100, isPass: true },
     ]);
 
-    const requested = await requestResultCorrection(setup.context, resultId, {
+    const requested = await insertLegacyPendingCorrection(setup.context, resultId, {
       reason: "Transcription error, should be 45",
       proposedMarksObtained: 45,
     });
@@ -583,7 +650,7 @@ describe("approveResultCorrection — full lifecycle: request -> approve -> appl
         setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
         { status: "published", marksObtained: 40 },
       );
-      const requested = await requestResultCorrection(setup.context, resultId, {
+      const requested = await insertLegacyPendingCorrection(setup.context, resultId, {
         reason: "some reason",
         proposedMarksObtained: 65,
       });
@@ -610,7 +677,7 @@ describe("approveResultCorrection — full lifecycle: request -> approve -> appl
       setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
       { status: "published", marksObtained: 40 },
     );
-    const requested = await requestResultCorrection(setup.context, resultId, {
+    const requested = await insertLegacyPendingCorrection(setup.context, resultId, {
       reason: "some reason",
       proposedMarksObtained: 65,
     });
@@ -639,7 +706,7 @@ describe("approveResultCorrection — full lifecycle: request -> approve -> appl
       other.academyId, otherExamId, other.studentId, other.batchId, other.activeGradeConfigId, other.creatorUserId,
       { status: "published", marksObtained: 40 },
     );
-    const otherRequested = await requestResultCorrection(other.context, otherResultId, {
+    const otherRequested = await insertLegacyPendingCorrection(other.context, otherResultId, {
       reason: "some reason",
       proposedMarksObtained: 65,
     });
@@ -667,7 +734,7 @@ describe("rejectResultCorrection — request -> reject -> exam_results untouched
       setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
       { status: "published", marksObtained: 40, gradeBandLabel: "Fail", passFail: "fail" },
     );
-    const requested = await requestResultCorrection(setup.context, resultId, {
+    const requested = await insertLegacyPendingCorrection(setup.context, resultId, {
       reason: "Transcription error",
       proposedMarksObtained: 65,
     });
@@ -704,7 +771,7 @@ describe("rejectResultCorrection — request -> reject -> exam_results untouched
       setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
       { status: "published", marksObtained: 40 },
     );
-    const requested = await requestResultCorrection(setup.context, resultId, {
+    const requested = await insertLegacyPendingCorrection(setup.context, resultId, {
       reason: "some reason",
       proposedMarksObtained: 65,
     });
@@ -725,7 +792,7 @@ describe("rejectResultCorrection — request -> reject -> exam_results untouched
         setup.academyId, examId, setup.studentId, setup.batchId, setup.activeGradeConfigId, setup.creatorUserId,
         { status: "published", marksObtained: 40 },
       );
-      const requested = await requestResultCorrection(setup.context, resultId, {
+      const requested = await insertLegacyPendingCorrection(setup.context, resultId, {
         reason: "some reason",
         proposedMarksObtained: 65,
       });

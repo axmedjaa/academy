@@ -73,10 +73,10 @@ const COPY: Record<Kind, { button: string; title: string; description: string; s
   expense: {
     button: "Submit expense",
     title: "Submit expense",
-    description: "It starts as a draft. Submit it from the list for approval.",
-    submit: "Save draft",
+    description: "It is recorded straight away. No approval is needed.",
+    submit: "Record expense",
     pending: "Saving…",
-    done: "Expense saved as a draft.",
+    done: "Expense recorded.",
   },
 };
 

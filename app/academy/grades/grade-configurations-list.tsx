@@ -39,8 +39,9 @@ import {
 /**
  * Grades (design A11): grade configurations, one active at a time. Each row
  * shows its bands, who created it and its status, with the actions its
- * status allows: Edit bands and Submit for approval on a draft; Approve or
- * Reject a pending one (never your own submission); Make active once
+ * status allows: Edit bands and Approve on a draft (one step for anyone who
+ * may approve); Approve or Reject a configuration still pending from before
+ * that change; Make active once
  * approved; Copy as draft to revise anything that is no longer a draft.
  * Every action is the existing server action with its own permission and
  * state checks.
@@ -180,11 +181,16 @@ export function GradeConfigurationsList({
                             type="button"
                             className={ROW_BTN_PRIMARY}
                             disabled={pending || config.bands.length === 0}
-                            title={config.bands.length === 0 ? "Add bands before submitting." : undefined}
-                            onClick={() => run(() => submitGradeConfigForApprovalAction(config.id), "Submitted for approval.")}
+                            title={config.bands.length === 0 ? (canApprove ? "Add bands before approving." : "Add bands before submitting.") : undefined}
+                            onClick={() =>
+                              run(
+                                () => submitGradeConfigForApprovalAction(config.id),
+                                canApprove ? "Configuration approved. Make it active when you're ready." : "Submitted for approval.",
+                              )
+                            }
                           >
-                            <Icon name="upload" width={16} height={16} />
-                            Submit for approval
+                            <Icon name={canApprove ? "check_circle" : "upload"} width={16} height={16} />
+                            {canApprove ? "Approve" : "Submit for approval"}
                           </button>
                         </>
                       )}
