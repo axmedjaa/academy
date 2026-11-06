@@ -11,10 +11,12 @@ import {
   courses,
   programs,
   staffBranchAssignments,
+  staffInvitations,
   staffProfiles,
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
+import { inviteAndAccept } from "@/lib/testing/staff-invitation-helpers";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
@@ -113,7 +115,6 @@ const statusOf = async (profileId: string) => (await db.select({ status: staffPr
 function newStaff(overrides: Partial<CreateStaffInput> = {}): CreateStaffInput {
   return {
     email: `staff-authz-new-${randomUUID()}@example.com`,
-    password: "supersecurepassword123",
     fullName: "New Person",
     phone: "+1-555-0123",
     role: "trainer",
@@ -122,7 +123,7 @@ function newStaff(overrides: Partial<CreateStaffInput> = {}): CreateStaffInput {
 }
 
 async function createTracked(context: AuthContext, input: CreateStaffInput) {
-  const result = await createStaff(context, input);
+  const result = await inviteAndAccept(context, input);
   if (result.ok) createdUserIds.push(result.userId);
   return result;
 }
@@ -153,6 +154,7 @@ afterAll(async () => {
     await db.delete(programs).where(eq(programs.academyId, academyId));
     await db.delete(staffBranchAssignments).where(eq(staffBranchAssignments.academyId, academyId));
     await db.delete(staffProfiles).where(eq(staffProfiles.academyId, academyId));
+    await db.delete(staffInvitations).where(eq(staffInvitations.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
     await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
@@ -230,7 +232,7 @@ describe("Manager cannot escalate through staff creation", () => {
   it("refuses a Manager attaching an existing account they control as Admin", async () => {
     const existing = await createUser();
     const [u] = await db.select({ email: users.email }).from(users).where(eq(users.id, existing));
-    const result = await createTracked(ctx(a.manager.userId), newStaff({ email: u.email, password: undefined, role: "academy_admin" }));
+    const result = await createTracked(ctx(a.manager.userId), newStaff({ email: u.email, role: "academy_admin" }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
     const memberships = await db.select().from(academyMemberships).where(and(eq(academyMemberships.academyId, a.academyId), eq(academyMemberships.userId, existing)));

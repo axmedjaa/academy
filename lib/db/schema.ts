@@ -1014,6 +1014,67 @@ export const staffBranchAssignments = pgTable(
   ],
 );
 
+// SEC-H-01 (SECURITY_AUDIT_PRE_DEPLOYMENT.md): "Add staff" no longer
+// creates or attaches an account. It records an invitation bound to one
+// email, academy, role and branch scope; the person proves they own the
+// email (the emailed link) and, for an existing account, signs in as it and
+// accepts. Only acceptance creates the membership and staff profile
+// (lib/academies/staff-invitations.ts). The raw token is never stored — only
+// its SHA-256 hash, like password_reset_tokens. Migration
+// drizzle/0045_staff_invitations.sql.
+export const staffInvitationStatusEnum = pgEnum("staff_invitation_status", [
+  "pending",
+  "accepted",
+  "revoked",
+]);
+
+export const staffInvitations = pgTable(
+  "staff_invitations",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    /** Lower-cased; the only account that may accept. */
+    email: text("email").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    role: academyRoleEnum("role").notNull(),
+    /** All-branch access granted by an owner (then branchIds is the Main Branch). */
+    academyWide: boolean("academy_wide").notNull().default(false),
+    /** Resolved and authorized when the invitation was created. */
+    branchIds: uuid("branch_ids").array().notNull().default(sql`'{}'::uuid[]`),
+    fullName: text("full_name").notNull(),
+    phone: text("phone").notNull(),
+    employeeNumber: text("employee_number"),
+    hireDate: date("hire_date"),
+    status: staffInvitationStatusEnum("status").notNull().default("pending"),
+    invitedBy: uuid("invited_by")
+      .notNull()
+      .references(() => users.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedUserId: uuid("accepted_user_id").references(() => users.id),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: uuid("revoked_by").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("staff_invitations_token_hash_unique").on(table.tokenHash),
+    // At most one open invitation per person per academy.
+    uniqueIndex("staff_invitations_academy_email_pending_unique")
+      .on(table.academyId, table.email)
+      .where(sql`${table.status} = 'pending'`),
+    index("staff_invitations_academy_status_idx").on(table.academyId, table.status),
+    check("staff_invitations_email_lowercase", sql`${table.email} = lower(${table.email})`),
+    check("staff_invitations_role_not_retired", sql`${table.role} not in ('admissions_officer', 'finance_officer')`),
+    check(
+      "staff_invitations_accepted_consistent",
+      sql`(${table.status} = 'accepted') = (${table.acceptedAt} is not null and ${table.acceptedUserId} is not null)`,
+    ),
+  ],
+);
+
 // document_type's exhaustive value list is given directly in PLAN.md's
 // Phase 2 §2 staff_documents column list — a closed set, unlike the
 // judgment-call free-text fields elsewhere in this file (academies.type,

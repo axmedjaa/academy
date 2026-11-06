@@ -52,6 +52,38 @@ export function passwordResetEmail(params: { resetUrl: string; expiresInMinutes:
   };
 }
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]!);
+}
+
+/**
+ * Staff invitation (SEC-H-01, lib/academies/staff-invitations.ts). The
+ * academy name is entered by academy staff, so it is HTML-escaped; it is
+ * kept out of the subject line to avoid header abuse.
+ */
+export function staffInvitationEmail(params: {
+  academyName: string;
+  roleLabel: string;
+  acceptUrl: string;
+  expiresOn: string;
+}): EmailContent {
+  const academy = escapeHtml(params.academyName);
+  const role = escapeHtml(params.roleLabel);
+  const bodyHtml = `
+    <p style="margin:0 0 12px;font-size:14px;line-height:1.5;color:${TEXT_COLOR};">
+      <strong>${academy}</strong> has invited you to join their team on ${APP_NAME} as <strong>${role}</strong>.
+    </p>
+    <p style="margin:0;font-size:14px;line-height:1.5;color:${TEXT_COLOR};">
+      Open the link to accept. If you already have a ${APP_NAME} account with this email, you'll sign in first. The link works once and expires on ${params.expiresOn}. If you weren't expecting this, you can ignore this email — nothing changes unless you accept.
+    </p>`;
+
+  return {
+    subject: `You're invited to join an academy on ${APP_NAME}`,
+    html: layout({ heading: "You're invited", bodyHtml, buttonLabel: "View invitation", buttonUrl: params.acceptUrl }),
+    text: `${params.academyName} has invited you to join their team on ${APP_NAME} as ${params.roleLabel}.\n\nOpen this link to accept: ${params.acceptUrl}\n\nThe link works once and expires on ${params.expiresOn}. If you weren't expecting this, ignore this email; nothing changes unless you accept.`,
+  };
+}
+
 function codeLayout(opts: { heading: string; introHtml: string; code: string; footerHtml: string }): string {
   return `<!doctype html>
 <html>

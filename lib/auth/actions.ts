@@ -16,6 +16,7 @@ import { getPlatformRole, getPostLoginRedirectPath } from "@/lib/auth/auth-conte
 import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
 import { getClientIp } from "@/lib/http/client-ip";
+import { RETURN_PATH_COOKIE, returnPathCookieOptions, sanitizeReturnPath } from "@/lib/auth/return-path";
 import { formatRetryAfter } from "@/lib/ui/duration";
 import {
   MFA_PENDING_COOKIE_NAME,
@@ -116,6 +117,10 @@ export async function signIn(
     // "before issuing a session" once enrolled, and its "first login forces
     // enrollment before any platform action is possible" text applies the
     // same principle to the not-yet-enrolled case (see mfa-pending.ts).
+    // Return-after-login is not carried through MFA; platform owners land
+    // on their normal page. Drop any stored destination.
+    cookieStore.delete({ name: RETURN_PATH_COOKIE, path: returnPathCookieOptions().path });
+
     const pendingToken = createPendingMfaToken(result.userId);
     cookieStore.set(
       MFA_PENDING_COOKIE_NAME,
@@ -135,7 +140,15 @@ export async function signIn(
   const { token } = await createSession(result.userId, { ip, userAgent });
   cookieStore.set(SESSION_COOKIE_NAME, token, sessionCookieOptions());
 
-  redirect(await getPostLoginRedirectPath(result.userId));
+  // Return-after-login (e.g. back to a staff invitation). Re-validated here:
+  // only an allowlisted internal path is honored, anything else is ignored.
+  // The destination page re-checks everything itself; nothing is accepted
+  // automatically.
+  const storedReturn = cookieStore.get(RETURN_PATH_COOKIE)?.value;
+  if (storedReturn !== undefined) {
+    cookieStore.delete({ name: RETURN_PATH_COOKIE, path: returnPathCookieOptions().path });
+  }
+  redirect(sanitizeReturnPath(storedReturn) ?? (await getPostLoginRedirectPath(result.userId)));
 }
 
 export async function signOut(): Promise<void> {

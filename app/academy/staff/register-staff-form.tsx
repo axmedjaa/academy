@@ -6,7 +6,7 @@ import { createStaff, type CreateStaffFormState } from "@/lib/academies/staff-ac
 import type { StaffWorkplaceOptions } from "@/lib/academies/staff";
 import { ASSIGNABLE_ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
 import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
-import { showSuccessToast } from "@/lib/ui/toast";
+import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import {
   DField,
   DesignDialog,
@@ -29,13 +29,15 @@ import { WorkplaceField } from "./workplace-field";
 const guardedCreateStaff = guardAction(createStaff);
 
 /**
- * Register staff member (design A04 form `staff`): Full name, Login email,
- * Phone, Role, Temporary password, on the design's form system. The
+ * Invite staff member (design A04 form `staff`): Full name, Login email,
+ * Phone, Role, on the design's form system. SEC-H-01: the temporary-password
+ * field is gone — nobody chooses another person's password, and submitting
+ * creates an invitation, not an account or membership. The
  * application's extra Employee number and Hire date fields are kept
  * (optional). The Role list offers only the roles this person may give
  * (Owner: any; Admin: any but Owner; Manager: roles below Manager), the
  * same list `createStaff` enforces on the server. `createStaff` validates,
- * creates or reuses the user account, scopes to the academy and audits.
+ * records the invitation, scopes it to the academy, audits and emails it.
  *
  * Multi-branch: "Where they work" picks all branches (owner only) or
  * specific branches — only those the creator works in are offered, and
@@ -55,11 +57,6 @@ const RULES: DesignFormRule[] = [
   },
   { name: "phone", label: "Phone", required: true },
   {
-    name: "password",
-    label: "Temporary password",
-    check: (value) => (value && value.length < 8 ? "Use at least 8 characters for the temporary password." : null),
-  },
-  {
     name: "branchIds",
     label: "Branches",
     check: (_value, data) =>
@@ -70,7 +67,6 @@ const RULES: DesignFormRule[] = [
 ];
 
 const SERVER_FIELD_PATTERNS: [RegExp, string][] = [
-  [/password/i, "password"],
   [/email/i, "email"],
   [/phone/i, "phone"],
   [/full name/i, "fullName"],
@@ -93,7 +89,9 @@ function StaffFields({
 
   useEffect(() => {
     if (state.ok) {
-      showSuccessToast("Staff member registered.");
+      // Same wording whether or not the email already has an account.
+      if (state.emailSent) showSuccessToast(`Invitation sent to ${state.email}.`);
+      else showErrorToast("Invitation saved, but the email could not be sent. Check the email settings, then resend it from Pending invitations.");
       onCreated();
     } else if (state.error) {
       showServerError(state.error.message, SERVER_FIELD_PATTERNS);
@@ -148,22 +146,6 @@ function StaffFields({
               ))}
             </select>
           </DField>
-          <DField
-            label="Temporary password"
-            name="password"
-            error={errors.password}
-            hint="Only needed when this email has no account yet. At least 8 characters."
-          >
-            <input
-              type="password"
-              name="password"
-              autoComplete="new-password"
-              placeholder="At least 8 characters"
-              onBlur={blur("password")}
-              className={controlClass(Boolean(errors.password))}
-              {...invalidProps("password", errors.password)}
-            />
-          </DField>
           <DField label="Employee number (optional)" name="employeeNumber" error={errors.employeeNumber}>
             <input type="text" name="employeeNumber" className={controlClass(Boolean(errors.employeeNumber))} />
           </DField>
@@ -176,13 +158,13 @@ function StaffFields({
         </FieldGrid>
         <FormErrorBanner message={banner} />
       </DialogBody>
-      <DialogFooter onCancel={onCancel} submitLabel="Create" pendingLabel="Creating…" pending={pending} />
+      <DialogFooter onCancel={onCancel} submitLabel="Send invitation" pendingLabel="Sending…" pending={pending} />
     </form>
   );
 }
 
-const TITLE = "Register staff member";
-const SUBTITLE = "The person signs in with this email and temporary password, and is asked to change it.";
+const TITLE = "Invite staff member";
+const SUBTITLE = "We email them an invitation. They get access only after they accept it with this email address.";
 
 /** Header action on Staff: opens the registration dialog. Also opened by
  * `/academy/staff?register=1` (the old /academy/staff/new address
@@ -203,7 +185,7 @@ export function RegisterStaffButton({
         onClick={() => setOpen(true)}
         className="inline-flex h-11 items-center rounded-lg bg-brand px-4 font-semibold text-white transition-colors duration-150 hover:bg-brand-hover"
       >
-        Register staff member
+        Invite staff member
       </button>
       <DesignDialog open={open} onOpenChange={setOpen} title={TITLE} description={SUBTITLE}>
         {open && (

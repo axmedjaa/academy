@@ -15,6 +15,7 @@ import {
   programs,
   staffBranchAssignments,
   staffDocuments,
+  staffInvitations,
   staffProfiles,
   subscriptionPlans,
   timetables,
@@ -36,6 +37,7 @@ import {
 } from "./staff";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
+import { inviteAndAccept } from "@/lib/testing/staff-invitation-helpers";
 
 // Same "one top-level cleanup, every test builds its own fully isolated
 // fixture set" convention as lib/academies/settings.test.ts, plus the same
@@ -269,7 +271,6 @@ async function seedActiveStaff(academyId: string, count: number): Promise<void> 
 function validCreateInput(overrides: Partial<CreateStaffInput> = {}): CreateStaffInput {
   return {
     email: `new-staff-${randomUUID()}@example.com`,
-    password: "supersecurepassword123",
     fullName: "New Staff Member",
     phone: "+1-555-0123",
     employeeNumber: "EMP-100",
@@ -279,9 +280,10 @@ function validCreateInput(overrides: Partial<CreateStaffInput> = {}): CreateStaf
   };
 }
 
-/** createStaff wrapper that also tracks the new user it creates for cleanup. */
+/** SEC-H-01: staff are created by invitation + acceptance. This runs both
+ * (accepting as the invited person) and tracks the user for cleanup. */
 async function createStaffTracked(context: AuthContext, input: CreateStaffInput) {
-  const result = await createStaff(context, input);
+  const result = await inviteAndAccept(context, input);
   if (result.ok) createdUserIds.push(result.userId);
   return result;
 }
@@ -310,6 +312,7 @@ afterAll(async () => {
       .where(eq(staffBranchAssignments.academyId, academyId));
     await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(staffProfiles).where(eq(staffProfiles.academyId, academyId));
+    await db.delete(staffInvitations).where(eq(staffInvitations.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
   }
@@ -474,7 +477,7 @@ describe("createStaff — the create/reuse/audit transaction", () => {
 
     const result = await createStaffTracked(
       context,
-      validCreateInput({ email: existingUser.email, password: undefined }),
+      validCreateInput({ email: existingUser.email }),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -484,11 +487,15 @@ describe("createStaff — the create/reuse/audit transaction", () => {
     expect(matchingUsers.length).toBe(1);
   });
 
-  it("requires a password when creating a brand-new account", async () => {
-    const { context } = await setupAcademy("academy_owner");
-    const result = await createStaff(context, validCreateInput({ password: undefined }));
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("validation");
+  it("inviting creates no account, no membership and no staff profile until the invitation is accepted (SEC-H-01)", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
+    const input = validCreateInput();
+    const result = await createStaff(context, input, { deliver: async () => true });
+    expect(result.ok).toBe(true);
+    const [account] = await db.select().from(users).where(eq(users.email, input.email));
+    expect(account).toBeUndefined();
+    const profiles = await db.select().from(staffProfiles).where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.email, input.email)));
+    expect(profiles).toHaveLength(0);
   });
 
   it("refuses when the target is already staff at this academy", async () => {
@@ -498,7 +505,7 @@ describe("createStaff — the create/reuse/audit transaction", () => {
     const first = await createStaffTracked(context, input);
     expect(first.ok).toBe(true);
 
-    const second = await createStaff(context, { ...input, password: undefined });
+    const second = await createStaff(context, input, { deliver: async () => true });
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error.code).toBe("already_staff");
   });
@@ -522,7 +529,7 @@ describe("createStaff — the create/reuse/audit transaction", () => {
     // place, not treated as a live conflict (this was the actual bug: a
     // naive "any existing membership row = already staff" check blocked
     // re-hiring forever after a single deletion).
-    const rehired = await createStaff(context, { ...input, password: undefined, role: "manager" });
+    const rehired = await inviteAndAccept(context, { ...input, role: "manager" });
     expect(rehired.ok).toBe(true);
     if (rehired.ok) {
       createdUserIds.push(rehired.userId);

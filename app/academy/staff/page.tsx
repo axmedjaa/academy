@@ -4,6 +4,8 @@ import { getStaffWorkplaceOptions, listStaff } from "@/lib/academies/staff";
 import { StaffTable } from "./staff-table";
 import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { RegisterStaffButton } from "./register-staff-form";
+import { listStaffInvitations } from "@/lib/academies/staff-invitations";
+import { PendingInvitations } from "./pending-invitations";
 
 /**
  * PLAN.md Item 35 — `/academy/staff`. Same gating shape as
@@ -41,6 +43,8 @@ export default async function StaffPage({
   }
 
   const canManage = result.permissionLevel === "full" || result.permissionLevel === "manage";
+  const invitations = canManage ? await listStaffInvitations(context) : null;
+  const branchNames = Object.fromEntries((workplace.ok ? workplace.options.branches : []).map((b) => [b.id, b.name]));
 
   return (
     <div className={PAGE_WRAP}>
@@ -54,6 +58,7 @@ export default async function StaffPage({
             />
           ) : undefined}
       />
+      {invitations?.ok && <PendingInvitations invitations={invitations.invitations} branchNames={branchNames} />}
       <StaffTable
         staff={result.staff}
         canManage={canManage}

@@ -15,6 +15,10 @@ import {
   type UpdateStaffInput,
 } from "@/lib/academies/staff";
 import type { AcademyRole } from "@/lib/auth/roles";
+import {
+  resendStaffInvitation as resendStaffInvitationForActor,
+  revokeStaffInvitation as revokeStaffInvitationForActor,
+} from "@/lib/academies/staff-invitations";
 
 const UNAUTHENTICATED: StaffActionError = {
   code: "forbidden",
@@ -24,6 +28,10 @@ const UNAUTHENTICATED: StaffActionError = {
 export interface CreateStaffFormState {
   ok: boolean;
   error?: StaffActionError;
+  /** Set on success: the invitation exists either way; this says whether
+   * the email reached the provider (SEC-H-01). */
+  emailSent?: boolean;
+  email?: string;
 }
 
 /**
@@ -35,7 +43,6 @@ export interface CreateStaffFormState {
 function parseCreateStaffFormData(formData: FormData): CreateStaffInput {
   return {
     email: String(formData.get("email") ?? ""),
-    password: String(formData.get("password") ?? ""),
     fullName: String(formData.get("fullName") ?? ""),
     phone: String(formData.get("phone") ?? ""),
     employeeNumber: String(formData.get("employeeNumber") ?? ""),
@@ -64,7 +71,29 @@ export async function createStaff(
   }
 
   revalidatePath("/academy/staff");
-  return { ok: true };
+  return { ok: true, emailSent: result.emailSent, email: result.email };
+}
+
+/** Cancels a pending invitation (SEC-H-01). */
+export async function revokeStaffInvitation(
+  invitationId: string,
+): Promise<{ ok: true } | { ok: false; error: StaffActionError }> {
+  const context = await getAuthContext();
+  if (!context) return { ok: false, error: UNAUTHENTICATED };
+  const result = await revokeStaffInvitationForActor(context, invitationId);
+  if (result.ok) revalidatePath("/academy/staff");
+  return result;
+}
+
+/** Sends a fresh invitation link; the previous link stops working. */
+export async function resendStaffInvitation(
+  invitationId: string,
+): Promise<{ ok: true; emailSent: boolean } | { ok: false; error: StaffActionError }> {
+  const context = await getAuthContext();
+  if (!context) return { ok: false, error: UNAUTHENTICATED };
+  const result = await resendStaffInvitationForActor(context, invitationId);
+  if (result.ok) revalidatePath("/academy/staff");
+  return result;
 }
 
 /**

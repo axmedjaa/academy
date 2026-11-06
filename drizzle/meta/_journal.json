@@ -309,6 +309,20 @@
       "when": 1793600000000,
       "tag": "0043_book_preorder_other_buyers",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1793700000000,
+      "tag": "0044_retire_admissions_finance_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1793800000000,
+      "tag": "0045_staff_invitations",
+      "breakpoints": true
     }
   ]
 }

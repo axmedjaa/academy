@@ -33,6 +33,7 @@ import {
   staffBranchAssignments,
   staffDocuments,
   staffProfiles,
+  staffInvitations,
   studentCharges,
   studentDocuments,
   studentIdCards,
@@ -385,6 +386,9 @@ export async function deleteAcademy(
     await tx.delete(students).where(eq(students.academyId, academy.id));
     await tx.delete(branches).where(eq(branches.academyId, academy.id));
     await tx.delete(academyMemberships).where(eq(academyMemberships.academyId, academy.id));
+    // Staff invitations (SEC-H-01) reference the academy; pending or not,
+    // they mean nothing once the academy is gone.
+    await tx.delete(staffInvitations).where(eq(staffInvitations.academyId, academy.id));
 
     // Guaranteed empty by the eligibility gate (hasSubscriptionPayments) —
     // deleted defensively before the subscription row(s) that reference it.

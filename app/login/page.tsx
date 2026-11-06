@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { Suspense, useActionState } from "react";
+import { useSearchParams } from "next/navigation";
 import { z } from "zod";
 import { signIn, type SignInState } from "@/lib/auth/actions";
 import { useFieldErrors } from "@/lib/validation/use-field-errors";
@@ -12,10 +13,20 @@ import {
   fieldLabelStyle,
   formColumnStyle,
   PrimaryButton,
+  SuccessBanner,
 } from "@/lib/ui/auth-components";
 import { color } from "@/lib/ui/theme";
 
 const initialState: SignInState = { ok: false };
+
+/** Staff-invitation context only (display text; the return destination
+ * itself lives in an httpOnly cookie, never in the URL). */
+function InvitationNotice() {
+  const params = useSearchParams();
+  if (params.get("invited") === "1") return <SuccessBanner message="Your account is ready and you've joined the academy. Sign in to start." />;
+  if (params.get("continue") === "invitation") return <SuccessBanner message="Sign in to continue to your invitation." />;
+  return null;
+}
 
 // Mirrors lib/auth/actions.ts's own (unexported — "use server" files may
 // only export async functions) `signInSchema`. Instant client-side
@@ -54,6 +65,9 @@ export default function LoginPage() {
   return (
     <AuthCard title="Sign in" subtitle="Sign in to your Dardar School System account">
       <form action={formAction} onSubmit={handleSubmit} style={formColumnStyle}>
+        <Suspense fallback={null}>
+          <InvitationNotice />
+        </Suspense>
         <label style={fieldLabelStyle}>
           Email
           <input type="email" name="email" required autoComplete="email" style={fieldInputStyle} />

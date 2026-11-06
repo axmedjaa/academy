@@ -2,11 +2,17 @@
 -- 0044 — Retire the Admissions Officer and Finance Officer academy roles
 -- =========================================================================
 --
--- STATUS: PREPARED, NOT APPLIED. This file is deliberately NOT listed in
--- drizzle/meta/_journal.json, so `npm run migrate` ignores it. Add a
--- journal entry (idx 44, tag "0044_retire_admissions_finance_roles") only
--- after the academy owner has approved the role mapping below, and apply it
--- to one environment at a time (DEV, then TEST, then production).
+-- STATUS: REGISTERED (drizzle/meta/_journal.json idx 44, when
+-- 1793700000000). Already applied on DEV: it was run there by hand,
+-- then recorded in DEV's drizzle.__drizzle_migrations without re-running
+-- (together with 0042 and 0043, which DEV had also applied by hand). Other
+-- environments apply it through the normal `npm run migrate`, in journal
+-- order, after a backup. On a database with no retired-role memberships the
+-- INSERT and UPDATE are no-ops and only the CHECK constraint is added.
+--
+-- This header was edited after DEV recorded the file's hash. Drizzle never
+-- re-reads the hash of an applied migration (it compares created_at only),
+-- so the differing hash has no effect.
 --
 -- What it does
 --   1. Writes one audit_logs row per affected membership (old role -> new

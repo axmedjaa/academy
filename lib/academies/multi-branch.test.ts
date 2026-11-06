@@ -14,12 +14,14 @@ import {
   incomeRecords,
   programs,
   staffBranchAssignments,
+  staffInvitations,
   staffProfiles,
   studentCharges,
   students,
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
+import { inviteAndAccept } from "@/lib/testing/staff-invitation-helpers";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { archiveBranch, createBranch, deleteBranch, listBranches } from "./branches";
@@ -27,7 +29,7 @@ import { getStudent, searchStudents } from "./students";
 import { createStudentCharge, listStudentCharges } from "./student-payments";
 import { getBatch, listBatches } from "./batches";
 import { createIncomeRecord, listIncomeRecords } from "./income-records";
-import { createStaff, getStaffWorkplaceOptions, listStaff, type CreateStaffInput } from "./staff";
+import { getStaffWorkplaceOptions, listStaff, type CreateStaffInput } from "./staff";
 import { assignStaffBranches, setAllBranchAccess, setStaffWorkplace } from "./staff-branch-assignments";
 import { getBranchComparison, listBranchStaff } from "./branch-overview";
 
@@ -178,6 +180,7 @@ afterAll(async () => {
   await db.delete(students).where(inArray(students.academyId, academyIds));
   await db.delete(staffBranchAssignments).where(inArray(staffBranchAssignments.academyId, academyIds));
   await db.delete(staffProfiles).where(inArray(staffProfiles.academyId, academyIds));
+  await db.delete(staffInvitations).where(inArray(staffInvitations.academyId, academyIds));
   await db.delete(branches).where(inArray(branches.academyId, academyIds));
   await db.delete(academySubscriptions).where(inArray(academySubscriptions.academyId, academyIds));
   await db.delete(academyMemberships).where(inArray(academyMemberships.academyId, academyIds));
@@ -345,9 +348,8 @@ describe("staff assignments and all-branch access", () => {
 
 describe("registering staff: where they work", () => {
   async function register(actorId: string, extra: Partial<CreateStaffInput>) {
-    const result = await createStaff(ctx(actorId), {
+    const result = await inviteAndAccept(ctx(actorId), {
       email: `multi-branch-test-${randomUUID()}@example.com`,
-      password: "temporary-pass-123",
       fullName: "New Staff",
       phone: "+1-555-0102",
       role: "trainer",
