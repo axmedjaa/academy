@@ -1,85 +1,143 @@
-import { Worker } from "bullmq";
-import { eq } from "drizzle-orm";
+import { UnrecoverableError, Worker, type WorkerOptions } from "bullmq";
+import type Redis from "ioredis";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { notifications } from "@/lib/db/schema";
+import { academies, notificationPreferences, notifications, users } from "@/lib/db/schema";
+import { sendEmail as sendEmailViaProvider, type SendEmailInput, type SendEmailOptions, type SendEmailResult } from "@/lib/email/client";
+import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { notificationEmailContent } from "@/lib/notifications/email-content";
 import {
   NOTIFICATION_JOB_ATTEMPTS,
   NOTIFICATION_QUEUE_NAME,
   notificationBackoffStrategy,
-  notificationQueueConnection,
   type NotificationJobData,
   type NotificationJobName,
 } from "@/lib/notifications/queue";
+import { MANDATORY_NOTIFICATION_TEMPLATE_IDS, isNotificationTemplateId } from "@/lib/notifications/templates";
+import { withTimeout } from "@/lib/with-timeout";
 
 /**
- * PLAN.md Phase 5, Item 58a — "the BullMQ notification worker
- * (`sendEmail`/`sendSms`, fixed templates per event)."
+ * Notification delivery (PLAN.md Phase 5 Item 58a; deployment readiness
+ * Step 2). Runs only in the dedicated worker process (scripts/worker.ts).
  *
- * ---------------------------------------------------------------------
- * No real email/SMS provider yet — documented judgment call
- * ---------------------------------------------------------------------
- * PLAN.md's Cross-Cutting Architecture Decisions name `lib/email` and
- * `lib/sms` as the eventual provider-interface module paths ("file storage
- * and email/SMS providers are built behind small interfaces (`lib/storage`,
- * `lib/email`, `lib/sms`)"), but neither directory exists anywhere in this
- * repo yet (confirmed by listing `lib/` before writing this file) — no
- * earlier phase created them. Building a real provider integration is
- * explicitly not this item's job ("infrastructure only"; see this module's
- * and notifications.ts's own scope-boundary comments), so `sendEmail`/
- * `sendSms` below are minimal stubs: they log the send via `lib/logger.ts`
- * (which already redacts sensitive fields) and return successfully. A
- * later item that adds real `lib/email`/`lib/sms` provider modules should
- * replace only the bodies of these two functions — every other piece here
- * (status transitions, retry/backoff bookkeeping, job shape) is meant to
- * stay put.
+ * Email: real delivery through the existing Resend client. One recipient
+ * per notification — the row's `user_id`. The `notifications` row is the
+ * source of truth: a job for a row already `sent` does nothing, and every
+ * send carries the row id as Resend's idempotency key, so a retry after a
+ * crash between "sent" and "recorded" is not delivered twice.
  *
- * ---------------------------------------------------------------------
- * Why `processNotificationJob` takes a minimal shape, not a real BullMQ Job
- * ---------------------------------------------------------------------
- * Exported separately from the `Worker` itself so it's directly unit
- * testable (per this item's own test brief: "test the stub sendEmail/
- * sendSms handlers directly, and that a successful call updates the row to
- * status='sent'/sent_at set") without needing a live Redis-backed Job
- * instance. `createNotificationWorker()` wires this same function into a
- * real `Worker` for actual use.
+ * Outcomes:
+ * - sent                       -> row `sent`
+ * - transient failure          -> rethrown; BullMQ retries on PLAN.md's
+ *                                 1m/5m/15m/1h/6h schedule, row stays
+ *                                 `pending` until the final attempt
+ * - not deliverable by design  -> row `failed` with a `skipped: <reason>`
+ *   (SMS has no provider, no     note; the job completes (no retries, no
+ *   individual recipient,        noise in the failed-job count)
+ *   recipient opted out or
+ *   inactive)
+ * - programming error          -> UnrecoverableError; row `failed`
+ *   (unknown template)
  *
- * ---------------------------------------------------------------------
- * Backoff — see lib/notifications/queue.ts's own comment for the literal
- * 1m/5m/15m/1h/6h sequence and the "5 attempts = 5 retries after the
- * initial try (6 total)" reading of PLAN.md's spec.
- * ---------------------------------------------------------------------
- * On success: `status='sent'`, `sent_at=now()`. On failure: `attempt_count`
- * is set to the attempt number that just failed and `last_error` is
- * recorded; if this was the final allowed attempt (no further BullMQ retry
- * will occur), `status` is set to `failed` permanently — otherwise it's
- * left `pending` so the row reflects "still retrying," and BullMQ's own
- * retry/backoff mechanism (configured on the queue/worker, not here)
- * re-queues the job. The error is always rethrown after updating the row
- * so BullMQ's own attempt/backoff bookkeeping still runs unchanged.
+ * Logs carry ids, template and outcome only — never addresses, content or
+ * tokens.
  */
-export async function sendEmail(data: NotificationJobData): Promise<void> {
-  logger.info("notification.email.send", {
-    notificationId: data.notificationId,
-    academyId: data.academyId,
-    eventType: data.eventType,
-    templateId: data.templateId,
-  });
+
+export const EMAIL_DELIVERY_TIMEOUT_MS = 20_000;
+
+export type EmailSender = (input: SendEmailInput, options: SendEmailOptions) => Promise<SendEmailResult>;
+
+/** Test runs must never reach the email provider. */
+const defaultEmailSender: EmailSender = (input, options) =>
+  env.NODE_ENV === "test"
+    ? Promise.resolve({ ok: false, error: "Email delivery is disabled in tests." })
+    : sendEmailViaProvider(input, options);
+
+export interface NotificationDeliveryDeps {
+  sendEmail: EmailSender;
+  appUrl: string | undefined;
+  deliveryTimeoutMs: number;
 }
 
-export async function sendSms(data: NotificationJobData): Promise<void> {
-  logger.info("notification.sms.send", {
-    notificationId: data.notificationId,
-    academyId: data.academyId,
-    eventType: data.eventType,
-    templateId: data.templateId,
-  });
+function defaultDeps(): NotificationDeliveryDeps {
+  return { sendEmail: defaultEmailSender, appUrl: env.APP_URL, deliveryTimeoutMs: EMAIL_DELIVERY_TIMEOUT_MS };
+}
+
+type DeliveryOutcome = { kind: "sent" } | { kind: "skipped"; reason: string };
+
+type NotificationRow = typeof notifications.$inferSelect;
+
+const recipientSchema = z.string().trim().email().max(320);
+const subjectSchema = z.string().trim().min(1).max(200).refine((value) => !/[\r\n]/.test(value));
+const bodySchema = z.string().trim().min(1).max(50_000);
+
+async function deliverEmail(row: NotificationRow, executor: DbClient, deps: NotificationDeliveryDeps): Promise<DeliveryOutcome> {
+  if (!isNotificationTemplateId(row.templateId)) {
+    throw new UnrecoverableError("unknown_template");
+  }
+  // Shared academy-wide rows (no user_id) have no individual email recipient.
+  if (!row.userId) return { kind: "skipped", reason: "no_individual_recipient" };
+
+  const [user] = await executor
+    .select({ email: users.email, status: users.status })
+    .from(users)
+    .where(eq(users.id, row.userId))
+    .limit(1);
+  if (!user) return { kind: "skipped", reason: "recipient_missing" };
+  if (user.status !== "active") return { kind: "skipped", reason: "recipient_inactive" };
+
+  // Opt-outs apply to academy notifications; security and suspension
+  // notices are mandatory (lib/notifications/templates.ts).
+  if (row.academyId && !MANDATORY_NOTIFICATION_TEMPLATE_IDS.has(row.templateId)) {
+    const [preference] = await executor
+      .select({ enabled: notificationPreferences.enabled })
+      .from(notificationPreferences)
+      .where(
+        and(
+          eq(notificationPreferences.userId, row.userId),
+          eq(notificationPreferences.academyId, row.academyId),
+          eq(notificationPreferences.templateId, row.templateId),
+        ),
+      )
+      .limit(1);
+    if (preference && !preference.enabled) return { kind: "skipped", reason: "recipient_opted_out" };
+  }
+
+  let academyName: string | null = null;
+  if (row.academyId) {
+    const [academy] = await executor.select({ name: academies.name }).from(academies).where(eq(academies.id, row.academyId)).limit(1);
+    academyName = academy?.name ?? null;
+  }
+
+  const content = notificationEmailContent(row.templateId, { academyName, appUrl: deps.appUrl });
+  const to = recipientSchema.safeParse(user.email);
+  if (!to.success) return { kind: "skipped", reason: "recipient_invalid" };
+  if (!subjectSchema.safeParse(content.subject).success || !bodySchema.safeParse(content.text).success || !bodySchema.safeParse(content.html).success) {
+    throw new UnrecoverableError("invalid_email_content");
+  }
+
+  const result = await withTimeout(
+    deps.sendEmail(
+      { to: to.data, subject: content.subject, html: content.html, text: content.text },
+      { idempotencyKey: `notification-${row.id}` },
+    ),
+    deps.deliveryTimeoutMs,
+    "email delivery",
+  );
+  if (!result.ok) throw new Error(`email_delivery_failed: ${result.error}`);
+  return { kind: "sent" };
 }
 
 async function markSent(notificationId: string, executor: DbClient): Promise<void> {
+  await executor.update(notifications).set({ status: "sent", sentAt: new Date() }).where(eq(notifications.id, notificationId));
+}
+
+async function markSkipped(notificationId: string, reason: string, executor: DbClient): Promise<void> {
   await executor
     .update(notifications)
-    .set({ status: "sent", sentAt: new Date() })
+    .set({ status: "failed", lastError: `skipped: ${reason}` })
     .where(eq(notifications.id, notificationId));
 }
 
@@ -92,15 +150,14 @@ async function markFailedAttempt(
 ): Promise<void> {
   await executor
     .update(notifications)
-    .set({
-      attemptCount,
-      lastError,
-      status: permanent ? "failed" : "pending",
-    })
+    .set({ attemptCount, lastError, status: permanent ? "failed" : "pending" })
     .where(eq(notifications.id, notificationId));
 }
 
-/** The minimal shape `processNotificationJob` needs from a BullMQ `Job`. */
+/**
+ * The minimal shape `processNotificationJob` needs from a BullMQ `Job` —
+ * lets tests drive it without a live queue.
+ */
 export interface MinimalNotificationJob {
   name: NotificationJobName;
   data: NotificationJobData;
@@ -111,47 +168,67 @@ export interface MinimalNotificationJob {
 export async function processNotificationJob(
   job: MinimalNotificationJob,
   executor: DbClient = db,
+  deps: NotificationDeliveryDeps = defaultDeps(),
 ): Promise<void> {
   const { data } = job;
+  const [row] = await executor.select().from(notifications).where(eq(notifications.id, data.notificationId)).limit(1);
+  if (!row) {
+    // Removed since it was queued (e.g. its academy was deleted).
+    logger.info("notification.job_skipped", { notificationId: data.notificationId, reason: "row_missing" });
+    return;
+  }
+  if (row.status !== "pending") {
+    // Already sent (duplicate job) or already terminal.
+    logger.info("notification.job_skipped", { notificationId: row.id, reason: `status_${row.status}` });
+    return;
+  }
+
   try {
+    let outcome: DeliveryOutcome;
     if (job.name === "sendEmail") {
-      await sendEmail(data);
+      outcome = await deliverEmail(row, executor, deps);
     } else if (job.name === "sendSms") {
-      await sendSms(data);
+      // No SMS provider is configured; never pretend a message was sent.
+      outcome = { kind: "skipped", reason: "sms_not_configured" };
     } else {
       throw new Error(`Unknown notification job name: ${String(job.name)}`);
     }
-    await markSent(data.notificationId, executor);
+
+    if (outcome.kind === "sent") {
+      await markSent(row.id, executor);
+      logger.info("notification.delivered", { notificationId: row.id, channel: row.channel, templateId: row.templateId });
+    } else {
+      await markSkipped(row.id, outcome.reason, executor);
+      logger.info("notification.not_delivered", { notificationId: row.id, channel: row.channel, templateId: row.templateId, reason: outcome.reason });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const attemptNumber = job.attemptsMade + 1;
     const maxAttempts = job.opts?.attempts ?? NOTIFICATION_JOB_ATTEMPTS;
-    const isFinalAttempt = attemptNumber >= maxAttempts;
-    await markFailedAttempt(data.notificationId, attemptNumber, message, isFinalAttempt, executor);
-    // Rethrow so BullMQ's own retry/backoff scheduling (configured via
-    // notificationBackoffStrategy) still runs — this function only keeps
-    // the `notifications` row in sync, it never overrides BullMQ's retry
-    // decision.
+    const permanent = err instanceof UnrecoverableError || attemptNumber >= maxAttempts;
+    await markFailedAttempt(row.id, attemptNumber, message, permanent, executor);
+    logger.warn("notification.delivery_failed", { notificationId: row.id, templateId: row.templateId, attempt: attemptNumber, permanent, error: message });
     throw err;
   }
 }
 
+/** Email sends must finish well inside the job lock, so a slow provider never looks like a stalled job. */
+export const NOTIFICATION_WORKER_OPTIONS: Pick<WorkerOptions, "concurrency" | "lockDuration" | "stalledInterval" | "maxStalledCount"> = {
+  concurrency: 5,
+  lockDuration: 60_000,
+  stalledInterval: 30_000,
+  maxStalledCount: 1,
+};
+
 /**
- * Constructs (but does not start eagerly on module import) a live BullMQ
- * `Worker`. Kept as a factory rather than a top-level singleton so
- * importing this module for its testable pieces (`sendEmail`, `sendSms`,
- * `processNotificationJob`) never has the side effect of opening a Redis
- * connection or consuming queued jobs — callers that actually want to run
- * the worker (a dedicated worker process/script, not built in this item)
- * call this explicitly.
+ * Builds (does not start on import) the BullMQ Worker for notifications.
+ * Requires a worker connection (`createWorkerRedisConnection`) — never the
+ * request-path producer connection.
  */
-export function createNotificationWorker(): Worker<NotificationJobData, void, NotificationJobName> {
-  return new Worker<NotificationJobData, void, NotificationJobName>(
-    NOTIFICATION_QUEUE_NAME,
-    (job) => processNotificationJob(job),
-    {
-      connection: notificationQueueConnection,
-      settings: { backoffStrategy: notificationBackoffStrategy },
-    },
-  );
+export function createNotificationWorker(connection: Redis): Worker<NotificationJobData, void, NotificationJobName> {
+  return new Worker<NotificationJobData, void, NotificationJobName>(NOTIFICATION_QUEUE_NAME, (job) => processNotificationJob(job), {
+    connection,
+    settings: { backoffStrategy: notificationBackoffStrategy },
+    ...NOTIFICATION_WORKER_OPTIONS,
+  });
 }

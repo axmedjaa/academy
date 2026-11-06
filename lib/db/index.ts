@@ -84,6 +84,14 @@ pool.on("error", (err) => {
 export const db = drizzle(pool, { schema });
 
 /**
+ * Ends the connection pool. Only for processes that exit cleanly on their
+ * own (the worker's graceful shutdown); the Next.js server never calls it.
+ */
+export async function closeDb(): Promise<void> {
+  await pool.end();
+}
+
+/**
  * The type of either `db` itself or the `tx` client inside `db.transaction()`
  * — both expose the same query-builder interface. Functions that must
  * participate in a caller's transaction (e.g. recordAudit(), per PLAN.md:

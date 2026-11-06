@@ -11,7 +11,13 @@ import {
 } from "@/lib/db/schema";
 import { enqueueNotification } from "./notifications";
 import { notificationQueue } from "./queue";
-import { processNotificationJob, sendEmail, sendSms, type MinimalNotificationJob } from "./worker";
+import { processNotificationJob, type MinimalNotificationJob, type NotificationDeliveryDeps } from "./worker";
+
+/** Never the real provider: a sender that records calls and succeeds. */
+function fakeDeps(): NotificationDeliveryDeps & { sent: unknown[] } {
+  const sent: unknown[] = [];
+  return { sent, appUrl: "https://app.example.test", deliveryTimeoutMs: 5_000, sendEmail: async (input, options) => { sent.push({ input, options }); return { ok: true }; } };
+}
 
 const createdUserIds: string[] = [];
 const createdAcademyIds: string[] = [];
@@ -273,11 +279,13 @@ describe("worker — processNotificationJob", () => {
       attemptsMade: 0,
     };
 
-    await processNotificationJob(job);
+    const deps = fakeDeps();
+    await processNotificationJob(job, db, deps);
 
     const [updated] = await db.select().from(notifications).where(eq(notifications.id, row.id));
     expect(updated.status).toBe("sent");
     expect(updated.sentAt).not.toBeNull();
+    expect(deps.sent).toHaveLength(1);
   });
 
   it("leaves status 'pending' with attempt_count recorded on a non-final failed attempt", async () => {
@@ -353,16 +361,14 @@ describe("worker — processNotificationJob", () => {
     expect(updated.attemptCount).toBe(6);
   });
 
-  it("sendEmail/sendSms stubs resolve without throwing", async () => {
-    const data = {
-      notificationId: randomUUID(),
-      academyId: null,
-      userId: null,
-      eventType: "result.published",
-      templateId: "result.published",
-      payload: null,
+  it("a job for a notification row that no longer exists completes without sending", async () => {
+    const deps = fakeDeps();
+    const job: MinimalNotificationJob = {
+      name: "sendEmail",
+      data: { notificationId: randomUUID(), academyId: null, userId: null, eventType: "result.published", templateId: "result.published", payload: null },
+      attemptsMade: 0,
     };
-    await expect(sendEmail(data)).resolves.toBeUndefined();
-    await expect(sendSms(data)).resolves.toBeUndefined();
+    await expect(processNotificationJob(job, db, deps)).resolves.toBeUndefined();
+    expect(deps.sent).toHaveLength(0);
   });
 });

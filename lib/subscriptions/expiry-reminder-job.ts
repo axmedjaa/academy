@@ -1,7 +1,7 @@
 import type { Queue } from "bullmq";
 import { logger } from "@/lib/logger";
 import { enqueueNotification } from "@/lib/notifications/notifications";
-import { notificationQueue } from "@/lib/notifications/queue";
+import { getMaintenanceQueue, getNotificationQueue } from "@/lib/notifications/queue";
 import { listPlatformSubscriptions } from "@/lib/subscriptions/renew";
 
 /**
@@ -144,62 +144,44 @@ export const EXPIRY_REMINDER_JOB_SCHEDULER_ID = "subscription-expiry-reminder-sc
 /** Distinct job name so a real consumer can tell this apart from `sendEmail`/`sendSms`. */
 export const EXPIRY_REMINDER_JOB_NAME = "scanExpiringSubscriptions";
 
+/** Retries for a failed scan (e.g. the database was briefly unreachable). */
+export const EXPIRY_REMINDER_JOB_OPTIONS = {
+  attempts: 3,
+  backoff: { type: "exponential" as const, delay: 60_000 },
+  removeOnComplete: 50,
+  removeOnFail: 200,
+};
+
 /**
- * Registers (or updates) a BullMQ repeatable job on the existing
- * `notificationQueue` (lib/notifications/queue.ts) that would fire this scan
- * once a day. This is a plain factory function, never called at module
- * import time — importing this file (e.g. to unit-test
- * `scanForExpiringSubscriptions` directly) never opens a Redis connection or
- * registers anything, matching lib/notifications/worker.ts's own
- * `createNotificationWorker` "factory, not eager singleton" convention.
+ * Registers (or updates) the daily expiry-scan schedule on the dedicated
+ * MAINTENANCE queue, consumed by the worker process (scripts/worker.ts,
+ * lib/workers/maintenance.ts). `upsertJobScheduler` keyed by a fixed id is
+ * idempotent: calling this on every worker start never creates a second
+ * schedule. Duplicate reminders are prevented separately by
+ * `enqueueNotification`'s idempotency key (one per subscription term).
  *
- * Verified against the installed `bullmq` package (v6.3.6) before writing
- * this: `Queue#add`'s `{ repeat: { pattern } }` job option from older BullMQ
- * versions is superseded in this version by `Queue#upsertJobScheduler`
- * (node_modules/bullmq/dist/esm/classes/queue.d.ts) — a job scheduler is the
- * documented v5+ mechanism for a repeatable job and is what's used here.
- *
- * ---------------------------------------------------------------------
- * IMPORTANT — documented gap / follow-up, not silently swept under the rug
- * ---------------------------------------------------------------------
- * `notificationQueue`'s own generics (NotificationJobData / "sendEmail" |
- * "sendSms") are typed narrowly for the per-notification-channel send jobs
- * lib/notifications/worker.ts's `Worker` already processes. This scan job is
- * a different shape entirely — a scheduler trigger with no notificationId,
- * no channel, nothing to "send" — so this call goes through a deliberately
- * loosened local type view of the same Queue/Redis connection rather than
- * widening queue.ts's own exported generics (queue.ts is explicitly
- * off-limits for this item).
- *
- * That leaves a real, intentionally-scoped-out gap: nothing currently
- * consumes `EXPIRY_REMINDER_JOB_NAME` jobs. lib/notifications/worker.ts's
- * `processNotificationJob` only recognizes "sendEmail"/"sendSms" and would
- * throw `Unknown notification job name` for this one, then attempt to write
- * a notifications-table failure row keyed by a `notificationId` this job's
- * data never has — i.e. calling `registerExpiryReminderRepeatableJob()` in
- * a real running worker process today would produce a permanently-failing,
- * noisy BullMQ job rather than actually invoking
- * `scanForExpiringSubscriptions()`. Fixing that requires either extending
- * worker.ts's dispatch (out of scope — worker.ts is explicitly not to be
- * modified by this item) or standing up a second, dedicated small worker
- * process for this one job name (out of scope per this item's own brief:
- * "building a full separate worker process is out of scope"). So this
- * function is provided (PLAN.md/this item's brief explicitly ask for the
- * BullMQ repeatable-job registration to exist), but is NOT invoked anywhere
- * in this codebase yet — no process-startup path calls it. Wiring an actual
- * consumer is a tracked follow-up for whichever later item stands up a real
- * worker-process entry point.
+ * Deployment readiness Step 2: this used to target the `notifications`
+ * queue, whose worker only handles `sendEmail`/`sendSms` and would have
+ * failed every scan job. It now has its own queue and a real consumer.
  */
-export function registerExpiryReminderRepeatableJob(): Promise<unknown> {
-  const queue = notificationQueue as unknown as Queue<Record<string, never>, void, string>;
+export function registerExpiryReminderRepeatableJob(queue: Queue = getMaintenanceQueue()): Promise<unknown> {
   return queue.upsertJobScheduler(
     EXPIRY_REMINDER_JOB_SCHEDULER_ID,
     { pattern: EXPIRY_REMINDER_CRON_PATTERN },
-    { name: EXPIRY_REMINDER_JOB_NAME, data: {} },
+    { name: EXPIRY_REMINDER_JOB_NAME, data: {}, opts: EXPIRY_REMINDER_JOB_OPTIONS },
   );
 }
 
-/** Removes the repeatable job registered by `registerExpiryReminderRepeatableJob`, if any. Mainly for tests/cleanup. */
-export function unregisterExpiryReminderRepeatableJob(): Promise<boolean> {
-  return notificationQueue.removeJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
+/** Removes the schedule registered by `registerExpiryReminderRepeatableJob`, if any. */
+export function unregisterExpiryReminderRepeatableJob(queue: Queue = getMaintenanceQueue()): Promise<boolean> {
+  return queue.removeJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
+}
+
+/**
+ * Removes a schedule left on the `notifications` queue by the earlier
+ * registration code, so the notification worker never receives a scan job.
+ * Harmless when none exists.
+ */
+export function removeLegacyExpiryReminderSchedule(queue: Queue = getNotificationQueue() as unknown as Queue): Promise<boolean> {
+  return queue.removeJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
 }

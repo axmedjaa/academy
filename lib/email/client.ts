@@ -10,6 +10,15 @@ export interface SendEmailInput {
 
 export type SendEmailResult = { ok: true } | { ok: false; error: string };
 
+export interface SendEmailOptions {
+  /**
+   * Sent as Resend's `Idempotency-Key`: a retried send with the same key is
+   * not delivered twice. Used by the notification worker (one key per
+   * notification row); the direct password-reset/invitation flows omit it.
+   */
+  idempotencyKey?: string;
+}
+
 /**
  * Isolates the Resend SDK behind one function — nothing outside lib/email
  * ever imports `Resend` or touches `RESEND_API_KEY` directly, so the
@@ -25,7 +34,7 @@ export type SendEmailResult = { ok: true } | { ok: false; error: string };
  * link, which embeds the raw one-time token) — only recipient/subject and,
  * on failure, the provider's own error message.
  */
-export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult> {
+export async function sendEmail(input: SendEmailInput, options: SendEmailOptions = {}): Promise<SendEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.EMAIL_FROM;
 
@@ -38,13 +47,16 @@ export async function sendEmail(input: SendEmailInput): Promise<SendEmailResult>
 
   try {
     const resend = new Resend(apiKey);
-    const { error } = await resend.emails.send({
+    const payload = {
       from,
       to: input.to,
       subject: input.subject,
       html: input.html,
       text: input.text,
-    });
+    };
+    const { error } = options.idempotencyKey
+      ? await resend.emails.send(payload, { idempotencyKey: options.idempotencyKey })
+      : await resend.emails.send(payload);
 
     if (error) {
       // error.message/name/statusCode are Resend's own safe, non-secret

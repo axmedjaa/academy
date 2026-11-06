@@ -1,51 +1,51 @@
-import Redis from "ioredis";
-import { Queue } from "bullmq";
+import Redis, { type RedisOptions } from "ioredis";
+import { Queue, type JobsOptions } from "bullmq";
 import { env } from "@/lib/env";
+import { logger } from "@/lib/logger";
+import { withTimeout } from "@/lib/with-timeout";
+import { createLogThrottle } from "@/lib/workers/log-throttle";
 
 /**
- * PLAN.md Phase 5, Item 58a — "BullMQ (same Redis) is wired in Phase 0 but
- * its first real queue/worker is built in Phase 5 for notifications."
+ * PLAN.md Phase 5, Item 58a — BullMQ queues for notifications (and, since
+ * Step 2 of deployment readiness, scheduled maintenance jobs).
  *
  * ---------------------------------------------------------------------
- * Why this is a SECOND, separate ioredis connection (not lib/redis.ts)
+ * Connections (deployment-readiness R1)
  * ---------------------------------------------------------------------
- * lib/redis.ts's `redis` client is deliberately configured to fail fast
- * (`maxRetriesPerRequest: 1`, a bounded `retryStrategy`) so a login-flow
- * rate-limit check never hangs during a Redis outage — see that file's own
- * comment. BullMQ, however, *requires* `maxRetriesPerRequest: null` on any
- * connection it's given, because its blocking commands (BRPOPLPUSH-style
- * job waiting) must not time out mid-block; passing a finite value throws
- * at Queue/Worker construction time. These two requirements are mutually
- * exclusive on one ioredis instance, so this module creates its own
- * connection instead of importing/sharing `lib/redis.ts`'s. Never point
- * this at the same client as lib/rate-limit.ts, and never loosen
- * lib/redis.ts's own retry settings to accommodate BullMQ.
+ * Two kinds of ioredis connection, never shared with lib/redis.ts's
+ * rate-limit client:
+ *
+ * 1. PRODUCER (this module's lazily-created queues — used by request
+ *    handlers to add jobs, and by monitoring to read counts). BullMQ's
+ *    `Queue` is non-blocking, so it may use a finite `maxRetriesPerRequest`.
+ *    It fails fast: `enableOfflineQueue: false` (no unbounded in-memory
+ *    buffering while Redis is down), connect and command timeouts, and every
+ *    `add` is additionally bounded by `withTimeout`. A request that triggers
+ *    a notification therefore never waits on Redis for more than a few
+ *    seconds; the notification row is already in Postgres (the outbox) and
+ *    the worker's recovery pass re-queues it once Redis is back.
+ *
+ *    BullMQ initializes a queue's connection exactly once; if Redis was
+ *    unreachable at that moment the queue stays unusable for the life of the
+ *    process. So the producer queue is discarded after a failed
+ *    initialization and rebuilt on the next use (after a short cooldown that
+ *    keeps an outage from turning into a reconnect storm).
+ *
+ * 2. WORKER (`createWorkerRedisConnection`) — only for BullMQ `Worker`s in
+ *    the dedicated worker process (scripts/worker.ts). BullMQ *requires*
+ *    `maxRetriesPerRequest: null` there, because its blocking commands must
+ *    not time out mid-block. Request handlers never use this connection.
  */
-export const notificationQueueConnection = new Redis(env.REDIS_URL, {
-  maxRetriesPerRequest: null,
-  lazyConnect: true,
-});
 
 export const NOTIFICATION_QUEUE_NAME = "notifications";
+/** Scheduled maintenance jobs (e.g. the daily subscription-expiry scan). */
+export const MAINTENANCE_QUEUE_NAME = "maintenance";
 
 /**
  * PLAN.md Phase 5 security considerations: "Retry policy: 5 attempts,
- * exponential backoff (1m, 5m, 15m, 1h, 6h), then marked failed."
- *
- * Judgment call on "5 attempts" vs. 5 listed delays: BullMQ's own
- * `attempts` job option counts the *total* number of tries including the
- * first (successful-or-not) one — it is not a "number of retries" count.
- * Read literally, "5 attempts" with 5 backoff delays between them would
- * need 6 total tries (a delay only ever separates two attempts), leaving
- * one of the five listed delays (the trailing 6h) never actually used.
- * Since PLAN.md lists five concrete delay values, this implementation
- * treats "5 attempts" as "5 retries after the initial try" (6 total BullMQ
- * `attempts`), so every one of the five listed delays is meaningful:
- * initial try -> fail -> wait 1m -> retry 1 -> fail -> wait 5m -> retry 2
- * -> fail -> wait 15m -> retry 3 -> fail -> wait 1h -> retry 4 -> fail ->
- * wait 6h -> retry 5 -> fail -> permanently `failed` (no further retry).
- * This is a deliberate, documented reading of an otherwise-ambiguous spec
- * line, not a literal "attempts: 5".
+ * exponential backoff (1m, 5m, 15m, 1h, 6h), then marked failed." Read as
+ * five retries after the initial try (6 total BullMQ `attempts`), so every
+ * listed delay is used: initial try -> 1m -> 5m -> 15m -> 1h -> 6h -> failed.
  */
 export const RETRY_BACKOFF_DELAYS_MS = [
   60_000, // 1m
@@ -58,15 +58,9 @@ export const RETRY_BACKOFF_DELAYS_MS = [
 export const NOTIFICATION_JOB_ATTEMPTS = RETRY_BACKOFF_DELAYS_MS.length + 1;
 
 /**
- * BullMQ's exact 2^n multiplier ("exponential" builtin strategy) does not
- * produce PLAN.md's literal 1m/5m/15m/1h/6h sequence (that's not a constant
- * ratio), so a `type: "custom"` backoff is used with this lookup-table
- * strategy instead, per PLAN.md's own instruction ("use a custom backoff
- * strategy function if needed"). `attemptsMade` here is 1-based — BullMQ
- * passes `job.attemptsMade + 1` (i.e. "the attempt number that just
- * failed") — see node_modules/bullmq/dist/esm/classes/job.js's
- * `shouldRetryJob`, verified against the installed package rather than
- * assumed.
+ * Custom backoff matching PLAN.md's literal 1m/5m/15m/1h/6h sequence (not a
+ * constant ratio, so BullMQ's builtin exponential strategy can't produce it).
+ * `attemptsMade` is 1-based: BullMQ passes the attempt number that just failed.
  */
 export function notificationBackoffStrategy(attemptsMade: number): number {
   const index = Math.min(Math.max(attemptsMade, 1), RETRY_BACKOFF_DELAYS_MS.length) - 1;
@@ -76,12 +70,9 @@ export function notificationBackoffStrategy(attemptsMade: number): number {
 export type NotificationJobName = "sendEmail" | "sendSms";
 
 /**
- * Database-Level Tenant Protection: "Background jobs (BullMQ) carry
- * academy_id explicitly in their job payload — a worker never infers
- * tenant context from ambient state." `academyId` is included (and may be
- * `null` for a platform-level notification with no academy, per the
- * `notifications` table's own nullable `academy_id` column) rather than
- * omitted, so the worker never has to look it up or assume one.
+ * Jobs carry academy_id explicitly — a worker never infers tenant context
+ * from ambient state. `academyId` may be null for platform-level
+ * notifications.
  */
 export interface NotificationJobData {
   notificationId: string;
@@ -92,18 +83,230 @@ export interface NotificationJobData {
   payload: unknown;
 }
 
-export const notificationQueue = new Queue<NotificationJobData, void, NotificationJobName>(
+export const NOTIFICATION_DEFAULT_JOB_OPTIONS: JobsOptions = {
+  attempts: NOTIFICATION_JOB_ATTEMPTS,
+  backoff: { type: "custom" },
+  removeOnFail: false,
+  removeOnComplete: true,
+};
+
+// ---------------------------------------------------------------------------
+// Connection options
+// ---------------------------------------------------------------------------
+
+export const PRODUCER_CONNECT_TIMEOUT_MS = 2_000;
+export const PRODUCER_COMMAND_TIMEOUT_MS = 3_000;
+/** How long the producer stays "unavailable" after a failed initialization. */
+export const PRODUCER_REBUILD_COOLDOWN_MS = 5_000;
+
+/** Capped reconnect backoff: keeps retrying (so recovery is automatic) without hammering Redis. */
+function reconnectDelay(times: number): number {
+  return Math.min(times * 500, 5_000);
+}
+
+export function producerRedisOptions(): RedisOptions {
+  return {
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 1,
+    connectTimeout: PRODUCER_CONNECT_TIMEOUT_MS,
+    commandTimeout: PRODUCER_COMMAND_TIMEOUT_MS,
+    retryStrategy: reconnectDelay,
+  };
+}
+
+/** For BullMQ Workers only (scripts/worker.ts). Never used by request handlers. */
+export function workerRedisOptions(): RedisOptions {
+  return {
+    maxRetriesPerRequest: null,
+    connectTimeout: 10_000,
+    retryStrategy: reconnectDelay,
+  };
+}
+
+export function createWorkerRedisConnection(url: string = env.REDIS_URL): Redis {
+  const connection = new Redis(url, workerRedisOptions());
+  // Reconnect attempts repeat the same error; log it at most once a minute.
+  const throttle = createLogThrottle(60_000);
+  connection.on("error", (err: Error) => {
+    const suppressed = throttle.admit("redis", err.message);
+    if (suppressed === null) return;
+    logger.warn("worker.redis_error", { error: err.message, ...(suppressed ? { repeatsSuppressed: suppressed } : {}) });
+  });
+  return connection;
+}
+
+// ---------------------------------------------------------------------------
+// Producer queues (lazy; rebuilt after a failed initialization)
+// ---------------------------------------------------------------------------
+
+export class NotificationQueueUnavailableError extends Error {
+  constructor(reason: string) {
+    super(`Notification queue unavailable: ${reason}`);
+    this.name = "NotificationQueueUnavailableError";
+  }
+}
+
+interface ProducerState<Q> {
+  connection: Redis;
+  queue: Q;
+  ready: Promise<void>;
+}
+
+/** Test seam: how producer connections are created. */
+export type RedisFactory = (url: string, options: RedisOptions) => Redis;
+let redisFactory: RedisFactory = (url, options) => new Redis(url, options);
+
+export function setProducerRedisFactoryForTests(factory: RedisFactory | null): void {
+  redisFactory = factory ?? ((url, options) => new Redis(url, options));
+}
+
+class ProducerHolder<Q extends Queue> {
+  private state: ProducerState<Q> | null = null;
+  private rebuildNotBefore = 0;
+
+  constructor(
+    private readonly label: string,
+    private readonly build: (connection: Redis) => Q,
+  ) {}
+
+  private create(): ProducerState<Q> {
+    const connection = redisFactory(env.REDIS_URL, producerRedisOptions());
+    let reportedError = false;
+    connection.on("error", (err: Error) => {
+      // One line per connection, not one per reconnect attempt.
+      if (reportedError) return;
+      reportedError = true;
+      logger.warn("queue.producer_redis_error", { queue: this.label, error: err.message });
+    });
+    const queue = this.build(connection);
+    queue.on("error", () => {
+      // Surfaced through `ready`/`add` rejections; the listener prevents an
+      // unhandled 'error' event from crashing the process.
+    });
+    const ready = queue.waitUntilReady().then(() => undefined);
+    const state: ProducerState<Q> = { connection, queue, ready };
+    ready.catch(() => {
+      if (this.state === state) this.discard("initialization failed");
+    });
+    return state;
+  }
+
+  /** The live queue, created on first use. Never throws. */
+  current(): ProducerState<Q> {
+    if (!this.state) this.state = this.create();
+    return this.state;
+  }
+
+  /** For producers: fails fast during the post-failure cooldown. */
+  forProducer(): ProducerState<Q> {
+    if (!this.state && Date.now() < this.rebuildNotBefore) {
+      throw new NotificationQueueUnavailableError("cooling down after a connection failure");
+    }
+    return this.current();
+  }
+
+  discard(reason: string): void {
+    const state = this.state;
+    if (!state) return;
+    this.state = null;
+    this.rebuildNotBefore = Date.now() + PRODUCER_REBUILD_COOLDOWN_MS;
+    logger.warn("queue.producer_discarded", { queue: this.label, reason });
+    state.queue.close().catch(() => undefined);
+    state.connection.disconnect();
+  }
+
+  async close(): Promise<void> {
+    const state = this.state;
+    this.state = null;
+    this.rebuildNotBefore = 0;
+    if (!state) return;
+    await state.queue.close().catch(() => undefined);
+    state.connection.disconnect();
+  }
+
+  /** Test-only: forget state without touching Redis. */
+  resetForTests(): void {
+    this.state = null;
+    this.rebuildNotBefore = 0;
+  }
+}
+
+const notificationProducer = new ProducerHolder<Queue<NotificationJobData, void, NotificationJobName>>(
   NOTIFICATION_QUEUE_NAME,
-  {
-    connection: notificationQueueConnection,
-    defaultJobOptions: {
-      attempts: NOTIFICATION_JOB_ATTEMPTS,
-      backoff: { type: "custom" },
-      // Failed jobs stay visible for the worker's own row (status='failed')
-      // and for platform monitoring (PLAN.md: "visible... to platform
-      // monitoring, not silently dropped") rather than being purged.
-      removeOnFail: false,
-      removeOnComplete: true,
-    },
-  },
+  (connection) =>
+    new Queue<NotificationJobData, void, NotificationJobName>(NOTIFICATION_QUEUE_NAME, {
+      connection,
+      defaultJobOptions: NOTIFICATION_DEFAULT_JOB_OPTIONS,
+    }),
 );
+
+const maintenanceProducer = new ProducerHolder<Queue>(MAINTENANCE_QUEUE_NAME, (connection) => new Queue(MAINTENANCE_QUEUE_NAME, { connection }));
+
+export function getNotificationQueue(): Queue<NotificationJobData, void, NotificationJobName> {
+  return notificationProducer.current().queue;
+}
+
+export function getNotificationQueueConnection(): Redis {
+  return notificationProducer.current().connection;
+}
+
+export function getMaintenanceQueue(): Queue {
+  return maintenanceProducer.current().queue;
+}
+
+/**
+ * Adds a notification job without ever blocking the caller for long.
+ * Throws `NotificationQueueUnavailableError` (or a `TimeoutError`) when
+ * Redis is unavailable; callers treat that as "deliver later".
+ */
+export async function addNotificationJob(
+  name: NotificationJobName,
+  data: NotificationJobData,
+  opts: { jobId: string },
+): Promise<void> {
+  const state = notificationProducer.forProducer();
+  try {
+    await withTimeout(state.ready, PRODUCER_CONNECT_TIMEOUT_MS + 500, "notification queue connect");
+  } catch (err) {
+    notificationProducer.discard("connect failed or timed out");
+    throw new NotificationQueueUnavailableError(err instanceof Error ? err.message : String(err));
+  }
+  try {
+    await withTimeout(state.queue.add(name, data, opts), PRODUCER_COMMAND_TIMEOUT_MS + 500, "notification queue add");
+  } catch (err) {
+    throw new NotificationQueueUnavailableError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** Closes the producer queues (worker shutdown, tests). Safe to call repeatedly. */
+export async function closeQueueProducers(): Promise<void> {
+  await Promise.all([notificationProducer.close(), maintenanceProducer.close()]);
+}
+
+export function resetQueueProducersForTests(): void {
+  notificationProducer.resetForTests();
+  maintenanceProducer.resetForTests();
+}
+
+/**
+ * Stable handles for existing callers (monitoring, tests): always delegate
+ * to the current live producer, so a rebuilt queue is picked up
+ * transparently. Importing this module opens no connection — the first
+ * property access does.
+ */
+function liveHandle<T extends object>(resolve: () => T): T {
+  return new Proxy({} as T, {
+    get(_target, prop) {
+      const target = resolve();
+      const value = Reflect.get(target, prop, target) as unknown;
+      return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    },
+    has(_target, prop) {
+      return prop in resolve();
+    },
+  });
+}
+
+export const notificationQueue = liveHandle(getNotificationQueue);
+export const notificationQueueConnection = liveHandle(getNotificationQueueConnection);

@@ -26,6 +26,8 @@
 
 # production
 /build
+# worker bundle (npm run build:worker)
+/dist/
 
 # misc
 .DS_Store

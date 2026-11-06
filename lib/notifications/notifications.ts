@@ -5,7 +5,8 @@ import { db, type DbClient } from "@/lib/db";
 import { notificationChannelEnum, notifications } from "@/lib/db/schema";
 import { redact } from "@/lib/redact";
 import { NOTIFICATION_TEMPLATE_IDS, type NotificationTemplateId } from "@/lib/notifications/templates";
-import { notificationQueue, type NotificationJobData } from "@/lib/notifications/queue";
+import { addNotificationJob, type NotificationJobData } from "@/lib/notifications/queue";
+import { logger } from "@/lib/logger";
 
 /**
  * PLAN.md Phase 5, Item 58a — the core `enqueueNotification` entry point.
@@ -94,6 +95,13 @@ export interface EnqueuedNotificationChannelResult {
   notificationId: string;
   /** true when this exact (idempotencyKey, channel) row already existed. */
   alreadyEnqueued: boolean;
+  /**
+   * Email/SMS only: whether the delivery job reached the queue on this call.
+   * `false` means Redis was unavailable; the row stays `pending` and the
+   * worker's recovery pass queues it later. Absent for in_app rows and for
+   * duplicates (nothing was queued).
+   */
+  queued?: boolean;
 }
 
 /**
@@ -161,6 +169,11 @@ async function insertNotificationRow(
   }
 }
 
+/** The BullMQ job id for a notification row; also used by the recovery pass. */
+export function notificationJobId(idempotencyKey: string, channel: NotificationChannel): string {
+  return `${idempotencyKey}:${channel}`;
+}
+
 export async function enqueueNotification(
   rawInput: EnqueueNotificationInput,
   executor: DbClient = db,
@@ -215,11 +228,25 @@ export async function enqueueNotification(
       templateId: input.templateId,
       payload: redactedPayload,
     };
-    await notificationQueue.add(channel === "email" ? "sendEmail" : "sendSms", jobData, {
-      // Defense in depth alongside the DB's own uniqueness: a duplicate
-      // jobId is silently not re-added by BullMQ.
-      jobId: `${idempotencyKey}:${channel}`,
-    });
+    // Deployment-readiness R1: queueing is best-effort and bounded. The row
+    // above is the durable record (outbox); if Redis is down this never
+    // blocks or fails the caller's operation (login, payment, ...), and the
+    // worker's recovery pass (lib/notifications/recovery.ts) queues the row
+    // once Redis is reachable. A duplicate jobId is ignored by BullMQ.
+    try {
+      await addNotificationJob(channel === "email" ? "sendEmail" : "sendSms", jobData, {
+        jobId: notificationJobId(idempotencyKey, channel),
+      });
+      result.queued = true;
+    } catch (err) {
+      result.queued = false;
+      logger.warn("notifications.enqueue_deferred", {
+        notificationId: result.notificationId,
+        channel,
+        eventType: input.eventType,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   return results;

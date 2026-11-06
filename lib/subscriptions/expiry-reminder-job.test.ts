@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { academies, academySubscriptions, notifications, subscriptionPlans, users } from "@/lib/db/schema";
 import { EXPIRING_SOON_WINDOW_DAYS } from "@/lib/subscriptions/renew";
-import { notificationQueue } from "@/lib/notifications/queue";
+import { closeQueueProducers, getMaintenanceQueue, getNotificationQueue, notificationQueue } from "@/lib/notifications/queue";
 import {
   EXPIRY_REMINDER_CRON_PATTERN,
   EXPIRY_REMINDER_JOB_SCHEDULER_ID,
@@ -106,6 +106,7 @@ afterEach(async () => {
 afterAll(async () => {
   await db.delete(subscriptionPlans).where(eq(subscriptionPlans.id, planId));
   await db.delete(users).where(eq(users.id, ownerUserId));
+  await closeQueueProducers();
 });
 
 describe("scanForExpiringSubscriptions", () => {
@@ -237,14 +238,14 @@ describe("registerExpiryReminderRepeatableJob / unregisterExpiryReminderRepeatab
   it("registers a repeatable job scheduler with the documented cron pattern, and it can be removed again", async () => {
     await registerExpiryReminderRepeatableJob();
 
-    const scheduler = await notificationQueue.getJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
+    const scheduler = await getMaintenanceQueue().getJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
     expect(scheduler).toBeDefined();
     expect(scheduler?.pattern).toBe(EXPIRY_REMINDER_CRON_PATTERN);
 
     const removed = await unregisterExpiryReminderRepeatableJob();
     expect(removed).toBe(true);
 
-    const afterRemoval = await notificationQueue.getJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
+    const afterRemoval = await getMaintenanceQueue().getJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
     expect(afterRemoval).toBeUndefined();
   });
 
@@ -252,8 +253,16 @@ describe("registerExpiryReminderRepeatableJob / unregisterExpiryReminderRepeatab
     await registerExpiryReminderRepeatableJob();
     await registerExpiryReminderRepeatableJob();
 
-    const schedulers = await notificationQueue.getJobSchedulers();
+    const schedulers = await getMaintenanceQueue().getJobSchedulers();
     const matching = schedulers.filter((s) => s.key === EXPIRY_REMINDER_JOB_SCHEDULER_ID);
     expect(matching).toHaveLength(1);
+  });
+
+  it("registers on the maintenance queue, never on the notifications queue (whose worker only sends email/SMS)", async () => {
+    await registerExpiryReminderRepeatableJob();
+    const onNotifications = await getNotificationQueue().getJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
+    expect(onNotifications).toBeUndefined();
+    const onMaintenance = await getMaintenanceQueue().getJobScheduler(EXPIRY_REMINDER_JOB_SCHEDULER_ID);
+    expect(onMaintenance?.template?.opts?.attempts).toBe(3);
   });
 });

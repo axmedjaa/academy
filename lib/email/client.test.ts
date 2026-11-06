@@ -114,3 +114,27 @@ describe("sendEmail", () => {
     expect(logged).not.toContain("super-secret-reset-token");
   });
 });
+
+describe("sendEmail — idempotency key (notification worker)", () => {
+  it("forwards the idempotency key to Resend when given", async () => {
+    process.env.RESEND_API_KEY = "test-key";
+    process.env.EMAIL_FROM = "App <no-reply@example.com>";
+    sendMock.mockResolvedValue({ data: { id: "abc" }, error: null });
+
+    const result = await sendEmail({ to: "user@example.com", subject: "s", html: "<p>h</p>", text: "t" }, { idempotencyKey: "notification-123" });
+
+    expect(result.ok).toBe(true);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toEqual({ idempotencyKey: "notification-123" });
+  });
+
+  it("calls Resend with a single argument when no key is given (existing direct flows unchanged)", async () => {
+    process.env.RESEND_API_KEY = "test-key";
+    process.env.EMAIL_FROM = "App <no-reply@example.com>";
+    sendMock.mockResolvedValue({ data: { id: "abc" }, error: null });
+
+    await sendEmail({ to: "user@example.com", subject: "s", html: "<p>h</p>", text: "t" });
+
+    expect(sendMock.mock.calls[0]).toHaveLength(1);
+  });
+});

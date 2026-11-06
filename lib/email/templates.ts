@@ -84,6 +84,41 @@ export function staffInvitationEmail(params: {
   };
 }
 
+/**
+ * Generic notification email (lib/notifications/email-content.ts). Every
+ * value is HTML-escaped; the link is optional (omitted when APP_URL is not
+ * configured). Carries no notification payload data.
+ */
+export function notificationEmail(params: {
+  subject: string;
+  heading: string;
+  message: string;
+  buttonLabel: string;
+  buttonUrl?: string;
+}): EmailContent {
+  const message = escapeHtml(params.message);
+  const bodyHtml = `
+    <p style="margin:0;font-size:14px;line-height:1.5;color:${TEXT_COLOR};">${message}</p>`;
+  const html = params.buttonUrl
+    ? layout({ heading: escapeHtml(params.heading), bodyHtml, buttonLabel: escapeHtml(params.buttonLabel), buttonUrl: params.buttonUrl })
+    : `<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background-color:#F7F8FA;font-family:Arial,Helvetica,sans-serif;">
+    <div style="max-width:480px;margin:0 auto;padding:32px 24px;">
+      <p style="margin:0 0 24px;font-size:14px;font-weight:700;color:${TEXT_COLOR};">${APP_NAME}</p>
+      <div style="background-color:#FFFFFF;border:1px solid ${BORDER_COLOR};border-radius:8px;padding:32px;">
+        <h1 style="margin:0 0 16px;font-size:18px;color:${TEXT_COLOR};">${escapeHtml(params.heading)}</h1>
+        ${bodyHtml}
+      </div>
+    </div>
+  </body>
+</html>`;
+  const text = params.buttonUrl ? `${params.message}
+
+${params.buttonLabel}: ${params.buttonUrl}` : params.message;
+  return { subject: params.subject, html, text };
+}
+
 function codeLayout(opts: { heading: string; introHtml: string; code: string; footerHtml: string }): string {
   return `<!doctype html>
 <html>
