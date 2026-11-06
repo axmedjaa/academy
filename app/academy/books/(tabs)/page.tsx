@@ -62,9 +62,6 @@ export default async function AcademyBooksPage({ searchParams }: { searchParams:
             {plural(rows.length, "book", "books")}
             {showArchived ? ", including archived" : ""}
           </span>
-          <Link href="/academy/books/stock" className="ml-auto text-sm font-semibold">
-            Stock table
-          </Link>
         </div>
       )}
 

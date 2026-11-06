@@ -26,7 +26,10 @@ import type { ConsoleNavItem, ConsoleShellData } from "@/lib/console/shell-data"
  * tinted active state and gold inset bar, and the signed-in user at the
  * bottom. At 640–899px it becomes a 72px icon rail with tooltips; below
  * 640px an off-canvas drawer opened from the header. On desktop the user can
- * collapse it to the rail (remembered per browser).
+ * collapse it to the rail (remembered per browser) with the panel-icon button
+ * in the brand row (`Sidebar Collapse Handle.dc.html`, option D); while
+ * collapsed, hovering or focusing that button opens the sidebar over the
+ * page until the pointer or focus leaves it.
  *
  * Header (56px): menu button (phone), page title with an "Account" crumb on
  * account pages, search with a results dropdown, the academy's branch
@@ -118,6 +121,26 @@ function useDismiss(open: boolean, close: () => void) {
   return ref;
 }
 
+/** The design's panel-left glyph: 18px, 1.8 stroke, round caps. */
+function PanelIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <line x1="9.5" y1="4" x2="9.5" y2="20" />
+    </svg>
+  );
+}
+
 const MENU_ITEM =
   "flex min-h-11 w-full items-center gap-3 rounded-lg border-0 bg-transparent px-3 text-left text-sm !text-ink no-underline transition-colors duration-150 hover:bg-app hover:no-underline";
 
@@ -140,6 +163,7 @@ export function ConsoleShell({
   const [bellOpen, setBellOpen] = useState(false);
   const [mobileSearch, setMobileSearch] = useState(false);
   const collapsed = useSyncExternalStore(subscribeCollapse, readCollapse, () => false);
+  const [peek, setPeek] = useState(false);
 
   // Close transient UI on navigation (adjusting state during render rather
   // than in an effect — React's documented pattern for prop-driven resets).
@@ -150,6 +174,7 @@ export function ConsoleShell({
     setMenuOpen(false);
     setBellOpen(false);
     setMobileSearch(false);
+    setPeek(false);
   }
 
   const allItems = data.groups.flatMap((group) => group.items);
@@ -165,7 +190,14 @@ export function ConsoleShell({
         : "Academy Console");
   const crumb = accountTitle ? "Account" : null;
 
+  // A collapsed desktop sidebar opens over the page (without moving it) while
+  // the pointer or keyboard focus is on its collapse control or inside it.
+  function startPeek() {
+    if (collapsed) setPeek(true);
+  }
+
   function toggleCollapsed() {
+    setPeek(false);
     try {
       window.localStorage.setItem(COLLAPSE_KEY, collapsed ? "0" : "1");
     } catch {
@@ -200,7 +232,8 @@ export function ConsoleShell({
     <div
       className={`cs-root min-h-screen bg-app ${fontClassName ?? ""}`}
       data-drawer={drawerOpen}
-      data-collapsed={collapsed}
+      data-collapsed={collapsed && !peek}
+      data-peek={collapsed && peek}
     >
       <a
         href="#main-content"
@@ -211,9 +244,17 @@ export function ConsoleShell({
 
       <div className="cs-scrim" aria-hidden="true" onClick={() => setDrawerOpen(false)} />
 
-      <aside id="console-sidebar" className="cs-sidebar" aria-label="Sidebar">
-        <div className="cs-brand -mx-3 flex h-14 shrink-0 items-center gap-3 border-b border-border px-5">
-          <Link href={data.console === "academy" ? "/academy/dashboard" : "/platform/dashboard"} className="flex min-w-0 flex-1 items-center gap-3 !text-ink no-underline hover:no-underline">
+      <aside
+        id="console-sidebar"
+        className="cs-sidebar"
+        aria-label="Sidebar"
+        onMouseLeave={() => setPeek(false)}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setPeek(false);
+        }}
+      >
+        <div className="cs-brand relative -mx-3 flex h-14 shrink-0 items-center gap-3 border-b border-border px-5">
+          <Link href={data.console === "academy" ? "/academy/dashboard" : "/platform/dashboard"} className="cs-brand-link flex min-w-0 flex-1 items-center gap-3 !text-ink no-underline hover:no-underline">
             {data.brand.logoUrl ? (
               // eslint-disable-next-line @next/next/no-img-element -- signed storage URL; this codebase renders images with plain <img>
               <img src={data.brand.logoUrl} alt="" className="h-7 w-7 shrink-0 rounded-md object-contain" />
@@ -227,6 +268,23 @@ export function ConsoleShell({
               <span className="block truncate text-xs text-muted">{data.brand.subtitle}</span>
             </span>
           </Link>
+          {/* Panel-icon collapse control (design option D). One element in
+              every state, so keyboard focus survives the peek re-layout.
+              Shown at >=900px only; CSS places it at the header's right end,
+              or centred in place of the logo when collapsed. */}
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            onMouseEnter={startPeek}
+            onFocus={startPeek}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!collapsed}
+            aria-controls="console-sidebar"
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="cs-collapse-toggle"
+          >
+            <PanelIcon />
+          </button>
           <button
             ref={drawerCloseRef}
             type="button"
@@ -237,16 +295,6 @@ export function ConsoleShell({
             <Icon name="close" />
           </button>
         </div>
-
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="cs-edge-toggle absolute -right-3 top-[70px] z-10 h-6 w-6 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-[0_1px_3px_rgba(17,24,39,0.12)] transition-colors duration-150 hover:border-brand hover:text-brand"
-        >
-          <Icon name="expand_more" width={14} height={14} className={collapsed ? "-rotate-90" : "rotate-90"} />
-        </button>
 
         <nav aria-label="Primary" className="cs-nav min-h-0 flex-1 overflow-y-auto pt-4">
           {data.groups.length === 0 && (

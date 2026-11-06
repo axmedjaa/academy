@@ -15,10 +15,11 @@ import { ActionButton } from "./books-actions";
  * mounted and this reads the open section from the URL.
  */
 
-export type BooksSection = "books" | "sell" | "campaigns" | "orders" | "payments" | "receive" | "give" | "reports";
+export type BooksSection = "books" | "stock" | "sell" | "campaigns" | "orders" | "payments" | "receive" | "give" | "reports";
 
 export function sectionOf(pathname: string): BooksSection {
   const rest = pathname.replace(/^\/academy\/books/, "");
+  if (rest.startsWith("/stock")) return "stock";
   if (rest.startsWith("/sales")) return "sell";
   if (rest.startsWith("/pre-orders")) return "campaigns";
   if (rest.startsWith("/orders")) return "orders";
@@ -29,7 +30,7 @@ export function sectionOf(pathname: string): BooksSection {
   return "books";
 }
 
-const STAGE_OF: Record<BooksSection, number> = { books: 1, sell: 1, campaigns: 2, orders: 3, payments: 3, receive: 4, give: 4, reports: 0 };
+const STAGE_OF: Record<BooksSection, number> = { books: 1, stock: 1, sell: 1, campaigns: 2, orders: 3, payments: 3, receive: 4, give: 4, reports: 0 };
 
 export interface StageCounts {
   activeBooks: number;
@@ -80,6 +81,12 @@ export function BooksStageNav({ counts, can }: { counts: StageCounts; can: NavPe
             href: "/academy/books",
             count: String(counts.activeBooks),
             action: can.canManageBooks ? <ActionButton dialog={{ kind: "addBook" }}>Add Book</ActionButton> : null,
+          },
+          {
+            key: "stock",
+            label: "Stock",
+            href: "/academy/books/stock",
+            count: `${counts.copiesInStock} copies`,
           },
           {
             key: "sell",

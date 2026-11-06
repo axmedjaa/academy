@@ -377,7 +377,7 @@ html {
   padding: 0 12px 12px;
   background: var(--color-surface);
   border-right: 1px solid var(--color-border);
-  transition: width 0.18s ease;
+  transition: width 0.18s ease, box-shadow 0.18s ease;
 }
 .cs-content {
   margin-left: 260px;
@@ -386,12 +386,54 @@ html {
 }
 .cs-rail-only,
 .cs-drawer-only,
-.cs-edge-toggle,
+.cs-collapse-toggle,
 .cs-tip {
   display: none;
 }
+/* Collapse control (Sidebar Collapse Handle.dc.html, option D, as built in
+   the Platform Console shell): a 28px ghost panel icon at the brand row's
+   right end with a 44px hit area; collapsed, a 40x36 tinted button centred
+   in place of the logo. Desktop only — below 900px the sidebar is a fixed
+   rail or a drawer. */
 @media (min-width: 900px) {
-  .cs-edge-toggle { display: flex; }
+  .cs-collapse-toggle {
+    position: relative;
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-right: -8px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-muted);
+    cursor: pointer;
+    transition: background-color 0.12s ease, color 0.12s ease;
+  }
+  .cs-collapse-toggle::before {
+    content: "";
+    position: absolute;
+    inset: -8px;
+  }
+  .cs-collapse-toggle:hover {
+    background: var(--color-brand-tint);
+    color: var(--color-brand);
+  }
+  .cs-root[data-collapsed="true"] .cs-collapse-toggle {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 40px;
+    height: 36px;
+    margin: -18px 0 0 -20px;
+    background: var(--color-brand-tint);
+    color: var(--color-brand);
+  }
+  .cs-root[data-collapsed="true"] .cs-collapse-toggle::before { inset: 0; }
+  .cs-root[data-collapsed="true"] .cs-brand-link { visibility: hidden; }
 }
 .cs-scrim {
   display: none;
@@ -435,13 +477,13 @@ html {
 @media (min-width: 640px) and (max-width: 899px) {
   .cs-sidebar { width: 72px; }
   .cs-content { margin-left: 72px; }
-  .cs-label, .cs-group-title, .cs-collapse-toggle { display: none !important; }
+  .cs-label, .cs-group-title { display: none !important; }
   .cs-rail-only { display: block; }
   .cs-item { justify-content: center; padding-left: 0 !important; padding-right: 0 !important; }
   .cs-brand { justify-content: center; padding: 0 !important; }
+  .cs-brand-link { justify-content: center; }
   .cs-tip { display: block; }
   .cs-nav .cs-item { display: flex !important; }
-  .cs-expand-toggle { display: none !important; }
 }
 @media (min-width: 900px) {
   .cs-root[data-collapsed="true"] .cs-sidebar { width: 72px; }
@@ -453,21 +495,29 @@ html {
   .cs-root[data-collapsed="true"] .cs-brand { justify-content: center; padding: 0 !important; }
   .cs-root[data-collapsed="true"] .cs-tip { display: block; }
   .cs-root[data-collapsed="true"] .cs-nav .cs-item { display: flex !important; }
-  .cs-root[data-collapsed="true"] .cs-collapse-toggle { display: none !important; }
+  /* Peek: the collapsed sidebar shown at full width over the page; the
+     content keeps its rail margin so nothing beneath it moves. */
+  .cs-root[data-peek="true"] .cs-content { margin-left: 72px; }
+  .cs-root[data-peek="true"] .cs-sidebar { box-shadow: 8px 0 24px rgba(17, 24, 39, 0.14); }
+}
+/* Short viewports: the design's compact 34px navigation rows. */
+@media (max-height: 819px) {
+  .cs-nav .cs-item { height: 34px; }
 }
 /* Rail tooltip: fixed-positioned so it escapes the nav's overflow clip; top
    falls back to the item's own static position. Shown on hover and on
    keyboard focus. */
 .cs-tip {
   position: fixed;
-  left: 84px;
+  left: 92px;
   margin-top: -2px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-radius: 8px;
   background: var(--color-ink);
   color: #fff;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.3);
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
@@ -480,12 +530,12 @@ html {
   opacity: 1;
   translate: 0 0;
 }
+/* The sidebar navigation still scrolls (wheel, touch, keyboard focus) but
+   shows no scrollbar line. */
 .cs-nav {
-  scrollbar-width: thin;
-  scrollbar-color: #d1d5db transparent;
+  scrollbar-width: none;
 }
-.cs-nav::-webkit-scrollbar { width: 6px; }
-.cs-nav::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 999px; }
+.cs-nav::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .cs-menu {
   animation: cs-drop 0.14s ease-out backwards;
 }
@@ -497,7 +547,7 @@ html {
   .cs-content { margin-left: 0 !important; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .cs-sidebar, .cs-content, .cs-scrim, .cs-tip, .cs-menu {
+  .cs-sidebar, .cs-content, .cs-scrim, .cs-tip, .cs-menu, .cs-collapse-toggle {
     transition: none !important;
     animation: none !important;
   }
