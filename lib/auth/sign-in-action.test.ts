@@ -4,6 +4,8 @@
  * - SEC-M-09: every platform role must pass MFA; no session before it.
  * - SEC-M-02: the per-account limit trips across rotating IPs.
  * - SEC-M-03: sign-in is refused, not waved through, while Redis is down.
+ * - Regression: one failed sign-in never locks anyone out, and successful
+ *   sign-ins from a shared IP don't use up that IP's allowance.
  */
 import { randomUUID } from "node:crypto";
 import { eq, inArray } from "drizzle-orm";
@@ -43,7 +45,8 @@ const { platformMemberships, sessions, users } = await import("@/lib/db/schema")
 const { hashPassword } = await import("@/lib/auth/password");
 const { redis } = await import("@/lib/redis");
 const { signIn } = await import("./actions");
-const { LOGIN_ACCOUNT_LIMIT } = await import("./login-rate-limit");
+const { LOGIN_ACCOUNT_LIMIT, loginAccountKey, loginIpKey, loginIpLimit } = await import("./login-rate-limit");
+const { rateLimitRedisKey } = await import("@/lib/rate-limit");
 
 const PASSWORD = "Correct-Horse-Battery-9";
 const userIds: string[] = [];
@@ -64,11 +67,21 @@ function form(email: string, password: string) {
   return data;
 }
 
-function freshIp() {
-  forwardedFor = `198.51.100.${Math.floor(Math.random() * 250) + 1}, 10.${Math.floor(Math.random() * 250)}.0.1`;
-  // The last entry is what one trusted hop appended; that's the client IP used.
-  redisKeys.push(`ratelimit:login:${forwardedFor.split(",")[1].trim()}`);
+/** Sets the request's client IP (as one trusted hop appends it) and returns it. */
+function setClientIp(ip: string): string {
+  forwardedFor = `198.51.100.${Math.floor(Math.random() * 250) + 1}, ${ip}`;
+  redisKeys.push(rateLimitRedisKey(loginIpKey(ip)));
+  return ip;
 }
+
+function freshIp(): string {
+  return setClientIp(`10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250) + 1}`);
+}
+
+const counter = async (key: string) => {
+  const raw = await redis.get(rateLimitRedisKey(key));
+  return raw === null ? 0 : Number(raw);
+};
 
 beforeEach(() => {
   jar.clear();
@@ -106,7 +119,7 @@ describe("SEC-M-09: MFA for every platform role", { timeout: 60_000 }, () => {
 describe("SEC-M-02: per-account login limit through signIn", { timeout: 120_000 }, () => {
   it("locks the account after repeated failures from different IPs, even for the right password", async () => {
     const user = await platformUser("platform_admin");
-    redisKeys.push(`ratelimit:login-account:${user.email}`);
+    redisKeys.push(rateLimitRedisKey(loginAccountKey(user.email)));
     for (let i = 0; i < LOGIN_ACCOUNT_LIMIT.maxAttempts; i += 1) {
       freshIp();
       const state = await signIn({ ok: false }, form(user.email, "wrong-password"));
@@ -120,7 +133,7 @@ describe("SEC-M-02: per-account login limit through signIn", { timeout: 120_000 
 
   it("an unknown email locks the same way (no account-existence signal)", async () => {
     const email = `nobody-${randomUUID()}@example.com`;
-    redisKeys.push(`ratelimit:login-account:${email}`);
+    redisKeys.push(rateLimitRedisKey(loginAccountKey(email)));
     for (let i = 0; i < LOGIN_ACCOUNT_LIMIT.maxAttempts; i += 1) {
       freshIp();
       await signIn({ ok: false }, form(email, "whatever"));
@@ -133,10 +146,56 @@ describe("SEC-M-02: per-account login limit through signIn", { timeout: 120_000 
 describe("SEC-M-03: sign-in while Redis is down", () => {
   it("is refused with a retry-shortly message, before the password is checked", async () => {
     const user = await platformUser("platform_admin");
-    vi.spyOn(redis, "incr").mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:6379"));
-    vi.spyOn(redis, "get").mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:6379"));
+    vi.spyOn(redis, "eval").mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:6379"));
     const state = await signIn({ ok: false }, form(user.email, PASSWORD));
     expect(state).toMatchObject({ ok: false, error: { code: "RATE_LIMITED", message: "This is temporarily unavailable. Please try again in a moment." } });
     expect(jar.size).toBe(0);
+  });
+});
+
+describe("regression: one failed sign-in never locks anyone out", { timeout: 180_000 }, () => {
+  it("one wrong password returns the normal error, and leaves each counter at 1 with an expiry", async () => {
+    const user = await platformUser("platform_admin");
+    redisKeys.push(rateLimitRedisKey(loginAccountKey(user.email)));
+    const ip = freshIp();
+    const state = await signIn({ ok: false }, form(user.email, "wrong-password"));
+    expect(state).toMatchObject({ ok: false, error: { code: "UNAUTHENTICATED", message: "Invalid email or password." } });
+    expect(await counter(loginIpKey(ip))).toBe(1);
+    expect(await counter(loginAccountKey(user.email))).toBe(1);
+    expect(await redis.ttl(rateLimitRedisKey(loginIpKey(ip)))).toBeGreaterThan(0);
+    expect(await redis.ttl(rateLimitRedisKey(loginAccountKey(user.email)))).toBeGreaterThan(0);
+  });
+
+  it("successful sign-ins from one shared IP (an office) never use up its allowance", async () => {
+    const officeIp = setClientIp(`10.77.${Math.floor(Math.random() * 250)}.1`);
+    const people = await Promise.all([platformUser("platform_admin"), platformUser("platform_admin"), platformUser("platform_admin")]);
+    for (let i = 0; i < loginIpLimit().maxAttempts + 2; i += 1) {
+      setClientIp(officeIp);
+      jar.clear();
+      const person = people[i % people.length];
+      const outcome = await signIn({ ok: false }, form(person.email, PASSWORD)).catch((e: unknown) => e);
+      expect(outcome).toBeInstanceOf(RedirectSignal);
+    }
+    expect(await counter(loginIpKey(officeIp))).toBe(0);
+  });
+
+  it("a correct password clears the account's earlier failures", async () => {
+    const user = await platformUser("platform_admin");
+    redisKeys.push(rateLimitRedisKey(loginAccountKey(user.email)));
+    for (let i = 0; i < 3; i += 1) {
+      freshIp();
+      await signIn({ ok: false }, form(user.email, "wrong-password"));
+    }
+    expect(await counter(loginAccountKey(user.email))).toBe(3);
+    freshIp();
+    await signIn({ ok: false }, form(user.email, PASSWORD)).catch(() => undefined);
+    expect(await counter(loginAccountKey(user.email))).toBe(0);
+  });
+
+  it("malformed input is refused without counting against anything", async () => {
+    const ip = freshIp();
+    const state = await signIn({ ok: false }, form("not-an-email", "x"));
+    expect(state.error?.code).toBe("VALIDATION_ERROR");
+    expect(await counter(loginIpKey(ip))).toBe(0);
   });
 });

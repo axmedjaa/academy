@@ -5,9 +5,10 @@ import { cookies, headers } from "next/headers";
 import { z } from "zod";
 import { attemptSignIn, type ActionError } from "@/lib/auth/sign-in";
 import {
-  checkLoginAccountLock,
-  checkLoginRateLimit,
-  recordFailedLoginForAccount,
+  clearLoginAccountFailures,
+  refundLoginIpAttempt,
+  reserveLoginAccountAttempt,
+  reserveLoginIpAttempt,
 } from "@/lib/auth/login-rate-limit";
 import { checkForgotPasswordRateLimit } from "@/lib/auth/forgot-password-rate-limit";
 import {
@@ -72,20 +73,8 @@ export async function signIn(
   const headerList = await headers();
   const ip = getClientIp(headerList);
 
-  // Checked (and incremented) before any parsing/DB work, so a flood of
-  // requests is rejected cheaply regardless of whether credentials are
-  // even well-formed (PLAN.md: "Redis-backed rate limiting on /login").
-  const rateLimit = await checkLoginRateLimit(ip);
-  if (!rateLimit.allowed) {
-    return {
-      ok: false,
-      error: {
-        code: "RATE_LIMITED",
-        message: rateLimitMessage(rateLimit, "Too many attempts."),
-      },
-    };
-  }
-
+  // Malformed input is refused before any limiter: it checks no password,
+  // so it is not a guess and never counts.
   const parsed = signInSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
@@ -101,24 +90,36 @@ export async function signIn(
     };
   }
 
-  // Security audit SEC-M-02: per-account limit (failed attempts only),
-  // checked before the password so a locked account costs no Argon2 work.
-  // Same message as the IP limit, and applied to unknown emails too, so it
-  // reveals nothing about which accounts exist.
-  const accountLock = await checkLoginAccountLock(parsed.data.email);
-  if (!accountLock.allowed) {
-    return {
-      ok: false,
-      error: { code: "RATE_LIMITED", message: rateLimitMessage(accountLock, "Too many attempts.") },
-    };
+  // Both limits count FAILED sign-ins only (lib/auth/login-rate-limit.ts):
+  // each attempt reserves a slot first, atomically, so parallel requests
+  // can't get past a limit, and a correct password hands it back. Both are
+  // checked before the password, so a blocked attempt costs no Argon2 work.
+  // Per client IP: stops floods.
+  const ipLimit = await reserveLoginIpAttempt(ip);
+  if (!ipLimit.allowed) {
+    return { ok: false, error: { code: "RATE_LIMITED", message: rateLimitMessage(ipLimit, "Too many attempts.") } };
+  }
+
+  // Per account (security audit SEC-M-02): stops guesses spread across many
+  // IPs. Same message as the IP limit, and applied to unknown emails too, so
+  // it reveals nothing about which accounts exist.
+  const accountLimit = await reserveLoginAccountAttempt(parsed.data.email);
+  if (!accountLimit.allowed) {
+    // No password was checked, so this is not a failed attempt for the IP.
+    await refundLoginIpAttempt(ip);
+    return { ok: false, error: { code: "RATE_LIMITED", message: rateLimitMessage(accountLimit, "Too many attempts.") } };
   }
 
   const result = await attemptSignIn(parsed.data.email, parsed.data.password);
 
   if (!result.ok) {
-    await recordFailedLoginForAccount(parsed.data.email);
+    // Both reservations stay counted: this was a failed attempt.
     return { ok: false, error: result.error };
   }
+
+  // Correct password: not a failure for the IP, and the account's earlier
+  // failures no longer matter. Done before the MFA redirect below.
+  await Promise.all([refundLoginIpAttempt(ip), clearLoginAccountFailures(parsed.data.email)]);
 
   const cookieStore = await cookies();
 

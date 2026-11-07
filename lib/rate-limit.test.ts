@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/lib/redis";
 import type { MonitoringEvent, MonitoringMetric, MonitoringSink } from "@/lib/monitoring/monitor";
-import { checkRateLimit } from "./rate-limit";
+import { checkRateLimit, rateLimitRedisKey } from "./rate-limit";
 
 function mockSink(): MonitoringSink & {
   recordEvent: ReturnType<typeof vi.fn<(event: MonitoringEvent) => void>>;
@@ -14,7 +14,7 @@ function mockSink(): MonitoringSink & {
 let testKey: string;
 
 afterEach(async () => {
-  await redis.del(`ratelimit:${testKey}`);
+  await redis.del(rateLimitRedisKey(`${testKey}`));
 });
 
 describe("checkRateLimit", () => {
@@ -56,7 +56,7 @@ describe("checkRateLimit", () => {
     expect(blockedOnFirst.allowed).toBe(false);
     expect(allowedOnSecond.allowed).toBe(true);
 
-    await redis.del(`ratelimit:${otherKey}`);
+    await redis.del(rateLimitRedisKey(`${otherKey}`));
   });
 
   it("resets after the window expires", async () => {
@@ -82,7 +82,7 @@ describe("checkRateLimit", () => {
 /**
  * Security regression tests (Priority 2 — "Redis rate-limit failure").
  * Simulates Redis being unreachable by making the real `redis` client's
- * own `incr` reject, the same way a real connection-refused or timeout
+ * own `eval` (the atomic increment) reject, the same way a real connection-refused or timeout
  * error surfaces to `checkRateLimit` — no second Redis instance needed to
  * exercise the exact catch path these tests assert on.
  */
@@ -103,7 +103,7 @@ describe("checkRateLimit — Redis outage policy", () => {
   });
 
   it("fails open on a connection-refused-style error (preserves legitimate access)", async () => {
-    vi.spyOn(redis, "incr").mockRejectedValueOnce(
+    vi.spyOn(redis, "eval").mockRejectedValueOnce(
       Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:6379"), { code: "ECONNREFUSED" }),
     );
     const sink = mockSink();
@@ -120,7 +120,7 @@ describe("checkRateLimit — Redis outage policy", () => {
   });
 
   it("fails open on a timeout-style error", async () => {
-    vi.spyOn(redis, "incr").mockRejectedValueOnce(new Error("Command timed out"));
+    vi.spyOn(redis, "eval").mockRejectedValueOnce(new Error("Command timed out"));
     const sink = mockSink();
 
     const result = await checkRateLimit(`test-${randomUUID()}`, { maxAttempts: 5, windowSeconds: 60 }, sink);
@@ -131,7 +131,7 @@ describe("checkRateLimit — Redis outage policy", () => {
   it("escalates to an alert-level event only once failures are sustained across calls", async () => {
     const sink = mockSink();
     const failure = () => new Error("connect ECONNREFUSED");
-    vi.spyOn(redis, "incr")
+    vi.spyOn(redis, "eval")
       .mockRejectedValueOnce(failure())
       .mockRejectedValueOnce(failure())
       .mockRejectedValueOnce(failure());
@@ -166,7 +166,7 @@ describe("checkRateLimit — Redis outage policy", () => {
   it("recovers immediately: a successful check after failures resets the streak", async () => {
     testKey = `test-${randomUUID()}`;
     const sink = mockSink();
-    vi.spyOn(redis, "incr").mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+    vi.spyOn(redis, "eval").mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
 
     const duringOutage = await checkRateLimit(testKey, { maxAttempts: 5, windowSeconds: 60 }, sink);
     expect(duringOutage.allowed).toBe(true);
@@ -174,7 +174,7 @@ describe("checkRateLimit — Redis outage policy", () => {
       expect.objectContaining({ context: expect.objectContaining({ consecutiveFailures: 1 }) }),
     );
 
-    // Redis is back — `incr` is no longer mocked to fail, so this call
+    // Redis is back — `eval` is no longer mocked to fail, so this call
     // hits the real connection and must behave like ordinary operation.
     const recovered = await checkRateLimit(testKey, { maxAttempts: 5, windowSeconds: 60 }, sink);
     expect(recovered.allowed).toBe(true);
@@ -182,7 +182,7 @@ describe("checkRateLimit — Redis outage policy", () => {
 
     // A brand-new failure right after recovery must be reported as
     // consecutiveFailures: 1 again, not a continuation of the old streak.
-    vi.spyOn(redis, "incr").mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+    vi.spyOn(redis, "eval").mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
     sink.recordEvent.mockClear();
     await checkRateLimit(testKey, { maxAttempts: 5, windowSeconds: 60 }, sink);
     expect(sink.recordEvent).toHaveBeenCalledWith(

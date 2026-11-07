@@ -89,11 +89,16 @@ export default defineConfig({
     env: {
       // Every login attempt across the whole suite shares one
       // Redis-backed rate-limit bucket keyed by client IP
-      // (lib/auth/login-rate-limit.ts) — raised well above the 5/900s
-      // production default so a full E2E run (and repeated local runs
-      // within the same window) never trips it. Test-only override, never
-      // touches the production default in lib/env.ts.
+      // (lib/auth/login-rate-limit.ts) — raised well above the production
+      // default so a full E2E run (and repeated local runs within the same
+      // window) never trips it. Test-only override, never touches the
+      // production default in lib/env.ts.
       LOGIN_RATE_LIMIT_MAX_ATTEMPTS: "1000",
+      // This server shares REDIS_URL with the developer's own dev server.
+      // A separate key prefix keeps the suite's sign-ins out of the dev
+      // server's rate-limit counters (and the reverse). See
+      // lib/rate-limit.ts rateLimitRedisKey.
+      RATE_LIMIT_NAMESPACE: "e2e",
       // The app instance this spawns must read/write the exact same
       // database e2e/global-setup.ts seeded — never dev. See this file's
       // own `testDatabaseUrl` resolution above (already fail-fast

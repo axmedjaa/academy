@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { redis } from "@/lib/redis";
+import { rateLimitRedisKey } from "@/lib/rate-limit";
 import { checkMfaEnrollmentRateLimit } from "./mfa-enrollment-rate-limit";
 
 let testUserId: string;
 
 afterEach(async () => {
-  await redis.del(`ratelimit:mfa-enrollment:${testUserId}`);
+  await redis.del(rateLimitRedisKey(`mfa-enrollment:${testUserId}`));
 });
 
 describe("checkMfaEnrollmentRateLimit", () => {
@@ -37,6 +38,6 @@ describe("checkMfaEnrollmentRateLimit", () => {
     expect(blockedForFirstUser.allowed).toBe(false);
     expect(allowedForOtherUser.allowed).toBe(true);
 
-    await redis.del(`ratelimit:mfa-enrollment:${otherUserId}`);
+    await redis.del(rateLimitRedisKey(`mfa-enrollment:${otherUserId}`));
   });
 });

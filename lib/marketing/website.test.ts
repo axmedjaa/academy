@@ -3,6 +3,7 @@ import { eq, inArray, like, or } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "@/lib/db";
 import { redis } from "@/lib/redis";
+import { rateLimitRedisKey } from "@/lib/rate-limit";
 import {
   auditLogs,
   contactSubmissions,
@@ -111,7 +112,7 @@ afterAll(async () => {
   await db.delete(platformAdminPermissions).where(inArray(platformAdminPermissions.userId, userIds));
   await db.delete(platformMemberships).where(inArray(platformMemberships.userId, userIds));
   await db.delete(users).where(inArray(users.id, userIds));
-  for (const value of usedIps) await redis.del(`ratelimit:contact-form:ip:${value}`);
+  for (const value of usedIps) await redis.del(rateLimitRedisKey(`contact-form:ip:${value}`));
 }, 120_000);
 
 describe("website contact settings", () => {

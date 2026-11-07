@@ -20,8 +20,11 @@ const envSchema = z.object({
   // activity) and is tunable via env like the Argon2 params above.
   SESSION_DURATION_DAYS: z.coerce.number().int().positive().optional(),
   // Login rate limiting: PLAN.md says "Redis-backed rate limiting on
-  // /login" but never states a threshold. Defaults below are a reasonable
-  // MVP choice (5 attempts / 15 minutes per client IP), tunable via env.
+  // /login" but never states a threshold. Per client IP, counting FAILED
+  // sign-ins only (a correct password hands its attempt back), so staff
+  // sharing one office IP aren't locked out by each other's successful
+  // sign-ins. Defaults: 20 failed attempts / 15 minutes, tunable via env.
+  // The per-account limit (lib/auth/login-rate-limit.ts) is separate.
   LOGIN_RATE_LIMIT_MAX_ATTEMPTS: z.coerce.number().int().positive().optional(),
   LOGIN_RATE_LIMIT_WINDOW_SECONDS: z.coerce
     .number()
@@ -168,6 +171,13 @@ const envSchema = z.object({
   // given that no deployment target/proxy topology is decided yet; must
   // be set correctly once one is.
   TRUSTED_PROXY_HOP_COUNT: z.coerce.number().int().nonnegative().optional(),
+  // Test runners only (Playwright's server: "e2e", Vitest: "vitest"): a
+  // prefix for rate-limit keys, so test traffic never counts against the
+  // developer's own server when both share one Redis. Unset everywhere else.
+  RATE_LIMIT_NAMESPACE: z
+    .string()
+    .regex(/^[a-z0-9-]{1,32}$/, "RATE_LIMIT_NAMESPACE must be lowercase letters, digits or dashes")
+    .optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

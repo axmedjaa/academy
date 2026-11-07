@@ -32,6 +32,10 @@ export default defineConfig({
     // the dev database). Raising both thresholds doesn't fix a genuine bug —
     // it removes a false-failure/leak mode that only appears under load,
     // which is the actual root cause here.
+    // Tests share REDIS_URL with the developer's own dev server; prefix
+    // their rate-limit keys so they never count against it (see
+    // lib/rate-limit.ts rateLimitRedisKey).
+    env: { RATE_LIMIT_NAMESPACE: "vitest" },
     testTimeout: 15000,
     // Fixture setup against the remote test branch can exceed 30s. A
     // timed-out beforeAll keeps inserting after afterAll has already

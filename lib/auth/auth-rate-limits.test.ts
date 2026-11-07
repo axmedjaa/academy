@@ -1,20 +1,25 @@
 /**
- * Security audit SEC-M-02 / SEC-M-03. Uses the test Redis from .env.local
- * (like lib/rate-limit.test.ts); an outage is simulated by making the real
- * client's commands reject, which is how a refused connection or timeout
- * reaches the limiter.
+ * Security audit SEC-M-02 / SEC-M-03 / SEC-L-06. Uses the test Redis from
+ * .env.local (like lib/rate-limit.test.ts), under the "vitest" key namespace
+ * (vitest.config.ts) so nothing here counts against a developer's own
+ * server. An outage is simulated by making the real client's commands
+ * reject, which is how a refused connection or timeout reaches the limiter.
  */
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { redis } from "@/lib/redis";
-import { checkRateLimit, peekRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit, rateLimitRedisKey } from "@/lib/rate-limit";
 import type { MonitoringSink } from "@/lib/monitoring/monitor";
 import { checkForgotPasswordRateLimit } from "./forgot-password-rate-limit";
 import {
-  checkLoginAccountLock,
-  checkLoginRateLimit,
+  clearLoginAccountFailures,
   LOGIN_ACCOUNT_LIMIT,
-  recordFailedLoginForAccount,
+  loginAccountKey,
+  loginIpKey,
+  loginIpLimit,
+  refundLoginIpAttempt,
+  reserveLoginAccountAttempt,
+  reserveLoginIpAttempt,
 } from "./login-rate-limit";
 import { checkMfaChallengeRateLimit, checkMfaChallengeUserRateLimit, MFA_CHALLENGE_USER_LIMIT } from "./mfa-challenge-rate-limit";
 import { checkMfaEmailOtpRateLimit } from "./mfa-email-otp-rate-limit";
@@ -26,22 +31,70 @@ const keys: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  if (keys.length) await redis.del(...keys.splice(0).map((k) => `ratelimit:${k}`));
+  if (keys.length) await redis.del(...keys.splice(0).map(rateLimitRedisKey));
 });
 
 function redisDown() {
   const refused = () => Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:6379"), { code: "ECONNREFUSED" });
-  vi.spyOn(redis, "incr").mockRejectedValue(refused());
-  vi.spyOn(redis, "get").mockRejectedValue(refused());
+  vi.spyOn(redis, "eval").mockRejectedValue(refused());
 }
 
+const counterOf = async (key: string) => {
+  const raw = await redis.get(rateLimitRedisKey(key));
+  return raw === null ? 0 : Number(raw);
+};
+
+describe("rate-limit keys", () => {
+  it("are namespaced under test runners, so test traffic never shares a developer server's counters", () => {
+    expect(process.env.RATE_LIMIT_NAMESPACE).toBe("vitest");
+    expect(rateLimitRedisKey("login:unknown")).toBe("ratelimit:vitest:login:unknown");
+  });
+
+  it("account keys are per normalised email; IP keys per IP", () => {
+    expect(loginAccountKey("  Someone@Example.COM ")).toBe("login-account:someone@example.com");
+    expect(loginAccountKey("a@example.com")).not.toBe(loginAccountKey("b@example.com"));
+    expect(loginIpKey("203.0.113.9")).toBe("login:203.0.113.9");
+  });
+});
+
+describe("SEC-L-06: counters always expire", { timeout: 60_000 }, () => {
+  it("a new counter gets the window as its expiry", async () => {
+    const key = `ttl-${randomUUID()}`;
+    keys.push(key);
+    await checkRateLimit(key, { maxAttempts: 5, windowSeconds: 120 }, quietSink);
+    const ttl = await redis.ttl(rateLimitRedisKey(key));
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(120);
+  });
+
+  it("a counter left without an expiry is repaired by the next increment", async () => {
+    const key = `ttl-${randomUUID()}`;
+    keys.push(key);
+    await redis.set(rateLimitRedisKey(key), "3"); // no expiry: the old failure mode
+    expect(await redis.ttl(rateLimitRedisKey(key))).toBe(-1);
+    const result = await checkRateLimit(key, { maxAttempts: 5, windowSeconds: 120 }, quietSink);
+    expect(result.remaining).toBe(1);
+    expect(await redis.ttl(rateLimitRedisKey(key))).toBeGreaterThan(0);
+  });
+
+  it("a refund never creates a counter, and removes one that reaches zero", async () => {
+    const ip = `ip-${randomUUID()}`;
+    keys.push(loginIpKey(ip));
+    await refundLoginIpAttempt(ip);
+    expect(await redis.exists(rateLimitRedisKey(loginIpKey(ip)))).toBe(0);
+    await reserveLoginIpAttempt(ip);
+    await refundLoginIpAttempt(ip);
+    expect(await redis.exists(rateLimitRedisKey(loginIpKey(ip)))).toBe(0);
+  });
+});
+
 describe("SEC-M-03: authentication limiters fail closed while Redis is down", () => {
-  it("login, MFA challenge, MFA email OTP, MFA enrollment and password reset all deny", async () => {
+  it("login (IP and account), MFA challenge, MFA email OTP, MFA enrollment and password reset all deny", async () => {
     redisDown();
     const id = randomUUID();
     const results = [
-      await checkLoginRateLimit(`ip-${id}`),
-      await checkLoginAccountLock(`${id}@example.com`),
+      await reserveLoginIpAttempt(`ip-${id}`),
+      await reserveLoginAccountAttempt(`${id}@example.com`),
       await checkMfaChallengeRateLimit(`ip-${id}`),
       await checkMfaChallengeUserRateLimit(id),
       await checkMfaEmailOtpRateLimit(id),
@@ -70,56 +123,77 @@ describe("SEC-M-03: authentication limiters fail closed while Redis is down", ()
   it("works again as soon as Redis is back", async () => {
     redisDown();
     const ip = `ip-${randomUUID()}`;
-    keys.push(`login:${ip}`);
-    expect((await checkLoginRateLimit(ip)).allowed).toBe(false);
+    keys.push(loginIpKey(ip));
+    expect((await reserveLoginIpAttempt(ip)).allowed).toBe(false);
     vi.restoreAllMocks();
-    expect((await checkLoginRateLimit(ip)).allowed).toBe(true);
+    expect((await reserveLoginIpAttempt(ip)).allowed).toBe(true);
   });
 });
 
-describe("SEC-M-02: per-account login limit (failed attempts only)", { timeout: 60_000 }, () => {
-  it("locks an email after the failure limit, whatever IP the attempts come from", async () => {
+describe("SEC-M-02: per-account limit", { timeout: 90_000 }, () => {
+  it("allows exactly the limit of failed attempts, whatever IP they come from, then locks", async () => {
     const email = `victim-${randomUUID()}@example.com`;
-    keys.push(`login-account:${email}`);
-    // Each failure would come from a different IP; the account key ignores IP.
+    keys.push(loginAccountKey(email));
     for (let i = 0; i < LOGIN_ACCOUNT_LIMIT.maxAttempts; i += 1) {
-      expect((await checkLoginAccountLock(email)).allowed).toBe(true);
-      await recordFailedLoginForAccount(email);
+      expect((await reserveLoginAccountAttempt(email)).allowed).toBe(true);
     }
-    const locked = await checkLoginAccountLock(email);
+    const locked = await reserveLoginAccountAttempt(email);
     expect(locked.allowed).toBe(false);
     expect(locked.unavailable).toBeUndefined();
     expect(locked.retryAfterSeconds).toBeGreaterThan(0);
+    expect(locked.retryAfterSeconds).toBeLessThanOrEqual(LOGIN_ACCOUNT_LIMIT.windowSeconds);
   });
 
-  it("is case- and whitespace-insensitive, and checking alone never counts", async () => {
+  it("parallel attempts can't get past the limit (reserve first, atomically)", async () => {
+    const email = `burst-${randomUUID()}@example.com`;
+    keys.push(loginAccountKey(email));
+    const results = await Promise.all(Array.from({ length: 15 }, () => reserveLoginAccountAttempt(email)));
+    expect(results.filter((r) => r.allowed)).toHaveLength(LOGIN_ACCOUNT_LIMIT.maxAttempts);
+  });
+
+  it("is case- and whitespace-insensitive, and one account's lock doesn't affect another", async () => {
     const email = `Mixed-${randomUUID()}@Example.com`;
-    keys.push(`login-account:${email.toLowerCase()}`);
-    for (let i = 0; i < 5; i += 1) await checkLoginAccountLock(email);
-    expect((await peekRateLimit(`login-account:${email.toLowerCase()}`, LOGIN_ACCOUNT_LIMIT)).remaining).toBe(LOGIN_ACCOUNT_LIMIT.maxAttempts);
-    for (let i = 0; i < LOGIN_ACCOUNT_LIMIT.maxAttempts; i += 1) await recordFailedLoginForAccount(`  ${email.toUpperCase()} `);
-    expect((await checkLoginAccountLock(email.toLowerCase())).allowed).toBe(false);
+    const other = `other-${randomUUID()}@example.com`;
+    keys.push(loginAccountKey(email), loginAccountKey(other));
+    for (let i = 0; i < LOGIN_ACCOUNT_LIMIT.maxAttempts; i += 1) await reserveLoginAccountAttempt(`  ${email.toUpperCase()} `);
+    expect((await reserveLoginAccountAttempt(email.toLowerCase())).allowed).toBe(false);
+    expect((await reserveLoginAccountAttempt(other)).allowed).toBe(true);
   });
 
-  it("one account's lock doesn't affect another", async () => {
-    const a = `a-${randomUUID()}@example.com`;
-    const b = `b-${randomUUID()}@example.com`;
-    keys.push(`login-account:${a}`, `login-account:${b}`);
-    for (let i = 0; i < LOGIN_ACCOUNT_LIMIT.maxAttempts; i += 1) await recordFailedLoginForAccount(a);
-    expect((await checkLoginAccountLock(a)).allowed).toBe(false);
-    expect((await checkLoginAccountLock(b)).allowed).toBe(true);
+  it("clearing (after a correct password) starts the count again", async () => {
+    const email = `clear-${randomUUID()}@example.com`;
+    keys.push(loginAccountKey(email));
+    for (let i = 0; i < 4; i += 1) await reserveLoginAccountAttempt(email);
+    await clearLoginAccountFailures(email);
+    expect(await counterOf(loginAccountKey(email))).toBe(0);
+  });
+});
+
+describe("per-IP limit counts failures only", { timeout: 90_000 }, () => {
+  it("a refunded (successful) attempt doesn't use up the allowance", async () => {
+    const ip = `ip-${randomUUID()}`;
+    keys.push(loginIpKey(ip));
+    for (let i = 0; i < loginIpLimit().maxAttempts + 5; i += 1) {
+      expect((await reserveLoginIpAttempt(ip)).allowed).toBe(true);
+      await refundLoginIpAttempt(ip);
+    }
+    expect(await counterOf(loginIpKey(ip))).toBe(0);
+  });
+
+  it("defaults to 20 failed attempts per 15 minutes", () => {
+    expect(loginIpLimit()).toMatchObject({ maxAttempts: 20, windowSeconds: 900, failClosed: true });
   });
 });
 
 describe("SEC-M-02: per-user MFA challenge limit", { timeout: 60_000 }, () => {
   it("trips for a user after the limit, independent of IP", async () => {
     const userId = randomUUID();
-    keys.push(`mfa-challenge-user:${userId}`);
+    const otherUserId = randomUUID();
+    keys.push(`mfa-challenge-user:${userId}`, `mfa-challenge-user:${otherUserId}`);
     for (let i = 0; i < MFA_CHALLENGE_USER_LIMIT.maxAttempts; i += 1) {
       expect((await checkMfaChallengeUserRateLimit(userId)).allowed).toBe(true);
     }
     expect((await checkMfaChallengeUserRateLimit(userId)).allowed).toBe(false);
-    keys.push(`mfa-challenge-user:${randomUUID()}`);
-    expect((await checkMfaChallengeUserRateLimit(keys[keys.length - 1].slice("mfa-challenge-user:".length))).allowed).toBe(true);
+    expect((await checkMfaChallengeUserRateLimit(otherUserId)).allowed).toBe(true);
   });
 });

@@ -1,3 +1,4 @@
+import { env } from "@/lib/env";
 import { redis } from "@/lib/redis";
 import { checkThreshold, logSink, type MonitoringSink } from "@/lib/monitoring/monitor";
 
@@ -98,23 +99,20 @@ export async function checkRateLimit(
   { maxAttempts, windowSeconds, failClosed = false }: RateLimitOptions,
   sink: MonitoringSink = logSink,
 ): Promise<RateLimitResult> {
-  const redisKey = `ratelimit:${key}`;
-
   // Fails open unless `failClosed`: see this module's own top comment for the full outage
   // policy and why fail-open (with loud, escalating observability) is the
   // deliberate choice here, not an oversight.
   try {
-    const count = await redis.incr(redisKey);
-
-    if (count === 1) {
-      await redis.expire(redisKey, windowSeconds);
-    }
+    // One atomic step (security audit SEC-L-06): increment, and set the
+    // window's expiry whenever the key has none. The old INCR-then-EXPIRE
+    // pair could leave a key without an expiry if the second call failed,
+    // locking that bucket forever; this also repairs any such key.
+    const [count, ttl] = (await redis.eval(INCREMENT_SCRIPT, 1, rateLimitRedisKey(key), String(windowSeconds))) as [number, number];
 
     consecutiveFailures = 0;
     outageStartedAt = null;
 
     if (count > maxAttempts) {
-      const ttl = await redis.ttl(redisKey);
       return {
         allowed: false,
         remaining: 0,
@@ -129,30 +127,70 @@ export async function checkRateLimit(
 }
 
 /**
- * Reads a limiter's current count without counting this call. Used where
- * only failures should count (the per-account login limit): peek first,
- * then `checkRateLimit` once an attempt has failed.
+ * Hands back one attempt counted by `checkRateLimit`, for limits that should
+ * only count failures (sign-in): the attempt is reserved up front, so
+ * parallel requests can never slip past the limit, and returned once it
+ * turns out to have succeeded. Never creates a key or a key without expiry.
+ * Best effort: a Redis error is logged and ignored (it can only leave one
+ * extra attempt counted).
  */
-export async function peekRateLimit(
-  key: string,
-  { maxAttempts, windowSeconds, failClosed = false }: RateLimitOptions,
-  sink: MonitoringSink = logSink,
-): Promise<RateLimitResult> {
-  const redisKey = `ratelimit:${key}`;
+export async function refundRateLimit(key: string): Promise<void> {
   try {
-    const raw = await redis.get(redisKey);
-    const count = raw === null ? 0 : Number(raw);
-    consecutiveFailures = 0;
-    outageStartedAt = null;
-    if (count >= maxAttempts) {
-      const ttl = await redis.ttl(redisKey);
-      return { allowed: false, remaining: 0, retryAfterSeconds: ttl > 0 ? ttl : windowSeconds };
-    }
-    return { allowed: true, remaining: maxAttempts - count };
+    await redis.eval(REFUND_SCRIPT, 1, rateLimitRedisKey(key));
   } catch (error) {
-    return reportOutage(key, error, { maxAttempts, failClosed }, sink);
+    logSink.recordEvent({
+      name: "rate_limit.refund_failed",
+      level: "info",
+      message: `Could not refund a rate-limit attempt on "${key}"`,
+      context: { key, error: error instanceof Error ? error.message : String(error) },
+    });
   }
 }
+
+/** Removes a limiter's counter entirely (e.g. an account's failures after a
+ * correct password). Best effort, like `refundRateLimit`. */
+export async function clearRateLimit(key: string): Promise<void> {
+  try {
+    await redis.del(rateLimitRedisKey(key));
+  } catch (error) {
+    logSink.recordEvent({
+      name: "rate_limit.clear_failed",
+      level: "info",
+      message: `Could not clear the rate-limit counter on "${key}"`,
+      context: { key, error: error instanceof Error ? error.message : String(error) },
+    });
+  }
+}
+
+/**
+ * The Redis key for a limiter key. `RATE_LIMIT_NAMESPACE` (set only by the
+ * test runners: "e2e" for Playwright's server, "vitest" for Vitest) keeps
+ * test traffic out of the counters a developer's own server uses when both
+ * share one Redis. Unset in development and production: keys are unchanged.
+ */
+export function rateLimitRedisKey(key: string): string {
+  const namespace = env.RATE_LIMIT_NAMESPACE;
+  return namespace ? `ratelimit:${namespace}:${key}` : `ratelimit:${key}`;
+}
+
+// KEYS[1] = counter, ARGV[1] = window in seconds. Returns { count, ttl }.
+const INCREMENT_SCRIPT = `
+local count = redis.call("INCR", KEYS[1])
+local ttl = redis.call("TTL", KEYS[1])
+if ttl < 0 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return { count, ttl }
+`;
+
+// KEYS[1] = counter. Decrements an existing counter; deletes it at zero.
+const REFUND_SCRIPT = `
+if redis.call("EXISTS", KEYS[1]) == 0 then return 0 end
+local count = redis.call("DECR", KEYS[1])
+if count <= 0 then redis.call("DEL", KEYS[1]) end
+return count
+`;
 
 function reportOutage(
   key: string,

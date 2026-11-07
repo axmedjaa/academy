@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import QRCode from "qrcode";
 import { db } from "@/lib/db";
 import { redis } from "@/lib/redis";
+import { rateLimitRedisKey } from "@/lib/rate-limit";
 import { getCertificatePrintData } from "./certificate-print";
 import {
   batchCourses,
@@ -914,7 +915,7 @@ describe("verifyCertificate — rate limiting", () => {
       expect(blocked.allowed).toBe(false);
       expect(blocked.retryAfterSeconds).toBeGreaterThan(0);
     } finally {
-      await redis.del(`ratelimit:verify-certificate:${ip}`);
+      await redis.del(rateLimitRedisKey(`verify-certificate:${ip}`));
     }
   });
 
@@ -943,7 +944,7 @@ describe("verifyCertificate — rate limiting", () => {
       // never reached the DB-write path.
       expect(verifications).toHaveLength(20);
     } finally {
-      await redis.del(`ratelimit:verify-certificate:${ip}`);
+      await redis.del(rateLimitRedisKey(`verify-certificate:${ip}`));
     }
   });
 });
