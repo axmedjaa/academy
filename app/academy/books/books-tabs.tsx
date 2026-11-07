@@ -44,6 +44,85 @@ const GROUP_OF: Record<BooksSection, "books" | "orders"> = {
   reports: "orders",
 };
 
+/** The sections of each main tab, in order (labels and routes). */
+export const NAV_PILLS: Record<"books" | "orders", { key: BooksSection; label: string; href: string }[]> = {
+  books: [
+    { key: "books", label: "Books", href: "/academy/books" },
+    { key: "stock", label: "Stock", href: "/academy/books/stock" },
+    { key: "sell", label: "Sell", href: "/academy/books/sales" },
+  ],
+  orders: [
+    { key: "campaigns", label: "Pre-Orders", href: "/academy/books/pre-orders" },
+    { key: "orders", label: "Orders", href: "/academy/books/orders" },
+    { key: "payments", label: "Payments", href: "/academy/books/payments" },
+    { key: "receive", label: "Receive", href: "/academy/books/receiving" },
+    { key: "give", label: "Give", href: "/academy/books/distribution" },
+  ],
+};
+
+const MAIN_TABS = [
+  { key: "books" as const, label: "Books", href: "/academy/books" },
+  { key: "orders" as const, label: "Orders", href: "/academy/books/orders" },
+];
+
+export function groupOf(section: BooksSection): "books" | "orders" {
+  return GROUP_OF[section];
+}
+
+/**
+ * The Books / Orders tabs and the open tab's section pills: the real labels
+ * and active state. Rendered by the page and by its loading skeleton, so
+ * the two always match. `right` is Reports and the section action (or their
+ * placeholders while loading).
+ */
+export function BooksNavFrame({ section, right }: { section: BooksSection; right: ReactNode }) {
+  const group = GROUP_OF[section];
+  return (
+    <>
+      <nav aria-label="Book Management" className="mb-4 border-b border-border">
+        <div className="-mb-px flex gap-2">
+          {MAIN_TABS.map((t) => {
+            const on = t.key === group;
+            return (
+              <Link
+                key={t.key}
+                href={t.href}
+                aria-current={on ? "page" : undefined}
+                className={`flex h-[52px] items-center border-b-[3px] px-[18px] text-base font-semibold !no-underline transition-colors duration-150 hover:!no-underline ${
+                  on ? "border-brand !text-brand" : "border-transparent !text-[#4B5563] hover:!text-ink"
+                }`}
+              >
+                {t.label}
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
+
+      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <div aria-label={group === "books" ? "Books sections" : "Orders sections"} role="navigation" className="flex min-w-0 max-w-full gap-2 overflow-x-auto [scrollbar-width:none]">
+          {NAV_PILLS[group].map((p) => {
+            const on = p.key === section;
+            return (
+              <Link
+                key={p.key}
+                href={p.href}
+                aria-current={on ? "page" : undefined}
+                className={`flex h-10 shrink-0 items-center whitespace-nowrap rounded-full border px-[15px] text-sm font-semibold !no-underline transition-colors duration-150 hover:!no-underline ${
+                  on ? "border-brand bg-brand !text-white" : "border-border-strong bg-surface !text-ink hover:bg-app"
+                }`}
+              >
+                {p.label}
+              </Link>
+            );
+          })}
+        </div>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{right}</div>
+      </div>
+    </>
+  );
+}
+
 export interface NavPermissions {
   canManageBooks: boolean;
   canSell: boolean;
@@ -101,80 +180,21 @@ export function HeroActions({ can }: { can: NavPermissions }) {
 export function BooksSectionNav({ can }: { can: NavPermissions }) {
   const pathname = usePathname();
   const section = sectionOf(pathname);
-  const group = GROUP_OF[section];
 
-  type Pill = { key: BooksSection; label: string; href: string; action?: ReactNode };
-  const pills: Pill[] =
-    group === "books"
-      ? [
-          { key: "books", label: "Books", href: "/academy/books", action: can.canManageBooks ? <ActionButton dialog={{ kind: "addBook" }}>Add Book</ActionButton> : null },
-          { key: "stock", label: "Stock", href: "/academy/books/stock" },
-          { key: "sell", label: "Sell", href: "/academy/books/sales", action: can.canSell ? <ActionButton dialog={{ kind: "sell" }}>Sell Book</ActionButton> : null },
-        ]
-      : [
-          {
-            key: "campaigns",
-            label: "Pre-Orders",
-            href: "/academy/books/pre-orders",
-            action: can.canManageCampaigns ? <ActionButton dialog={{ kind: "campaign" }}>Create Pre-Order Campaign</ActionButton> : null,
-          },
-          { key: "orders", label: "Orders", href: "/academy/books/orders", action: can.canManage ? <ActionButton dialog={{ kind: "order" }}>Create Order</ActionButton> : null },
-          { key: "payments", label: "Payments", href: "/academy/books/payments", action: can.canManage ? <ActionButton dialog={{ kind: "pay" }}>Record Payment</ActionButton> : null },
-          {
-            key: "receive",
-            label: "Receive",
-            href: "/academy/books/receiving",
-            action: can.canManageCampaigns ? <ActionButton dialog={{ kind: "receive" }}>Receive Books</ActionButton> : null,
-          },
-          { key: "give", label: "Give", href: "/academy/books/distribution" },
-        ];
-  const current = pills.find((p) => p.key === section);
-  const mainTabs = [
-    { key: "books" as const, label: "Books", href: "/academy/books" },
-    { key: "orders" as const, label: "Orders", href: "/academy/books/orders" },
-  ];
+  const actions: Partial<Record<BooksSection, ReactNode>> = {
+    books: can.canManageBooks ? <ActionButton dialog={{ kind: "addBook" }}>Add Book</ActionButton> : null,
+    sell: can.canSell ? <ActionButton dialog={{ kind: "sell" }}>Sell Book</ActionButton> : null,
+    campaigns: can.canManageCampaigns ? <ActionButton dialog={{ kind: "campaign" }}>Create Pre-Order Campaign</ActionButton> : null,
+    orders: can.canManage ? <ActionButton dialog={{ kind: "order" }}>Create Order</ActionButton> : null,
+    payments: can.canManage ? <ActionButton dialog={{ kind: "pay" }}>Record Payment</ActionButton> : null,
+    receive: can.canManageCampaigns ? <ActionButton dialog={{ kind: "receive" }}>Receive Books</ActionButton> : null,
+  };
 
   return (
-    <>
-      <nav aria-label="Book Management" className="mb-4 border-b border-border">
-        <div className="-mb-px flex gap-2">
-          {mainTabs.map((t) => {
-            const on = t.key === group;
-            return (
-              <Link
-                key={t.key}
-                href={t.href}
-                aria-current={on ? "page" : undefined}
-                className={`flex h-[52px] items-center border-b-[3px] px-[18px] text-base font-semibold !no-underline transition-colors duration-150 hover:!no-underline ${
-                  on ? "border-brand !text-brand" : "border-transparent !text-[#4B5563] hover:!text-ink"
-                }`}
-              >
-                {t.label}
-              </Link>
-            );
-          })}
-        </div>
-      </nav>
-
-      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <div aria-label={group === "books" ? "Books sections" : "Orders sections"} role="navigation" className="flex min-w-0 max-w-full gap-2 overflow-x-auto [scrollbar-width:none]">
-          {pills.map((p) => {
-            const on = p.key === section;
-            return (
-              <Link
-                key={p.key}
-                href={p.href}
-                aria-current={on ? "page" : undefined}
-                className={`flex h-10 shrink-0 items-center whitespace-nowrap rounded-full border px-[15px] text-sm font-semibold !no-underline transition-colors duration-150 hover:!no-underline ${
-                  on ? "border-brand bg-brand !text-white" : "border-border-strong bg-surface !text-ink hover:bg-app"
-                }`}
-              >
-                {p.label}
-              </Link>
-            );
-          })}
-        </div>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+    <BooksNavFrame
+      section={section}
+      right={
+        <>
           <Link
             href="/academy/books/reports"
             aria-current={section === "reports" ? "page" : undefined}
@@ -183,9 +203,9 @@ export function BooksSectionNav({ can }: { can: NavPermissions }) {
             <Icon name="bar_chart" width={18} height={18} />
             Reports
           </Link>
-          {current?.action}
-        </div>
-      </div>
-    </>
+          {actions[section]}
+        </>
+      }
+    />
   );
 }

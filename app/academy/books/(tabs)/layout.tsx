@@ -5,8 +5,8 @@ import { BooksShell } from "../books-shell";
 import { getBooksOverview, getPreorderBranches, getPreorderStudents } from "../books-data";
 
 /**
- * Book Management (design B01-B12): one page with the four-step roadmap.
- * This layout renders the hero, roadmap and section tabs once; each section
+ * Book Management (design B01-B12): one page with Books and Orders tabs.
+ * This layout renders the hero, tabs and section pills once; each section
  * is its own route (`/academy/books`, `/sales`, `/stock`, `/pre-orders`,
  * `/orders`, `/orders/[orderId]`, `/payments`, `/receiving`,
  * `/distribution`, `/reports`), so links, refresh and the back button open

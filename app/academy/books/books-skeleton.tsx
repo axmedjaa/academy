@@ -1,5 +1,5 @@
 
-import { Bone } from "@/app/academy/_shell/skeletons";
+import { Bone, SkeletonTable } from "@/app/academy/_shell/skeletons";
 
 /**
  * Book Management loading states (design B11). Same look as every other
@@ -133,6 +133,7 @@ export function BooksCatalogSkeleton() {
         <Bone className="h-11 w-36 rounded-lg" />
         <Bone className="h-11 w-32 rounded-lg" />
         <Bone className="h-11 w-36 rounded-lg" />
+        <Bone className="h-3.5 w-14 rounded" />
       </div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-4">
         {Array.from({ length: 6 }, (_, i) => (
@@ -414,68 +415,60 @@ export function OrderDetailSkeleton() {
   );
 }
 
-/** Generic section loading (design B11), for any section without its own. */
-export function BooksSectionSkeleton() {
+/** The page hero while loading: real title and description, outlines of
+ * the three main actions. Neutral, like every Academy page skeleton. */
+export function BooksHeroSkeleton() {
   return (
-    <>
-      <Bone className="h-7 w-[220px] rounded-md" />
-      <Bone className="mb-5 mt-2.5 h-4 w-[340px] max-w-full rounded-md" />
-      <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-card">
-        {[0, 1, 2, 3, 4, 5].map((i) => (
-          <div key={i} className={`flex items-center gap-4 p-4 ${i ? "border-t border-border" : ""}`}>
-            <Bone className="h-12 w-9 shrink-0 rounded" />
+    <div className={`${card} mb-7 rounded-[20px] p-[22px] sm:px-8 sm:pb-8 sm:pt-9`}>
+      <div className="text-[28px] font-bold leading-[1.1] tracking-[-0.02em] text-ink sm:text-[36px]">Book Management</div>
+      <p className="mt-3 max-w-[60ch] leading-normal text-muted">Manage academy books, pre-orders, payments and distribution.</p>
+      <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="flex min-h-[74px] items-center gap-3.5 rounded-[14px] border border-border px-4 py-3.5">
+            <Bone className="h-11 w-11 shrink-0 rounded-[10px]" />
             <div className="min-w-0 flex-1">
-              <Bone className="h-3.5 w-3/5 rounded-md" />
-              <Bone className="mt-2 h-3 w-[35%] rounded-md" />
+              <Bone className="h-4 w-24 rounded" />
+              <Bone className="mt-1.5 h-3 w-40 max-w-full rounded" />
             </div>
-            <Bone className="h-[22px] w-20 shrink-0 rounded-full" />
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** An order's own page shows this compact title instead of the hero (B05). */
+export function BooksCompactTitle() {
+  return (
+    <div className="mb-5">
+      <div className="text-[28px] font-bold leading-tight tracking-[-0.015em]">Book Management</div>
+      <p className="mt-1.5 text-muted">Manage academy books, pre-orders, payments and distribution.</p>
+    </div>
+  );
+}
+
+/** Reports link and section action while loading (they depend on access). */
+export function NavRightSkeleton() {
+  return (
+    <>
+      <Bone className="h-5 w-20 rounded" />
+      <Bone className="h-11 w-32 rounded-lg" />
     </>
   );
 }
 
-export function BooksPageSkeleton() {
+/** Stock: level chips, search, and the stock table (Book, Price, In stock,
+ * Sales (30 days), Level) in the real table frame. */
+export function StockSkeleton() {
   return (
-    <div className="text-sm">
-      {/* Hero */}
-      <div className={`${card} mb-7 rounded-[20px] p-[22px] sm:px-8 sm:pb-8 sm:pt-9`}>
-        <div className="text-[28px] font-bold leading-[1.1] tracking-[-0.02em] text-ink sm:text-[36px]">Book Management</div>
-        <p className="mt-3 max-w-[60ch] leading-normal text-muted">Manage academy books, pre-orders, payments and distribution.</p>
-        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="flex min-h-[74px] items-center gap-3.5 rounded-[14px] border border-border px-4 py-3.5">
-              <Bone className="h-11 w-11 shrink-0 rounded-[10px]" />
-              <div className="min-w-0 flex-1">
-                <Bone className="h-4 w-24 rounded" />
-                <Bone className="mt-1.5 h-3 w-40 max-w-full rounded" />
-              </div>
-            </div>
-          ))}
-        </div>
+    <>
+      <div className="mb-4 flex w-fit gap-1 rounded-xl bg-[#EEF0F3] p-1">
+        {["w-12", "w-20", "w-24", "w-28"].map((w) => (
+          <span key={w} className={`block h-9 ${w} rounded-lg bg-surface`} />
+        ))}
       </div>
-
-      {/* Books / Orders tabs */}
-      <div className="mb-4 flex gap-6 border-b border-border px-[18px]">
-        <Bone className="mb-4 mt-4 h-5 w-16 rounded" />
-        <Bone className="mb-4 mt-4 h-5 w-16 rounded" />
-      </div>
-
-      {/* Section pills, Reports and the section action */}
-      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <div className="flex gap-2">
-          <Bone className="h-10 w-20 rounded-full" />
-          <Bone className="h-10 w-20 rounded-full" />
-          <Bone className="h-10 w-16 rounded-full" />
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <Bone className="h-5 w-20 rounded" />
-          <Bone className="h-11 w-28 rounded-lg" />
-        </div>
-      </div>
-
-      <BooksCatalogSkeleton />
-    </div>
+      <Bone className="mb-6 h-11 w-full max-w-[380px] rounded-lg" />
+      <SkeletonTable headers={["Book", "Price", "In stock", "Sales (30 days)", "Level"]} avatar stackBelow={600} />
+    </>
   );
 }

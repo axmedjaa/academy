@@ -1,12 +1,12 @@
 import { SkeletonPage } from "@/app/academy/_shell/skeletons";
-import { BooksPageSkeleton } from "./books-skeleton";
+import { BooksRouteSkeleton } from "./books-route-skeleton";
 
-/** First load of Book Management: hero, roadmap, tabs and section rows
- * in the shape of the loaded page (design B11). */
+/** First load of Book Management (design B11): the hero, the real tabs and
+ * pills with the opened section marked, and that section's own skeleton. */
 export default function BooksLoading() {
   return (
     <SkeletonPage label="Book Management">
-      <BooksPageSkeleton />
+      <BooksRouteSkeleton />
     </SkeletonPage>
   );
 }
