@@ -3,10 +3,10 @@ import { redirect } from "next/navigation";
 import { PageMessage } from "@/app/academy/_shell/ui";
 import { FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
 import { getBooksOverview } from "../../books-data";
-import { GatedAction, PillChips, StepCards } from "../../books-sections";
+import { GatedAction, PillChips } from "../../books-sections";
 import { BTN_SECONDARY, EmptyCard, KpiGrid, Pager, SectionHead, paginate, readParams } from "../../books-ui";
 import { OrderCard } from "../../order-card";
-import { buyerSearchText, plural, sumByCurrency, titlesLine } from "../../books-view";
+import { buyerSearchText, sumByCurrency } from "../../books-view";
 
 const PAGE_SIZE = 6;
 
@@ -19,7 +19,7 @@ const PAGE_SIZE = 6;
 export default async function StudentOrdersPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const overview = await getBooksOverview();
   if (!overview) redirect("/login");
-  const { booksResult, preordersResult } = overview;
+  const { preordersResult } = overview;
   if (!preordersResult.ok) {
     return <PageMessage title={preordersResult.error.code === "blocked" ? "Access unavailable" : "Access denied"} message={preordersResult.error.message} />;
   }
@@ -29,7 +29,6 @@ export default async function StudentOrdersPage({ searchParams }: { searchParams
   const campaign = get("campaign");
   const pay = get("pay");
   const { orders, campaigns } = preordersResult.overview;
-  const bookName = new Map((booksResult.ok ? booksResult.books : []).map((b) => [b.id, b.name]));
 
   const base = orders.filter(
     (o) => (!campaign || o.campaignId === campaign) && (!q || buyerSearchText(o).includes(q)),
@@ -40,20 +39,12 @@ export default async function StudentOrdersPage({ searchParams }: { searchParams
 
   return (
     <>
-      <SectionHead title="Student Orders" description="Each order is for one student or another person and can include several books. Create the order first, then record the payment." />
-      <StepCards
-        steps={[
-          { n: "1", title: "Create Order", sub: "Choose who is ordering and add books", dialog: { kind: "order" } },
-          { n: "2", title: "Record Payment", sub: "Enter the amount paid, in full or in part", dialog: { kind: "pay" } },
-          { n: "3", title: "Give Books", sub: "Once paid in full and verified", href: "/academy/books/distribution" },
-        ]}
-      />
+      <SectionHead title="Student Orders" description="One order can include several books. Record payments on each order." />
       <KpiGrid
         items={[
-          { label: "Orders", value: rows.length, sub: `${plural(rows.reduce((s, o) => s + o.copies, 0), "book copy", "book copies")} ordered` },
-          { label: "Order Total", value: money((o) => o.totalCents), sub: "Value of these orders" },
-          { label: "Amount Paid", value: money((o) => o.paidCents), sub: `${money((o) => o.unverifiedCents)} not verified yet` },
-          { label: "Remaining Balance", value: money((o) => o.balanceCents), sub: `${plural(rows.filter((o) => o.balanceCents > 0).length, "order", "orders")} still owe money` },
+          { label: "Orders", value: rows.length },
+          { label: "Paid", value: money((o) => o.paidCents) },
+          { label: "Balance", value: money((o) => o.balanceCents) },
         ]}
       />
       {orders.length > 0 && (
@@ -97,7 +88,7 @@ export default async function StudentOrdersPage({ searchParams }: { searchParams
           />
         )
       ) : (
-        visible.map((o) => <OrderCard key={o.id} order={o} titles={titlesLine(o.items.map((i) => bookName.get(i.bookId) ?? "Book"))} />)
+        visible.map((o) => <OrderCard key={o.id} order={o} />)
       )}
       <div className="mt-2">
         <Pager page={page} pageSize={PAGE_SIZE} total={rows.length} params={params} />

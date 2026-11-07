@@ -10,8 +10,8 @@ import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
 import { formatMoney } from "@/lib/ui/money";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { Badge } from "@/app/academy/_shell/ui";
-import { ActionButton, BookCover, useBooksActions } from "./books-actions";
-import type { Tone } from "./books-view";
+import { ActionButton, useBooksActions } from "./books-actions";
+import { initials, tileOf, type Tone } from "./books-view";
 
 /** Interactive pieces of the Book Management sections (design B01-B09). */
 
@@ -71,56 +71,11 @@ export function ToggleParam({ param, label }: { param: string; label: string }) 
   );
 }
 
-export interface StepCard {
-  n: string;
-  title: string;
-  sub: string;
-  dialog?: Parameters<ReturnType<typeof useBooksActions>["open"]>[0];
-  href?: string;
-}
-
-/** The design's numbered how-to cards above a section; a card that starts
- * an action opens it. */
-export function StepCards({ steps }: { steps: StepCard[] }) {
-  const { open, data } = useBooksActions();
-  const body = (s: StepCard) => (
-    <>
-      <span aria-hidden="true" className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-tint text-[13px] font-bold text-brand">
-        {s.n}
-      </span>
-      <span className="min-w-0">
-        <span className="block font-bold text-ink">{s.title}</span>
-        <span className="mt-0.5 block text-xs leading-snug text-muted">{s.sub}</span>
-      </span>
-    </>
-  );
-  const cls = "flex min-w-0 items-start gap-3 rounded-xl border border-border bg-surface px-4 py-3.5 text-left";
-  return (
-    <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-      {steps.map((s) =>
-        s.dialog && data.canManage ? (
-          <button key={s.n} type="button" onClick={() => open(s.dialog!)} className={`${cls} cursor-pointer transition-colors duration-150 hover:border-brand`}>
-            {body(s)}
-          </button>
-        ) : s.href ? (
-          <Link key={s.n} href={s.href} className={`${cls} !no-underline transition-colors duration-150 hover:border-brand hover:!no-underline`}>
-            {body(s)}
-          </Link>
-        ) : (
-          <div key={s.n} className={cls}>
-            {body(s)}
-          </div>
-        ),
-      )}
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* Book card (design B01)                                              */
 /* ------------------------------------------------------------------ */
 
-export function BookCard({ book, campaign }: { book: BookRecord; campaign: { name: string; sub: string } | null }) {
+export function BookCard({ book }: { book: BookRecord }) {
   const router = useRouter();
   const { data, open } = useBooksActions();
   const [toggling, startToggle] = useTransition();
@@ -129,6 +84,8 @@ export function BookCard({ book, campaign }: { book: BookRecord; campaign: { nam
   const sellWhy = archived ? "Archived book." : book.stockQuantity <= 0 ? "Out of stock. Take a pre-order instead." : undefined;
   const stockText = book.stockQuantity === 0 ? "Out of stock" : book.stockQuantity <= 5 ? `Low stock: ${book.stockQuantity} left` : `${book.stockQuantity} in stock`;
   const stockColor = book.stockQuantity === 0 ? "text-[#B91C1C]" : book.stockQuantity <= 5 ? "text-[#92400E]" : "text-[#166534]";
+  const tile = tileOf(book.subject, book.name);
+  const cover = data.coverUrls[book.id];
 
   function toggleArchive() {
     startToggle(async () => {
@@ -147,49 +104,56 @@ export function BookCard({ book, campaign }: { book: BookRecord; campaign: { nam
     });
   }
 
+  const textButton = "min-h-11 rounded-lg px-1.5 font-semibold transition-colors duration-150 hover:bg-app disabled:opacity-60";
   return (
-    <article className={`flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-surface p-4 shadow-card ${archived ? "opacity-85" : ""}`}>
-      <div className="flex items-start gap-3.5">
-        <BookCover book={book} url={data.coverUrls[book.id]} />
-        <div className="min-w-0 flex-1">
-          <h3 className="font-semibold leading-snug [overflow-wrap:anywhere]">{book.name}</h3>
-          <p className="mt-1 text-xs leading-snug text-muted">{[book.subject, book.classLevel].filter(Boolean).join(" · ") || book.author || "No subject or class"}</p>
-          <p className="mt-2 text-lg font-bold tabular-nums">{formatMoney(book.priceCents, book.currency)}</p>
+    <article className={`flex min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-card ${archived ? "opacity-85" : ""}`}>
+      {/* Cover area: the uploaded cover, or a book in the subject's colour. */}
+      <div className="relative flex h-[164px] items-center justify-center" style={{ background: `${tile.color}14` }}>
+        <span
+          aria-hidden="true"
+          className="flex h-[132px] w-24 items-center justify-center overflow-hidden rounded-md text-[28px] font-bold text-white shadow-[inset_6px_0_0_rgba(0,0,0,0.18),0_6px_14px_rgba(17,24,39,0.18)]"
+          style={{ background: tile.color }}
+        >
+          {cover ? (
+            // eslint-disable-next-line @next/next/no-img-element -- short-lived signed storage URL.
+            <img src={cover} alt="" className="h-full w-full object-cover" />
+          ) : (
+            initials(book.name)
+          )}
+        </span>
+        <span className="absolute right-3 top-3">
+          <Badge label={archived ? "Archived" : "Active"} tone={archived ? "gray" : "green"} />
+        </span>
+      </div>
+      <div className="flex flex-1 flex-col px-4 pb-3.5 pt-4">
+        <h3 className="text-base font-bold leading-snug [overflow-wrap:anywhere]">{book.name}</h3>
+        <p className="mt-1 text-[13px] leading-snug text-muted">{[book.subject, book.classLevel].filter(Boolean).join(" · ") || book.author || "No subject or class"}</p>
+        <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span className="text-2xl font-bold tracking-[-0.01em] tabular-nums">{formatMoney(book.priceCents, book.currency)}</span>
+          <span className={`text-[13px] font-semibold ${stockColor}`}>{stockText}</span>
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="min-w-0 text-[13px] text-[#374151]">
-          {campaign ? campaign.name : "Not in a campaign"} <span className="text-muted">· {campaign ? campaign.sub : "Add it to a campaign"}</span>
-        </span>
-        <Badge label={archived ? "Archived" : "Active"} tone={archived ? "gray" : "green"} />
-      </div>
-      <p className={`text-[13px] font-semibold ${stockColor}`}>{stockText}</p>
-      <div className="mt-auto flex flex-wrap gap-2">
+      <div className="mt-auto flex flex-wrap items-center gap-0.5 border-t border-border px-3 py-3">
         {data.canSell && (
           <button
             type="button"
             disabled={noSell}
             title={sellWhy}
             onClick={() => open({ kind: "sell", bookId: book.id })}
-            className="min-h-11 flex-[1_1_100%] rounded-lg bg-brand font-semibold text-white hover:bg-brand-hover disabled:cursor-not-allowed disabled:bg-[#9CA3AF]"
+            className="mr-auto min-h-11 shrink-0 rounded-lg bg-brand px-3.5 font-semibold text-white transition-colors duration-150 hover:bg-brand-hover disabled:cursor-not-allowed disabled:bg-[#9CA3AF]"
           >
             Sell Book
           </button>
         )}
-        <button type="button" onClick={() => open({ kind: "viewBook", bookId: book.id })} className="min-h-11 flex-[1_1_70px] rounded-lg border border-border-strong bg-surface font-semibold hover:bg-app">
+        <button type="button" onClick={() => open({ kind: "viewBook", bookId: book.id })} className={`${textButton} text-[#374151]`}>
           View
         </button>
         {data.canManageBooks && (
           <>
-            <button type="button" onClick={() => open({ kind: "editBook", bookId: book.id })} className="min-h-11 flex-[1_1_70px] rounded-lg border border-border-strong bg-surface font-semibold hover:bg-app">
+            <button type="button" onClick={() => open({ kind: "editBook", bookId: book.id })} className={`${textButton} text-[#374151]`}>
               Edit
             </button>
-            <button
-              type="button"
-              disabled={toggling}
-              onClick={toggleArchive}
-              className="min-h-11 flex-[1_1_80px] rounded-lg border border-dashed border-brand bg-surface text-[13px] font-semibold text-brand hover:bg-brand-tint disabled:opacity-60"
-            >
+            <button type="button" disabled={toggling} onClick={toggleArchive} className={`${textButton} text-brand hover:bg-brand-tint`}>
               {toggling ? "Saving…" : archived ? "Restore" : "Archive"}
             </button>
           </>

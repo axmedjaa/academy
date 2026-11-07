@@ -6,7 +6,7 @@ import { formatMoney } from "@/lib/ui/money";
 import { PageMessage } from "@/app/academy/_shell/ui";
 import { FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
 import { getBooksOverview } from "../../books-data";
-import { PillChips, StepCards } from "../../books-sections";
+import { PillChips } from "../../books-sections";
 import { BTN_SECONDARY, CARD, EmptyCard, InfoNote, KpiGrid, Pager, SectionHead, paginate, readParams } from "../../books-ui";
 import { GiveRow, type GiveRowData } from "../../distribution-client";
 import { buyerOf, buyerSearchText, distributionBadge, initials } from "../../books-view";
@@ -109,19 +109,11 @@ export default async function GiveBooksPage({ searchParams }: { searchParams: Pr
         </Link>
         .
       </InfoNote>
-      <StepCards
-        steps={[
-          { n: "1", title: "Find the order", sub: "Search by name, student ID or phone" },
-          { n: "2", title: "Check payment and books", sub: "Paid in full and verified, and what is left" },
-          { n: "3", title: "Mark as Given", sub: "Choose how many copies, then confirm" },
-        ]}
-      />
       <KpiGrid
         items={[
-          { label: "Orders waiting for books", value: orders.filter((o) => o.copies > o.given).length, sub: `${orders.filter((o) => o.copies > o.given && !cleared(o)).length} still waiting for payment or verification` },
-          { label: "Books waiting to be given", value: orders.reduce((s, o) => s + o.copies - o.given, 0), sub: "Copies across all orders" },
-          { label: "Books given", value: orders.reduce((s, o) => s + o.given, 0), sub: "Copies marked as given" },
-          { label: "Orders with all books", value: orders.filter((o) => o.copies === o.given).length, sub: "Orders completed" },
+          { label: "Students waiting", value: orders.filter((o) => o.copies > o.given).length },
+          { label: "Books to give", value: orders.reduce((s, o) => s + o.copies - o.given, 0) },
+          { label: "Books given", value: orders.reduce((s, o) => s + o.given, 0) },
         ]}
       />
       {orders.length > 0 && (

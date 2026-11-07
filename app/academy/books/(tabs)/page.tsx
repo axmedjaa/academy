@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { CAMPAIGN_STATUS_LABEL } from "@/lib/academies/book-preorder-math";
 import { PageMessage } from "@/app/academy/_shell/ui";
 import { FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
 import { getBooksOverview } from "../books-data";
@@ -20,7 +19,7 @@ const PAGE_SIZE = 6;
 export default async function AcademyBooksPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const overview = await getBooksOverview();
   if (!overview) redirect("/login");
-  const { booksResult, preordersResult } = overview;
+  const { booksResult } = overview;
   if (!booksResult.ok) {
     return <PageMessage title={booksResult.error.code === "blocked" ? "Access unavailable" : "Access denied"} message={booksResult.error.message} />;
   }
@@ -41,14 +40,6 @@ export default async function AcademyBooksPage({ searchParams }: { searchParams:
     .filter((b) => !q || [b.name, b.subject ?? "", b.author ?? "", b.isbn ?? ""].some((f) => f.toLowerCase().includes(q)))
     .sort((a, b) => (a.status === b.status ? a.name.localeCompare(b.name) : a.status === "active" ? -1 : 1));
   const visible = paginate(rows, page, PAGE_SIZE);
-
-  const campaigns = preordersResult.ok ? preordersResult.overview.campaigns : [];
-  const campaignLine = (bookId: string) => {
-    const list = campaigns.filter((c) => c.status !== "cancelled" && c.books.some((b) => b.bookId === bookId));
-    const pick = list.find((c) => c.status === "open") ?? list[0];
-    if (!pick) return null;
-    return { name: pick.name, sub: CAMPAIGN_STATUS_LABEL[pick.status] + (list.length > 1 ? ` · +${list.length - 1} more` : "") };
-  };
 
   return (
     <>
@@ -90,7 +81,7 @@ export default async function AcademyBooksPage({ searchParams }: { searchParams:
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-4">
           {visible.map((book) => (
-            <BookCard key={book.id} book={book} campaign={campaignLine(book.id)} />
+            <BookCard key={book.id} book={book} />
           ))}
         </div>
       )}

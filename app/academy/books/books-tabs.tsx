@@ -4,14 +4,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { Icon } from "@/app/academy/_shell/icons";
-import { ActionButton } from "./books-actions";
+import { ActionButton, useBooksActions } from "./books-actions";
 
 /**
- * Book Management navigation (design B01-B09): the four-step roadmap
- * (Books, Pre-Orders, Orders and Payments, Receive and Give Books), the
- * open step's section tabs, the Reports link and the open section's main
- * action. Every section is its own route under /academy/books, so links,
- * refresh and the back button keep working; the shared layout stays
+ * Book Management navigation (design B01-B13, revised 2026-11-07): two main
+ * tabs, Books (catalogue, stock and direct sales) and Orders (pre-order
+ * campaigns, student orders, payments, receiving and giving books), each
+ * with its sections as pills, plus the Reports link and the open section's
+ * main action. Every section is its own route under /academy/books, so
+ * links, refresh and the back button keep working; the shared layout stays
  * mounted and this reads the open section from the URL.
  */
 
@@ -30,18 +31,18 @@ export function sectionOf(pathname: string): BooksSection {
   return "books";
 }
 
-const STAGE_OF: Record<BooksSection, number> = { books: 1, stock: 1, sell: 1, campaigns: 2, orders: 3, payments: 3, receive: 4, give: 4, reports: 0 };
-
-export interface StageCounts {
-  activeBooks: number;
-  copiesInStock: number;
-  openCampaigns: number;
-  orders: number;
-  payments: number;
-  toVerify: number;
-  toReceive: number;
-  toGive: number;
-}
+/** Which main tab a section belongs to. Reports covers the pre-order flow. */
+const GROUP_OF: Record<BooksSection, "books" | "orders"> = {
+  books: "books",
+  stock: "books",
+  sell: "books",
+  campaigns: "orders",
+  orders: "orders",
+  payments: "orders",
+  receive: "orders",
+  give: "orders",
+  reports: "orders",
+};
 
 export interface NavPermissions {
   canManageBooks: boolean;
@@ -58,169 +59,122 @@ export function HeroGate({ hero, compact }: { hero: ReactNode; compact: ReactNod
   return <>{isDetail ? compact : hero}</>;
 }
 
-export function BooksStageNav({ counts, can }: { counts: StageCounts; can: NavPermissions }) {
+/** The hero's three main actions (design: Add Book in gold, Sell Book and
+ * Pre-Order). An action the member can't use is omitted, not disabled. */
+export function HeroActions({ can }: { can: NavPermissions }) {
+  const { open } = useBooksActions();
+  const actions = [
+    can.canManageBooks && { key: "add", icon: "book", title: "Add Book", sub: "Add a title and set its price", gold: true, run: () => open({ kind: "addBook" }) },
+    can.canSell && { key: "sell", icon: "payments", title: "Sell Book", sub: "Sell a copy that is in stock", gold: false, run: () => open({ kind: "sell" }) },
+    can.canManageCampaigns && { key: "pre", icon: "autorenew", title: "Pre-Order", sub: "Open books for ordering", gold: false, run: () => open({ kind: "campaign" }) },
+  ].filter((a): a is { key: string; icon: string; title: string; sub: string; gold: boolean; run: () => void } => Boolean(a));
+  if (!actions.length) return null;
+  return (
+    <div className="relative mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5">
+      {actions.map((a) => (
+        <button
+          key={a.key}
+          type="button"
+          onClick={a.run}
+          className={`flex min-h-[74px] min-w-0 items-center gap-3.5 rounded-[14px] px-4 py-3.5 text-left transition-colors duration-150 ${
+            a.gold
+              ? "border-0 bg-[#F5B638] text-ink shadow-[0_2px_10px_rgba(0,0,0,0.18)] hover:bg-[#FFC65A]"
+              : "border border-white/25 bg-white/[0.08] text-white hover:bg-white/[0.16]"
+          }`}
+        >
+          <span
+            aria-hidden="true"
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-[10px] ${a.gold ? "bg-black/[0.08] text-ink" : "bg-white/[0.14] text-white"}`}
+          >
+            <Icon name={a.icon} width={22} height={22} />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-base font-bold leading-tight">{a.title}</span>
+            <span className={`mt-0.5 block text-[13px] leading-snug ${a.gold ? "text-[#3F2A00]" : "text-white/85"}`}>{a.sub}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function BooksSectionNav({ can }: { can: NavPermissions }) {
   const pathname = usePathname();
   const section = sectionOf(pathname);
-  const stage = STAGE_OF[section];
+  const group = GROUP_OF[section];
 
-  const stages = [
-    { n: 1, title: "Books", verb: "Add books and sell what is in stock", q: "What books does the academy have?", href: "/academy/books", count: counts.activeBooks },
-    { n: 2, title: "Pre-Orders", verb: "Open books for ordering", q: "What can be ordered right now?", href: "/academy/books/pre-orders", count: counts.openCampaigns },
-    { n: 3, title: "Orders and Payments", verb: "Take orders, record payments", q: "Who ordered and who has paid?", href: "/academy/books/orders", count: counts.orders },
-    { n: 4, title: "Receive and Give Books", verb: "Receive books, give them to students", q: "Which books arrived and were given to students?", href: "/academy/books/receiving", count: counts.toGive },
-  ];
-  const fill = `${Math.round((Math.max(0, stage - 1) / 3) * 100)}%`;
-
-  type Tab = { key: BooksSection; label: string; href: string; count: string; warn?: boolean; action?: ReactNode };
-  const tabs: Tab[] =
-    stage === 1
+  type Pill = { key: BooksSection; label: string; href: string; action?: ReactNode };
+  const pills: Pill[] =
+    group === "books"
       ? [
-          {
-            key: "books",
-            label: "Books",
-            href: "/academy/books",
-            count: String(counts.activeBooks),
-            action: can.canManageBooks ? <ActionButton dialog={{ kind: "addBook" }}>Add Book</ActionButton> : null,
-          },
-          {
-            key: "stock",
-            label: "Stock",
-            href: "/academy/books/stock",
-            count: `${counts.copiesInStock} copies`,
-          },
-          {
-            key: "sell",
-            label: "Sell Book",
-            href: "/academy/books/sales",
-            count: `${counts.copiesInStock} in stock`,
-            action: can.canSell ? <ActionButton dialog={{ kind: "sell" }}>Sell Book</ActionButton> : null,
-          },
+          { key: "books", label: "Books", href: "/academy/books", action: can.canManageBooks ? <ActionButton dialog={{ kind: "addBook" }}>Add Book</ActionButton> : null },
+          { key: "stock", label: "Stock", href: "/academy/books/stock" },
+          { key: "sell", label: "Sell", href: "/academy/books/sales", action: can.canSell ? <ActionButton dialog={{ kind: "sell" }}>Sell Book</ActionButton> : null },
         ]
-      : stage === 3
-        ? [
-            {
-              key: "orders",
-              label: "Student Orders",
-              href: "/academy/books/orders",
-              count: String(counts.orders),
-              action: can.canManage ? <ActionButton dialog={{ kind: "order" }}>Create Order</ActionButton> : null,
-            },
-            {
-              key: "payments",
-              label: "Payments",
-              href: "/academy/books/payments",
-              count: counts.toVerify ? `${counts.toVerify} to verify` : String(counts.payments),
-              warn: counts.toVerify > 0,
-              action: can.canManage ? <ActionButton dialog={{ kind: "pay" }}>Record Payment</ActionButton> : null,
-            },
-          ]
-        : stage === 4
-          ? [
-              {
-                key: "receive",
-                label: "Receive Books",
-                href: "/academy/books/receiving",
-                count: `${counts.toReceive} to receive`,
-                action: can.canManageCampaigns ? <ActionButton dialog={{ kind: "receive" }}>Receive Books</ActionButton> : null,
-              },
-              { key: "give", label: "Give Books to Students", href: "/academy/books/distribution", count: `${counts.toGive} to give` },
-            ]
-          : [];
-  const current = tabs.find((t) => t.key === section);
+      : [
+          {
+            key: "campaigns",
+            label: "Pre-Orders",
+            href: "/academy/books/pre-orders",
+            action: can.canManageCampaigns ? <ActionButton dialog={{ kind: "campaign" }}>Create Pre-Order Campaign</ActionButton> : null,
+          },
+          { key: "orders", label: "Orders", href: "/academy/books/orders", action: can.canManage ? <ActionButton dialog={{ kind: "order" }}>Create Order</ActionButton> : null },
+          { key: "payments", label: "Payments", href: "/academy/books/payments", action: can.canManage ? <ActionButton dialog={{ kind: "pay" }}>Record Payment</ActionButton> : null },
+          {
+            key: "receive",
+            label: "Receive",
+            href: "/academy/books/receiving",
+            action: can.canManageCampaigns ? <ActionButton dialog={{ kind: "receive" }}>Receive Books</ActionButton> : null,
+          },
+          { key: "give", label: "Give", href: "/academy/books/distribution" },
+        ];
+  const current = pills.find((p) => p.key === section);
+  const mainTabs = [
+    { key: "books" as const, label: "Books", href: "/academy/books" },
+    { key: "orders" as const, label: "Orders", href: "/academy/books/orders" },
+  ];
 
   return (
     <>
-      <nav aria-label="Book steps" className="mb-4 overflow-hidden rounded-2xl border border-border bg-surface shadow-card">
-        {/* Horizontal roadmap (tablet and desktop) */}
-        <div className="relative hidden grid-cols-4 px-2 pt-5 sm:grid">
-          <div aria-hidden="true" className="absolute left-[12.5%] right-[12.5%] top-[38px] h-1 rounded-sm bg-border">
-            <div className="h-full rounded-sm bg-brand transition-[width] duration-200" style={{ width: fill }} />
-          </div>
-          {stages.map((s) => {
-            const on = stage === s.n;
-            const done = stage > s.n;
+      <nav aria-label="Book Management" className="mb-4 border-b border-border">
+        <div className="-mb-px flex gap-2">
+          {mainTabs.map((t) => {
+            const on = t.key === group;
             return (
               <Link
-                key={s.n}
-                href={s.href}
-                aria-current={on ? "step" : undefined}
-                title={s.q}
-                className="relative flex min-w-0 flex-col items-center gap-1.5 px-2 pb-[18px] text-center !no-underline hover:!no-underline"
+                key={t.key}
+                href={t.href}
+                aria-current={on ? "page" : undefined}
+                className={`flex h-[52px] items-center border-b-[3px] px-[18px] text-base font-semibold !no-underline transition-colors duration-150 hover:!no-underline ${
+                  on ? "border-brand !text-brand" : "border-transparent !text-[#4B5563] hover:!text-ink"
+                }`}
               >
-                <span
-                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-[3px] text-base font-bold ${
-                    done ? "border-brand bg-brand text-white" : on ? "border-brand bg-surface text-brand shadow-[0_0_0_4px_#F9E8EC,0_0_0_6px_#F5B638]" : "border-border-strong bg-surface text-muted"
-                  }`}
-                >
-                  {done ? "✓" : s.n}
-                </span>
-                <span className={`mt-1.5 text-[15px] font-bold leading-tight ${on ? "text-brand" : "text-ink"}`}>{s.title}</span>
-                <span className="max-w-[190px] text-xs leading-snug text-muted">{s.verb}</span>
-                <StagePill on={on} value={String(s.count)} />
-              </Link>
-            );
-          })}
-        </div>
-        {/* Vertical roadmap (phones) */}
-        <div className="px-3.5 py-2 sm:hidden">
-          {stages.map((s, i) => {
-            const on = stage === s.n;
-            const done = stage > s.n;
-            return (
-              <Link
-                key={s.n}
-                href={s.href}
-                aria-current={on ? "step" : undefined}
-                className="relative flex min-h-[60px] w-full items-center gap-3.5 py-2.5 text-left !no-underline hover:!no-underline"
-              >
-                {i < 3 && <span aria-hidden="true" className={`absolute bottom-[-12px] left-[17px] top-12 w-[3px] rounded-sm ${done ? "bg-brand" : "bg-border"}`} />}
-                <span
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-[3px] text-[15px] font-bold ${
-                    done ? "border-brand bg-brand text-white" : on ? "border-brand bg-surface text-brand shadow-[0_0_0_4px_#F9E8EC,0_0_0_6px_#F5B638]" : "border-border-strong bg-surface text-muted"
-                  }`}
-                >
-                  {done ? "✓" : s.n}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className={`block text-[15px] font-bold leading-tight ${on ? "text-brand" : "text-ink"}`}>{s.title}</span>
-                  <span className="block text-xs leading-snug text-muted">{s.verb}</span>
-                </span>
-                <StagePill on={on} value={String(s.count)} />
+                {t.label}
               </Link>
             );
           })}
         </div>
       </nav>
 
-      <div className={`mb-5 mt-1 flex flex-wrap items-end gap-x-6 gap-y-1 ${tabs.length ? "border-b border-border" : ""}`}>
-        {tabs.length > 0 && (
-          <div role="tablist" aria-label="Section" className="-mb-px flex max-w-full gap-6 overflow-x-auto [scrollbar-width:none]">
-            {tabs.map((t) => {
-              const on = t.key === section;
-              return (
-                <Link
-                  key={t.key}
-                  href={t.href}
-                  role="tab"
-                  aria-selected={on}
-                  className={`flex h-12 items-center gap-2 whitespace-nowrap border-b-[3px] px-0.5 text-[15px] font-semibold !no-underline hover:!no-underline ${
-                    on ? "border-brand !text-brand" : "border-transparent !text-[#4B5563] hover:!text-ink"
-                  }`}
-                >
-                  <span>{t.label}</span>
-                  <span
-                    className={`inline-flex h-[22px] min-w-[22px] items-center justify-center rounded-full px-2 text-xs font-semibold ${
-                      t.warn ? "bg-warning-bg text-[#78350F]" : on ? "bg-brand-tint text-brand" : "bg-[#EEF0F3] text-[#374151]"
-                    }`}
-                  >
-                    {t.count}
-                  </span>
-                </Link>
-              );
-            })}
-          </div>
-        )}
-        <div className="ml-auto flex flex-wrap items-center gap-2 pb-1.5">
+      <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
+        <div aria-label={group === "books" ? "Books sections" : "Orders sections"} role="navigation" className="flex min-w-0 max-w-full gap-2 overflow-x-auto [scrollbar-width:none]">
+          {pills.map((p) => {
+            const on = p.key === section;
+            return (
+              <Link
+                key={p.key}
+                href={p.href}
+                aria-current={on ? "page" : undefined}
+                className={`flex h-10 shrink-0 items-center whitespace-nowrap rounded-full border px-[15px] text-sm font-semibold !no-underline transition-colors duration-150 hover:!no-underline ${
+                  on ? "border-brand bg-brand !text-white" : "border-border-strong bg-surface !text-ink hover:bg-app"
+                }`}
+              >
+                {p.label}
+              </Link>
+            );
+          })}
+        </div>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <Link
             href="/academy/books/reports"
             aria-current={section === "reports" ? "page" : undefined}
@@ -233,17 +187,5 @@ export function BooksStageNav({ counts, can }: { counts: StageCounts; can: NavPe
         </div>
       </div>
     </>
-  );
-}
-
-function StagePill({ on, value }: { on: boolean; value: string }) {
-  return (
-    <span
-      className={`inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-full border px-2 text-xs font-bold ${
-        on ? "border-[#F5B638] bg-[#F5B638] text-ink" : "border-border bg-surface text-[#374151]"
-      }`}
-    >
-      {value}
-    </span>
   );
 }

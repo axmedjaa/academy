@@ -5,10 +5,10 @@ import { formatMoney } from "@/lib/ui/money";
 import { PageMessage } from "@/app/academy/_shell/ui";
 import { FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
 import { getBooksOverview } from "../../books-data";
-import { StepCards, ToneBadge, VerifyButton } from "../../books-sections";
+import { ToneBadge, VerifyButton } from "../../books-sections";
 import { BTN_SECONDARY, CARD, EmptyCard, KpiGrid, Pager, SectionHead, paginate, readParams } from "../../books-ui";
 import { OrderCard } from "../../order-card";
-import { buyerOf, buyerSearchText, formatIsoDate, plural, sumByCurrency, titlesLine } from "../../books-view";
+import { buyerOf, buyerSearchText, formatIsoDate, sumByCurrency } from "../../books-view";
 
 const PAGE_SIZE = 8;
 
@@ -21,7 +21,7 @@ const PAGE_SIZE = 8;
 export default async function PreorderPaymentsPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const overview = await getBooksOverview();
   if (!overview) redirect("/login");
-  const { booksResult, preordersResult } = overview;
+  const { preordersResult } = overview;
   if (!preordersResult.ok) {
     return <PageMessage title={preordersResult.error.code === "blocked" ? "Access unavailable" : "Access denied"} message={preordersResult.error.message} />;
   }
@@ -32,7 +32,6 @@ export default async function PreorderPaymentsPage({ searchParams }: { searchPar
   const method = get("method");
   const ver = get("ver");
   const { orders } = preordersResult.overview;
-  const bookName = new Map((booksResult.ok ? booksResult.books : []).map((b) => [b.id, b.name]));
 
   const payments = orders.flatMap((o) => o.payments.map((p) => ({ p, o })));
   const unverified = payments.filter((x) => !x.p.verified);
@@ -62,19 +61,12 @@ export default async function PreorderPaymentsPage({ searchParams }: { searchPar
 
   return (
     <>
-      <SectionHead title="Payments" description="Record the money paid for book orders, in full or in parts. Books are given only once an order is paid in full and its payments are verified. Academy subscription payments are separate." />
-      <StepCards
-        steps={[
-          { n: "1", title: "Select Order", sub: "Search the name, student ID or phone", dialog: { kind: "pay" } },
-          { n: "2", title: "Enter Amount Paid", sub: "A full or partial payment" },
-          { n: "3", title: "Confirm", sub: "Review the payment, then save it" },
-        ]}
-      />
+      <SectionHead title="Payments" description="Record the money students pay for their book orders, in full or in parts. Book payments only; academy subscription payments are separate." />
       <KpiGrid
         items={[
-          { label: "Amount Paid", value: sumByCurrency(payments.map((x) => ({ cents: x.p.amountCents, currency: x.o.currency }))), sub: `${plural(payments.length, "payment", "payments")} recorded` },
-          { label: "Remaining Balance", value: sumByCurrency(owing.map((o) => ({ cents: o.balanceCents, currency: o.currency }))), sub: `${plural(owing.length, "order", "orders")} still owe money` },
-          { label: "Waiting to be verified", value: unverified.length, sub: `${sumByCurrency(unverified.map((x) => ({ cents: x.p.amountCents, currency: x.o.currency })))} not checked yet` },
+          { label: "Amount Paid", value: sumByCurrency(payments.map((x) => ({ cents: x.p.amountCents, currency: x.o.currency }))) },
+          { label: "Remaining Balance", value: sumByCurrency(owing.map((o) => ({ cents: o.balanceCents, currency: o.currency }))) },
+          { label: "To verify", value: unverified.length },
         ]}
       />
       <div role="tablist" aria-label="Payment views" className="mb-4 flex w-fit max-w-full gap-1 overflow-x-auto rounded-xl bg-[#EEF0F3] p-1">
@@ -98,7 +90,7 @@ export default async function PreorderPaymentsPage({ searchParams }: { searchPar
               }
             />
           ) : (
-            paginate(outRows, page, 6).map((o) => <OrderCard key={o.id} order={o} titles={titlesLine(o.items.map((i) => bookName.get(i.bookId) ?? "Book"))} />)
+            paginate(outRows, page, 6).map((o) => <OrderCard key={o.id} order={o} />)
           )}
           <Pager page={page} pageSize={6} total={outRows.length} params={params} />
         </>

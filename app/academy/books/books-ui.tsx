@@ -17,34 +17,19 @@ export function SectionHead({ title, description, actions }: { title: string; de
   );
 }
 
-/** Icon and tint by label, as the design's KPI cards pick them. */
-function kpiLook(label: string): [string, string, string] {
-  if (/outstanding|waiting|shortage|damaged/i.test(label)) return ["warning", "bg-[#FEF3C7]", "text-[#92400E]"];
-  if (/books|copies|received|given/i.test(label)) return ["inventory_2", "bg-[#EFF6FF]", "text-[#1D4ED8]"];
-  if (/collected|paid|payments|verified/i.test(label)) return ["payments", "bg-[#ECFDF3]", "text-[#166534]"];
-  return ["receipt_long", "bg-brand-tint", "text-brand"];
-}
-
+/** The design's summary cards (B03, B06-B08): a plain white card with the
+ * label above a large figure. An optional line under the figure for the
+ * sections that explain a number (Receive, Reports). */
 export function KpiGrid({ items }: { items: { label: string; value: ReactNode; sub?: ReactNode }[] }) {
   return (
-    <div className="mb-5 grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fit,minmax(170px,1fr))]">
-      {items.map((k) => {
-        const [icon, bg, fg] = kpiLook(k.label);
-        return (
-          <div key={k.label} className="flex min-w-0 flex-col gap-3 rounded-2xl border border-border bg-surface p-4 shadow-card">
-            <div className="flex items-center gap-2.5">
-              <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] ${bg} ${fg}`}>
-                <Icon name={icon} width={18} height={18} />
-              </span>
-              <span className="min-w-0 text-[13px] font-medium leading-tight text-[#374151]">{k.label}</span>
-            </div>
-            <div>
-              <div className="text-[28px] font-bold leading-[1.1] tracking-[-0.01em] tabular-nums [overflow-wrap:anywhere]">{k.value}</div>
-              {k.sub && <div className="mt-1 text-xs text-muted">{k.sub}</div>}
-            </div>
-          </div>
-        );
-      })}
+    <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(180px,1fr))] sm:gap-4">
+      {items.map((k) => (
+        <div key={k.label} className="flex min-w-0 flex-col rounded-2xl border border-border bg-surface px-5 py-4 shadow-card">
+          <span className="text-[13px] leading-tight text-[#4B5563]">{k.label}</span>
+          <span className="mt-2 text-2xl font-bold leading-[1.1] tracking-[-0.01em] tabular-nums [overflow-wrap:anywhere]">{k.value}</span>
+          {k.sub && <span className="mt-1 text-xs text-muted">{k.sub}</span>}
+        </div>
+      ))}
     </div>
   );
 }
