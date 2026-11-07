@@ -27,6 +27,13 @@ export interface ExpenseRecordFormState {
   error?: ExpenseRecordActionError;
 }
 
+
+/** SEC-M-06: the form's per-submission key (hidden input), if present. */
+function optionalKey(formData: FormData): string | undefined {
+  const key = String(formData.get("idempotencyKey") ?? "").trim();
+  return key.length > 0 ? key : undefined;
+}
+
 /**
  * The form's "Amount" field is entered in dollars (e.g. "10", "5.55") —
  * never raw cents; `dollarsToCents` is the one centralized conversion
@@ -46,6 +53,7 @@ function parseCreateExpenseRecordFormData(formData: FormData): CreateExpenseReco
     description: description.length > 0 ? description : undefined,
     amountCents: dollarsToCents(String(formData.get("amountDollars") ?? "")) ?? NaN,
     currency: currency.length > 0 ? currency : undefined,
+    idempotencyKey: optionalKey(formData),
   };
 }
 

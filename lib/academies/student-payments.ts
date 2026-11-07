@@ -2,6 +2,8 @@ import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from
 import { getBranchScope, inBranchScope, isStudentInScope, studentInScopeCondition, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
+import { IDEMPOTENCY_INDEX, IDEMPOTENCY_KEY_REUSED, idempotencyKeyField, isIdempotencyViolation } from "@/lib/academies/idempotency";
+import { findKeyedStudentPayment } from "@/lib/academies/student-payment-idempotency";
 import {
   academies,
   receipts,
@@ -194,6 +196,9 @@ export const recordStudentPaymentSchema = z.object({
   // staff notes, e.g. "Second installment".
   notes: optionalText(1000),
   receivedAt: z.coerce.date({ message: "A valid received date is required" }),
+  // SEC-M-06: one per form submission; a retry with the same key returns
+  // the original payment instead of recording it again.
+  idempotencyKey: idempotencyKeyField,
 });
 
 export type RecordStudentPaymentInput = z.input<typeof recordStudentPaymentSchema>;
@@ -730,8 +735,36 @@ export async function createStudentCharge(
 }
 
 export type RecordStudentPaymentResult =
-  | { ok: true; payment: StudentPaymentRecord }
+  /** `duplicate` is true when an earlier submission with the same
+   * idempotency key already recorded this payment (nothing new written). */
+  | { ok: true; payment: StudentPaymentRecord; duplicate?: boolean }
   | { ok: false; error: StudentPaymentsActionError };
+
+/**
+ * SEC-M-06 replay for a charge / one-off payment. Returns null when no row
+ * has this key. A row found for another operation (a fee-period payment,
+ * which has allocations) or with different details is refused rather than
+ * returned; a row outside the actor's branch scope is reported as not found.
+ */
+async function replayStudentPayment(
+  academyId: string,
+  scope: BranchScope,
+  data: { idempotencyKey: string; studentId: string; chargeId?: string; amountCents: number; method: string },
+): Promise<RecordStudentPaymentResult | null> {
+  const keyed = await findKeyedStudentPayment(academyId, scope, data.idempotencyKey);
+  if (keyed.kind === "none") return null;
+  if (keyed.kind === "out_of_scope") return { ok: false, error: STUDENT_NOT_FOUND };
+  const { payment, allocations } = keyed;
+  const sameOperation =
+    allocations.length === 0 &&
+    payment.reversedPaymentId === null &&
+    payment.studentId === data.studentId &&
+    payment.chargeId === (data.chargeId ?? null) &&
+    payment.amountCents === data.amountCents &&
+    payment.method === data.method;
+  if (!sameOperation) return { ok: false, error: IDEMPOTENCY_KEY_REUSED };
+  return { ok: true, payment: toPaymentRecord(payment), duplicate: true };
+}
 
 /**
  * PLAN.md §4/Finance Lifecycle, as amended by the later "no approval
@@ -763,6 +796,13 @@ export async function recordStudentPayment(
     };
   }
   const data = parsed.data;
+
+  // SEC-M-06: a retried submission returns the original payment. Checked
+  // after authorization and validation, never instead of them.
+  if (data.idempotencyKey) {
+    const replay = await replayStudentPayment(academyId, scope, { ...data, idempotencyKey: data.idempotencyKey });
+    if (replay) return replay;
+  }
 
   const result = await db.transaction(async (tx) => {
     const [student] = await tx
@@ -815,6 +855,7 @@ export async function recordStudentPayment(
         status: "approved",
         approvedBy: actorContext.userId,
         approvedAt: now,
+        idempotencyKey: data.idempotencyKey,
       })
       .returning();
 
@@ -839,8 +880,18 @@ export async function recordStudentPayment(
     }
 
     return { kind: "ok" as const, row };
+  }).catch(async (err: unknown) => {
+    // A concurrent identical submission committed first: this transaction
+    // (payment, audit row, charge recalculation) was rolled back whole.
+    if (data.idempotencyKey && isIdempotencyViolation(err, IDEMPOTENCY_INDEX.studentPayments)) {
+      return { kind: "replay" as const, replay: await replayStudentPayment(academyId, scope, { ...data, idempotencyKey: data.idempotencyKey }) };
+    }
+    throw err;
   });
 
+  if (result.kind === "replay") {
+    return result.replay ?? { ok: false, error: IDEMPOTENCY_KEY_REUSED };
+  }
   if (result.kind === "student_not_found") {
     return { ok: false, error: STUDENT_NOT_FOUND };
   }

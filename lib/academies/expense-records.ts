@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
-import { branchScopeCondition, getBranchScope, type BranchScope } from "@/lib/academies/branch-access";
+import { branchScopeCondition, getBranchScope, inBranchScope, type BranchScope } from "@/lib/academies/branch-access";
+import { IDEMPOTENCY_INDEX, IDEMPOTENCY_KEY_REUSED, idempotencyKeyField, isIdempotencyViolation } from "@/lib/academies/idempotency";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { academies, approvalRequests, branches, expenseRecords } from "@/lib/db/schema";
@@ -113,7 +114,9 @@ export interface ExpenseRecordActionError {
     // rather than collapsed into "forbidden" — same convention as
     // lib/academies/grade-configurations.ts's GradeConfigActionError.
     | "self_approval"
-    | "already_decided";
+    | "already_decided"
+    // An idempotency key replayed with different details (SEC-M-06).
+    | "conflict";
   message: string;
 }
 
@@ -155,6 +158,8 @@ export const createExpenseRecordSchema = z.object({
     .toUpperCase()
     .length(3, "Currency must be a 3-letter code, e.g. USD")
     .optional(),
+  // SEC-M-06: one per form submission; see lib/academies/idempotency.ts.
+  idempotencyKey: idempotencyKeyField,
 });
 
 export type CreateExpenseRecordInput = z.input<typeof createExpenseRecordSchema>;
@@ -314,8 +319,36 @@ export async function listExpenseRecords(actorContext: AuthContext): Promise<Lis
 }
 
 export type CreateExpenseRecordResult =
-  | { ok: true; record: ExpenseRecordRecord }
+  /** `duplicate` is true when an earlier submission with the same
+   * idempotency key already created this record (nothing new written). */
+  | { ok: true; record: ExpenseRecordRecord; duplicate?: boolean }
   | { ok: false; error: ExpenseRecordActionError };
+
+/**
+ * SEC-M-06 replay: returns null when no expense in this academy has the
+ * key. A row outside the actor's branch scope is reported as not found; a
+ * row with different details (or a reversal) is refused, never returned.
+ */
+async function replayCreateExpenseRecord(
+  academyId: string,
+  scope: BranchScope,
+  data: { idempotencyKey: string; branchId?: string; category: string; amountCents: number },
+): Promise<CreateExpenseRecordResult | null> {
+  const [row] = await db
+    .select()
+    .from(expenseRecords)
+    .where(and(eq(expenseRecords.academyId, academyId), eq(expenseRecords.idempotencyKey, data.idempotencyKey)))
+    .limit(1);
+  if (!row) return null;
+  if (!inBranchScope(scope, row.branchId)) return { ok: false, error: BRANCH_NOT_FOUND };
+  const sameOperation =
+    row.reversedRecordId === null &&
+    row.branchId === (data.branchId ?? null) &&
+    row.category === data.category &&
+    row.amountCents === data.amountCents;
+  if (!sameOperation) return { ok: false, error: IDEMPOTENCY_KEY_REUSED };
+  return { ok: true, record: toRecord(row), duplicate: true };
+}
 
 /** Records an expense, effective immediately: `— -> approved`, with the
  * recorder as approver (see "Independent operation" above). Gate:
@@ -340,6 +373,13 @@ export async function createExpenseRecord(
     };
   }
   const data = parsed.data;
+
+  // SEC-M-06: a retried submission returns the original record. Checked
+  // after authorization and validation, never instead of them.
+  if (data.idempotencyKey) {
+    const prior = await replayCreateExpenseRecord(academyId, scope, { ...data, idempotencyKey: data.idempotencyKey });
+    if (prior) return prior;
+  }
 
   const result = await db.transaction(async (tx) => {
     // Verify a supplied branchId actually belongs to this academy before
@@ -372,6 +412,7 @@ export async function createExpenseRecord(
         status: "approved",
         approvedBy: actorContext.userId,
         approvedAt: new Date(),
+        idempotencyKey: data.idempotencyKey,
       })
       .returning();
 
@@ -389,7 +430,18 @@ export async function createExpenseRecord(
     );
 
     return { outcome: "ok" as const, row };
+  }).catch(async (err: unknown) => {
+    // A concurrent identical submission committed first: this transaction
+    // (record and audit row) was rolled back whole.
+    if (data.idempotencyKey && isIdempotencyViolation(err, IDEMPOTENCY_INDEX.expenseRecords)) {
+      return { outcome: "replay" as const, replay: await replayCreateExpenseRecord(academyId, scope, { ...data, idempotencyKey: data.idempotencyKey }) };
+    }
+    throw err;
   });
+
+  if (result.outcome === "replay") {
+    return result.replay ?? { ok: false, error: IDEMPOTENCY_KEY_REUSED };
+  }
 
   if (result.outcome === "invalid_branch") {
     return { ok: false, error: BRANCH_NOT_FOUND };

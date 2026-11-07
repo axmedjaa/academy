@@ -250,6 +250,7 @@ function PaymentForm({
   const [chargeId, setChargeId] = useState("");
   const [amount, setAmount] = useState("");
   const [receivedAt] = useState(localNow);
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   useResult(state, COPY.payment.done, onSaved, showServerError, [
     [/student/i, "studentId"],
     [/amount|exceed|overpay/i, "amountDollars"],
@@ -269,6 +270,9 @@ function PaymentForm({
       onSubmit={onDesignSubmit(validate, (data) => startTransition(() => formAction(data)))}
     >
       <DialogBody>
+        {/* SEC-M-06: same key for every retry of this submission; the dialog
+            unmounts after a success, so the next payment gets a new one. */}
+        <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
         {student && (
           <FormSummary
             items={[
@@ -393,6 +397,7 @@ function LedgerForm({ kind, onCancel, onSaved }: { kind: "income" | "expense"; o
   const formAction = kind === "income" ? incomeAction : expenseAction;
   const pending = kind === "income" ? incomePending : expensePending;
   const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(LEDGER_RULES);
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   useResult(state, COPY[kind].done, onSaved, showServerError, [
     [/category/i, "category"],
     [/amount/i, "amountDollars"],
@@ -406,6 +411,9 @@ function LedgerForm({ kind, onCancel, onSaved }: { kind: "income" | "expense"; o
       onSubmit={onDesignSubmit(validate, (data) => startTransition(() => formAction(data)))}
     >
       <DialogBody>
+        {/* SEC-M-06: same key for every retry of this submission; the dialog
+            unmounts after a success, so the next payment gets a new one. */}
+        <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
         <FieldGrid>
           <DField label="Category" name="category" required error={errors.category}>
             <input

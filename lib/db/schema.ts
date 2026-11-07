@@ -2272,11 +2272,18 @@ export const studentPayments = pgTable(
       (): AnyPgColumn => studentPayments.id,
     ),
     reversalReason: text("reversal_reason"),
+    // SEC-M-06 (migration 0046): one key per form submission; a retry with
+    // the same key returns the original row. NULL for rows written without
+    // one (existing data, reversals, internal callers).
+    idempotencyKey: uuid("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
+    uniqueIndex("student_payments_academy_idempotency_unique")
+      .on(table.academyId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
     // Phase 4 §2: "index (academy_id, created_at), (student_id)".
     index("student_payments_academy_id_created_at_idx").on(table.academyId, table.createdAt),
     index("student_payments_student_id_idx").on(table.studentId),
@@ -2347,11 +2354,18 @@ export const incomeRecords = pgTable(
     reversedRecordId: uuid("reversed_record_id").references(
       (): AnyPgColumn => incomeRecords.id,
     ),
+    // SEC-M-06 (migration 0046): one key per form submission; a retry with
+    // the same key returns the original row. NULL for rows written without
+    // one (existing data, reversals, internal callers).
+    idempotencyKey: uuid("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
+    uniqueIndex("income_records_academy_idempotency_unique")
+      .on(table.academyId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
     // Not explicitly listed for this table, but every academy-scoped table
     // elsewhere in this file carries an academy_id lookup index.
     index("income_records_academy_id_idx").on(table.academyId),
@@ -2396,6 +2410,10 @@ export const expenseRecords = pgTable(
     reversedRecordId: uuid("reversed_record_id").references(
       (): AnyPgColumn => expenseRecords.id,
     ),
+    // SEC-M-06 (migration 0046): one key per form submission; a retry with
+    // the same key returns the original row. NULL for rows written without
+    // one (existing data, reversals, internal callers).
+    idempotencyKey: uuid("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -2404,6 +2422,9 @@ export const expenseRecords = pgTable(
       .defaultNow(),
   },
   (table) => [
+    uniqueIndex("expense_records_academy_idempotency_unique")
+      .on(table.academyId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
     index("expense_records_academy_id_idx").on(table.academyId),
     check("expense_records_amount_cents_nonnegative", sql`${table.amountCents} >= 0`),
   ],
@@ -3009,11 +3030,18 @@ export const bookSales = pgTable(
     recordedBy: uuid("recorded_by")
       .notNull()
       .references(() => users.id),
+    // SEC-M-06 (migration 0046): one key per form submission; a retry with
+    // the same key returns the original row. NULL for rows written without
+    // one (existing data, reversals, internal callers).
+    idempotencyKey: uuid("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
+    uniqueIndex("book_sales_academy_idempotency_unique")
+      .on(table.academyId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} is not null`),
     index("book_sales_academy_id_idx").on(table.academyId),
     index("book_sales_book_id_idx").on(table.bookId),
     index("book_sales_student_id_idx").on(table.studentId),

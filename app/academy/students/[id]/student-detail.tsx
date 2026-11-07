@@ -628,6 +628,8 @@ function PayAllRemainingDialog({
   const numberOf = new Map(periods.map((period, index) => [period.id, index + 1]));
   const byId = new Map(periods.map((period) => [period.id, period]));
   const [nowLocal] = useState(() => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
+  // SEC-M-06: one key per opening of this dialog, resent on every retry.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   return (
     <ActionDialog
       open
@@ -645,6 +647,7 @@ function PayAllRemainingDialog({
       rules={[{ name: "receivedAt", label: "Date received", required: true }]}
       run={async (data) => {
         const result = await recordEnrollmentPaymentAction({
+          idempotencyKey,
           studentId,
           enrollmentId: enrollment.id,
           amountCents,
@@ -816,6 +819,9 @@ function PeriodPaymentForm({
   const [receivedAt, setReceivedAt] = useState(() => new Date().toISOString().slice(0, 16));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // SEC-M-06: same key for every retry of this payment; replaced after a
+  // success so the next payment is a new submission.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   async function handleSubmit() {
     setError(null);
@@ -835,6 +841,7 @@ function PeriodPaymentForm({
     }
     setSubmitting(true);
     const result = await recordFeePeriodPaymentAction({
+      idempotencyKey,
       studentId,
       enrollmentId: period.enrollmentId,
       allocations: [{ feePeriodId: period.id, amountCents }],
@@ -849,6 +856,7 @@ function PeriodPaymentForm({
       showErrorToast(result.error?.message ?? "Failed to record payment.");
       return;
     }
+    setIdempotencyKey(crypto.randomUUID());
     showSuccessToast("Payment recorded.");
     onDone();
   }
@@ -1112,6 +1120,9 @@ function RecordEnrollmentPaymentForm({
   const [receivedAt, setReceivedAt] = useState(() => new Date().toISOString().slice(0, 16));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // SEC-M-06: same key for every retry of this payment; replaced after a
+  // success so the next payment is a new submission.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   async function handleSubmit() {
     setError(null);
@@ -1122,6 +1133,7 @@ function RecordEnrollmentPaymentForm({
     }
     setSubmitting(true);
     const result = await recordEnrollmentPaymentAction({
+      idempotencyKey,
       studentId,
       enrollmentId,
       amountCents,
@@ -1136,6 +1148,7 @@ function RecordEnrollmentPaymentForm({
       showErrorToast(result.error?.message ?? "Failed to record payment.");
       return;
     }
+    setIdempotencyKey(crypto.randomUUID());
     showSuccessToast("Payment recorded.");
     setReference("");
     setNotes("");
@@ -1200,7 +1213,17 @@ function ChargesPanel({
   canManagePayments: boolean;
 }) {
   const [createChargeState, createChargeFormAction, creatingCharge] = useActionState(createStudentChargeAction, initialState);
-  const [recordPaymentState, recordPaymentFormAction, recordingPayment] = useActionState(recordStudentPaymentAction, initialState);
+  // SEC-M-06: same key for every retry of this payment; replaced once a
+  // payment succeeds, so the next one is a new submission.
+  const [paymentKey, setPaymentKey] = useState(() => crypto.randomUUID());
+  const [recordPaymentState, recordPaymentFormAction, recordingPayment] = useActionState(
+    async (previous: typeof initialState, formData: FormData) => {
+      const result = await recordStudentPaymentAction(previous, formData);
+      if (result.ok) setPaymentKey(crypto.randomUUID());
+      return result;
+    },
+    initialState,
+  );
   const payableCharges = charges.filter((charge) => charge.status === "open" || charge.status === "partially_paid");
 
   useEffect(() => {
@@ -1278,6 +1301,7 @@ function ChargesPanel({
           <form action={recordPaymentFormAction} className="flex flex-col gap-3">
             <h3 className="text-sm font-semibold text-ink">Record payment against a charge</h3>
             <input type="hidden" name="studentId" value={studentId} />
+            <input type="hidden" name="idempotencyKey" value={paymentKey} />
             <Field label="Charge">
               <select name="chargeId" required defaultValue="" className={inputClass}>
                 <option value="" disabled>

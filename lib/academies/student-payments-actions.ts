@@ -35,6 +35,13 @@ export interface StudentPaymentsFormState {
   error?: StudentPaymentsActionError;
 }
 
+
+/** SEC-M-06: the form's per-submission key (hidden input), if present. */
+function optionalKey(formData: FormData): string | undefined {
+  const key = String(formData.get("idempotencyKey") ?? "").trim();
+  return key.length > 0 ? key : undefined;
+}
+
 /** The form's "Amount" field is entered in dollars — see
  * lib/academies/expense-records-actions.ts's identical parse function for
  * the full rationale (lib/ui/money.ts's dollarsToCents). */
@@ -85,6 +92,7 @@ function parseRecordStudentPaymentFormData(formData: FormData): RecordStudentPay
     reference: reference.length > 0 ? reference : undefined,
     notes: notes.length > 0 ? notes : undefined,
     receivedAt: String(formData.get("receivedAt") ?? ""),
+    idempotencyKey: optionalKey(formData),
   };
 }
 

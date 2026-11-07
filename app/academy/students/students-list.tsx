@@ -600,10 +600,13 @@ function RecordPaymentDialog({
   // dialog is (re)opened for a (possibly different) row — "adjust state
   // during render" (see this file's identical pattern above for
   // editingId/selectedBatchId), not an effect: purely derived from props.
+  // SEC-M-06: one key per opening of this dialog, resent on every retry.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [prevOpen, setPrevOpen] = useState(open);
   if (open !== prevOpen) {
     setPrevOpen(open);
     if (open) {
+      setIdempotencyKey(crypto.randomUUID());
       setAmount(centsToDollars(period.remainingCents));
       setMethod("cash");
       setReference("");
@@ -631,6 +634,7 @@ function RecordPaymentDialog({
     }
     setSubmitting(true);
     const result = await recordFeePeriodPaymentAction({
+      idempotencyKey,
       studentId,
       enrollmentId: period.enrollmentId,
       allocations: [{ feePeriodId: period.id, amountCents }],

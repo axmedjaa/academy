@@ -2,6 +2,8 @@ import { and, eq, inArray, sql, type SQLWrapper } from "drizzle-orm";
 import { getBranchScope, inBranchScope, studentInScopeCondition, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
+import { IDEMPOTENCY_INDEX, IDEMPOTENCY_KEY_REUSED, idempotencyKeyField, isIdempotencyViolation } from "@/lib/academies/idempotency";
+import { findKeyedStudentPayment } from "@/lib/academies/student-payment-idempotency";
 import {
   academies,
   batchEnrollments,
@@ -1065,6 +1067,8 @@ export const recordFeePeriodPaymentSchema = z.object({
     .or(z.literal(""))
     .transform((value) => (value && value.length > 0 ? value : undefined)),
   receivedAt: z.coerce.date({ message: "A valid received date is required" }),
+  // SEC-M-06: one per form submission; see lib/academies/idempotency.ts.
+  idempotencyKey: idempotencyKeyField,
 });
 
 export type RecordFeePeriodPaymentInput = z.input<typeof recordFeePeriodPaymentSchema>;
@@ -1080,8 +1084,67 @@ export interface FeePeriodPaymentRecord {
 }
 
 export type RecordFeePeriodPaymentResult =
-  | { ok: true; payment: FeePeriodPaymentRecord }
+  /** `duplicate` is true when an earlier submission with the same
+   * idempotency key already recorded this payment (nothing new written). */
+  | { ok: true; payment: FeePeriodPaymentRecord; duplicate?: boolean }
   | { ok: false; error: FeePeriodActionError };
+
+/**
+ * SEC-M-06 replay for a fee-period payment. Returns null when no row has
+ * this key. The row must be a fee-period payment (it has allocations) for
+ * the same student, enrollment and method; `match: "allocations"` also
+ * requires the same periods and amounts (a direct multi-period payment),
+ * `match: "total"` only the same total (recordEnrollmentPayment, whose split
+ * across periods is derived from balances at the time). A row outside the
+ * actor's branch scope is reported as not found.
+ */
+async function replayFeePeriodPayment(
+  academyId: string,
+  scope: BranchScope,
+  key: string,
+  expected: {
+    studentId: string;
+    enrollmentId: string;
+    method: string;
+    match:
+      | { kind: "allocations"; allocations: { feePeriodId: string; amountCents: number }[] }
+      | { kind: "total"; amountCents: number };
+  },
+): Promise<RecordFeePeriodPaymentResult | null> {
+  const keyed = await findKeyedStudentPayment(academyId, scope, key);
+  if (keyed.kind === "none") return null;
+  if (keyed.kind === "out_of_scope") return { ok: false, error: STUDENT_NOT_FOUND };
+  const { payment, allocations } = keyed;
+  const signature = (list: { feePeriodId: string; amountCents: number }[]) =>
+    list
+      .map((a) => a.feePeriodId + ":" + a.amountCents)
+      .sort()
+      .join(",");
+  const sameOperation =
+    allocations.length > 0 &&
+    allocations.every((a) => a.enrollmentId === expected.enrollmentId) &&
+    payment.reversedPaymentId === null &&
+    payment.chargeId === null &&
+    payment.studentId === expected.studentId &&
+    payment.method === expected.method &&
+    (expected.match.kind === "total"
+      ? payment.amountCents === expected.match.amountCents
+      : signature(allocations) === signature(expected.match.allocations));
+  if (!sameOperation) return { ok: false, error: IDEMPOTENCY_KEY_REUSED };
+  return {
+    ok: true,
+    duplicate: true,
+    payment: {
+      id: payment.id,
+      studentId: payment.studentId,
+      amountCents: payment.amountCents,
+      currency: payment.currency,
+      method: payment.method,
+      status: payment.status,
+      allocations: allocations.map((a) => ({ feePeriodId: a.feePeriodId, amountCents: a.amountCents })),
+    },
+  };
+}
 
 /**
  * §12-20 in one action: validates the student/enrollment/every fee period
@@ -1098,6 +1161,8 @@ export type RecordFeePeriodPaymentResult =
 export async function recordFeePeriodPayment(
   actorContext: AuthContext,
   input: RecordFeePeriodPaymentInput,
+  /** Internal: recordEnrollmentPayment replays by total, not by split. */
+  options: { replayTotalCents?: number } = {},
 ): Promise<RecordFeePeriodPaymentResult> {
   const resolved = await resolveFeePeriodsAccess(actorContext);
   if (!resolved.ok) return resolved;
@@ -1117,6 +1182,26 @@ export async function recordFeePeriodPayment(
   if (new Set(periodIds).size !== periodIds.length) {
     return { ok: false, error: { code: "validation", message: "Each fee period may only be selected once per payment." } };
   }
+
+  // SEC-M-06: a retried submission returns the original payment. Checked
+  // after authorization and validation, never instead of them. Also re-run
+  // when this attempt fails: an identical request that committed first
+  // makes this one see the reduced balance ("exceeds balance") rather than
+  // reach the unique index.
+  const replay = async () =>
+    data.idempotencyKey
+      ? replayFeePeriodPayment(academyId, scope, data.idempotencyKey, {
+          studentId: data.studentId,
+          enrollmentId: data.enrollmentId,
+          method: data.method,
+          match:
+            options.replayTotalCents !== undefined
+              ? { kind: "total", amountCents: options.replayTotalCents }
+              : { kind: "allocations", allocations: data.allocations },
+        })
+      : null;
+  const prior = await replay();
+  if (prior) return prior;
 
   const result = await db.transaction(async (tx) => {
     const [student] = await tx
@@ -1176,6 +1261,7 @@ export async function recordFeePeriodPayment(
         status: "approved",
         approvedBy: actorContext.userId,
         approvedAt: now,
+        idempotencyKey: data.idempotencyKey,
       })
       .returning();
 
@@ -1205,8 +1291,20 @@ export async function recordFeePeriodPayment(
     );
 
     return { kind: "ok" as const, payment, allocations: allocationRows };
+  }).catch((err: unknown) => {
+    // A concurrent identical submission committed first: this transaction
+    // (payment, allocations, audit row) was rolled back whole.
+    if (data.idempotencyKey && isIdempotencyViolation(err, IDEMPOTENCY_INDEX.studentPayments)) {
+      return { kind: "duplicate_key" as const };
+    }
+    throw err;
   });
 
+  if (result.kind !== "ok" && data.idempotencyKey) {
+    const winner = await replay();
+    if (winner) return winner;
+  }
+  if (result.kind === "duplicate_key") return { ok: false, error: IDEMPOTENCY_KEY_REUSED };
   if (result.kind === "student_not_found") return { ok: false, error: STUDENT_NOT_FOUND };
   if (result.kind === "enrollment_not_found") return { ok: false, error: ENROLLMENT_NOT_FOUND };
   if (result.kind === "period_not_found") {
@@ -1279,6 +1377,8 @@ export const recordEnrollmentPaymentSchema = z.object({
     .or(z.literal(""))
     .transform((value) => (value && value.length > 0 ? value : undefined)),
   receivedAt: z.coerce.date({ message: "A valid received date is required" }),
+  // SEC-M-06: one per form submission; see lib/academies/idempotency.ts.
+  idempotencyKey: idempotencyKeyField,
 });
 
 export type RecordEnrollmentPaymentInput = z.input<typeof recordEnrollmentPaymentSchema>;
@@ -1308,6 +1408,29 @@ export async function recordEnrollmentPayment(
   }
   const data = parsed.data;
 
+  // SEC-M-06: replay BEFORE deriving the split. After the first attempt
+  // committed, the balances it read have changed, so recomputing would give
+  // a different split or "no outstanding balance". Same authorization gate
+  // as recordFeePeriodPayment.
+  const replay = async (): Promise<RecordFeePeriodPaymentResult | null> => {
+    if (!data.idempotencyKey) return null;
+    const resolved = await resolveFeePeriodsAccess(actorContext);
+    if (!resolved.ok) return resolved;
+    if (!canManage(resolved.access.permissionLevel)) return { ok: false, error: FORBIDDEN };
+    return replayFeePeriodPayment(resolved.access.academyId, resolved.access.scope, data.idempotencyKey, {
+      studentId: data.studentId,
+      enrollmentId: data.enrollmentId,
+      method: data.method,
+      match: { kind: "total", amountCents: data.amountCents },
+    });
+  };
+  const prior = await replay();
+  if (prior) return prior;
+  // A concurrent identical request may commit between here and the write;
+  // on a failure below, look once more before reporting it.
+  const orReplay = async (failure: RecordFeePeriodPaymentResult): Promise<RecordFeePeriodPaymentResult> =>
+    (await replay()) ?? failure;
+
   const periodsResult = await listFeePeriodsForEnrollment(actorContext, data.enrollmentId);
   if (!periodsResult.ok) return periodsResult;
 
@@ -1325,17 +1448,17 @@ export async function recordEnrollmentPayment(
   }
 
   if (allocations.length === 0) {
-    return { ok: false, error: { code: "validation", message: "There is no outstanding balance to record a payment against." } };
+    return orReplay({ ok: false, error: { code: "validation", message: "There is no outstanding balance to record a payment against." } });
   }
   if (remaining > 0) {
     const totalOutstandingCents = outstanding.reduce((sum, period) => sum + period.remainingCents, 0);
-    return {
+    return orReplay({
       ok: false,
       error: {
         code: "conflict",
         message: `Amount exceeds the total outstanding balance (${totalOutstandingCents} cents). Overpayment is not supported.`,
       },
-    };
+    });
   }
 
   return recordFeePeriodPayment(actorContext, {
@@ -1347,7 +1470,8 @@ export async function recordEnrollmentPayment(
     reference: data.reference,
     notes: data.notes,
     receivedAt: data.receivedAt,
-  });
+    idempotencyKey: data.idempotencyKey,
+  }, { replayTotalCents: data.amountCents });
 }
 
 // ===========================================================================

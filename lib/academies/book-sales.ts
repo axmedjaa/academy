@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { branchScopeCondition, getBranchScope, inBranchScope, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
+import { IDEMPOTENCY_INDEX, IDEMPOTENCY_KEY_REUSED, idempotencyKeyField, isIdempotencyViolation } from "@/lib/academies/idempotency";
 import { books, bookSalePayments, bookSaleRefunds, bookSales, branches, incomeRecords, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
@@ -151,6 +152,8 @@ export const createBookSaleSchema = z
       .or(z.literal(""))
       .transform((value) => (value && value.length > 0 ? value : undefined)),
     paidAt: z.coerce.date().optional(),
+    // SEC-M-06: one per form submission; see lib/academies/idempotency.ts.
+    idempotencyKey: idempotencyKeyField,
   })
   .refine((data) => data.buyerType !== "student" || !!data.studentId, {
     message: "Select a student.",
@@ -217,7 +220,47 @@ function toSaleRecord(row: typeof bookSales.$inferSelect): BookSaleRecord {
   };
 }
 
-export type CreateBookSaleResult = { ok: true; sale: BookSaleRecord } | { ok: false; error: BookSaleActionError };
+/** `duplicate` is true when an earlier submission with the same idempotency
+ * key already recorded this sale (no new sale, stock change or income). */
+export type CreateBookSaleResult = { ok: true; sale: BookSaleRecord; duplicate?: boolean } | { ok: false; error: BookSaleActionError };
+
+/**
+ * SEC-M-06 replay: returns null when no sale in this academy has the key. A
+ * sale outside the actor's branch scope is reported as not found; a sale with
+ * different details is refused, never returned.
+ */
+async function replayCreateBookSale(
+  academyId: string,
+  scope: BranchScope,
+  data: {
+    idempotencyKey: string;
+    bookId: string;
+    branchId?: string;
+    buyerType: "student" | "other_person";
+    studentId?: string;
+    quantity: number;
+    discountType: "none" | "fixed" | "percentage";
+    discountValue: number;
+  },
+): Promise<CreateBookSaleResult | null> {
+  const [row] = await db
+    .select()
+    .from(bookSales)
+    .where(and(eq(bookSales.academyId, academyId), eq(bookSales.idempotencyKey, data.idempotencyKey)))
+    .limit(1);
+  if (!row) return null;
+  if (!inBranchScope(scope, row.branchId)) return { ok: false, error: BRANCH_NOT_FOUND };
+  const sameOperation =
+    row.bookId === data.bookId &&
+    row.branchId === (data.branchId ?? null) &&
+    row.buyerType === data.buyerType &&
+    row.studentId === (data.buyerType === "student" ? (data.studentId ?? null) : null) &&
+    row.quantity === data.quantity &&
+    row.discountType === data.discountType &&
+    row.discountValue === (data.discountType === "none" ? 0 : data.discountValue);
+  if (!sameOperation) return { ok: false, error: IDEMPOTENCY_KEY_REUSED };
+  return { ok: true, sale: toSaleRecord(row), duplicate: true };
+}
 
 export async function createBookSale(actorContext: AuthContext, input: CreateBookSaleInput): Promise<CreateBookSaleResult> {
   const resolved = await resolveAccess(actorContext);
@@ -230,6 +273,16 @@ export async function createBookSale(actorContext: AuthContext, input: CreateBoo
     return { ok: false, error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid input." } };
   }
   const data = parsed.data;
+
+  // SEC-M-06: a retried submission returns the original sale. Checked after
+  // authorization and validation, never instead of them. Re-run when this
+  // attempt fails too: an identical request that committed first (it holds
+  // the book row lock) makes this one see the reduced stock rather than
+  // reach the unique index.
+  const replay = async () =>
+    data.idempotencyKey ? replayCreateBookSale(academyId, scope, { ...data, idempotencyKey: data.idempotencyKey }) : null;
+  const prior = await replay();
+  if (prior) return prior;
 
   const result = await db.transaction(async (tx) => {
     const [book] = await tx.select().from(books).where(eq(books.id, data.bookId)).for("update");
@@ -291,6 +344,7 @@ export async function createBookSale(actorContext: AuthContext, input: CreateBoo
         finalAmountCents,
         paymentStatus: derivePaymentStatus(finalAmountCents, data.amountPaidCents),
         recordedBy: actorContext.userId,
+        idempotencyKey: data.idempotencyKey,
       })
       .returning();
 
@@ -348,8 +402,20 @@ export async function createBookSale(actorContext: AuthContext, input: CreateBoo
     );
 
     return { kind: "ok" as const, sale };
+  }).catch((err: unknown) => {
+    // A concurrent identical submission committed first: this transaction
+    // (sale, stock change, income, payment, audit rows) was rolled back whole.
+    if (data.idempotencyKey && isIdempotencyViolation(err, IDEMPOTENCY_INDEX.bookSales)) {
+      return { kind: "duplicate_key" as const };
+    }
+    throw err;
   });
 
+  if (result.kind !== "ok" && data.idempotencyKey) {
+    const winner = await replay();
+    if (winner) return winner;
+  }
+  if (result.kind === "duplicate_key") return { ok: false, error: IDEMPOTENCY_KEY_REUSED };
   if (result.kind === "book_not_found") return { ok: false, error: BOOK_NOT_FOUND };
   if (result.kind === "inactive") return { ok: false, error: { code: "validation", message: "This book is inactive and cannot be sold." } };
   if (result.kind === "insufficient_stock") {

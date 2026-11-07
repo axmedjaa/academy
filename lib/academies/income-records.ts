@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
-import { branchScopeCondition, getBranchScope, type BranchScope } from "@/lib/academies/branch-access";
+import { branchScopeCondition, getBranchScope, inBranchScope, type BranchScope } from "@/lib/academies/branch-access";
+import { IDEMPOTENCY_INDEX, IDEMPOTENCY_KEY_REUSED, idempotencyKeyField, isIdempotencyViolation } from "@/lib/academies/idempotency";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import { academies, branches, incomeRecords } from "@/lib/db/schema";
@@ -47,7 +48,8 @@ function canCreate(level: AcademyPermissionLevel): boolean {
 }
 
 export interface IncomeRecordActionError {
-  code: "forbidden" | "validation" | "blocked" | "not_found";
+  // "conflict": an idempotency key replayed with different details (SEC-M-06).
+  code: "forbidden" | "validation" | "blocked" | "not_found" | "conflict";
   message: string;
 }
 
@@ -84,6 +86,8 @@ export const createIncomeRecordSchema = z.object({
     .toUpperCase()
     .length(3, "Currency must be a 3-letter code, e.g. USD")
     .optional(),
+  // SEC-M-06: one per form submission; see lib/academies/idempotency.ts.
+  idempotencyKey: idempotencyKeyField,
 });
 
 export type CreateIncomeRecordInput = z.input<typeof createIncomeRecordSchema>;
@@ -207,8 +211,36 @@ export async function listIncomeRecords(actorContext: AuthContext): Promise<List
 }
 
 export type CreateIncomeRecordResult =
-  | { ok: true; record: IncomeRecordRecord }
+  /** `duplicate` is true when an earlier submission with the same
+   * idempotency key already created this record (nothing new written). */
+  | { ok: true; record: IncomeRecordRecord; duplicate?: boolean }
   | { ok: false; error: IncomeRecordActionError };
+
+/**
+ * SEC-M-06 replay: returns null when no income record in this academy has the
+ * key. A row outside the actor's branch scope is reported as not found; a
+ * row with different details (or a reversal) is refused, never returned.
+ */
+async function replayCreateIncomeRecord(
+  academyId: string,
+  scope: BranchScope,
+  data: { idempotencyKey: string; branchId?: string; category: string; amountCents: number },
+): Promise<CreateIncomeRecordResult | null> {
+  const [row] = await db
+    .select()
+    .from(incomeRecords)
+    .where(and(eq(incomeRecords.academyId, academyId), eq(incomeRecords.idempotencyKey, data.idempotencyKey)))
+    .limit(1);
+  if (!row) return null;
+  if (!inBranchScope(scope, row.branchId)) return { ok: false, error: BRANCH_NOT_FOUND };
+  const sameOperation =
+    row.reversedRecordId === null &&
+    row.branchId === (data.branchId ?? null) &&
+    row.category === data.category &&
+    row.amountCents === data.amountCents;
+  if (!sameOperation) return { ok: false, error: IDEMPOTENCY_KEY_REUSED };
+  return { ok: true, record: toRecord(row), duplicate: true };
+}
 
 /**
  * PLAN.md's Finance Lifecycle table: income is "posted directly ... no
@@ -235,6 +267,13 @@ export async function createIncomeRecord(
     };
   }
   const data = parsed.data;
+
+  // SEC-M-06: a retried submission returns the original record. Checked
+  // after authorization and validation, never instead of them.
+  if (data.idempotencyKey) {
+    const prior = await replayCreateIncomeRecord(academyId, scope, { ...data, idempotencyKey: data.idempotencyKey });
+    if (prior) return prior;
+  }
 
   const result = await db.transaction(async (tx) => {
     // Verify a supplied branchId actually belongs to this academy before
@@ -264,6 +303,7 @@ export async function createIncomeRecord(
         amountCents: data.amountCents,
         currency,
         recordedBy: actorContext.userId,
+        idempotencyKey: data.idempotencyKey,
       })
       .returning();
 
@@ -281,7 +321,18 @@ export async function createIncomeRecord(
     );
 
     return { outcome: "ok" as const, row };
+  }).catch(async (err: unknown) => {
+    // A concurrent identical submission committed first: this transaction
+    // (record and audit row) was rolled back whole.
+    if (data.idempotencyKey && isIdempotencyViolation(err, IDEMPOTENCY_INDEX.incomeRecords)) {
+      return { outcome: "replay" as const, replay: await replayCreateIncomeRecord(academyId, scope, { ...data, idempotencyKey: data.idempotencyKey }) };
+    }
+    throw err;
   });
+
+  if (result.outcome === "replay") {
+    return result.replay ?? { ok: false, error: IDEMPOTENCY_KEY_REUSED };
+  }
 
   if (result.outcome === "invalid_branch") {
     return { ok: false, error: BRANCH_NOT_FOUND };

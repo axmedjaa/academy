@@ -508,6 +508,9 @@ export function SellForm({
   const [paid, setPaid] = useState("");
   const [paidAt] = useState(localNow);
   const [saleId, setSaleId] = useState<string | null>(null);
+  // SEC-M-06: one key for this sale, resent on every retry (double click,
+  // network error). After a success the form is replaced by the receipt view.
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [pending, startTransition] = useTransition();
 
   const qty = /^\d+$/.test(quantity.trim()) ? Number(quantity) : 0;
@@ -598,6 +601,7 @@ export function SellForm({
           const text = (name: string) => String(data.get(name) ?? "").trim() || undefined;
           try {
             const result = await createBookSaleAction({
+              idempotencyKey,
               bookId: book.id,
               buyerType,
               studentId: buyerType === "student" ? studentId : undefined,
