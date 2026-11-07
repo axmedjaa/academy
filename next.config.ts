@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { securityHeaderRules } from "./lib/http/security-headers";
 
 const nextConfig: NextConfig = {
   // Next.js's dev server blocks cross-origin requests to dev-only assets/
@@ -23,6 +24,14 @@ const nextConfig: NextConfig = {
   // `next build`, or `next dev` run by hand) is unaffected and keeps the
   // default `.next`.
   distDir: process.env.E2E_DIST_DIR || ".next",
+
+  // Security audit SEC-M-01: no X-Powered-By, and CSP / framing / HSTS /
+  // nosniff / Referrer-Policy / Permissions-Policy on every response. See
+  // lib/http/security-headers.ts.
+  poweredByHeader: false,
+  async headers() {
+    return securityHeaderRules({ isDev: process.env.NODE_ENV !== "production" });
+  },
 };
 
 export default nextConfig;

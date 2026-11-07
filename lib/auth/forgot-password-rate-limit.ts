@@ -18,5 +18,6 @@ export async function checkForgotPasswordRateLimit(
       env.FORGOT_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS ?? DEFAULT_MAX_ATTEMPTS,
     windowSeconds:
       env.FORGOT_PASSWORD_RATE_LIMIT_WINDOW_SECONDS ?? DEFAULT_WINDOW_SECONDS,
+    failClosed: true,
   });
 }

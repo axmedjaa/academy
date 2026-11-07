@@ -1,4 +1,4 @@
-import { checkRateLimit, type RateLimitResult } from "@/lib/rate-limit";
+import { checkRateLimit, type RateLimitOptions, type RateLimitResult } from "@/lib/rate-limit";
 import { env } from "@/lib/env";
 
 const DEFAULT_MAX_ATTEMPTS = 5;
@@ -19,5 +19,21 @@ export async function checkMfaChallengeRateLimit(
       env.MFA_CHALLENGE_RATE_LIMIT_MAX_ATTEMPTS ?? DEFAULT_MAX_ATTEMPTS,
     windowSeconds:
       env.MFA_CHALLENGE_RATE_LIMIT_WINDOW_SECONDS ?? DEFAULT_WINDOW_SECONDS,
+    failClosed: true,
   });
+}
+
+/**
+ * Security audit SEC-M-02: per-user limit on MFA challenge attempts, so an
+ * attacker who has the password can't spread code guesses across many IPs.
+ * Counts every attempt for that user (successful ones end the challenge).
+ */
+export const MFA_CHALLENGE_USER_LIMIT: RateLimitOptions = {
+  maxAttempts: 10,
+  windowSeconds: 15 * 60,
+  failClosed: true,
+};
+
+export async function checkMfaChallengeUserRateLimit(userId: string): Promise<RateLimitResult> {
+  return checkRateLimit(`mfa-challenge-user:${userId}`, MFA_CHALLENGE_USER_LIMIT);
 }

@@ -4,15 +4,35 @@ import { checkThreshold, logSink, type MonitoringSink } from "@/lib/monitoring/m
 export interface RateLimitOptions {
   maxAttempts: number;
   windowSeconds: number;
+  /**
+   * Security audit SEC-M-03. When Redis can't be reached, deny instead of
+   * allow. Set for the authentication limiters (login, MFA challenge, MFA
+   * email OTP, MFA enrollment, password reset); low-risk limiters such as
+   * the contact form keep the fail-open default.
+   */
+  failClosed?: boolean;
 }
 
 export interface RateLimitResult {
   allowed: boolean;
   remaining: number;
   retryAfterSeconds?: number;
+  /** True when the check was denied because Redis was unavailable (failClosed). */
+  unavailable?: boolean;
 }
 
+/** Suggested wait shown to the user while a fail-closed limiter can't reach Redis. */
+export const RATE_LIMIT_UNAVAILABLE_RETRY_SECONDS = 30;
+
 /**
+ * Outage policy. Superseded in part by security audit SEC-M-03: limiters
+ * created with `failClosed: true` (every authentication limiter) now DENY
+ * while Redis is unavailable, because brute-force protection must not
+ * disappear exactly when infrastructure is degraded. The Redis client gives
+ * up within a couple of seconds (lib/redis.ts), so a denial is quick, and
+ * the user is told to try again shortly. The text below still describes the
+ * default (fail-open) limiters and the observability shared by both.
+ *
  * Security audit finding (Priority 2 — "Redis rate-limit failure"). Still
  * fails open on a Redis error — the policy itself is unchanged, and
  * deliberately so: flipping every rate-limited endpoint to fail closed
@@ -75,12 +95,12 @@ let outageStartedAt: number | null = null;
  */
 export async function checkRateLimit(
   key: string,
-  { maxAttempts, windowSeconds }: RateLimitOptions,
+  { maxAttempts, windowSeconds, failClosed = false }: RateLimitOptions,
   sink: MonitoringSink = logSink,
 ): Promise<RateLimitResult> {
   const redisKey = `ratelimit:${key}`;
 
-  // Fails open: see this module's own top comment for the full outage
+  // Fails open unless `failClosed`: see this module's own top comment for the full outage
   // policy and why fail-open (with loud, escalating observability) is the
   // deliberate choice here, not an oversight.
   try {
@@ -104,35 +124,73 @@ export async function checkRateLimit(
 
     return { allowed: true, remaining: maxAttempts - count };
   } catch (error) {
-    consecutiveFailures += 1;
-    outageStartedAt ??= Date.now();
-
-    const context = {
-      key,
-      error: error instanceof Error ? error.message : String(error),
-      consecutiveFailures,
-      outageDurationMs: Date.now() - outageStartedAt,
-      failingOpen: true,
-    };
-
-    // Always visible (an "info"-level event is still a structured,
-    // greppable log line via the default sink) — and additionally
-    // escalated to a real "alert" event by checkThreshold once the
-    // streak is sustained, exactly like queue-health.ts's own thresholds.
-    sink.recordEvent({
-      name: "rate_limit.redis_unavailable",
-      level: "info",
-      message: `Redis unreachable for rate limit check on "${key}" — failing open`,
-      context,
-    });
-    checkThreshold({
-      name: "rate_limit.redis_consecutive_failures",
-      value: consecutiveFailures,
-      threshold: SUSTAINED_OUTAGE_THRESHOLD - 1,
-      context,
-      sink,
-    });
-
-    return { allowed: true, remaining: maxAttempts };
+    return reportOutage(key, error, { maxAttempts, failClosed }, sink);
   }
+}
+
+/**
+ * Reads a limiter's current count without counting this call. Used where
+ * only failures should count (the per-account login limit): peek first,
+ * then `checkRateLimit` once an attempt has failed.
+ */
+export async function peekRateLimit(
+  key: string,
+  { maxAttempts, windowSeconds, failClosed = false }: RateLimitOptions,
+  sink: MonitoringSink = logSink,
+): Promise<RateLimitResult> {
+  const redisKey = `ratelimit:${key}`;
+  try {
+    const raw = await redis.get(redisKey);
+    const count = raw === null ? 0 : Number(raw);
+    consecutiveFailures = 0;
+    outageStartedAt = null;
+    if (count >= maxAttempts) {
+      const ttl = await redis.ttl(redisKey);
+      return { allowed: false, remaining: 0, retryAfterSeconds: ttl > 0 ? ttl : windowSeconds };
+    }
+    return { allowed: true, remaining: maxAttempts - count };
+  } catch (error) {
+    return reportOutage(key, error, { maxAttempts, failClosed }, sink);
+  }
+}
+
+function reportOutage(
+  key: string,
+  error: unknown,
+  { maxAttempts, failClosed }: { maxAttempts: number; failClosed: boolean },
+  sink: MonitoringSink,
+): RateLimitResult {
+  consecutiveFailures += 1;
+  outageStartedAt ??= Date.now();
+
+  const context = {
+    key,
+    error: error instanceof Error ? error.message : String(error),
+    consecutiveFailures,
+    outageDurationMs: Date.now() - outageStartedAt,
+    failingOpen: !failClosed,
+  };
+
+  // Always visible (an "info"-level event is still a structured,
+  // greppable log line via the default sink) — and additionally
+  // escalated to a real "alert" event by checkThreshold once the
+  // streak is sustained, exactly like queue-health.ts's own thresholds.
+  sink.recordEvent({
+    name: "rate_limit.redis_unavailable",
+    level: "info",
+    message: `Redis unreachable for rate limit check on "${key}" — ${failClosed ? "failing closed (request denied)" : "failing open"}`,
+    context,
+  });
+  checkThreshold({
+    name: "rate_limit.redis_consecutive_failures",
+    value: consecutiveFailures,
+    threshold: SUSTAINED_OUTAGE_THRESHOLD - 1,
+    context,
+    sink,
+  });
+
+  if (failClosed) {
+    return { allowed: false, remaining: 0, retryAfterSeconds: RATE_LIMIT_UNAVAILABLE_RETRY_SECONDS, unavailable: true };
+  }
+  return { allowed: true, remaining: maxAttempts };
 }

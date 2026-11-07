@@ -7,7 +7,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { verifyPassword } from "@/lib/auth/password";
-import { getAuthContext, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
+import { getAuthContext, getPlatformRole, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
 import {
   enrollMfaForUser,
   regenerateRecoveryCodesForUser,
@@ -24,11 +24,11 @@ import {
   MFA_PENDING_COOKIE_NAME,
   verifyPendingMfaToken,
 } from "@/lib/auth/mfa-pending";
-import { checkMfaChallengeRateLimit } from "@/lib/auth/mfa-challenge-rate-limit";
+import { checkMfaChallengeRateLimit, checkMfaChallengeUserRateLimit } from "@/lib/auth/mfa-challenge-rate-limit";
 import { checkMfaEnrollmentRateLimit } from "@/lib/auth/mfa-enrollment-rate-limit";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
 import { getClientIp } from "@/lib/http/client-ip";
-import { formatRetryAfter } from "@/lib/ui/duration";
+import { rateLimitMessage } from "@/lib/auth/rate-limit-message";
 import {
   SESSION_COOKIE_NAME,
   createSession,
@@ -36,9 +36,9 @@ import {
 } from "@/lib/auth/session";
 
 /**
- * Only ever reached for a platform_owner (Item 14: this path is taken only
- * from the pending-MFA-cookie branches, which signIn only creates for
- * platform_owner accounts) — actorRole is hardcoded rather than re-queried.
+ * Only reached from the pending-MFA-cookie branches, which signIn creates
+ * for platform staff (every platform role since SEC-M-09). The role is
+ * looked up rather than assumed, for the suspicious-login record.
  */
 async function completeLoginSession(userId: string): Promise<void> {
   const headerList = await headers();
@@ -48,7 +48,7 @@ async function completeLoginSession(userId: string): Promise<void> {
   await checkSuspiciousLogin(userId, {
     ip,
     userAgent,
-    actorRole: "platform_owner",
+    actorRole: (await getPlatformRole(userId)) ?? undefined,
   });
 
   const { token } = await createSession(userId, { ip, userAgent });
@@ -105,7 +105,7 @@ export async function verifyMfaEnrollment(
       ok: false,
       error: {
         code: "RATE_LIMITED",
-        message: `Too many attempts. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
+        message: rateLimitMessage(rateLimit, "Too many attempts."),
       },
     };
   }
@@ -170,7 +170,7 @@ export async function challengeMfa(
       ok: false,
       error: {
         code: "RATE_LIMITED",
-        message: `Too many attempts. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
+        message: rateLimitMessage(rateLimit, "Too many attempts."),
       },
     };
   }
@@ -181,6 +181,16 @@ export async function challengeMfa(
 
   if (!pending) {
     redirect("/login");
+  }
+
+  // Security audit SEC-M-02: per-user limit too, so guesses spread across
+  // many IPs still stop for this account.
+  const userLimit = await checkMfaChallengeUserRateLimit(pending.userId);
+  if (!userLimit.allowed) {
+    return {
+      ok: false,
+      error: { code: "RATE_LIMITED", message: rateLimitMessage(userLimit, "Too many attempts.") },
+    };
   }
 
   const parsed = challengeMfaSchema.safeParse({

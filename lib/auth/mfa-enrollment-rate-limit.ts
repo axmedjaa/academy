@@ -36,5 +36,6 @@ export async function checkMfaEnrollmentRateLimit(
       env.MFA_ENROLLMENT_RATE_LIMIT_MAX_ATTEMPTS ?? DEFAULT_MAX_ATTEMPTS,
     windowSeconds:
       env.MFA_ENROLLMENT_RATE_LIMIT_WINDOW_SECONDS ?? DEFAULT_WINDOW_SECONDS,
+    failClosed: true,
   });
 }

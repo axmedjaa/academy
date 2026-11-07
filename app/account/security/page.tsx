@@ -25,8 +25,8 @@ function initialsOf(name: string): string {
  * two-step verification and a link to Activity. Every read and action is
  * the signed-in user's own: `listMySessions` / `revokeSession` /
  * `revokeAllOtherSessions` (IDOR-checked per session), `updateOwnAccount`
- * for email and password, and `hasVerifiedMfaCredential` for Platform
- * Owners, the only accounts two-step verification applies to. Name and
+ * for email and password, and `hasVerifiedMfaCredential` for platform
+ * staff (owner and admins), the accounts two-step verification applies to. Name and
  * phone come from the caller's staff record; there is no self-service edit
  * for them, so they are shown read-only.
  */
@@ -42,7 +42,7 @@ export default async function AccountSecurityPage() {
   const [sessions, currentSessionId, mfaEnabled, identity, pendingEmailChange] = await Promise.all([
     listMySessions(),
     getCurrentSessionId(),
-    context.platformRole === "platform_owner" ? hasVerifiedMfaCredential(context.userId) : Promise.resolve(null),
+    context.platformRole ? hasVerifiedMfaCredential(context.userId) : Promise.resolve(null),
     getAccountIdentity(context, academy),
     getPendingEmailChange(context.userId),
   ]);
@@ -173,7 +173,7 @@ export default async function AccountSecurityPage() {
         </ul>
       </section>
 
-      {context.platformRole === "platform_owner" && (
+      {context.platformRole && (
         <section className={CARD} aria-labelledby="mfa-heading">
           <h3 id="mfa-heading" className="text-sm font-semibold text-ink">
             Two-step verification
@@ -181,7 +181,7 @@ export default async function AccountSecurityPage() {
           <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
             <span className="flex flex-wrap items-center gap-3 text-[13px] text-muted">
               {mfaEnabled ? <Badge label="Enabled" tone="green" /> : <Badge label="Not enabled" tone="gray" />}
-              Required for Platform Owner accounts.
+              Required for platform staff accounts.
             </span>
             <Link
               href={mfaEnabled ? "/mfa/recovery-codes" : "/mfa/setup"}

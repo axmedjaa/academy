@@ -4,7 +4,11 @@ import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
 import { z } from "zod";
 import { attemptSignIn, type ActionError } from "@/lib/auth/sign-in";
-import { checkLoginRateLimit } from "@/lib/auth/login-rate-limit";
+import {
+  checkLoginAccountLock,
+  checkLoginRateLimit,
+  recordFailedLoginForAccount,
+} from "@/lib/auth/login-rate-limit";
 import { checkForgotPasswordRateLimit } from "@/lib/auth/forgot-password-rate-limit";
 import {
   applyPasswordReset,
@@ -17,7 +21,7 @@ import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
 import { getClientIp } from "@/lib/http/client-ip";
 import { RETURN_PATH_COOKIE, returnPathCookieOptions, sanitizeReturnPath } from "@/lib/auth/return-path";
-import { formatRetryAfter } from "@/lib/ui/duration";
+import { rateLimitMessage } from "@/lib/auth/rate-limit-message";
 import {
   MFA_PENDING_COOKIE_NAME,
   createPendingMfaToken,
@@ -77,7 +81,7 @@ export async function signIn(
       ok: false,
       error: {
         code: "RATE_LIMITED",
-        message: `Too many attempts. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
+        message: rateLimitMessage(rateLimit, "Too many attempts."),
       },
     };
   }
@@ -97,27 +101,40 @@ export async function signIn(
     };
   }
 
+  // Security audit SEC-M-02: per-account limit (failed attempts only),
+  // checked before the password so a locked account costs no Argon2 work.
+  // Same message as the IP limit, and applied to unknown emails too, so it
+  // reveals nothing about which accounts exist.
+  const accountLock = await checkLoginAccountLock(parsed.data.email);
+  if (!accountLock.allowed) {
+    return {
+      ok: false,
+      error: { code: "RATE_LIMITED", message: rateLimitMessage(accountLock, "Too many attempts.") },
+    };
+  }
+
   const result = await attemptSignIn(parsed.data.email, parsed.data.password);
 
   if (!result.ok) {
+    await recordFailedLoginForAccount(parsed.data.email);
     return { ok: false, error: result.error };
   }
 
   const cookieStore = await cookies();
 
-  // MFA is mandatory for platform_owner only (PLAN.md Phase 0 "Permissions
-  // needed") — every other role (including no platform role at all) signs
-  // in exactly as before Item 14.
+  // MFA is mandatory for every platform role (security audit SEC-M-09:
+  // platform admins can hold cross-academy capabilities, so a password alone
+  // is not enough). Academy users (no platform role) sign in as before.
   const platformRole = await getPlatformRole(result.userId);
 
-  if (platformRole === "platform_owner") {
+  if (platformRole) {
     const enrolled = await hasVerifiedMfaCredential(result.userId);
 
     // Neither branch issues a session yet: PLAN.md requires challengeMfa
     // "before issuing a session" once enrolled, and its "first login forces
     // enrollment before any platform action is possible" text applies the
     // same principle to the not-yet-enrolled case (see mfa-pending.ts).
-    // Return-after-login is not carried through MFA; platform owners land
+    // Return-after-login is not carried through MFA; platform staff land
     // on their normal page. Drop any stored destination.
     cookieStore.delete({ name: RETURN_PATH_COOKIE, path: returnPathCookieOptions().path });
 
@@ -209,7 +226,7 @@ export async function requestPasswordReset(
       ok: false,
       error: {
         code: "RATE_LIMITED",
-        message: `Too many requests. Please try again in ${formatRetryAfter(rateLimit.retryAfterSeconds ?? 0)}.`,
+        message: rateLimitMessage(rateLimit, "Too many requests."),
       },
     };
   }

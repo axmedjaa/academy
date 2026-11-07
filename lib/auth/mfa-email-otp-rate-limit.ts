@@ -17,5 +17,6 @@ export async function checkMfaEmailOtpRateLimit(userId: string): Promise<RateLim
   return checkRateLimit(`mfa-email-otp:${userId}`, {
     maxAttempts: env.MFA_EMAIL_OTP_RATE_LIMIT_MAX_ATTEMPTS ?? DEFAULT_MAX_ATTEMPTS,
     windowSeconds: env.MFA_EMAIL_OTP_RATE_LIMIT_WINDOW_SECONDS ?? DEFAULT_WINDOW_SECONDS,
+    failClosed: true,
   });
 }
