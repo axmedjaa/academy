@@ -1,5 +1,5 @@
 
-import { Bone, SkeletonTable } from "@/app/academy/_shell/skeletons";
+import { Bone, SkeletonChips, SkeletonTable } from "@/app/academy/_shell/skeletons";
 
 /**
  * Book Management loading states (design B11). Same look as every other
@@ -30,23 +30,29 @@ function Head({ action = false }: { action?: boolean }) {
   );
 }
 
+/** Search box, dropdown and filter pill while loading: the empty field
+ * outline, as every Academy page skeleton draws filters (SkeletonFilters). */
+const FIELD = "block h-11 rounded-lg border border-border-strong bg-surface";
+const SEARCH = `${FIELD} w-full max-w-[380px]`;
+const PILL = "block h-10 rounded-full border border-border-strong bg-surface";
+
 function Filters({ selects = 1, chips = 0 }: { selects?: number; chips?: number }) {
   return (
-    <>
+    <div aria-hidden="true">
       <div className="mb-3 flex flex-wrap gap-3">
-        <Bone className="h-11 w-full max-w-[380px] rounded-lg" />
+        <span className={SEARCH} />
         {Array.from({ length: selects }, (_, i) => (
-          <Bone key={i} className="h-11 w-40 rounded-lg" />
+          <span key={i} className={`${FIELD} w-40`} />
         ))}
       </div>
       {chips > 0 && (
         <div className="mb-4 flex flex-wrap gap-2">
           {Array.from({ length: chips }, (_, i) => (
-            <Bone key={i} className="h-10 w-28 rounded-full" />
+            <span key={i} className={`${PILL} w-28`} />
           ))}
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -128,11 +134,14 @@ function OrderCards({ count = 3 }: { count?: number }) {
 export function BooksCatalogSkeleton() {
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Bone className="h-11 w-full max-w-[380px] rounded-lg" />
-        <Bone className="h-11 w-36 rounded-lg" />
-        <Bone className="h-11 w-32 rounded-lg" />
-        <Bone className="h-11 w-36 rounded-lg" />
+      <div aria-hidden="true" className="mb-4 flex flex-wrap items-center gap-3">
+        <span className={SEARCH} />
+        <span className={`${FIELD} w-36`} />
+        <span className={`${FIELD} w-32`} />
+        <span className={`${FIELD} flex w-[152px] items-center gap-2 px-3`}>
+          <span className="block h-4 w-4 rounded border border-border-strong" />
+          <Bone className="h-3.5 w-24 rounded" />
+        </span>
         <Bone className="h-3.5 w-14 rounded" />
       </div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-4">
@@ -180,7 +189,7 @@ export function SellSkeleton() {
         ))}
       </div>
       <Bone className="mb-3 h-5 w-28 rounded" />
-      <Bone className="mb-4 h-11 w-full max-w-[420px] rounded-lg" />
+      <span aria-hidden="true" className={`${FIELD} mb-4 w-full max-w-[420px]`} />
       <div className="flex flex-col gap-3">
         {[0, 1, 2].map((i) => (
           <div key={i} className={`${card} flex flex-wrap items-center gap-x-6 gap-y-4 px-5 py-4`}>
@@ -265,8 +274,8 @@ export function PaymentsSkeleton() {
     <>
       <Head />
       <Kpis count={3} />
-      <Bone className="mb-4 h-12 w-80 max-w-full rounded-xl" />
-      <Bone className="mb-3 h-11 w-full max-w-[380px] rounded-lg" />
+      <SkeletonChips count={2} />
+      <span aria-hidden="true" className={`${SEARCH} mb-3`} />
       <OrderCards count={2} />
     </>
   );
@@ -280,7 +289,7 @@ export function ReceivingSkeleton() {
       <Note />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Bone className="h-4 w-16 rounded" />
-        <Bone className="h-11 w-48 rounded-lg" />
+        <span aria-hidden="true" className={`${FIELD} w-48`} />
         <Bone className="h-3.5 w-72 max-w-full rounded" />
       </div>
       <Kpis count={4} />
@@ -462,12 +471,8 @@ export function NavRightSkeleton() {
 export function StockSkeleton() {
   return (
     <>
-      <div className="mb-4 flex w-fit gap-1 rounded-xl bg-[#EEF0F3] p-1">
-        {["w-12", "w-20", "w-24", "w-28"].map((w) => (
-          <span key={w} className={`block h-9 ${w} rounded-lg bg-surface`} />
-        ))}
-      </div>
-      <Bone className="mb-6 h-11 w-full max-w-[380px] rounded-lg" />
+      <SkeletonChips count={4} />
+      <span aria-hidden="true" className={`${SEARCH} mb-6`} />
       <SkeletonTable headers={["Book", "Price", "In stock", "Sales (30 days)", "Level"]} avatar stackBelow={600} />
     </>
   );
