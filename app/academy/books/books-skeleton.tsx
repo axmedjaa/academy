@@ -33,7 +33,8 @@ function Head({ action = false }: { action?: boolean }) {
 /** Search box, dropdown and filter pill while loading: the empty field
  * outline, as every Academy page skeleton draws filters (SkeletonFilters). */
 const FIELD = "block h-11 rounded-lg border border-border-strong bg-surface";
-const SEARCH = `${FIELD} w-full max-w-[380px]`;
+// Same sizing as SearchField (app/academy/_shell/filter-controls).
+const SEARCH = `${FIELD} w-full min-w-[200px] max-w-[380px] flex-[1_1_220px]`;
 const PILL = "block h-10 rounded-full border border-border-strong bg-surface";
 
 function Filters({ selects = 1, chips = 0 }: { selects?: number; chips?: number }) {
@@ -134,12 +135,12 @@ function OrderCards({ count = 3 }: { count?: number }) {
 export function BooksCatalogSkeleton() {
   return (
     <>
+      {/* Only the controls that are always there: the Subject and Class
+          dropdowns appear only when books have subjects or classes. */}
       <div aria-hidden="true" className="mb-4 flex flex-wrap items-center gap-3">
         <span className={SEARCH} />
-        <span className={`${FIELD} w-36`} />
-        <span className={`${FIELD} w-32`} />
-        <span className={`${FIELD} flex w-[152px] items-center gap-2 px-3`}>
-          <span className="block h-4 w-4 rounded border border-border-strong" />
+        <span className={`${FIELD} flex w-[152px] shrink-0 items-center gap-2 px-3`}>
+          <span className="block h-4 w-4 shrink-0 rounded border border-border-strong" />
           <Bone className="h-3.5 w-24 rounded" />
         </span>
         <Bone className="h-3.5 w-14 rounded" />
