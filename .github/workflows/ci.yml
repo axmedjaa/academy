@@ -1,9 +1,16 @@
-name: CI
+name: CI/CD
 
 on:
   push:
     branches: [main]
   pull_request:
+
+# One run per branch or pull request at a time. A newer push to a pull
+# request cancels its superseded run; runs on main are never cancelled
+# (each main push queues behind the one in progress instead).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ci:
@@ -15,9 +22,10 @@ jobs:
     # the CI-equivalent of the native-Windows approach used for local dev
     # (Memurai itself isn't applicable on a Linux runner).
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to release commits (Node 24 action runtime).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
           cache: "npm"
@@ -54,10 +62,20 @@ jobs:
           REDIS_URL: redis://localhost:6379
           MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
 
+      # Production worker bundle (dist/worker.mjs): proves the worker and
+      # everything it imports still compile for plain `node`.
+      - name: Build worker bundle
+        run: npm run build:worker
+
+      # scripts/migrate.mjs is the project's migration runner (also
+      # `npm run migrate` / `migrate:prod`): same drizzle migrator and
+      # ./drizzle folder as before, plain Node, needs only DATABASE_URL.
+      # Running the scripts/migrate.ts wrapper under tsx failed with
+      # ERR_REQUIRE_ASYNC_MODULE (the runner uses top-level await).
       - name: Apply migrations
         run: |
-          node --import=tsx scripts/migrate.ts
-          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci_test node --import=tsx scripts/migrate.ts
+          node scripts/migrate.mjs
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci_test node scripts/migrate.mjs
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
           REDIS_URL: redis://localhost:6379
