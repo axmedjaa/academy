@@ -36,7 +36,7 @@ Seed one MFA-enrolled `platform_owner` account for local sign-in (safe to re-run
 npm run seed
 ```
 
-The seed script prints the account's email/password, TOTP secret (add to an authenticator app to sign in), and one-time recovery codes. Override the credentials via `SEED_PLATFORM_OWNER_EMAIL`/`SEED_PLATFORM_OWNER_PASSWORD` (see `.env.example`) — never commit real credentials here or in `.env.local`.
+The seed script prints the account's email/password and one-time recovery codes. Sign-in then asks for a code emailed to that address (needs `RESEND_API_KEY`/`EMAIL_FROM`); a recovery code works instead when email isn't set up. Override the credentials via `SEED_PLATFORM_OWNER_EMAIL`/`SEED_PLATFORM_OWNER_PASSWORD` (see `.env.example`) — never commit real credentials here or in `.env.local`.
 
 ```
 npm run dev

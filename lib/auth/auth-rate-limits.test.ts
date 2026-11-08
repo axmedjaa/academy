@@ -23,7 +23,6 @@ import {
 } from "./login-rate-limit";
 import { checkMfaChallengeRateLimit, checkMfaChallengeUserRateLimit, MFA_CHALLENGE_USER_LIMIT } from "./mfa-challenge-rate-limit";
 import { checkMfaEmailOtpRateLimit } from "./mfa-email-otp-rate-limit";
-import { checkMfaEnrollmentRateLimit } from "./mfa-enrollment-rate-limit";
 import { rateLimitMessage } from "./rate-limit-message";
 
 const quietSink: MonitoringSink = { recordEvent: () => undefined, recordMetric: () => undefined };
@@ -89,7 +88,7 @@ describe("SEC-L-06: counters always expire", { timeout: 60_000 }, () => {
 });
 
 describe("SEC-M-03: authentication limiters fail closed while Redis is down", () => {
-  it("login (IP and account), MFA challenge, MFA email OTP, MFA enrollment and password reset all deny", async () => {
+  it("login (IP and account), MFA challenge, MFA email OTP and password reset all deny", async () => {
     redisDown();
     const id = randomUUID();
     const results = [
@@ -98,7 +97,6 @@ describe("SEC-M-03: authentication limiters fail closed while Redis is down", ()
       await checkMfaChallengeRateLimit(`ip-${id}`),
       await checkMfaChallengeUserRateLimit(id),
       await checkMfaEmailOtpRateLimit(id),
-      await checkMfaEnrollmentRateLimit(id),
       await checkForgotPasswordRateLimit(`${id}@example.com`),
     ];
     for (const result of results) {

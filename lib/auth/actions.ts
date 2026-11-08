@@ -18,7 +18,8 @@ import {
 } from "@/lib/auth/password-reset";
 import { passwordSchema } from "@/lib/auth/password";
 import { getPlatformRole, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
-import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
+import { sendMfaEmailOtp } from "@/lib/auth/mfa-email-otp";
+import { logger } from "@/lib/logger";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
 import { getClientIp } from "@/lib/http/client-ip";
 import { RETURN_PATH_COOKIE, returnPathCookieOptions, sanitizeReturnPath } from "@/lib/auth/return-path";
@@ -129,12 +130,9 @@ export async function signIn(
   const platformRole = await getPlatformRole(result.userId);
 
   if (platformRole) {
-    const enrolled = await hasVerifiedMfaCredential(result.userId);
-
-    // Neither branch issues a session yet: PLAN.md requires challengeMfa
-    // "before issuing a session" once enrolled, and its "first login forces
-    // enrollment before any platform action is possible" text applies the
-    // same principle to the not-yet-enrolled case (see mfa-pending.ts).
+    // No session yet: PLAN.md requires the MFA challenge "before issuing a
+    // session". The signed, short-lived pending cookie is all the account
+    // gets until the emailed code (or a recovery code) is verified.
     // Return-after-login is not carried through MFA; platform staff land
     // on their normal page. Drop any stored destination.
     cookieStore.delete({ name: RETURN_PATH_COOKIE, path: returnPathCookieOptions().path });
@@ -146,7 +144,20 @@ export async function signIn(
       pendingMfaCookieOptions(),
     );
 
-    redirect(enrolled ? "/mfa/challenge" : "/mfa/setup");
+    // Email verification is the default second step: the code goes out
+    // now, so the challenge page opens with it on its way. A failed or
+    // rate-limited send is not an error here; the challenge page reads the
+    // code's state and offers "Resend code" or a recovery code.
+    try {
+      await sendMfaEmailOtp(result.userId);
+    } catch (error) {
+      logger.error("mfa email otp: automatic send at sign-in threw", {
+        userId: result.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    redirect("/mfa/challenge");
   }
 
   const userAgent = headerList.get("user-agent") ?? undefined;

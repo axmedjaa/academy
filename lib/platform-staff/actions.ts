@@ -30,7 +30,7 @@ export type CreatePlatformAdminAccountState = PlatformStaffFormState;
 
 /**
  * Add staff dialog, form-bound via useActionState (same pattern as
- * lib/auth/mfa-actions.ts's verifyMfaEnrollment) since account creation
+ * lib/auth/mfa-actions.ts's challengeMfa) since account creation
  * has field-level validation errors to surface. Every rule (owner-only,
  * validation, duplicate email) is enforced in lib/platform-staff/staff.ts.
  */

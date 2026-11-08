@@ -153,9 +153,9 @@ export type CreatePlatformStaffResult = StaffResult<{ userId: string }>;
 
 /**
  * Creates a platform staff account with the chosen platform role. A new
- * Platform Admin starts with no grants; a new Platform Owner is forced into
- * MFA enrollment on first sign-in by the existing sign-in flow
- * (lib/auth/actions.ts) before any session is issued.
+ * Platform Admin starts with no grants. Every platform role must enter a
+ * code emailed to them at each sign-in (lib/auth/actions.ts) before any
+ * session is issued.
  */
 export async function createPlatformStaffAccount(
   actorContext: AuthContext,

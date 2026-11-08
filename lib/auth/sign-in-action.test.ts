@@ -1,7 +1,8 @@
 /**
  * The signIn server action (lib/auth/actions.ts) end to end, against
  * TEST_DATABASE_URL and the test Redis, with Next's request APIs mocked:
- * - SEC-M-09: every platform role must pass MFA; no session before it.
+ * - SEC-M-09: every platform role must pass MFA; no session before it. The
+ *   email code is sent automatically (mocked: no real email).
  * - SEC-M-02: the per-account limit trips across rotating IPs.
  * - SEC-M-03: sign-in is refused, not waved through, while Redis is down.
  * - Regression: one failed sign-in never locks anyone out, and successful
@@ -34,6 +35,9 @@ vi.mock("next/navigation", () => ({
   },
 }));
 
+// Never a real email from the suite.
+vi.mock("@/lib/email/client", () => ({ sendEmail: vi.fn(async () => ({ ok: true })) }));
+
 // Trust one proxy hop so each test's X-Forwarded-For is a distinct client.
 vi.mock("@/lib/env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/env")>();
@@ -41,7 +45,8 @@ vi.mock("@/lib/env", async (importOriginal) => {
 });
 
 const { db } = await import("@/lib/db");
-const { platformMemberships, sessions, users } = await import("@/lib/db/schema");
+const { auditLogs, mfaEmailOtps, platformMemberships, sessions, users } = await import("@/lib/db/schema");
+const { sendEmail } = await import("@/lib/email/client");
 const { hashPassword } = await import("@/lib/auth/password");
 const { redis } = await import("@/lib/redis");
 const { signIn } = await import("./actions");
@@ -96,6 +101,8 @@ afterEach(async () => {
 afterAll(async () => {
   if (userIds.length) {
     await db.delete(sessions).where(inArray(sessions.userId, userIds));
+    await db.delete(mfaEmailOtps).where(inArray(mfaEmailOtps.userId, userIds));
+    await db.delete(auditLogs).where(inArray(auditLogs.actorUserId, userIds));
     await db.delete(platformMemberships).where(inArray(platformMemberships.userId, userIds));
     await db.delete(users).where(inArray(users.id, userIds));
   }
@@ -103,11 +110,12 @@ afterAll(async () => {
 
 describe("SEC-M-09: MFA for every platform role", { timeout: 60_000 }, () => {
   for (const role of ["platform_admin", "platform_owner"] as const) {
-    it(`${role}: correct password goes to MFA setup with only a pending cookie, never a session`, async () => {
+    it(`${role}: correct password emails a code and goes to the challenge with only a pending cookie, never a session`, async () => {
       const user = await platformUser(role);
       const error = await signIn({ ok: false }, form(user.email, PASSWORD)).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(RedirectSignal);
-      expect((error as RedirectSignal).url).toBe("/mfa/setup");
+      expect((error as RedirectSignal).url).toBe("/mfa/challenge");
+      expect(vi.mocked(sendEmail).mock.calls.some(([input]) => input.to === user.email)).toBe(true);
       expect(jar.has("mfa_pending")).toBe(true);
       expect(jar.has("session")).toBe(false);
       expect(await db.select().from(sessions).where(eq(sessions.userId, user.id))).toHaveLength(0);

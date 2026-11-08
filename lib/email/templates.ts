@@ -137,11 +137,9 @@ function codeLayout(opts: { heading: string; introHtml: string; code: string; fo
 }
 
 /**
- * MFA login-time email OTP — an ADDITIONAL verification method alongside
- * the existing authenticator-app TOTP (lib/auth/mfa.ts), never a
- * replacement or an enrollment path: lib/auth/mfa-email-otp.ts only ever
- * sends/accepts this for an account that already has a verified TOTP
- * credential. Sent to the account's own email, never anyone else's.
+ * The sign-in verification code for platform staff, sent automatically once
+ * the password is accepted (lib/auth/mfa-email-otp.ts). Sent to the
+ * account's own email, never anyone else's.
  */
 export function mfaEmailOtpEmail(params: { code: string; expiresInMinutes: number }): EmailContent {
   const { code, expiresInMinutes } = params;

@@ -1,5 +1,4 @@
 import { and, eq } from "drizzle-orm";
-import * as OTPAuth from "otpauth";
 import { db } from "@/lib/db";
 import {
   batchCourses,
@@ -29,14 +28,14 @@ import {
   users,
 } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/auth/password";
-import { enrollMfaForUser, verifyMfaEnrollmentForUser } from "@/lib/auth/mfa";
+import { regenerateRecoveryCodesForUser } from "@/lib/auth/mfa";
 import type { AcademyRole } from "@/lib/auth/roles";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 // PLAN.md "Seed & Demonstration Data": guarded, refuses to run in
-// production. This is the Phase 0 seed — just the one MFA-enrolled
-// platform_owner; the full demo dataset (academy, branches, students...)
+// production. This is the Phase 0 seed — just the one platform_owner
+// (who signs in with an emailed code, or one of the printed recovery codes); the full demo dataset (academy, branches, students...)
 // is a later-phase concern once those tables exist.
 if (process.env.NODE_ENV === "production") {
   console.error("Refusing to run: seed script must not run in production.");
@@ -71,32 +70,19 @@ async function main() {
       .insert(platformMemberships)
       .values({ userId: user.id, role: "platform_owner" });
 
-    // Drive the real enrollment flow (Item 13) rather than inserting a
-    // pre-verified credential row directly, so the seeded account is
-    // guaranteed consistent with what a real enrollment produces.
-    const { secretBase32 } = await enrollMfaForUser(user.id);
-    const currentCode = new OTPAuth.TOTP({
-      issuer: "Dardar",
-      label: email,
-      algorithm: "SHA1",
-      digits: 6,
-      period: 30,
-      secret: secretBase32,
-    }).generate();
-
-    const verifyResult = await verifyMfaEnrollmentForUser(user.id, currentCode);
-    if (!verifyResult.ok) {
-      throw new Error(
-        `Seed MFA verification unexpectedly failed: ${verifyResult.error.message}`,
-      );
+    // Sign-in verification is by emailed code; recovery codes are the
+    // backup (and the way in when email isn't configured locally).
+    const recovery = await regenerateRecoveryCodesForUser(user.id);
+    if (!recovery.ok) {
+      throw new Error(`Seed recovery codes unexpectedly failed: ${recovery.error.message}`);
     }
 
     console.log("Seeded platform_owner:");
     console.log(`  Email:    ${email}`);
     console.log(`  Password: ${password}`);
-    console.log(`  TOTP secret (add to an authenticator app): ${secretBase32}`);
+    console.log("  Sign-in verification: a code is emailed to this address.");
     console.log("  Recovery codes (shown once, save them):");
-    for (const code of verifyResult.recoveryCodes) {
+    for (const code of recovery.recoveryCodes) {
       console.log(`    ${code}`);
     }
   }

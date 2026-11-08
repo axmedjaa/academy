@@ -10,8 +10,8 @@ interface Props {
 }
 
 /**
- * Shared by /mfa/setup (Item 13) and /mfa/recovery-codes (Item 15) — DESIGN.md
- * §7: regenerating recovery codes gets "the same one-time reveal as setup."
+ * Used by /mfa/recovery-codes (Item 15) — DESIGN.md §7: recovery codes get a
+ * one-time reveal.
  * Pure restyle — the underlying "you must tick the box before Continue is
  * enabled" behavior is unchanged.
  */

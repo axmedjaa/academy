@@ -1,542 +1,166 @@
 import { randomUUID, createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
-import * as OTPAuth from "otpauth";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { and, eq, inArray } from "drizzle-orm";
+import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
   auditLogs,
   mfaEmailOtps,
   mfaRecoveryCodes,
   mfaTotpCredentials,
+  platformMemberships,
   users,
 } from "@/lib/db/schema";
-import {
-  enrollMfaForUser,
-  hasVerifiedMfaCredential,
-  regenerateRecoveryCodesForUser,
-  verifyMfaChallenge,
-  verifyMfaEnrollmentForUser,
-} from "./mfa";
+import { countUnusedRecoveryCodes, regenerateRecoveryCodesForUser, verifyMfaChallenge } from "./mfa";
+
+const createdUserIds: string[] = [];
+
+async function createUser(options: { platformRole?: "platform_owner" | "platform_admin" } = {}): Promise<string> {
+  const [user] = await db
+    .insert(users)
+    .values({ email: `mfa-test-${randomUUID()}@example.com`, passwordHash: "not-a-real-hash" })
+    .returning({ id: users.id });
+  createdUserIds.push(user.id);
+  if (options.platformRole) {
+    await db.insert(platformMemberships).values({ userId: user.id, role: options.platformRole });
+  }
+  return user.id;
+}
+
+async function insertEmailCode(userId: string, code: string): Promise<void> {
+  await db.insert(mfaEmailOtps).values({
+    userId,
+    codeHash: createHash("sha256").update(`${userId}:${code}`).digest("hex"),
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+  });
+}
 
 async function auditRowsFor(actorUserId: string, action: string) {
   return db
     .select()
     .from(auditLogs)
-    .where(
-      and(eq(auditLogs.actorUserId, actorUserId), eq(auditLogs.action, action)),
-    );
+    .where(and(eq(auditLogs.actorUserId, actorUserId), eq(auditLogs.action, action)));
 }
-
-/** Creates a throwaway user for a single test, returning its id. */
-async function insertTestUser(label: string): Promise<string> {
-  const [user] = await db
-    .insert(users)
-    .values({
-      email: `mfa-audit-${label}-${randomUUID()}@example.com`,
-      passwordHash: "not-a-real-hash",
-    })
-    .returning({ id: users.id });
-  return user.id;
-}
-
-/** Full teardown for a throwaway user created via insertTestUser, in FK order. */
-async function deleteTestUser(id: string): Promise<void> {
-  await db.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, id));
-  await db.delete(auditLogs).where(eq(auditLogs.actorUserId, id));
-  await db.delete(mfaTotpCredentials).where(eq(mfaTotpCredentials.userId, id));
-  await db.delete(users).where(eq(users.id, id));
-}
-
-let userId: string;
-
-/**
- * `timestamp` defaults to now; pass a future one to deterministically land
- * on a step this suite hasn't already consumed. Needed since the replay-
- * prevention fix (lib/auth/mfa.ts) now makes `currentCodeFor(secret)`
- * *not* idempotent across calls within the same ~30s step for the same
- * credential — a second test re-validating "the same code still works"
- * would otherwise flakily depend on how much wall-clock time elapsed
- * since an earlier test already consumed that step.
- */
-function currentCodeFor(secretBase32: string, timestamp?: number): string {
-  return new OTPAuth.TOTP({
-    issuer: "Dardar",
-    label: "test",
-    algorithm: "SHA1",
-    digits: 6,
-    period: 30,
-    secret: secretBase32,
-  }).generate({ timestamp });
-}
-
-beforeAll(async () => {
-  const [user] = await db
-    .insert(users)
-    .values({
-      email: `mfa-test-${randomUUID()}@example.com`,
-      passwordHash: "not-a-real-hash",
-    })
-    .returning({ id: users.id });
-  userId = user.id;
-});
 
 afterAll(async () => {
-  await db.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, userId));
-  // Audit rows now reference this user as actorUserId (security finding
-  // #1) — delete them before the user row to satisfy the FK.
-  await db.delete(auditLogs).where(eq(auditLogs.actorUserId, userId));
-  await db
-    .delete(mfaTotpCredentials)
-    .where(eq(mfaTotpCredentials.userId, userId));
-  await db.delete(users).where(eq(users.id, userId));
+  if (!createdUserIds.length) return;
+  await db.delete(mfaRecoveryCodes).where(inArray(mfaRecoveryCodes.userId, createdUserIds));
+  await db.delete(mfaEmailOtps).where(inArray(mfaEmailOtps.userId, createdUserIds));
+  await db.delete(mfaTotpCredentials).where(inArray(mfaTotpCredentials.userId, createdUserIds));
+  await db.delete(auditLogs).where(inArray(auditLogs.actorUserId, createdUserIds));
+  await db.delete(platformMemberships).where(inArray(platformMemberships.userId, createdUserIds));
+  await db.delete(users).where(inArray(users.id, createdUserIds));
 });
 
-describe("enrollMfaForUser", () => {
-  it("returns a secret, an otpauth URL, and a QR code data URL", async () => {
-    const result = await enrollMfaForUser(userId);
-    expect(result.secretBase32).toMatch(/^[A-Z2-7]+$/);
-    expect(result.otpauthUrl).toMatch(/^otpauth:\/\/totp\//);
-    expect(result.qrCodeDataUrl).toMatch(/^data:image\/png;base64,/);
-  });
-
-  it("resumes the same unverified enrollment rather than minting a new secret", async () => {
-    const first = await enrollMfaForUser(userId);
-    const second = await enrollMfaForUser(userId);
-    expect(second.secretBase32).toBe(first.secretBase32);
-  });
-
-  // Security finding #1.
-  it("writes an audit row for a fresh enrollment, never containing the secret/otpauth URL/QR data URL", async () => {
-    const freshUserId = await insertTestUser("enroll-fresh");
-
-    const result = await enrollMfaForUser(freshUserId);
-
-    const rows = await auditRowsFor(freshUserId, "enrollMfa");
-    expect(rows.length).toBe(1);
-    expect(rows[0].entityType).toBe("mfa_credential");
-    expect(rows[0].actorUserId).toBe(freshUserId);
-
-    const serialized = JSON.stringify({
-      before: rows[0].before,
-      after: rows[0].after,
-      context: rows[0].context,
-    });
-    expect(serialized).not.toContain(result.secretBase32);
-    expect(serialized).not.toContain(result.otpauthUrl);
-    expect(serialized).not.toContain(result.qrCodeDataUrl);
-
-    await deleteTestUser(freshUserId);
-  });
-
-  it("does not write a second audit row when resuming an existing unverified enrollment", async () => {
-    const freshUserId = await insertTestUser("enroll-resume");
-
-    await enrollMfaForUser(freshUserId);
-    await enrollMfaForUser(freshUserId);
-
-    const rows = await auditRowsFor(freshUserId, "enrollMfa");
-    expect(rows.length).toBe(1);
-
-    await deleteTestUser(freshUserId);
-  });
-});
-
-describe("verifyMfaEnrollmentForUser", () => {
-  it("rejects a wrong code", async () => {
-    await enrollMfaForUser(userId);
-    const result = await verifyMfaEnrollmentForUser(userId, "000000");
+describe("regenerateRecoveryCodesForUser", () => {
+  it("refuses accounts without a platform role (two-step verification doesn't apply to them)", async () => {
+    const userId = await createUser();
+    const result = await regenerateRecoveryCodesForUser(userId);
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("INVALID_CODE");
-    }
+    if (!result.ok) expect(result.error.code).toBe("NOT_ELIGIBLE");
+    expect(await auditRowsFor(userId, "regenerateRecoveryCodes")).toHaveLength(0);
   });
 
-  it("accepts the correct code, returns 10 recovery codes, and marks the credential verified", async () => {
-    expect(await hasVerifiedMfaCredential(userId)).toBe(false);
-
-    const { secretBase32 } = await enrollMfaForUser(userId);
-    const code = currentCodeFor(secretBase32);
-
-    const result = await verifyMfaEnrollmentForUser(userId, code);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.recoveryCodes).toHaveLength(10);
-      expect(new Set(result.recoveryCodes).size).toBe(10);
-    }
-
-    expect(await hasVerifiedMfaCredential(userId)).toBe(true);
-  });
-
-  it("stores recovery codes hashed, never in plaintext", async () => {
-    const rows = await db
-      .select()
-      .from(mfaRecoveryCodes)
-      .where(eq(mfaRecoveryCodes.userId, userId));
-
-    expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) {
-      expect(row.codeHash).toMatch(/^[a-f0-9]{64}$/); // sha256 hex digest
-    }
-  });
-
-  // Security finding #1.
-  it("writes an audit row on success, never containing the plaintext code or recovery codes", async () => {
-    const freshUserId = await insertTestUser("verify-success");
-    const { secretBase32 } = await enrollMfaForUser(freshUserId);
-    const code = currentCodeFor(secretBase32);
-
-    const result = await verifyMfaEnrollmentForUser(freshUserId, code);
+  it("issues 10 codes to platform staff without any authenticator app, stored only as hashes", async () => {
+    const userId = await createUser({ platformRole: "platform_admin" });
+    const result = await regenerateRecoveryCodesForUser(userId);
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
 
-    const rows = await auditRowsFor(freshUserId, "verifyMfaEnrollment");
-    expect(rows.length).toBe(1);
-    expect(rows[0].entityType).toBe("mfa_credential");
-    expect(rows[0].after).toMatchObject({
-      verified: true,
-      recoveryCodesGenerated: 10,
-    });
-
-    const serialized = JSON.stringify({
-      before: rows[0].before,
-      after: rows[0].after,
-      context: rows[0].context,
-    });
-    expect(serialized).not.toContain(code);
-    for (const recoveryCode of result.recoveryCodes) {
-      expect(serialized).not.toContain(recoveryCode);
+    expect(result.recoveryCodes).toHaveLength(10);
+    expect(await countUnusedRecoveryCodes(userId)).toBe(10);
+    const rows = await db.select().from(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, userId));
+    for (const row of rows) {
+      expect(result.recoveryCodes).not.toContain(row.codeHash);
+      expect(row.codeHash).toMatch(/^[0-9a-f]{64}$/);
     }
-
-    await deleteTestUser(freshUserId);
   });
 
-  it("writes no audit row for an invalid code", async () => {
-    const freshUserId = await insertTestUser("verify-invalid");
-    await enrollMfaForUser(freshUserId);
+  it("replaces the entire code set: old codes stop working, new codes work, audit holds only a count", async () => {
+    const userId = await createUser({ platformRole: "platform_owner" });
+    const first = await regenerateRecoveryCodesForUser(userId);
+    if (!first.ok) throw new Error("test setup failed");
 
-    const result = await verifyMfaEnrollmentForUser(freshUserId, "000000");
-    expect(result.ok).toBe(false);
+    const second = await regenerateRecoveryCodesForUser(userId);
+    if (!second.ok) throw new Error("unreachable");
+    expect(second.recoveryCodes.some((code) => first.recoveryCodes.includes(code))).toBe(false);
 
-    const rows = await auditRowsFor(freshUserId, "verifyMfaEnrollment");
-    expect(rows.length).toBe(0);
+    expect((await verifyMfaChallenge(userId, "recovery", first.recoveryCodes[0])).ok).toBe(false);
+    expect((await verifyMfaChallenge(userId, "recovery", second.recoveryCodes[0])).ok).toBe(true);
 
-    await deleteTestUser(freshUserId);
-  });
-
-  it("rejects verification once already verified (no pending enrollment left)", async () => {
-    const [credential] = await db
-      .select()
-      .from(mfaTotpCredentials)
-      .where(eq(mfaTotpCredentials.userId, userId));
-
-    // Re-derive a currently-valid code for the now-verified secret is not
-    // needed here — with no unverified credential left, any code is
-    // rejected before it would even be checked.
-    const result = await verifyMfaEnrollmentForUser(userId, "123456");
-    expect(result.ok).toBe(false);
-    expect(credential.verifiedAt).not.toBeNull();
-  });
-
-  it("does not reuse a verified credential's secret on a later enrollMfaForUser call", async () => {
-    const previouslyVerified = await db
-      .select()
-      .from(mfaTotpCredentials)
-      .where(eq(mfaTotpCredentials.userId, userId));
-    const verifiedSecretHash = createHash("sha256")
-      .update(previouslyVerified[0].secretEncrypted)
-      .digest("hex");
-
-    const fresh = await enrollMfaForUser(userId);
-    const freshCredentials = await db
-      .select()
-      .from(mfaTotpCredentials)
-      .where(eq(mfaTotpCredentials.userId, userId));
-    const newRow = freshCredentials.find(
-      (c) =>
-        createHash("sha256").update(c.secretEncrypted).digest("hex") !==
-        verifiedSecretHash,
-    );
-
-    expect(newRow).toBeDefined();
-    expect(newRow?.verifiedAt).toBeNull();
-    void fresh;
+    const rows = await auditRowsFor(userId, "regenerateRecoveryCodes");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].after).toMatchObject({ regeneratedCount: 10 });
+    const serialized = JSON.stringify(rows.map((row) => [row.before, row.after, row.context]));
+    for (const code of [...first.recoveryCodes, ...second.recoveryCodes]) {
+      expect(serialized).not.toContain(code);
+    }
   });
 });
 
 describe("verifyMfaChallenge", () => {
-  let challengeUserId: string;
-  let secretBase32: string;
-  let recoveryCodes: string[];
+  it("accepts a correct, unused recovery code once, regardless of case, then rejects reuse", async () => {
+    const userId = await createUser({ platformRole: "platform_owner" });
+    const issued = await regenerateRecoveryCodesForUser(userId);
+    if (!issued.ok) throw new Error("test setup failed");
 
-  beforeAll(async () => {
-    const [user] = await db
-      .insert(users)
-      .values({
-        email: `mfa-challenge-test-${randomUUID()}@example.com`,
-        passwordHash: "not-a-real-hash",
-      })
-      .returning({ id: users.id });
-    challengeUserId = user.id;
-
-    const enrollment = await enrollMfaForUser(challengeUserId);
-    secretBase32 = enrollment.secretBase32;
-
-    const verifyResult = await verifyMfaEnrollmentForUser(
-      challengeUserId,
-      currentCodeFor(secretBase32),
-    );
-    if (!verifyResult.ok) throw new Error("test setup: enrollment failed");
-    recoveryCodes = verifyResult.recoveryCodes;
+    expect((await verifyMfaChallenge(userId, "recovery", issued.recoveryCodes[0].toLowerCase())).ok).toBe(true);
+    const reuse = await verifyMfaChallenge(userId, "recovery", issued.recoveryCodes[0]);
+    expect(reuse.ok).toBe(false);
+    if (!reuse.ok) expect(reuse.error.code).toBe("INVALID_CODE");
+    expect(await countUnusedRecoveryCodes(userId)).toBe(9);
+    expect(await auditRowsFor(userId, "mfa_recovery_code_used")).toHaveLength(1);
   });
 
-  afterAll(async () => {
-    await db
-      .delete(mfaRecoveryCodes)
-      .where(eq(mfaRecoveryCodes.userId, challengeUserId));
-    await db
-      .delete(mfaEmailOtps)
-      .where(eq(mfaEmailOtps.userId, challengeUserId));
-    await db
-      .delete(auditLogs)
-      .where(eq(auditLogs.actorUserId, challengeUserId));
-    await db
-      .delete(mfaTotpCredentials)
-      .where(eq(mfaTotpCredentials.userId, challengeUserId));
-    await db.delete(users).where(eq(users.id, challengeUserId));
+  it("lets only one of two parallel submissions of the same recovery code through", async () => {
+    const userId = await createUser({ platformRole: "platform_owner" });
+    const issued = await regenerateRecoveryCodesForUser(userId);
+    if (!issued.ok) throw new Error("test setup failed");
+
+    const results = await Promise.all([
+      verifyMfaChallenge(userId, "recovery", issued.recoveryCodes[0]),
+      verifyMfaChallenge(userId, "recovery", issued.recoveryCodes[0]),
+    ]);
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
   });
 
-  it("accepts a correct TOTP code", async () => {
-    const result = await verifyMfaChallenge(
-      challengeUserId,
-      "totp",
-      currentCodeFor(secretBase32),
-    );
-    expect(result.ok).toBe(true);
+  it("rejects a made-up recovery code and another account's recovery code", async () => {
+    const userA = await createUser({ platformRole: "platform_owner" });
+    const userB = await createUser({ platformRole: "platform_admin" });
+    const issuedA = await regenerateRecoveryCodesForUser(userA);
+    if (!issuedA.ok) throw new Error("test setup failed");
+
+    expect((await verifyMfaChallenge(userA, "recovery", "AAAAA-AAAAA")).ok).toBe(false);
+    expect((await verifyMfaChallenge(userB, "recovery", issuedA.recoveryCodes[0])).ok).toBe(false);
   });
 
-  it("rejects a wrong TOTP code", async () => {
-    const result = await verifyMfaChallenge(challengeUserId, "totp", "000000");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("INVALID_CODE");
-    }
+  it("accepts a correct email code and rejects a wrong one with the same generic error", async () => {
+    const userId = await createUser({ platformRole: "platform_admin" });
+    await insertEmailCode(userId, "482913");
+
+    const wrong = await verifyMfaChallenge(userId, "email", "000000");
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) expect(wrong.error).toEqual({ code: "INVALID_CODE", message: "Invalid code." });
+
+    expect((await verifyMfaChallenge(userId, "email", "482913")).ok).toBe(true);
   });
 
-  /**
-   * Security regression test (TOTP replay prevention — see
-   * mfaTotpCredentials' own schema comment for the full CWE/NIST
-   * citation). Before the fix, `totp.validate()` alone decided validity,
-   * with no memory of a code already being spent — the exact same valid
-   * code could authenticate a second, attacker-controlled session before
-   * its ~90s window expired (`window: 1` tolerates the adjacent step too).
-   * This test presents the identical valid code twice back-to-back: it
-   * must succeed once and fail the second time.
-   *
-   * Uses its own dedicated user/credential (not the shared
-   * `challengeUserId` this describe block's other tests reuse) —
-   * `lastUsedStep` is now real, persisted state on the credential row, so
-   * sharing a credential with another test that calls `currentCodeFor`
-   * for the *same* 30s step would make both tests' outcomes depend on
-   * execution order/timing rather than this test's own setup.
-   */
-  it("rejects reusing the same valid TOTP code a second time (replay prevention)", async () => {
-    const freshUserId = await insertTestUser("replay");
-    const { secretBase32: freshSecret } = await enrollMfaForUser(freshUserId);
-    const enrolled = await verifyMfaEnrollmentForUser(freshUserId, currentCodeFor(freshSecret));
-    if (!enrolled.ok) throw new Error("test setup: enrollment failed");
+  it("an account enrolled with an authenticator app moves to email codes; its TOTP data is kept and its recovery codes still work", async () => {
+    const userId = await createUser({ platformRole: "platform_owner" });
+    await db.insert(mfaTotpCredentials).values({ userId, secretEncrypted: "legacy-secret", verifiedAt: new Date() });
+    const issued = await regenerateRecoveryCodesForUser(userId);
+    if (!issued.ok) throw new Error("test setup failed");
 
-    const code = currentCodeFor(freshSecret);
+    await insertEmailCode(userId, "135799");
+    expect((await verifyMfaChallenge(userId, "email", "135799")).ok).toBe(true);
+    expect((await verifyMfaChallenge(userId, "recovery", issued.recoveryCodes[3])).ok).toBe(true);
 
-    const first = await verifyMfaChallenge(freshUserId, "totp", code);
-    expect(first.ok).toBe(true);
-
-    const second = await verifyMfaChallenge(freshUserId, "totp", code);
-    expect(second.ok).toBe(false);
-    if (!second.ok) {
-      expect(second.error.code).toBe("INVALID_CODE");
-    }
-
-    await deleteTestUser(freshUserId);
+    const totpRows = await db.select().from(mfaTotpCredentials).where(eq(mfaTotpCredentials.userId, userId));
+    expect(totpRows).toHaveLength(1);
   });
 
-  it("accepts a correct, unused recovery code and then rejects reusing it", async () => {
-    const code = recoveryCodes[0];
-
-    const first = await verifyMfaChallenge(challengeUserId, "recovery", code);
-    expect(first.ok).toBe(true);
-
-    const second = await verifyMfaChallenge(challengeUserId, "recovery", code);
-    expect(second.ok).toBe(false);
-  });
-
-  it("accepts a recovery code regardless of input case", async () => {
-    const code = recoveryCodes[1];
-    const result = await verifyMfaChallenge(
-      challengeUserId,
-      "recovery",
-      code.toLowerCase(),
-    );
-    expect(result.ok).toBe(true);
-  });
-
-  it("rejects a made-up recovery code", async () => {
-    const result = await verifyMfaChallenge(
-      challengeUserId,
-      "recovery",
-      "AAAAA-AAAAA",
-    );
-    expect(result.ok).toBe(false);
-  });
-
-  it("accepts a correct email-OTP code as an ADDITIONAL method (never replacing TOTP)", async () => {
-    const rawCode = "482913";
-    const codeHash = createHash("sha256").update(`${challengeUserId}:${rawCode}`).digest("hex");
-    await db.insert(mfaEmailOtps).values({
-      userId: challengeUserId,
-      codeHash,
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-    });
-
-    const result = await verifyMfaChallenge(challengeUserId, "email", rawCode);
-    expect(result.ok).toBe(true);
-
-    // TOTP still works afterward — email OTP is additive, not a replacement.
-    // A step one full period ahead, not "now": an earlier test in this same
-    // describe block already validated (and thus consumed, post the
-    // replay-prevention fix) whatever step "now" currently falls in for
-    // this credential, and TOTP steps are only 30s wide.
-    const totpResult = await verifyMfaChallenge(
-      challengeUserId,
-      "totp",
-      currentCodeFor(secretBase32, Date.now() + 30_000),
-    );
-    expect(totpResult.ok).toBe(true);
-
-    await db.delete(mfaEmailOtps).where(eq(mfaEmailOtps.userId, challengeUserId));
-  });
-
-  it("rejects a wrong email-OTP code", async () => {
-    const codeHash = createHash("sha256").update(`${challengeUserId}:111222`).digest("hex");
-    await db.insert(mfaEmailOtps).values({
-      userId: challengeUserId,
-      codeHash,
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-    });
-
-    const result = await verifyMfaChallenge(challengeUserId, "email", "000000");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("INVALID_CODE");
-
-    await db.delete(mfaEmailOtps).where(eq(mfaEmailOtps.userId, challengeUserId));
-  });
-
-  it("rejects any code for a user with no verified credential", async () => {
-    const [freshUser] = await db
-      .insert(users)
-      .values({
-        email: `mfa-challenge-nocred-${randomUUID()}@example.com`,
-        passwordHash: "x",
-      })
-      .returning({ id: users.id });
-
-    const result = await verifyMfaChallenge(freshUser.id, "totp", "123456");
-    expect(result.ok).toBe(false);
-
-    await db.delete(users).where(eq(users.id, freshUser.id));
-  });
-});
-
-describe("regenerateRecoveryCodesForUser", () => {
-  it("fails for a user with no verified MFA credential", async () => {
-    const [freshUser] = await db
-      .insert(users)
-      .values({
-        email: `mfa-regen-nocred-${randomUUID()}@example.com`,
-        passwordHash: "x",
-      })
-      .returning({ id: users.id });
-
-    const result = await regenerateRecoveryCodesForUser(freshUser.id);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("NOT_ENROLLED");
-    }
-
-    // Security finding #1: the NOT_ENROLLED failure path writes no audit row.
-    const rows = await auditRowsFor(freshUser.id, "regenerateRecoveryCodes");
-    expect(rows.length).toBe(0);
-
-    await db.delete(users).where(eq(users.id, freshUser.id));
-  });
-
-  it("replaces the entire code set: old codes stop working, new codes work", async () => {
-    const [user] = await db
-      .insert(users)
-      .values({
-        email: `mfa-regen-${randomUUID()}@example.com`,
-        passwordHash: "x",
-      })
-      .returning({ id: users.id });
-    const regenUserId = user.id;
-
-    const { secretBase32 } = await enrollMfaForUser(regenUserId);
-    const enrollResult = await verifyMfaEnrollmentForUser(
-      regenUserId,
-      currentCodeFor(secretBase32),
-    );
-    if (!enrollResult.ok) throw new Error("test setup: enrollment failed");
-    const oldCode = enrollResult.recoveryCodes[0];
-
-    const regenResult = await regenerateRecoveryCodesForUser(regenUserId);
-    expect(regenResult.ok).toBe(true);
-    if (!regenResult.ok) throw new Error("unreachable");
-
-    expect(regenResult.recoveryCodes).toHaveLength(10);
-    // A fresh set, not the same codes re-issued.
-    expect(
-      regenResult.recoveryCodes.some((code) =>
-        enrollResult.recoveryCodes.includes(code),
-      ),
-    ).toBe(false);
-
-    const oldCodeResult = await verifyMfaChallenge(
-      regenUserId,
-      "recovery",
-      oldCode,
-    );
-    expect(oldCodeResult.ok).toBe(false);
-
-    const newCodeResult = await verifyMfaChallenge(
-      regenUserId,
-      "recovery",
-      regenResult.recoveryCodes[0],
-    );
-    expect(newCodeResult.ok).toBe(true);
-
-    // Security finding #1: success writes an audit row containing only a
-    // count, never the plaintext codes (old or new).
-    const rows = await auditRowsFor(regenUserId, "regenerateRecoveryCodes");
-    expect(rows.length).toBe(1);
-    expect(rows[0].entityType).toBe("mfa_recovery_codes");
-    expect(rows[0].after).toMatchObject({ regeneratedCount: 10 });
-
-    const serialized = JSON.stringify({
-      before: rows[0].before,
-      after: rows[0].after,
-      context: rows[0].context,
-    });
-    for (const recoveryCode of [
-      ...enrollResult.recoveryCodes,
-      ...regenResult.recoveryCodes,
-    ]) {
-      expect(serialized).not.toContain(recoveryCode);
-    }
-
-    await db.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, regenUserId));
-    await db.delete(auditLogs).where(eq(auditLogs.actorUserId, regenUserId));
-    await db
-      .delete(mfaTotpCredentials)
-      .where(eq(mfaTotpCredentials.userId, regenUserId));
-    await db.delete(users).where(eq(users.id, regenUserId));
+  it("an account never enrolled with an authenticator app can still pass with an email code", async () => {
+    const userId = await createUser({ platformRole: "platform_admin" });
+    await insertEmailCode(userId, "246802");
+    expect((await verifyMfaChallenge(userId, "email", "246802")).ok).toBe(true);
   });
 });

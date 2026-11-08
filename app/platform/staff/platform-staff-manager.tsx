@@ -671,7 +671,7 @@ function AddStaffForm({ onDone }: { onDone: () => void }) {
             required
             error={errors.role}
             full
-            hint="A new Platform Owner must set up MFA at first sign-in."
+            hint="Platform staff confirm each sign-in with a code sent to their email."
           >
             <RoleSelect errors={errors} blur={blur} defaultValue="platform_admin" />
           </DField>

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext, getCurrentSessionId } from "@/lib/auth/auth-context";
-import { hasVerifiedMfaCredential } from "@/lib/auth/mfa";
+import { countUnusedRecoveryCodes } from "@/lib/auth/mfa";
 import { getPendingEmailChange } from "@/lib/auth/email-change";
 import { listMySessions, revokeAllOtherSessions, revokeSession } from "@/lib/auth/session-actions";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
@@ -25,7 +25,7 @@ function initialsOf(name: string): string {
  * two-step verification and a link to Activity. Every read and action is
  * the signed-in user's own: `listMySessions` / `revokeSession` /
  * `revokeAllOtherSessions` (IDOR-checked per session), `updateOwnAccount`
- * for email and password, and `hasVerifiedMfaCredential` for platform
+ * for email and password, and `countUnusedRecoveryCodes` for platform
  * staff (owner and admins), the accounts two-step verification applies to. Name and
  * phone come from the caller's staff record; there is no self-service edit
  * for them, so they are shown read-only.
@@ -39,10 +39,10 @@ export default async function AccountSecurityPage() {
   const access = context.platformRole ? null : await checkAcademyAccessForContext(context);
   const academy = access && access.level !== "blocked" ? { academyId: access.academyId, role: access.membershipRole } : null;
 
-  const [sessions, currentSessionId, mfaEnabled, identity, pendingEmailChange] = await Promise.all([
+  const [sessions, currentSessionId, recoveryCodesLeft, identity, pendingEmailChange] = await Promise.all([
     listMySessions(),
     getCurrentSessionId(),
-    context.platformRole ? hasVerifiedMfaCredential(context.userId) : Promise.resolve(null),
+    context.platformRole ? countUnusedRecoveryCodes(context.userId) : Promise.resolve(0),
     getAccountIdentity(context, academy),
     getPendingEmailChange(context.userId),
   ]);
@@ -180,14 +180,15 @@ export default async function AccountSecurityPage() {
           </h3>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
             <span className="flex flex-wrap items-center gap-3 text-[13px] text-muted">
-              {mfaEnabled ? <Badge label="Enabled" tone="green" /> : <Badge label="Not enabled" tone="gray" />}
-              Required for platform staff accounts.
+              <Badge label="Enabled" tone="green" />
+              A code is sent to your email each time you sign in.{" "}
+              {recoveryCodesLeft > 0 ? `${recoveryCodesLeft} recovery codes left.` : "No recovery codes yet."}
             </span>
             <Link
-              href={mfaEnabled ? "/mfa/recovery-codes" : "/mfa/setup"}
-              className={mfaEnabled ? ROW_BTN : `${ROW_BTN} !border-brand !bg-brand !text-white hover:!bg-brand-hover`}
+              href="/mfa/recovery-codes"
+              className={recoveryCodesLeft > 0 ? ROW_BTN : `${ROW_BTN} !border-brand !bg-brand !text-white hover:!bg-brand-hover`}
             >
-              {mfaEnabled ? "Regenerate recovery codes" : "Set up two-step verification"}
+              {recoveryCodesLeft > 0 ? "Regenerate recovery codes" : "Create recovery codes"}
             </Link>
           </div>
         </section>

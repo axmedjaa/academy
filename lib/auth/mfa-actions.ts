@@ -9,23 +9,17 @@ import { users } from "@/lib/db/schema";
 import { verifyPassword } from "@/lib/auth/password";
 import { getAuthContext, getPlatformRole, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
 import {
-  enrollMfaForUser,
   regenerateRecoveryCodesForUser,
   verifyMfaChallenge,
-  verifyMfaEnrollmentForUser,
-  type EnrollMfaResult,
   type MfaChallengeError,
   type RegenerateRecoveryCodesError,
-  type VerifyMfaEnrollmentError,
 } from "@/lib/auth/mfa";
 import { sendMfaEmailOtp } from "@/lib/auth/mfa-email-otp";
-import { resolveMfaFlowUserId } from "@/lib/auth/mfa-flow-identity";
 import {
   MFA_PENDING_COOKIE_NAME,
   verifyPendingMfaToken,
 } from "@/lib/auth/mfa-pending";
 import { checkMfaChallengeRateLimit, checkMfaChallengeUserRateLimit } from "@/lib/auth/mfa-challenge-rate-limit";
-import { checkMfaEnrollmentRateLimit } from "@/lib/auth/mfa-enrollment-rate-limit";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
 import { getClientIp } from "@/lib/http/client-ip";
 import { rateLimitMessage } from "@/lib/auth/rate-limit-message";
@@ -36,7 +30,7 @@ import {
 } from "@/lib/auth/session";
 
 /**
- * Only reached from the pending-MFA-cookie branches, which signIn creates
+ * Only reached from the pending-MFA-cookie branch, which signIn creates
  * for platform staff (every platform role since SEC-M-09). The role is
  * looked up rather than assumed, for the suspicious-login record.
  */
@@ -58,94 +52,17 @@ async function completeLoginSession(userId: string): Promise<void> {
   cookieStore.delete(MFA_PENDING_COOKIE_NAME);
 }
 
-export async function enrollMfa(): Promise<EnrollMfaResult> {
-  const userId = await resolveMfaFlowUserId();
-  if (!userId) {
-    redirect("/login");
-  }
-
-  return enrollMfaForUser(userId);
-}
-
-const verifyMfaEnrollmentSchema = z.object({
-  code: z
-    .string()
-    .trim()
-    .regex(/^\d{6}$/, "Enter the 6-digit code from your authenticator app"),
-});
-
-export type VerifyMfaEnrollmentFormError =
-  | VerifyMfaEnrollmentError
-  | { code: "VALIDATION_ERROR"; message: string }
-  | { code: "RATE_LIMITED"; message: string };
-
-export interface VerifyMfaEnrollmentState {
-  ok: boolean;
-  recoveryCodes?: string[];
-  error?: VerifyMfaEnrollmentFormError;
-}
-
-export async function verifyMfaEnrollment(
-  _prevState: VerifyMfaEnrollmentState,
-  formData: FormData,
-): Promise<VerifyMfaEnrollmentState> {
-  const userId = await resolveMfaFlowUserId();
-  if (!userId) {
-    redirect("/login");
-  }
-
-  // Security finding #6: rate limit repeated TOTP enrollment-verification
-  // attempts, keyed by userId (see lib/auth/mfa-enrollment-rate-limit.ts —
-  // this is an already-identified, signed-in account action, unlike
-  // challengeMfa's pre-auth IP key below). Mirrors challengeMfa's own
-  // rate-limit check/rejection shape exactly. Never logs the code itself.
-  const rateLimit = await checkMfaEnrollmentRateLimit(userId);
-  if (!rateLimit.allowed) {
-    return {
-      ok: false,
-      error: {
-        code: "RATE_LIMITED",
-        message: rateLimitMessage(rateLimit, "Too many attempts."),
-      },
-    };
-  }
-
-  const parsed = verifyMfaEnrollmentSchema.safeParse({
-    code: formData.get("code"),
-  });
-
-  if (!parsed.success) {
-    return {
-      ok: false,
-      error: {
-        code: "VALIDATION_ERROR",
-        message: parsed.error.issues[0]?.message ?? "Invalid input.",
-      },
-    };
-  }
-
-  const result = await verifyMfaEnrollmentForUser(userId, parsed.data.code);
-
-  if (!result.ok) {
-    return { ok: false, error: result.error };
-  }
-
-  // Completing enrollment includes proving a valid code, which is exactly
-  // what a challenge would have required — so if this was the forced
-  // first-login flow (pending cookie present), it's equivalent to a
-  // successful challenge: issue the real session now.
-  const cookieStore = await cookies();
-  if (cookieStore.get(MFA_PENDING_COOKIE_NAME)?.value) {
-    await completeLoginSession(userId);
-  }
-
-  return { ok: true, recoveryCodes: result.recoveryCodes };
-}
-
-const challengeMfaSchema = z.object({
-  mode: z.enum(["totp", "recovery", "email"]),
-  code: z.string().trim().min(1, "Enter a code"),
-});
+/** The emailed code is exactly six digits; a recovery code is XXXXX-XXXXX. */
+const challengeMfaSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("email"),
+    code: z.string().trim().regex(/^\d{6}$/, "Enter the 6-digit code from your email"),
+  }),
+  z.object({
+    mode: z.literal("recovery"),
+    code: z.string().trim().min(1, "Enter a recovery code"),
+  }),
+]);
 
 export type ChallengeMfaError =
   | MfaChallengeError
@@ -157,6 +74,11 @@ export interface ChallengeMfaState {
   error?: ChallengeMfaError;
 }
 
+/**
+ * The second sign-in step. No session exists until this succeeds: the
+ * signed, short-lived pending-MFA cookie (set by signIn after a correct
+ * password) is the only thing that identifies the account here.
+ */
 export async function challengeMfa(
   _prevState: ChallengeMfaState,
   formData: FormData,
@@ -224,18 +146,15 @@ export async function challengeMfa(
 
 export interface SendMfaEmailOtpState {
   ok: boolean;
-  error?: { code: string; message: string };
+  /** Seconds until "Resend code" is available again. */
+  resendAvailableInSeconds?: number;
+  error?: { code: string; message: string; retryAfterSeconds?: number };
 }
 
 /**
- * "Send code to my email" / "Resend code" on /mfa/challenge — a plain
- * callable (no form fields to carry), bound via useTransition on the
- * client rather than useActionState, matching
- * lib/auth/update-account-actions.ts's resendEmailChangeVerification.
- *
- * Reads the pending-MFA cookie directly (same as challengeMfa below), not
- * resolveMfaFlowUserId — this is strictly a login-time challenge action,
- * never the voluntary-enrollment case that helper also covers.
+ * "Resend code" on /mfa/challenge (the first code is sent by signIn). A
+ * plain callable bound via useTransition. Reads the pending-MFA cookie
+ * directly, like challengeMfa: this is only ever part of signing in.
  */
 export async function sendMfaEmailOtpAction(): Promise<SendMfaEmailOtpState> {
   const cookieStore = await cookies();
@@ -251,7 +170,7 @@ export async function sendMfaEmailOtpAction(): Promise<SendMfaEmailOtpState> {
     return { ok: false, error: result.error };
   }
 
-  return { ok: true };
+  return { ok: true, resendAvailableInSeconds: result.resendAvailableInSeconds };
 }
 
 const regenerateRecoveryCodesSchema = z.object({
@@ -270,13 +189,13 @@ export interface RegenerateRecoveryCodesState {
 }
 
 /**
- * Item 15. Requires a real, already-authenticated session (unlike
- * enrollMfa/verifyMfaEnrollment, this is a post-login account-management
- * action, not part of signing in) plus password re-confirmation —
+ * Item 15. Requires a real, already-authenticated session (a post-login
+ * account-management action, not part of signing in) plus password
+ * re-confirmation —
  * DESIGN.md §7: "re-confirmation required" (method unspecified there;
  * password re-entry is the standard pattern for a sensitive
- * account-security action and doesn't force redundant TOTP re-entry from
- * someone who just used it to sign in).
+ * account-security action and doesn't send another email code to
+ * someone who just used one to sign in).
  */
 export async function regenerateRecoveryCodes(
   _prevState: RegenerateRecoveryCodesState,

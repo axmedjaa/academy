@@ -228,6 +228,9 @@ export const auditLogs = pgTable(
   ],
 );
 
+// Retired: authenticator-app (TOTP) verification was replaced by emailed
+// sign-in codes (lib/auth/mfa-email-otp.ts). Existing rows are kept, not
+// read; nothing writes new ones. Original notes follow.
 // No unique constraint on user_id: enrollMfaForUser reuses an existing
 // unverified row rather than relying on a DB constraint to prevent
 // duplicates (see lib/auth/mfa.ts) — PLAN.md's column list is exactly
