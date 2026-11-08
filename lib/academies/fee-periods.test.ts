@@ -266,18 +266,6 @@ describe("setEnrollmentFeeSchedule permission matrix", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("Finance Officer can set a schedule", async () => {
-    const fixture = await setupFixture();
-    const { context } = await addActingUser(fixture.academyId, "finance_officer");
-    const result = await setEnrollmentFeeSchedule(context, {
-      enrollmentId: fixture.enrollmentId,
-      intervalMonths: 1,
-      amountCents: 5000,
-      anchorDate: "2026-09-01",
-    });
-    expect(result.ok).toBe(true);
-  });
-
   it("Academy Administrator can set a schedule (raised to manage-level per the manual student-payment verification report)", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "academy_admin");
@@ -303,19 +291,6 @@ describe("setEnrollmentFeeSchedule permission matrix", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe("forbidden");
     }
-  });
-
-  it("Admissions Officer has no access at all", async () => {
-    const fixture = await setupFixture();
-    const { context } = await addActingUser(fixture.academyId, "admissions_officer");
-    const result = await setEnrollmentFeeSchedule(context, {
-      enrollmentId: fixture.enrollmentId,
-      intervalMonths: 1,
-      amountCents: 5000,
-      anchorDate: "2026-09-01",
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("rejects an enrollment belonging to a different academy", async () => {
@@ -813,9 +788,9 @@ describe("recordFeePeriodPayment", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it("Admissions Officer cannot record a fee-period payment", async () => {
+  it("Trainer (view-only) cannot record a fee-period payment", async () => {
     const { fixture, periods } = await withMonthlySchedule();
-    const { context } = await addActingUser(fixture.academyId, "admissions_officer");
+    const { context } = await addActingUser(fixture.academyId, "trainer");
     const result = await recordFeePeriodPayment(context, {
       studentId: fixture.studentId,
       enrollmentId: fixture.enrollmentId,
@@ -908,9 +883,9 @@ describe("recordFeePeriodPayment", () => {
       expect(listed.ok && listed.periods.every((period) => period.paidCents === 0)).toBe(true);
     });
 
-    it("Finance Officer's payment is immediately effective, no separate approval step", async () => {
+    it("Academy Administrator's payment is immediately effective, no separate approval step", async () => {
       const { fixture } = await withMonthlySchedule(5000);
-      const { context } = await addActingUser(fixture.academyId, "finance_officer");
+      const { context } = await addActingUser(fixture.academyId, "academy_admin");
       const result = await recordEnrollmentPayment(context, {
         studentId: fixture.studentId,
         enrollmentId: fixture.enrollmentId,

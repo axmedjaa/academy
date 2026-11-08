@@ -394,9 +394,7 @@ describe("refund permissions and isolation", () => {
     ["academy_owner", true],
     ["manager", true],
     ["academy_admin", false],
-    ["finance_officer", false],
     ["trainer", false],
-    ["admissions_officer", false],
   ])("role %s may record a refund: %s", async (role, allowed) => {
     const f = await setup();
     await pay(f, 1_000);

@@ -45,6 +45,12 @@ import { registerStudent } from "./register-student";
 import { INVALID_SIGNATURE_BYTES, VALID_SIGNATURE_BYTES } from "@/lib/storage/test-signature-fixtures";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
+/** A Manager limited to their assigned branches (academy_wide = false): what
+ * migration 0044 made of a branch-limited Admissions Officer. A test-only
+ * fixture name; the membership row holds the real role "manager". */
+const BRANCH_MANAGER = "branch_manager" as const;
+type FixtureRole = AcademyRole | typeof BRANCH_MANAGER;
+
 const getUploadUrlMock = vi.mocked(getUploadUrl);
 const getDownloadUrlMock = vi.mocked(getDownloadUrl);
 const headObjectMock = vi.mocked(headObject);
@@ -103,11 +109,17 @@ async function createAcademy(creatorUserId: string): Promise<string> {
   return academy.id;
 }
 
-async function addMembership(userId: string, academyId: string, role: AcademyRole): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
+async function addMembership(userId: string, academyId: string, role: FixtureRole): Promise<void> {
+  await db.insert(academyMemberships).values({
+    userId,
+    academyId,
+    role: role === BRANCH_MANAGER ? "manager" : role,
+    status: "active",
+    academyWide: role === BRANCH_MANAGER ? false : legacyAllBranchAccess(role),
+  });
 }
 
-async function setupAcademy(role: AcademyRole): Promise<{ academyId: string; userId: string; context: AuthContext }> {
+async function setupAcademy(role: FixtureRole): Promise<{ academyId: string; userId: string; context: AuthContext }> {
   const creatorUserId = await createUser();
   const academyId = await createAcademy(creatorUserId);
   const planId = await createPlan();
@@ -195,8 +207,8 @@ afterAll(async () => {
 }, 90_000);
 
 describe("requestStudentPhotoUploadUrl — authorization and scope", () => {
-  it("refuses a role with no write access to students (finance_officer)", async () => {
-    const { academyId, context } = await setupAcademy("finance_officer");
+  it("refuses a role with no write access to students (trainer)", async () => {
+    const { academyId, context } = await setupAcademy("trainer");
     const branchId = await insertBranchDirect(academyId);
     const creator = await createUser();
     const student = await insertStudentDirect(academyId, branchId, creator);
@@ -211,8 +223,8 @@ describe("requestStudentPhotoUploadUrl — authorization and scope", () => {
     expect(getUploadUrlMock).not.toHaveBeenCalled();
   });
 
-  it("refuses a branch-limited caller (admissions_officer) for a student outside their assigned branch, with a generic not_found", async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
+  it("refuses a branch-limited caller (manager) for a student outside their assigned branch, with a generic not_found", async () => {
+    const { academyId, userId, context } = await setupAcademy(BRANCH_MANAGER);
     const assignedBranch = await insertBranchDirect(academyId);
     const otherBranch = await insertBranchDirect(academyId);
     await assignUserToBranches(academyId, userId, [assignedBranch]);
@@ -287,8 +299,8 @@ describe("requestNewStudentPhotoUploadUrl — authorization (no student yet)", (
     expect(getUploadUrlMock).not.toHaveBeenCalled();
   });
 
-  it("allows admissions_officer and returns an academy-scoped (not student-scoped) key", async () => {
-    const { academyId, context } = await setupAcademy("admissions_officer");
+  it("allows a branch-limited manager and returns an academy-scoped (not student-scoped) key", async () => {
+    const { academyId, context } = await setupAcademy(BRANCH_MANAGER);
 
     const result = await requestNewStudentPhotoUploadUrl(context, { contentType: "image/webp", fileSizeBytes: 1000 });
 
@@ -298,20 +310,20 @@ describe("requestNewStudentPhotoUploadUrl — authorization (no student yet)", (
   });
 
   it.each(["image/jpeg", "image/png", "image/webp", "image/avif"])("accepts %s", async (contentType) => {
-    const { context } = await setupAcademy("admissions_officer");
+    const { context } = await setupAcademy(BRANCH_MANAGER);
     const result = await requestNewStudentPhotoUploadUrl(context, { contentType, fileSizeBytes: 1000 });
     expect(result.ok).toBe(true);
   });
 
   it("rejects image/gif (no animation use case for a student photo)", async () => {
-    const { context } = await setupAcademy("admissions_officer");
+    const { context } = await setupAcademy(BRANCH_MANAGER);
     const result = await requestNewStudentPhotoUploadUrl(context, { contentType: "image/gif", fileSizeBytes: 1000 });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
   it("rejects image/svg+xml (no sanitization pipeline)", async () => {
-    const { context } = await setupAcademy("admissions_officer");
+    const { context } = await setupAcademy(BRANCH_MANAGER);
     const result = await requestNewStudentPhotoUploadUrl(context, { contentType: "image/svg+xml", fileSizeBytes: 1000 });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
@@ -453,7 +465,7 @@ describe("verifyStudentPhotoUpload / confirmStudentPhotoUpload", () => {
   });
 
   it("refuses to confirm a photo for a student outside a branch-limited caller's assigned branch", async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
+    const { academyId, userId, context } = await setupAcademy(BRANCH_MANAGER);
     const assignedBranch = await insertBranchDirect(academyId);
     const otherBranch = await insertBranchDirect(academyId);
     await assignUserToBranches(academyId, userId, [assignedBranch]);

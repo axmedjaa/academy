@@ -328,19 +328,8 @@ describe("getFinanceReports — per-entity permission scoping", () => {
     expect(result.report.income.visible).toBe(false);
   });
 
-  it("an Admissions Officer (none on all three finance rows) sees nothing at all", async () => {
-    const { context } = await setupAcademy("admissions_officer");
-    const result = await getFinanceReports(context);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    expect(result.report.studentPayments.visible).toBe(false);
-    expect(result.report.income.visible).toBe(false);
-    expect(result.report.expenses.visible).toBe(false);
-  });
-
-  it("a Finance Officer sees all three sections (manage on payments/income, manage on expenses)", async () => {
-    const { context } = await setupAcademy("finance_officer");
+  it("a Manager sees all three sections (full on payments, manage on income, approve on expenses)", async () => {
+    const { context } = await setupAcademy("manager");
     const result = await getFinanceReports(context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -615,8 +604,6 @@ describe("getFinanceReports — role coverage matches the underlying entities' o
     ["academy_owner", true, true, true],
     ["academy_admin", true, true, true],
     ["manager", true, true, true],
-    ["admissions_officer", false, false, false],
-    ["finance_officer", true, true, true],
     ["trainer", true, false, true],
   ])(
     "role %s: studentPayments visible=%s, income visible=%s, expenses visible=%s",

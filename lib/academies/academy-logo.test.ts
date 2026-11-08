@@ -159,8 +159,8 @@ afterAll(async () => {
 }, 90_000);
 
 describe("requestAcademyLogoUploadUrl — authorization", () => {
-  it("refuses a role without the academy.settings permission (finance_officer)", async () => {
-    const { context } = await setupAcademy("finance_officer");
+  it("refuses a role without the academy.settings permission (trainer)", async () => {
+    const { context } = await setupAcademy("trainer");
     const result = await requestAcademyLogoUploadUrl(context, { contentType: "image/png", fileSizeBytes: 1000 });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");

@@ -365,8 +365,6 @@ describe("issueCertificate — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: issueCertificate allowed = %s", async (role, allowed) => {
     const setup = await setupAcademy(role);
@@ -385,8 +383,6 @@ describe("cancelCertificate — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: cancelCertificate allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -1026,22 +1022,6 @@ describe("getCertificatePrintData", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.certificate.status).toBe("cancelled");
-  });
-
-  it("a role with no view rights on this permission row (finance_officer) is refused", async () => {
-    const setup = await setupAcademy("academy_owner");
-    const { studentId, batchId } = await createEligibleStudentAndBatch(setup);
-    const issued = await issueCertificate(setup.context, studentId, batchId);
-    expect(issued.ok).toBe(true);
-    if (!issued.ok) return;
-
-    const financeUserId = await createUser();
-    await addMembership(financeUserId, setup.academyId, "finance_officer");
-    const financeContext = { userId: financeUserId, branchIds: [], academyWide: false };
-
-    const result = await getCertificatePrintData(financeContext, issued.certificate.id, "https://app.example.com");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("the embedded QR code encodes the same verification URL returned alongside it", async () => {

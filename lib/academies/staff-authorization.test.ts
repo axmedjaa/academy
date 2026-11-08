@@ -212,8 +212,8 @@ describe("Manager cannot change roles (direct service calls)", () => {
     expect((await roleOf(a.academyId, a.trainer.userId)).role).toBe("trainer");
   });
 
-  it("refuses Finance, Admissions and Trainer changing roles", async () => {
-    for (const role of ["finance_officer", "admissions_officer", "trainer"] as const) {
+  it("refuses a Trainer changing roles", async () => {
+    for (const role of ["trainer"] as const) {
       const actor = await addStaff(a.academyId, role, false, [a.mainBranchId]);
       const result = await assignStaffRole(ctx(actor.userId), a.trainer.userId, "manager");
       expect(result.ok).toBe(false);
@@ -373,9 +373,9 @@ describe("staff with no access and no branch", () => {
     expect(await db.select().from(staffBranchAssignments).where(eq(staffBranchAssignments.staffProfileId, person.profileId))).toHaveLength(0);
   });
 
-  it("cannot be archived by Finance, Admissions or a Trainer", async () => {
+  it("cannot be archived by a Trainer", async () => {
     const person = await addNoAccessNoBranchStaff(a);
-    for (const role of ["finance_officer", "admissions_officer", "trainer"] as const) {
+    for (const role of ["trainer"] as const) {
       const actor = await addStaff(a.academyId, role, false, [a.mainBranchId]);
       expect((await updateStaff(ctx(actor.userId), person.profileId, archiveInput("No Access Person"))).ok).toBe(false);
     }

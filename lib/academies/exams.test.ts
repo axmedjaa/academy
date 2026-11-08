@@ -291,8 +291,6 @@ describe("createExam — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: createExam allowed = %s", async (role, allowed) => {
     const { context, batchId } = await setupAcademy(role);
@@ -370,8 +368,6 @@ describe("enterMarks — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
   ])("role %s: enterMarks allowed = %s", async (role, allowed) => {
     const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy(role);
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);

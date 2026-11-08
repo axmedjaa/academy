@@ -601,7 +601,7 @@ describe("createStaff — permission matrix (Full/Manage may create, everyone el
     },
   );
 
-  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "refuses %s with code 'forbidden'",
     async (role) => {
       const { context } = await setupAcademy(role);
@@ -682,7 +682,7 @@ describe("updateStaff", () => {
     },
   );
 
-  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "refuses %s with code 'forbidden'",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
@@ -788,7 +788,7 @@ describe("assignStaffRole", () => {
     },
   );
 
-  it.each<AcademyRole>(["manager", "admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["manager", "trainer"])(
     "refuses %s with code 'forbidden'",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
@@ -923,7 +923,7 @@ describe("removeStaffMembership (owner-safety pass, delete/deletion-audit task)"
     expect(membership.status).toBe("active");
   });
 
-  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "refuses %s with code 'forbidden'",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
@@ -976,7 +976,7 @@ describe("removeStaffMembership (owner-safety pass, delete/deletion-audit task)"
   });
 });
 
-describe("listStaff — permission matrix (Full/Manage/View may list, Admissions/Finance refused)", () => {
+describe("listStaff — permission matrix (Full/Manage/View may list)", () => {
   it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
     "allows %s to view the staff list, unfiltered by branch",
     async (role) => {
@@ -1014,16 +1014,6 @@ describe("listStaff — permission matrix (Full/Manage/View may list, Admissions
     expect(ids.length).toBeGreaterThanOrEqual(1);
   });
 
-  it.each<AcademyRole>(["admissions_officer", "finance_officer"])(
-    "refuses %s with code 'forbidden'",
-    async (role) => {
-      const { context } = await setupAcademy(role);
-      const result = await listStaff(context);
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error.code).toBe("forbidden");
-    },
-  );
-
   it("never returns another academy's staff (tenant isolation)", async () => {
     const other = await setupAcademy("academy_owner");
     await createTargetStaff(other.academyId);
@@ -1036,13 +1026,13 @@ describe("listStaff — permission matrix (Full/Manage/View may list, Admissions
 
   it("includes the joined academy_memberships role and users.email (loginEmail)", async () => {
     const { academyId, context } = await setupAcademy("academy_owner");
-    const target = await createTargetStaff(academyId, "finance_officer");
+    const target = await createTargetStaff(academyId, "trainer");
 
     const result = await listStaff(context);
     expect(result.ok).toBe(true);
     if (result.ok) {
       const row = result.staff.find((s) => s.id === target.staffProfileId);
-      expect(row?.role).toBe("finance_officer");
+      expect(row?.role).toBe("trainer");
       expect(row?.loginEmail).toBeTruthy();
     }
   });
@@ -1199,8 +1189,6 @@ describe("getStaffDeletionEligibility / deleteStaff", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: delete allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");

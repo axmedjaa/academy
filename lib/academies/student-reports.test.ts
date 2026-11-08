@@ -151,18 +151,6 @@ async function enrollStudentDirect(
     .values({ academyId, batchId, courseId: await courseOfBatch(batchId), studentId, status, ...(enrolledAt ? { enrolledAt } : {}) });
 }
 
-async function insertStaffProfile(academyId: string, userId: string): Promise<string> {
-  const [profile] = await db
-    .insert(staffProfiles)
-    .values({ academyId, userId, fullName: "Test Staff Member", phone: "+1-555-0100" })
-    .returning({ id: staffProfiles.id });
-  return profile.id;
-}
-
-async function assignBranchToStaff(academyId: string, staffProfileId: string, branchId: string): Promise<void> {
-  await db.insert(staffBranchAssignments).values({ academyId, staffProfileId, branchId });
-}
-
 async function setupAcademy(
   role: AcademyRole,
 ): Promise<{
@@ -353,8 +341,8 @@ describe("getStudentReports — permission gating", () => {
   });
 
   // ACADEMY_STUDENTS_ACTION (lib/auth/academy-permissions.ts) grants every
-  // one of the six academy roles at least "view" — owner/admin "full",
-  // manager/admissions_officer "manage", finance_officer/trainer "view" —
+  // assignable academy role at least "view" — owner/admin "full", manager
+  // "manage", trainer "view" —
   // so unlike a permission row with a genuine "none" entry, there is no
   // academy role this report can reject outright once membership exists.
   // This positively asserts that reuse (every role reaches the report at
@@ -364,31 +352,11 @@ describe("getStudentReports — permission gating", () => {
     "academy_owner",
     "academy_admin",
     "manager",
-    "admissions_officer",
-    "finance_officer",
     "trainer",
   ])("role %s is never forbidden outright (ACADEMY_STUDENTS_ACTION has no 'none' entry for any role)", async (role) => {
     const { context } = await setupAcademy(role);
     const result = await getStudentReports(context);
     expect(result.ok).toBe(true);
-  });
-
-  it("Admissions Officer sees students across every branch in the academy, regardless of branch assignment (lib/academies/students.ts's resolveScope — Admissions Officer is academy-wide, not branch-limited, for visibility)", async () => {
-    const { academyId, branchId: branchA, creatorUserId, userId, context } = await setupAcademy("admissions_officer");
-    const branchB = await insertBranchDirect(academyId);
-    await insertStudentDirect(academyId, branchA, creatorUserId);
-    await insertStudentDirect(academyId, branchB, creatorUserId);
-
-    // Even with a branch assignment on file (irrelevant to visibility now),
-    // an Admissions Officer still sees both branches' students.
-    const staffProfileId = await insertStaffProfile(academyId, userId);
-    await assignBranchToStaff(academyId, staffProfileId, branchA);
-
-    const result = await getStudentReports(context);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.report.totalStudents).toBe(2);
-    expect(result.report.branchDistribution.reduce((sum, row) => sum + row.count, 0)).toBe(2);
   });
 
   it("a branch-limited role with zero assigned branches gets an empty report, not an error", async () => {

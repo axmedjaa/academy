@@ -463,18 +463,6 @@ describe("exportData — finance_report", () => {
     expect(result.content).not.toContain("studentPayments");
   });
 
-  it("a role with no view rights on any finance section (admissions_officer) exports zero rows, never an error", async () => {
-    const { academyId, studentId, creatorUserId, context } = await setupAcademy("admissions_officer");
-    await insertIncomeDirect(academyId, creatorUserId);
-    void studentId;
-
-    const result = await exportData(context, "finance_report", {}, "csv");
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.rowCount).toBe(0);
-    expect(result.content).toBe(toCsv([], [...FINANCE_REPORT_COLUMNS]));
-  });
-
   it("a role with partial visibility (trainer: payments+expenses, not income) never exports the income section", async () => {
     const { academyId, branchId, studentId, creatorUserId, context } = await setupAcademy("trainer");
     // Multi-branch: a trainer sees its own branches' payments only, so it
@@ -604,19 +592,6 @@ describe("exportData — academic_report", () => {
     }
   });
 
-  it("a role with no exams/results access (admissions_officer) gets the same 'forbidden' error getAcademicReports would", async () => {
-    const { context } = await setupAcademy("admissions_officer");
-    const result = await exportData(context, "academic_report", {}, "csv");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
-
-  it("does not write an audit row when the export is forbidden", async () => {
-    const { academyId, context } = await setupAcademy("admissions_officer");
-    await exportData(context, "academic_report", {}, "csv");
-    const row = await latestExportAuditRow(academyId, "academic_report");
-    expect(row).toBeUndefined();
-  });
 });
 
 // ---------------------------------------------------------------------
@@ -660,6 +635,13 @@ describe("exportData — audit_log", () => {
     const result = await exportData(context, "audit_log", {}, "csv");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
+  });
+
+  it("does not write an audit row when the export is forbidden", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    await exportData(context, "audit_log", {}, "csv");
+    const row = await latestExportAuditRow(academyId, "audit_log");
+    expect(row).toBeUndefined();
   });
 
   it("writes an audit row with entityType 'audit_log' on success", async () => {

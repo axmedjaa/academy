@@ -143,18 +143,16 @@ afterAll(async () => {
 });
 
 describe("createIncomeRecord — permission matrix", () => {
-  // PLAN.md's Finance Lifecycle table: "posted directly by Manager or
-  // Finance Officer" — corrected in Wave 2 from an earlier guess that gave
+  // PLAN.md's Finance Lifecycle table: "posted directly by Manager" (the
+  // Finance Officer role was retired into Manager, migration 0044) — corrected in Wave 2 from an earlier guess that gave
   // Manager view-only (see lib/auth/academy-permissions.ts's module
   // comment on ACADEMY_INCOME_ACTION).
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", false],
     ["academy_admin", false],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", true],
     ["trainer", false],
-  ])("role %s: create allowed = %s (Manager or Finance Officer)", async (role, allowed) => {
+  ])("role %s: create allowed = %s (Manager)", async (role, allowed) => {
     const { context } = await setupAcademy(role);
     const result = await createIncomeRecord(context, validInput());
     expect(result.ok).toBe(allowed);
@@ -162,7 +160,7 @@ describe("createIncomeRecord — permission matrix", () => {
   });
 
   it("writes status 'posted' directly, writes an audit row, and resolves currency from the academy default", async () => {
-    const { academyId, userId, context } = await setupAcademy("finance_officer", "GBP");
+    const { academyId, userId, context } = await setupAcademy("manager", "GBP");
     const result = await createIncomeRecord(context, validInput());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -179,7 +177,7 @@ describe("createIncomeRecord — permission matrix", () => {
   });
 
   it("uses an explicitly supplied currency instead of the academy default", async () => {
-    const { context } = await setupAcademy("finance_officer", "GBP");
+    const { context } = await setupAcademy("manager", "GBP");
     const result = await createIncomeRecord(context, validInput({ currency: "usd" }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.record.currency).toBe("USD");
@@ -205,21 +203,21 @@ describe("createIncomeRecord — permission matrix", () => {
   });
 
   it("rejects a negative amountCents at the application layer with code 'validation'", async () => {
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("manager");
     const result = await createIncomeRecord(context, validInput({ amountCents: -1 }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
   it("rejects an empty category with code 'validation'", async () => {
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("manager");
     const result = await createIncomeRecord(context, validInput({ category: "" }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
   it("creates a record when branchId belongs to the caller's own academy", async () => {
-    const { academyId, context } = await setupAcademy("finance_officer");
+    const { academyId, context } = await setupAcademy("manager");
     const branchId = await insertBranchDirect(academyId);
 
     const result = await createIncomeRecord(context, validInput({ branchId }));
@@ -228,8 +226,8 @@ describe("createIncomeRecord — permission matrix", () => {
   });
 
   it("rejects a branchId belonging to a DIFFERENT academy and creates no record", async () => {
-    const { context } = await setupAcademy("finance_officer");
-    const other = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("manager");
+    const other = await setupAcademy("manager");
     const otherAcademyBranch = await insertBranchDirect(other.academyId);
 
     const before = await db.select().from(incomeRecords);
@@ -245,7 +243,7 @@ describe("createIncomeRecord — permission matrix", () => {
 
 describe("income_records — DB-level constraints", () => {
   it("rejects a negative amount_cents via the CHECK constraint", async () => {
-    const { academyId, userId } = await setupAcademy("finance_officer");
+    const { academyId, userId } = await setupAcademy("manager");
     await expect(
       db.insert(incomeRecords).values({
         academyId,
@@ -258,7 +256,7 @@ describe("income_records — DB-level constraints", () => {
   });
 
   it("FK violation: a nonexistent academy_id is rejected", async () => {
-    const { userId } = await setupAcademy("finance_officer");
+    const { userId } = await setupAcademy("manager");
     await expect(
       db.insert(incomeRecords).values({
         academyId: randomUUID(),
@@ -271,7 +269,7 @@ describe("income_records — DB-level constraints", () => {
   });
 
   it("FK violation: a nonexistent recorded_by is rejected", async () => {
-    const { academyId } = await setupAcademy("finance_officer");
+    const { academyId } = await setupAcademy("manager");
     await expect(
       db.insert(incomeRecords).values({
         academyId,
@@ -286,21 +284,21 @@ describe("income_records — DB-level constraints", () => {
 
 describe("listIncomeRecords — tenant isolation", () => {
   it("never returns another academy's income records", async () => {
-    const other = await setupAcademy("finance_officer");
+    const other = await setupAcademy("manager");
     await createIncomeRecord(other.context, validInput());
 
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("manager");
     const result = await listIncomeRecords(context);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.records).toEqual([]);
   });
 
   it("view-only roles (Owner/Admin) can list but canCreate is false", async () => {
-    const financeOfficer = await setupAcademy("finance_officer");
-    await createIncomeRecord(financeOfficer.context, validInput());
+    const recorderFixture = await setupAcademy("manager");
+    await createIncomeRecord(recorderFixture.context, validInput());
 
     const ownerUserId = await createUser();
-    await addMembership(ownerUserId, financeOfficer.academyId, "academy_owner");
+    await addMembership(ownerUserId, recorderFixture.academyId, "academy_owner");
     const ownerContext: AuthContext = { userId: ownerUserId, branchIds: [], academyWide: false };
 
     const result = await listIncomeRecords(ownerContext);
@@ -311,14 +309,14 @@ describe("listIncomeRecords — tenant isolation", () => {
     }
   });
 
-  // Manager reuses Finance Officer's "manage" level (see the permission
-  // matrix test above) — canCreate must reflect that, unlike Owner/Admin.
+  // Manager has the "manage" level on income (see the permission matrix
+  // test above) — canCreate must reflect that, unlike Owner/Admin.
   it("manager can list and canCreate is true", async () => {
-    const financeOfficer = await setupAcademy("finance_officer");
-    await createIncomeRecord(financeOfficer.context, validInput());
+    const recorderFixture = await setupAcademy("manager");
+    await createIncomeRecord(recorderFixture.context, validInput());
 
     const managerUserId = await createUser();
-    await addMembership(managerUserId, financeOfficer.academyId, "manager");
+    await addMembership(managerUserId, recorderFixture.academyId, "manager");
     const managerContext: AuthContext = { userId: managerUserId, branchIds: [], academyWide: false };
 
     const result = await listIncomeRecords(managerContext);
@@ -329,8 +327,8 @@ describe("listIncomeRecords — tenant isolation", () => {
     }
   });
 
-  it("admissions_officer (no permission row entry) is forbidden from listing entirely", async () => {
-    const { context } = await setupAcademy("admissions_officer");
+  it("trainer (no income access) is forbidden from listing entirely", async () => {
+    const { context } = await setupAcademy("trainer");
     const result = await listIncomeRecords(context);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
@@ -339,7 +337,7 @@ describe("listIncomeRecords — tenant isolation", () => {
 
 describe("money-input-system fix — income amount entered in dollars", () => {
   it('an amount entered as "100" is stored as 10000 cents ($100.00), never $1.00', async () => {
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("manager");
     const entered = dollarsToCents("100");
     expect(entered).toBe(10_000);
     const result = await createIncomeRecord(context, validInput({ amountCents: entered! }));

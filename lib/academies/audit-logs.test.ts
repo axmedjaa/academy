@@ -177,7 +177,7 @@ describe("getAcademyAuditLogs — positive access (Owner/Admin, Full)", () => {
 });
 
 describe("getAcademyAuditLogs — negative access (—)", () => {
-  it.each<AcademyRole>(["manager", "admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["manager", "trainer"])(
     "denies %s with code 'forbidden'",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);

@@ -195,7 +195,7 @@ describe("updateAcademySettings — positive access (Full / View-Edit)", () => {
 });
 
 describe("updateAcademySettings — negative access (—)", () => {
-  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "refuses %s with code 'forbidden' and makes no change",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
@@ -389,8 +389,8 @@ describe("getOwnAcademyUsage", () => {
     }
   });
 
-  it("refuses finance_officer with code 'forbidden'", async () => {
-    const { context } = await setupAcademy("finance_officer");
+  it("refuses trainer with code 'forbidden'", async () => {
+    const { context } = await setupAcademy("trainer");
     const result = await getOwnAcademyUsage(context);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");

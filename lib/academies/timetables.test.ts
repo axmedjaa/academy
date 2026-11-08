@@ -233,7 +233,6 @@ describe("createTimetableEntry — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["finance_officer", false],
   ])("role %s: create allowed = %s", async (role, allowed) => {
     const { context, branchId, batchId } = await setupAcademy(role);
 
@@ -245,21 +244,6 @@ describe("createTimetableEntry — permission matrix", () => {
       endTime: "10:00",
     });
     expect(result.ok).toBe(allowed);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
-
-  it("admissions_officer ('view') is refused even for its own assigned branch", async () => {
-    const { academyId, userId, context, branchId, batchId } = await setupAcademy("admissions_officer");
-    await assignUserToBranches(academyId, userId, [branchId]);
-
-    const result = await createTimetableEntry(context, {
-      branchId,
-      batchId,
-      dayOfWeek: "mon",
-      startTime: "09:00",
-      endTime: "10:00",
-    });
-    expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
@@ -798,18 +782,6 @@ describe("createWeeklyTimetableEntries — multi-day creation", () => {
     }
   });
 
-  it("is forbidden for roles without manage access, identically to single-day creation", async () => {
-    const { context, branchId, batchId } = await setupAcademy("finance_officer");
-    const result = await createWeeklyTimetableEntries(context, {
-      branchId,
-      batchId,
-      daysOfWeek: ["mon", "tue"],
-      startTime: "09:00",
-      endTime: "11:00",
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
 });
 
 describe("createWeeklyTimetableEntries — atomicity", () => {

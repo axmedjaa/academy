@@ -228,11 +228,9 @@ describe("createExpenseRecord — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", true],
     ["trainer", false],
   ])(
-    "role %s: create allowed = %s (Owner/Admin/Manager/Finance Officer, per the approved architecture decision — Admissions Officer/Trainer still refused)",
+    "role %s: create allowed = %s (Owner/Admin/Manager, per the approved architecture decision — Trainer refused)",
     async (role, allowed) => {
       const { context } = await setupAcademy(role);
       const result = await createExpenseRecord(context, validInput());
@@ -242,7 +240,7 @@ describe("createExpenseRecord — permission matrix", () => {
   );
 
   it("records the expense as 'approved' straight away (no approval needed), writes an audit row, and resolves currency from the academy default", async () => {
-    const { academyId, userId, context } = await setupAcademy("finance_officer", "GBP");
+    const { academyId, userId, context } = await setupAcademy("academy_owner", "GBP");
     const result = await createExpenseRecord(context, validInput());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -262,14 +260,14 @@ describe("createExpenseRecord — permission matrix", () => {
   });
 
   it("rejects a negative amountCents at the application layer with code 'validation'", async () => {
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("academy_owner");
     const result = await createExpenseRecord(context, validInput({ amountCents: -1 }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
   it("creates a record when branchId belongs to the caller's own academy", async () => {
-    const { academyId, context } = await setupAcademy("finance_officer");
+    const { academyId, context } = await setupAcademy("academy_owner");
     const branchId = await insertBranchDirect(academyId);
 
     const result = await createExpenseRecord(context, validInput({ branchId }));
@@ -278,8 +276,8 @@ describe("createExpenseRecord — permission matrix", () => {
   });
 
   it("rejects a branchId belonging to a DIFFERENT academy and creates no record", async () => {
-    const { context } = await setupAcademy("finance_officer");
-    const other = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("academy_owner");
+    const other = await setupAcademy("academy_owner");
     const otherAcademyBranch = await insertBranchDirect(other.academyId);
 
     const before = await db.select().from(expenseRecords);
@@ -298,11 +296,9 @@ describe("submitExpenseForApproval — draft -> pending_approval", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", true],
     ["trainer", false],
   ])("role %s: submit allowed = %s", async (role, allowed) => {
-    const owner = await setupAcademy("finance_officer");
+    const owner = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
     const actor = await addActingUser(owner.academyId, role);
 
@@ -312,7 +308,7 @@ describe("submitExpenseForApproval — draft -> pending_approval", () => {
   });
 
   it("a legacy draft recorded by the actor is completed directly: approved, no approval_requests row", async () => {
-    const { academyId, userId, context } = await setupAcademy("finance_officer");
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(academyId, userId, "draft");
 
     const result = await submitExpenseForApproval(context, expenseId);
@@ -324,7 +320,7 @@ describe("submitExpenseForApproval — draft -> pending_approval", () => {
   });
 
   it("someone else's legacy draft, submitted by a role without general approve authority, still goes to pending_approval with a pending approval_requests row", async () => {
-    const { academyId, userId } = await setupAcademy("finance_officer");
+    const { academyId, userId } = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(academyId, userId, "draft");
     const other = await addActingUser(academyId, "academy_owner");
 
@@ -340,7 +336,7 @@ describe("submitExpenseForApproval — draft -> pending_approval", () => {
   });
 
   it("refuses to submit a non-draft expense with code 'invalid_state'", async () => {
-    const { academyId, userId, context } = await setupAcademy("finance_officer");
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(academyId, userId, "pending_approval");
 
     const result = await submitExpenseForApproval(context, expenseId);
@@ -349,17 +345,17 @@ describe("submitExpenseForApproval — draft -> pending_approval", () => {
   });
 
   it("rejects a cross-academy expense id with code 'not_found'", async () => {
-    const other = await setupAcademy("finance_officer");
+    const other = await setupAcademy("academy_owner");
     const otherExpenseId = await insertExpenseDirect(other.academyId, other.userId, "draft");
 
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("academy_owner");
     const result = await submitExpenseForApproval(context, otherExpenseId);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
   it("rejects a nonexistent expense id with code 'not_found'", async () => {
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("academy_owner");
     const result = await submitExpenseForApproval(context, randomUUID());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
@@ -371,13 +367,11 @@ describe("approveExpense — pending_approval -> approved", () => {
     ["academy_owner", false],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])(
-    "role %s: approving a DIFFERENT user's submission allowed = %s (GENERAL approve authority — Admin/Manager only; Owner/Finance Officer may still self-approve their OWN, tested separately below)",
+    "role %s: approving a DIFFERENT user's submission allowed = %s (GENERAL approve authority — Admin/Manager only; Owner may still self-approve their OWN, tested separately below)",
     async (role, allowed) => {
-      const owner = await setupAcademy("finance_officer");
+      const owner = await setupAcademy("academy_owner");
       const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
       const submitResult = await submitAsLegacyPending(owner.context, expenseId);
       expect(submitResult.ok).toBe(true);
@@ -393,7 +387,7 @@ describe("approveExpense — pending_approval -> approved", () => {
   );
 
   it("approves: status -> approved, approved_by/approved_at set, approval_requests row decided, audit before/after recorded", async () => {
-    const owner = await setupAcademy("finance_officer");
+    const owner = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
     await submitAsLegacyPending(owner.context, expenseId);
 
@@ -418,7 +412,7 @@ describe("approveExpense — pending_approval -> approved", () => {
   });
 
   it("refuses to approve an expense that was never submitted (still 'draft') with code 'invalid_state'", async () => {
-    const owner = await setupAcademy("finance_officer");
+    const owner = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
     const admin = await addActingUser(owner.academyId, "academy_admin");
 
@@ -428,7 +422,7 @@ describe("approveExpense — pending_approval -> approved", () => {
   });
 
   it("refuses to approve an already-approved expense with code 'invalid_state'", async () => {
-    const owner = await setupAcademy("finance_officer");
+    const owner = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
     await submitAsLegacyPending(owner.context, expenseId);
     const admin = await addActingUser(owner.academyId, "academy_admin");
@@ -447,7 +441,7 @@ describe("approveExpense — pending_approval -> approved", () => {
   });
 
   it("rejects a cross-academy expense id with code 'not_found'", async () => {
-    const other = await setupAcademy("finance_officer");
+    const other = await setupAcademy("academy_owner");
     const otherExpenseId = await insertExpenseDirect(other.academyId, other.userId, "draft");
     await submitAsLegacyPending(other.context, otherExpenseId);
 
@@ -457,7 +451,7 @@ describe("approveExpense — pending_approval -> approved", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager", "finance_officer"])(
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
     "%s self-approval is ALLOWED: creates -> submits -> approves their own expense immediately (approved architecture decision)",
     async (role) => {
       const { context, userId } = await setupAcademy(role);
@@ -498,17 +492,17 @@ describe("approveExpense — pending_approval -> approved", () => {
   });
 
   it("a real pending expense id belonging to a DIFFERENT academy is rejected as not_found — never approved, even for a same-role self-approve attempt (tenant isolation)", async () => {
-    const other = await setupAcademy("finance_officer");
+    const other = await setupAcademy("academy_owner");
     const otherCreated = await createLegacyDraft(other.context);
     expect(otherCreated.ok).toBe(true);
     if (!otherCreated.ok) return;
     const otherSubmitted = await submitAsLegacyPending(other.context, otherCreated.record.id);
     expect(otherSubmitted.ok).toBe(true);
 
-    // A same-role Finance Officer in a completely different academy — must
+    // A same-role Owner in a completely different academy — must
     // never be able to decide a different academy's expense, self-approve
     // path included.
-    const attacker = await setupAcademy("finance_officer");
+    const attacker = await setupAcademy("academy_owner");
     const result = await approveExpense(attacker.context, otherCreated.record.id);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
@@ -520,13 +514,11 @@ describe("rejectExpense — pending_approval -> rejected", () => {
     ["academy_owner", false],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])(
     "role %s: rejecting a DIFFERENT user's submission allowed = %s (GENERAL approve authority — Admin/Manager only)",
     async (role, allowed) => {
-      const owner = await setupAcademy("finance_officer");
+      const owner = await setupAcademy("academy_owner");
       const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
       await submitAsLegacyPending(owner.context, expenseId);
 
@@ -538,7 +530,7 @@ describe("rejectExpense — pending_approval -> rejected", () => {
   );
 
   it("requires a non-empty reason with code 'validation'", async () => {
-    const owner = await setupAcademy("finance_officer");
+    const owner = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
     await submitAsLegacyPending(owner.context, expenseId);
     const manager = await addActingUser(owner.academyId, "manager");
@@ -549,7 +541,7 @@ describe("rejectExpense — pending_approval -> rejected", () => {
   });
 
   it("rejects: status -> rejected, rejection_reason persisted on both the expense row and the approval_requests row", async () => {
-    const owner = await setupAcademy("finance_officer");
+    const owner = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
     await submitAsLegacyPending(owner.context, expenseId);
 
@@ -565,7 +557,7 @@ describe("rejectExpense — pending_approval -> rejected", () => {
     expect(request?.reason).toBe("Duplicate expense.");
   });
 
-  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager", "finance_officer"])(
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
     "%s self-rejection is ALLOWED (same approved architecture change as self-approval)",
     async (role) => {
       const { context } = await setupAcademy(role);
@@ -582,22 +574,22 @@ describe("rejectExpense — pending_approval -> rejected", () => {
     },
   );
 
-  it("a self-approve-only role (Finance Officer) still cannot reject a DIFFERENT Finance Officer's submission", async () => {
-    const submitterAcademy = await setupAcademy("finance_officer");
+  it("a self-approve-only role (Owner) still cannot reject a DIFFERENT Owner's submission", async () => {
+    const submitterAcademy = await setupAcademy("academy_owner");
     const created = await createLegacyDraft(submitterAcademy.context);
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     const submitted = await submitAsLegacyPending(submitterAcademy.context, created.record.id);
     expect(submitted.ok).toBe(true);
 
-    const otherFinanceOfficer = await addActingUser(submitterAcademy.academyId, "finance_officer");
-    const result = await rejectExpense(otherFinanceOfficer.context, created.record.id, "Not mine to decide.");
+    const otherOwner = await addActingUser(submitterAcademy.academyId, "academy_owner");
+    const result = await rejectExpense(otherOwner.context, created.record.id, "Not mine to decide.");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("refuses to reject an expense that isn't pending approval with code 'invalid_state'", async () => {
-    const owner = await setupAcademy("finance_officer");
+    const owner = await setupAcademy("academy_owner");
     const expenseId = await insertExpenseDirect(owner.academyId, owner.userId, "draft");
     const admin = await addActingUser(owner.academyId, "academy_admin");
 
@@ -609,7 +601,7 @@ describe("rejectExpense — pending_approval -> rejected", () => {
 
 describe("expense_records — DB-level constraints", () => {
   it("rejects a negative amount_cents via the CHECK constraint", async () => {
-    const { academyId, userId } = await setupAcademy("finance_officer");
+    const { academyId, userId } = await setupAcademy("academy_owner");
     await expect(
       db.insert(expenseRecords).values({
         academyId,
@@ -622,7 +614,7 @@ describe("expense_records — DB-level constraints", () => {
   });
 
   it("FK violation: a nonexistent academy_id is rejected", async () => {
-    const { userId } = await setupAcademy("finance_officer");
+    const { userId } = await setupAcademy("academy_owner");
     await expect(
       db.insert(expenseRecords).values({
         academyId: randomUUID(),
@@ -635,7 +627,7 @@ describe("expense_records — DB-level constraints", () => {
   });
 
   it("FK violation: a nonexistent submitted_by is rejected", async () => {
-    const { academyId } = await setupAcademy("finance_officer");
+    const { academyId } = await setupAcademy("academy_owner");
     await expect(
       db.insert(expenseRecords).values({
         academyId,
@@ -650,19 +642,19 @@ describe("expense_records — DB-level constraints", () => {
 
 describe("listExpenseRecords — tenant isolation", () => {
   it("never returns another academy's expense records", async () => {
-    const other = await setupAcademy("finance_officer");
+    const other = await setupAcademy("academy_owner");
     await insertExpenseDirect(other.academyId, other.userId);
 
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("academy_owner");
     const result = await listExpenseRecords(context);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.records).toEqual([]);
   });
 
   it("Owner: can list, can create, canSelfApprove but NOT general canApprove (approved architecture decision)", async () => {
-    const financeOfficer = await setupAcademy("finance_officer");
-    await insertExpenseDirect(financeOfficer.academyId, financeOfficer.userId);
-    const owner = await addActingUser(financeOfficer.academyId, "academy_owner");
+    const ownerFixture = await setupAcademy("academy_owner");
+    await insertExpenseDirect(ownerFixture.academyId, ownerFixture.userId);
+    const owner = await addActingUser(ownerFixture.academyId, "academy_owner");
 
     const result = await listExpenseRecords(owner.context);
     expect(result.ok).toBe(true);
@@ -675,7 +667,7 @@ describe("listExpenseRecords — tenant isolation", () => {
   });
 
   it("Academy Administrator/Manager: canCreate, GENERAL canApprove, AND canSelfApprove all true", async () => {
-    const { academyId } = await setupAcademy("finance_officer");
+    const { academyId } = await setupAcademy("academy_owner");
     for (const role of ["academy_admin", "manager"] as const) {
       const actor = await addActingUser(academyId, role);
       const result = await listExpenseRecords(actor.context);
@@ -688,8 +680,8 @@ describe("listExpenseRecords — tenant isolation", () => {
     }
   });
 
-  it("Finance Officer: canCreate, canSelfApprove, but NOT general canApprove", async () => {
-    const { context } = await setupAcademy("finance_officer");
+  it("Owner (manage on expenses): canCreate, canSelfApprove, but NOT general canApprove", async () => {
+    const { context } = await setupAcademy("academy_owner");
     const result = await listExpenseRecords(context);
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -700,8 +692,8 @@ describe("listExpenseRecords — tenant isolation", () => {
   });
 
   it("Trainer: view-only — canCreate, canApprove, AND canSelfApprove all false (Trainer is not in the self-approve role set)", async () => {
-    const financeOfficer = await setupAcademy("finance_officer");
-    const trainer = await addActingUser(financeOfficer.academyId, "trainer");
+    const ownerFixture = await setupAcademy("academy_owner");
+    const trainer = await addActingUser(ownerFixture.academyId, "trainer");
 
     const result = await listExpenseRecords(trainer.context);
     expect(result.ok).toBe(true);
@@ -712,17 +704,11 @@ describe("listExpenseRecords — tenant isolation", () => {
     }
   });
 
-  it("admissions_officer (no permission row entry) is forbidden from listing entirely", async () => {
-    const { context } = await setupAcademy("admissions_officer");
-    const result = await listExpenseRecords(context);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
 });
 
 describe("money-input-system fix — expense amount entered in dollars", () => {
   it('an amount entered as "10.01" is stored as 1001 cents ($10.01), never 10 cents', async () => {
-    const { context } = await setupAcademy("finance_officer");
+    const { context } = await setupAcademy("academy_owner");
     const entered = dollarsToCents("10.01");
     expect(entered).toBe(1001);
     const result = await createExpenseRecord(context, validInput({ amountCents: entered! }));

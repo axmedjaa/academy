@@ -286,20 +286,10 @@ describe("createBatch — permission matrix (academy-wide roles, own branch)", (
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["finance_officer", false],
   ])("role %s: create allowed = %s", async (role, allowed) => {
     const { context, branchId, courseId } = await setupAcademy(role);
     const result = await createBatch(context, validInput(branchId, courseId));
     expect(result.ok).toBe(allowed);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
-
-  it("admissions_officer ('view') is refused create even for its own assigned branch", async () => {
-    const { academyId, userId, context, branchId, courseId } = await setupAcademy("admissions_officer");
-    await assignUserToBranches(academyId, userId, [branchId]);
-
-    const result = await createBatch(context, validInput(branchId, courseId));
-    expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
@@ -359,8 +349,8 @@ describe("createBatch — permission matrix (academy-wide roles, own branch)", (
   });
 });
 
-describe("listBatches / getBatch — branch-scoped roles (Admissions Officer, Trainer)", () => {
-  it.each<AcademyRole>(["admissions_officer", "trainer"])(
+describe("listBatches / getBatch — branch-scoped roles (Trainer)", () => {
+  it.each<AcademyRole>(["trainer"])(
     "role %s sees only batches in their assigned branch(es)",
     async (role) => {
       const { academyId, userId, context, courseId } = await setupAcademy(role);
@@ -405,7 +395,7 @@ describe("listBatches / getBatch — branch-scoped roles (Admissions Officer, Tr
     },
   );
 
-  it.each<AcademyRole>(["admissions_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "role %s: getBatch on a guessed/nonexistent id returns the identical 'not_found'",
     async (role) => {
       const { academyId, userId, context, branchId } = await setupAcademy(role);
@@ -718,8 +708,6 @@ describe("getBatchDeletionEligibility / deleteBatch", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: delete allowed = %s (Trainer's own-branch archive access does not extend to delete)", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -729,7 +717,7 @@ describe("getBatchDeletionEligibility / deleteBatch", () => {
 
     const actingUserId = await createUser();
     await addMembership(actingUserId, owner.academyId, role);
-    if (role === "trainer" || role === "admissions_officer") {
+    if (role === "trainer") {
       await assignUserToBranches(owner.academyId, actingUserId, [owner.branchId]);
     }
     const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };

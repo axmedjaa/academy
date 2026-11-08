@@ -144,8 +144,8 @@ afterAll(async () => {
 }, 90_000);
 
 describe("createBook", () => {
-  it("Manager/Finance Officer can create a book", async () => {
-    for (const role of ["manager", "finance_officer"] as const) {
+  it("Manager can create a book", async () => {
+    for (const role of ["manager"] as const) {
       const { academyId, context } = await setupAcademy(role);
       const result = await createTestBook(context, academyId, { name: "English Grammar Book" });
       expect(result.ok).toBe(true);
@@ -166,8 +166,8 @@ describe("createBook", () => {
     }
   });
 
-  it("Admissions Officer/Trainer have no access", async () => {
-    for (const role of ["admissions_officer", "trainer"] as const) {
+  it("Trainer has no access", async () => {
+    for (const role of ["trainer"] as const) {
       const { academyId, context } = await setupAcademy(role);
       const result = await createTestBook(context, academyId);
       expect(result.ok).toBe(false);

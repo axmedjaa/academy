@@ -157,8 +157,6 @@ describe("createProgram — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: create allowed = %s", async (role, allowed) => {
     const { context } = await setupAcademy(role);
@@ -204,8 +202,6 @@ describe("archiveProgram — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: archive allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -248,7 +244,7 @@ describe("updateProgram", () => {
 });
 
 describe("listPrograms / getProgram", () => {
-  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager", "admissions_officer", "trainer"])(
+  it.each<AcademyRole>(["academy_owner", "academy_admin", "manager", "trainer"])(
     "role %s can list academy-wide programs (no branch scoping)",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
@@ -261,15 +257,6 @@ describe("listPrograms / getProgram", () => {
       }
     },
   );
-
-  it("finance_officer is refused entirely with code 'forbidden'", async () => {
-    const { academyId, context } = await setupAcademy("finance_officer");
-    await insertProgramDirect(academyId);
-
-    const result = await listPrograms(context);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
 
   it("never returns another academy's programs", async () => {
     const other = await setupAcademy("academy_owner");
@@ -350,7 +337,7 @@ describe("getProgramDeletionEligibility / deleteProgram", () => {
     expect(stillThere.ok).toBe(true);
   });
 
-  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "refuses %s with code 'forbidden'",
     async (role) => {
       const owner = await setupAcademy("academy_owner");

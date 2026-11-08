@@ -344,8 +344,6 @@ describe("requestResultCorrection — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: requestResultCorrection allowed = %s", async (role, allowed) => {
     const setup = await setupAcademy(role);
@@ -519,8 +517,6 @@ describe("approveResultCorrection/rejectResultCorrection — permission matrix",
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: approveResultCorrection allowed = %s", async (role, allowed) => {
     const setup = await setupAcademy(role);

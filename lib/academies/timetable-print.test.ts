@@ -267,10 +267,4 @@ describe("getTimetablePrintData", () => {
     }
   });
 
-  it("is forbidden for roles with no timetable access", async () => {
-    const { context } = await setupAcademy("finance_officer");
-    const result = await getTimetablePrintData(context, {});
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
 });

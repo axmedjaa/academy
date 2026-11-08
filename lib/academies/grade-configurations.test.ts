@@ -210,8 +210,6 @@ describe("createGradeConfiguration — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: create allowed = %s", async (role, allowed) => {
     const { context } = await setupAcademy(role);
@@ -262,8 +260,6 @@ describe("updateGradeBands — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: update allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -592,8 +588,6 @@ describe("submitGradeConfigForApproval — Draft -> Pending Approval", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: submit allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -660,8 +654,6 @@ describe("approveGradeConfig — Pending Approval -> Approved (authority: Owner/
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])(
     "role %s: approve allowed = %s (Academy Administrator raised to 'full' — architecture decision: never blocked waiting for approval)",
@@ -807,8 +799,6 @@ describe("rejectGradeConfig — Pending Approval back to Draft (same authority a
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: reject allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -906,8 +896,6 @@ describe("activateGradeConfiguration — Approved -> Active (two-row atomic tran
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: activate allowed = %s (gated on canManage, not the narrower canApprove)", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");

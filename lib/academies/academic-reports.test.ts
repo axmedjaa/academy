@@ -401,11 +401,9 @@ describe("getAcademicReports — permission gating", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", true],
   ])(
-    "role %s: allowed = %s (neither ACADEMY_EXAMS_ACTION nor ACADEMY_RESULTS_ACTION grants admissions_officer/finance_officer any level)",
+    "role %s: allowed = %s",
     async (role, allowed) => {
       const { context } = await setupAcademy(role);
       const result = await getAcademicReports(context);

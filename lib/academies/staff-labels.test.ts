@@ -59,10 +59,10 @@ describe("resolveStaffLabels", () => {
     expect(labels.get(manager.id)).toBe("Manager");
   });
 
-  it("maps every academy role to its own distinct friendly label", async () => {
+  it("maps every assignable academy role to its own distinct friendly label", async () => {
     const creator = await createUser();
     const academyId = await createAcademy(creator.id);
-    const roles: AcademyRole[] = ["academy_owner", "academy_admin", "manager", "admissions_officer", "finance_officer", "trainer"];
+    const roles: AcademyRole[] = ["academy_owner", "academy_admin", "manager", "trainer"];
     const userIds: string[] = [];
     for (const role of roles) {
       const user = await createUser();
@@ -74,9 +74,7 @@ describe("resolveStaffLabels", () => {
     expect(labels.get(userIds[0])).toBe("Academy Owner");
     expect(labels.get(userIds[1])).toBe("Academy Administrator");
     expect(labels.get(userIds[2])).toBe("Manager");
-    expect(labels.get(userIds[3])).toBe("Admissions Officer");
-    expect(labels.get(userIds[4])).toBe("Finance Officer");
-    expect(labels.get(userIds[5])).toBe("Trainer");
+    expect(labels.get(userIds[3])).toBe("Trainer");
   });
 
   it("falls back to email when no membership row exists in this academy (e.g. removed staff)", async () => {
@@ -112,12 +110,12 @@ describe("resolveStaffLabels", () => {
   it("batches multiple ids into one lookup (no N+1) and dedupes repeated ids", async () => {
     const creator = await createUser();
     const academyId = await createAcademy(creator.id);
-    const finance = await createUser();
-    await addMembership(finance.id, academyId, "finance_officer");
+    const manager = await createUser();
+    await addMembership(manager.id, academyId, "manager");
 
-    const labels = await resolveStaffLabels(academyId, [finance.id, finance.id, creator.id]);
+    const labels = await resolveStaffLabels(academyId, [manager.id, manager.id, creator.id]);
     expect(labels.size).toBe(2);
-    expect(labels.get(finance.id)).toBe("Finance Officer");
+    expect(labels.get(manager.id)).toBe("Manager");
     // creator has no membership in this academy (only createdBy on the row) -> email fallback.
     expect(labels.get(creator.id)).toBe(creator.email);
   });

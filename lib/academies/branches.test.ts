@@ -264,8 +264,6 @@ describe("createBranch — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: create allowed = %s", async (role, allowed) => {
     const { context } = await setupAcademy(role);
@@ -442,8 +440,6 @@ describe("restoreBranch", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: restore allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -467,8 +463,6 @@ describe("updateBranch / archiveBranch — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: update/archive allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -511,18 +505,10 @@ describe("listBranches / getBranch — academy-wide roles see everything", () =>
     },
   );
 
-  it("finance_officer is refused entirely with code 'forbidden'", async () => {
-    const { academyId, context } = await setupAcademy("finance_officer");
-    await insertBranchDirect(academyId);
-
-    const result = await listBranches(context);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
 });
 
-describe("listBranches / getBranch — branch-limited roles (Admissions Officer, Trainer)", () => {
-  it.each<AcademyRole>(["admissions_officer", "trainer"])(
+describe("listBranches / getBranch — branch-limited roles (Trainer)", () => {
+  it.each<AcademyRole>(["trainer"])(
     "role %s sees only their assigned branch(es)",
     async (role) => {
       const { academyId, userId, context } = await setupAcademy(role);
@@ -539,7 +525,7 @@ describe("listBranches / getBranch — branch-limited roles (Admissions Officer,
     },
   );
 
-  it.each<AcademyRole>(["admissions_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "role %s with no staff_profiles/assignment rows sees no branches",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);
@@ -551,7 +537,7 @@ describe("listBranches / getBranch — branch-limited roles (Admissions Officer,
     },
   );
 
-  it.each<AcademyRole>(["admissions_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "role %s: getBranch on an unassigned branch returns 404-equivalent 'not_found' (IDOR)",
     async (role) => {
       const { academyId, userId, context } = await setupAcademy(role);
@@ -568,7 +554,7 @@ describe("listBranches / getBranch — branch-limited roles (Admissions Officer,
     },
   );
 
-  it.each<AcademyRole>(["admissions_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "role %s: getBranch on a guessed/nonexistent id returns the identical 'not_found'",
     async (role) => {
       const { academyId, userId, context } = await setupAcademy(role);
@@ -705,8 +691,6 @@ describe("getBranchDeletionEligibility / deleteBranch", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: delete allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");

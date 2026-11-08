@@ -419,8 +419,6 @@ describe("submitResults — permission matrix (same gate as enterMarks)", () => 
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
   ])("role %s: submitResults allowed = %s", async (role, allowed) => {
     const setup = await setupAcademy(role);
     const examId = await insertExamDirect(setup.academyId, setup.batchId);
@@ -597,8 +595,6 @@ describe("approveResult/rejectResult — permission matrix (new academy.results 
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: approveResult allowed = %s", async (role, allowed) => {
     const setup = await setupAcademy(role);
@@ -619,8 +615,6 @@ describe("approveResult/rejectResult — permission matrix (new academy.results 
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: rejectResult allowed = %s", async (role, allowed) => {
     const setup = await setupAcademy(role);
@@ -844,8 +838,6 @@ describe("publishResults — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: publishResults allowed = %s", async (role, allowed) => {
     const setup = await setupAcademy(role);

@@ -352,7 +352,6 @@ describe("assignTrainerToBatch — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["finance_officer", false],
   ])("role %s: assign allowed = %s", async (role, allowed) => {
     const { context, academyId, batchId } = await setupAcademy(role);
     const trainerUserId = await createUser();
@@ -360,17 +359,6 @@ describe("assignTrainerToBatch — permission matrix", () => {
 
     const result = await assignTrainerToBatch(context, { batchId, staffProfileId });
     expect(result.ok).toBe(allowed);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
-
-  it("admissions_officer ('view') is refused even for its own assigned branch", async () => {
-    const { academyId, userId, context, branchId, batchId } = await setupAcademy("admissions_officer");
-    await assignUserToBranches(academyId, userId, [branchId]);
-    const trainerUserId = await createUser();
-    const staffProfileId = await insertStaffProfile(academyId, trainerUserId);
-
-    const result = await assignTrainerToBatch(context, { batchId, staffProfileId });
-    expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
@@ -516,24 +504,12 @@ describe("enrollStudentInBatch — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["finance_officer", false],
   ])("role %s: enroll allowed = %s", async (role, allowed) => {
     const { context, academyId, branchId, batchId, creatorUserId } = await setupAcademy(role);
     const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
 
     const result = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
     expect(result.ok).toBe(allowed);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
-
-  it("admissions_officer ('view') is refused even for its own assigned branch", async () => {
-    const { academyId, userId, context, branchId, batchId, creatorUserId } =
-      await setupAcademy("admissions_officer");
-    await assignUserToBranches(academyId, userId, [branchId]);
-    const studentId = await insertStudentDirect(academyId, branchId, creatorUserId);
-
-    const result = await enrollStudentInBatch(context, { batchId, studentId, paymentPlan: DEFAULT_PAYMENT_PLAN });
-    expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
@@ -1361,8 +1337,6 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: delete allowed = %s (Trainer's own-branch withdraw access does not extend to delete)", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -1373,7 +1347,7 @@ describe("getEnrollmentDeletionEligibility / deleteBatchEnrollment", () => {
 
     const actingUserId = await createUser();
     await addMembership(actingUserId, owner.academyId, role);
-    if (role === "trainer" || role === "admissions_officer") {
+    if (role === "trainer") {
       await assignUserToBranches(owner.academyId, actingUserId, [owner.branchId]);
     }
     const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };

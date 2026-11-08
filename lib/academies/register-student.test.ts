@@ -23,6 +23,12 @@ import {
 } from "./register-student";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
+/** A Manager limited to their assigned branches (academy_wide = false): what
+ * migration 0044 made of a branch-limited Admissions Officer. A test-only
+ * fixture name; the membership row holds the real role "manager". */
+const BRANCH_MANAGER = "branch_manager" as const;
+type FixtureRole = AcademyRole | typeof BRANCH_MANAGER;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Same "one top-level cleanup, every test builds its own fully isolated
@@ -83,9 +89,15 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 async function addMembership(
   userId: string,
   academyId: string,
-  role: AcademyRole,
+  role: FixtureRole,
 ): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
+  await db.insert(academyMemberships).values({
+    userId,
+    academyId,
+    role: role === BRANCH_MANAGER ? "manager" : role,
+    status: "active",
+    academyWide: role === BRANCH_MANAGER ? false : legacyAllBranchAccess(role),
+  });
 }
 
 async function insertBranchDirect(
@@ -130,7 +142,7 @@ async function assignUserToBranches(
  * 100 students allowed), one branch, and one membership of the given
  * role. */
 async function setupAcademy(
-  role: AcademyRole,
+  role: FixtureRole,
   maxStudents = 100,
 ): Promise<{
   academyId: string;
@@ -216,18 +228,9 @@ describe("registerStudent — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", true],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: register allowed = %s", async (role, allowed) => {
-    const { academyId, branchId, userId, context } = await setupAcademy(role);
-
-    // Admissions Officer is branch-limited (§6) — give it an assignment to
-    // the fixture branch so this test isolates the role-level permission
-    // question from the separate branch-scoping tests below.
-    if (role === "admissions_officer") {
-      await assignUserToBranches(academyId, userId, [branchId]);
-    }
+    const { branchId, context } = await setupAcademy(role);
 
     const result = await registerStudent(context, validInput(branchId));
     expect(result.ok).toBe(allowed);
@@ -269,18 +272,18 @@ describe("registerStudent — permission matrix", () => {
   });
 });
 
-describe("registerStudent — branch-limited scoping (Admissions Officer)", () => {
-  it("Admissions Officer can register into an assigned branch", async () => {
-    const { academyId, branchId, userId, context } = await setupAcademy("admissions_officer");
+describe("registerStudent — branch-limited scoping (Manager without all-branch access)", () => {
+  it("A branch-limited manager can register into an assigned branch", async () => {
+    const { academyId, branchId, userId, context } = await setupAcademy(BRANCH_MANAGER);
     await assignUserToBranches(academyId, userId, [branchId]);
 
     const result = await registerStudent(context, validInput(branchId));
     expect(result.ok).toBe(true);
   });
 
-  it("Admissions Officer is refused (code 'not_found') for an unassigned branch, IDOR-safe", async () => {
+  it("A branch-limited manager is refused (code 'not_found') for an unassigned branch, IDOR-safe", async () => {
     const { academyId, branchId: assignedBranch, userId, context } = await setupAcademy(
-      "admissions_officer",
+      BRANCH_MANAGER,
     );
     const otherBranch = await insertBranchDirect(academyId);
     await assignUserToBranches(academyId, userId, [assignedBranch]);
@@ -290,8 +293,8 @@ describe("registerStudent — branch-limited scoping (Admissions Officer)", () =
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it("Admissions Officer with no staff_profiles/assignment rows is refused for any branch", async () => {
-    const { branchId, context } = await setupAcademy("admissions_officer");
+  it("A branch-limited manager with no staff_profiles/assignment rows is refused for any branch", async () => {
+    const { branchId, context } = await setupAcademy(BRANCH_MANAGER);
     const result = await registerStudent(context, validInput(branchId));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");

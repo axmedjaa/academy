@@ -226,8 +226,6 @@ describe("createCourse — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: create allowed = %s", async (role, allowed) => {
     const { context, programId } = await setupAcademy(role);
@@ -315,8 +313,6 @@ describe("archiveCourse / updateCourse — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: update/archive allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -660,7 +656,7 @@ describe("getCourseDeletionEligibility / deleteCourse", () => {
     expect(stillThere.ok).toBe(true);
   });
 
-  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "refuses %s with code 'forbidden'",
     async (role) => {
       const owner = await setupAcademy("academy_owner");

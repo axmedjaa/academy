@@ -198,7 +198,7 @@ describe("assignStaffBranches — permission matrix (Full/Manage may assign, eve
     },
   );
 
-  it.each<AcademyRole>(["admissions_officer", "finance_officer", "trainer"])(
+  it.each<AcademyRole>(["trainer"])(
     "refuses %s with code 'forbidden'",
     async (role) => {
       const { academyId, context } = await setupAcademy(role);

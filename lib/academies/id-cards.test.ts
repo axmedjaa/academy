@@ -25,6 +25,12 @@ import {
 } from "./id-cards";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
+/** A Manager limited to their assigned branches (academy_wide = false): what
+ * migration 0044 made of a branch-limited Admissions Officer. A test-only
+ * fixture name; the membership row holds the real role "manager". */
+const BRANCH_MANAGER = "branch_manager" as const;
+type FixtureRole = AcademyRole | typeof BRANCH_MANAGER;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Same "one top-level cleanup, every test builds its own fully isolated
@@ -85,9 +91,15 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 async function addMembership(
   userId: string,
   academyId: string,
-  role: AcademyRole,
+  role: FixtureRole,
 ): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
+  await db.insert(academyMemberships).values({
+    userId,
+    academyId,
+    role: role === BRANCH_MANAGER ? "manager" : role,
+    status: "active",
+    academyWide: role === BRANCH_MANAGER ? false : legacyAllBranchAccess(role),
+  });
 }
 
 async function insertBranchDirect(academyId: string): Promise<string> {
@@ -151,11 +163,11 @@ async function assignUserToBranches(
 
 /** Full fixture: a fresh academy, one active plan/subscription, a
  * membership of the given role, one branch, and one student in that
- * branch. Branch-limited roles (admissions_officer, trainer) are assigned
+ * branch. Branch-limited roles (BRANCH_MANAGER, trainer) are assigned
  * to the student's own branch by default — pass `assignToBranch: false`
  * for the IDOR variant that needs the caller assigned elsewhere. */
 async function setupWithStudent(
-  role: AcademyRole,
+  role: FixtureRole,
   options: { assignToBranch?: boolean } = {},
 ): Promise<{
   academyId: string;
@@ -185,7 +197,7 @@ async function setupWithStudent(
   await addMembership(userId, academyId, role);
 
   const assignToBranch = options.assignToBranch ?? true;
-  if ((role === "admissions_officer" || role === "trainer") && assignToBranch) {
+  if ((role === BRANCH_MANAGER || role === "trainer") && assignToBranch) {
     await assignUserToBranches(academyId, userId, [branchId]);
   }
 
@@ -242,8 +254,6 @@ describe("issueStudentIdCard — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", true],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: issue allowed = %s", async (role, allowed) => {
     const { context, studentId } = await setupWithStudent(role);
@@ -357,8 +367,6 @@ describe("reprintStudentIdCard", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", true],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: reprint allowed = %s", async (role, allowed) => {
     const owner = await setupWithStudent("academy_owner");
@@ -368,7 +376,7 @@ describe("reprintStudentIdCard", () => {
 
     const actingUserId = await createUser();
     await addMembership(actingUserId, owner.academyId, role);
-    if (role === "admissions_officer" || role === "trainer") {
+    if (role === "trainer") {
       await assignUserToBranches(owner.academyId, actingUserId, [owner.branchId]);
     }
     const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
@@ -386,10 +394,10 @@ describe("reprintStudentIdCard", () => {
   });
 });
 
-describe("branch-scoped IDOR — Admissions Officer / Trainer", () => {
-  it("admissions_officer cannot issue a card for a student outside their assigned branch", async () => {
+describe("branch-scoped IDOR — branch-limited Manager / Trainer", () => {
+  it("a branch-limited manager cannot issue a card for a student outside their assigned branch", async () => {
     const { context, academyId, userId, otherBranchId } = await setupWithStudent(
-      "admissions_officer",
+      BRANCH_MANAGER,
       { assignToBranch: true },
     );
     const outsideStudent = await insertStudentDirect(academyId, otherBranchId, userId);
@@ -399,7 +407,7 @@ describe("branch-scoped IDOR — Admissions Officer / Trainer", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it("admissions_officer cannot reprint a card for a student outside their assigned branch", async () => {
+  it("a branch-limited manager cannot reprint a card for a student outside their assigned branch", async () => {
     const owner = await setupWithStudent("academy_owner");
     const outsideStudent = await insertStudentDirect(
       owner.academyId,
@@ -411,7 +419,7 @@ describe("branch-scoped IDOR — Admissions Officer / Trainer", () => {
     if (!issued.ok) return;
 
     const officerUserId = await createUser();
-    await addMembership(officerUserId, owner.academyId, "admissions_officer");
+    await addMembership(officerUserId, owner.academyId, BRANCH_MANAGER);
     await assignUserToBranches(owner.academyId, officerUserId, [owner.branchId]);
     const officerContext: AuthContext = {
       userId: officerUserId,
@@ -490,8 +498,8 @@ describe("getIdCard", () => {
     if (result.ok) expect(result.card?.id).toBe(second.card.id);
   });
 
-  it("finance_officer is refused entirely with code 'forbidden'", async () => {
-    const { context, studentId } = await setupWithStudent("finance_officer");
+  it("trainer (no ID-card access) is refused entirely with code 'forbidden'", async () => {
+    const { context, studentId } = await setupWithStudent("trainer");
     const result = await getIdCard(context, studentId);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
@@ -541,8 +549,8 @@ describe("lookup and issue by studentNumber (not just UUID id)", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it("a studentNumber outside an admissions_officer's assigned branch still resolves to nothing", async () => {
-    const { context, academyId, userId, otherBranchId } = await setupWithStudent("admissions_officer", {
+  it("a studentNumber outside a branch-limited manager's assigned branch still resolves to nothing", async () => {
+    const { context, academyId, userId, otherBranchId } = await setupWithStudent(BRANCH_MANAGER, {
       assignToBranch: true,
     });
     const outsideStudent = await insertStudentDirect(academyId, otherBranchId, userId);

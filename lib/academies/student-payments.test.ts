@@ -297,8 +297,6 @@ describe("createStudentCharge — permission matrix", () => {
     ["academy_owner", false],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", true],
     ["trainer", false],
   ])(
     "role %s: create allowed = %s (Owner/Trainer are view-only; Admin was raised to manage-level per the manual student-payment verification report)",
@@ -328,7 +326,7 @@ describe("createStudentCharge — permission matrix", () => {
   });
 
   it("uses an explicitly supplied currency instead of the academy default", async () => {
-    const { studentId, context } = await setupAcademy("finance_officer", "GBP");
+    const { studentId, context } = await setupAcademy("academy_admin", "GBP");
     const result = await createStudentCharge(context, validCharge(studentId, { currency: "usd" }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.charge.currency).toBe("USD");
@@ -362,8 +360,6 @@ describe("recordStudentPayment — permission matrix", () => {
     ["academy_owner", false],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", true],
     ["trainer", false],
   ])("role %s: record allowed = %s", async (role, allowed) => {
     const { studentId, context } = await setupAcademy(role);
@@ -373,7 +369,7 @@ describe("recordStudentPayment — permission matrix", () => {
   });
 
   it("always creates with status 'approved' immediately, approvedBy/approvedAt set to the recorder — no approval workflow", async () => {
-    const { studentId, userId, context } = await setupAcademy("finance_officer");
+    const { studentId, userId, context } = await setupAcademy("academy_admin");
     const result = await recordStudentPayment(context, validPayment(studentId));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -390,8 +386,8 @@ describe("recordStudentPayment — permission matrix", () => {
     expect(await countApprovalRequestsForPayment(result.payment.id)).toBe(0);
   });
 
-  it("Finance Officer's payment is immediately effective — no Manager approval needed (fixes the previous asymmetry where Finance Officer could record but never get approved)", async () => {
-    const { studentId, context } = await setupAcademy("finance_officer");
+  it("Academy Administrator's payment is immediately effective — no Manager approval needed", async () => {
+    const { studentId, context } = await setupAcademy("academy_admin");
     const result = await recordStudentPayment(context, validPayment(studentId));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -453,7 +449,7 @@ describe("recordStudentPayment — permission matrix", () => {
   });
 
   it("rejects a negative amountCents at the application layer with code 'validation'", async () => {
-    const { studentId, context } = await setupAcademy("finance_officer");
+    const { studentId, context } = await setupAcademy("academy_admin");
     const result = await recordStudentPayment(context, validPayment(studentId, { amountCents: -1 }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("validation");
@@ -638,8 +634,6 @@ describe("issueReceipt", () => {
     ["academy_owner", false],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", true],
     ["trainer", false],
   ])("role %s: issue allowed (permission-wise) = %s", async (role, allowed) => {
     const { academyId, studentId, creatorUserId, context } = await setupAcademy(role);
@@ -896,12 +890,6 @@ describe("listStudentCharges / listStudentPayments — tenant isolation", () => 
     }
   });
 
-  it("admissions_officer (no permission row entry) is forbidden from listing entirely", async () => {
-    const { context } = await setupAcademy("admissions_officer");
-    const result = await listStudentCharges(context);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
 });
 
 describe("listStudentPayments — search, status and method filters (Finance → Payments)", () => {

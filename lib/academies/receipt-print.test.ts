@@ -18,6 +18,8 @@ import {
   paymentAllocations,
   programs,
   receipts,
+  staffBranchAssignments,
+  staffProfiles,
   students,
   studentCharges,
   studentPayments,
@@ -114,6 +116,15 @@ async function addActingUser(academyId: string, role: AcademyRole): Promise<{ us
   return { userId, context: { userId, branchIds: [], academyWide: false } };
 }
 
+/** A staff profile for the user, assigned to one branch (branch-limited roles see only their branches). */
+async function assignUserToBranch(academyId: string, userId: string, branchId: string): Promise<void> {
+  const [profile] = await db
+    .insert(staffProfiles)
+    .values({ academyId, userId, fullName: "Test Staff Member", phone: "+1-555-0100" })
+    .returning({ id: staffProfiles.id });
+  await db.insert(staffBranchAssignments).values({ academyId, staffProfileId: profile.id, branchId });
+}
+
 async function insertBranchDirect(academyId: string): Promise<string> {
   const [row] = await db
     .insert(branches)
@@ -186,6 +197,8 @@ afterAll(async () => {
     await db.delete(courses).where(eq(courses.academyId, academyId));
     await db.delete(programs).where(eq(programs.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(staffBranchAssignments).where(eq(staffBranchAssignments.academyId, academyId));
+    await db.delete(staffProfiles).where(eq(staffProfiles.academyId, academyId));
     await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
@@ -318,14 +331,18 @@ describe("getReceiptPrintData — charge-linked payment", () => {
 
     for (const role of ["academy_owner", "academy_admin", "trainer"] as const) {
       const viewer = await addActingUser(recorder.academyId, role);
+      // A Trainer is branch-limited (academy_wide = false): assigned to the
+      // student's own branch, so this checks visibility inside that branch.
+      if (role === "trainer") await assignUserToBranch(recorder.academyId, viewer.userId, recorder.branchId);
       const result = await getReceiptPrintData(viewer.context, receiptResult.receipt.id);
       expect(result.ok).toBe(true);
     }
   });
 
-  it("Admissions Officer (no access on student_payments) is refused", async () => {
+  it("a branch-limited Trainer assigned to a different branch cannot view the receipt", async () => {
     const recorder = await setupAcademy("manager");
     const chargeResult = await createStudentCharge(recorder.context, { studentId: recorder.studentId, description: "Fee", amountCents: 500 });
+    expect(chargeResult.ok).toBe(true);
     if (!chargeResult.ok) return;
     const paymentResult = await recordStudentPayment(recorder.context, {
       studentId: recorder.studentId,
@@ -334,15 +351,21 @@ describe("getReceiptPrintData — charge-linked payment", () => {
       method: "cash",
       receivedAt: new Date().toISOString(),
     });
+    expect(paymentResult.ok).toBe(true);
     if (!paymentResult.ok) return;
     const receiptResult = await issueReceipt(recorder.context, paymentResult.payment.id);
+    expect(receiptResult.ok).toBe(true);
     if (!receiptResult.ok) return;
 
-    const admissions = await addActingUser(recorder.academyId, "admissions_officer");
-    const result = await getReceiptPrintData(admissions.context, receiptResult.receipt.id);
+    const trainer = await addActingUser(recorder.academyId, "trainer");
+    const otherBranchId = await insertBranchDirect(recorder.academyId);
+    await assignUserToBranch(recorder.academyId, trainer.userId, otherBranchId);
+
+    const result = await getReceiptPrintData(trainer.context, receiptResult.receipt.id);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
+    if (!result.ok) expect(result.error.code).toBe("not_found");
   });
+
 });
 
 describe("getReceiptPrintData — fee-period-linked payment", () => {

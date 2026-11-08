@@ -301,7 +301,7 @@ describe("staff assignments and all-branch access", () => {
   });
 
   it("only the owner grants all-branch access, only to Main Branch staff, and it is audited", { timeout: 90_000 }, async () => {
-    const target = await member(X.academyId, "finance_officer", false, [branchB]);
+    const target = await member(X.academyId, "trainer", false, [branchB]);
 
     const byManager = await setAllBranchAccess(ctx(wideManager.userId), target.staffProfileId, true);
     expect(byManager.ok).toBe(false);
@@ -453,7 +453,7 @@ describe("editing where existing staff work", () => {
   }
 
   it("the owner moves someone to all branches and back; role, status and account never change; every step is audited", { timeout: 120_000 }, async () => {
-    const target = await member(X.academyId, "finance_officer", false, [branchB]);
+    const target = await member(X.academyId, "trainer", false, [branchB]);
     const before = await snapshot(target);
 
     const toAll = await setStaffWorkplace(ctx(X.ownerId), target.staffProfileId, { workplace: "all" });

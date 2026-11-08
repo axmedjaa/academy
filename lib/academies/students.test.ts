@@ -43,6 +43,12 @@ import { enrollStudentInBatch, type PaymentPlanInput } from "./batch-assignments
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
+/** A Manager limited to their assigned branches (academy_wide = false): what
+ * migration 0044 made of a branch-limited Admissions Officer. A test-only
+ * fixture name; the membership row holds the real role "manager". */
+const BRANCH_MANAGER = "branch_manager" as const;
+type FixtureRole = AcademyRole | typeof BRANCH_MANAGER;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Same "one top-level cleanup, every test builds its own fully isolated
@@ -103,15 +109,21 @@ async function createAcademy(creatorUserId: string): Promise<string> {
 async function addMembership(
   userId: string,
   academyId: string,
-  role: AcademyRole,
+  role: FixtureRole,
 ): Promise<void> {
-  await db.insert(academyMemberships).values({ userId, academyId, role, status: "active", academyWide: legacyAllBranchAccess(role) });
+  await db.insert(academyMemberships).values({
+    userId,
+    academyId,
+    role: role === BRANCH_MANAGER ? "manager" : role,
+    status: "active",
+    academyWide: role === BRANCH_MANAGER ? false : legacyAllBranchAccess(role),
+  });
 }
 
 /** Full fixture: a fresh academy, one active plan/subscription, and one
  * membership of the given role. */
 async function setupAcademy(
-  role: AcademyRole,
+  role: FixtureRole,
 ): Promise<{ academyId: string; userId: string; context: AuthContext }> {
   const creatorUserId = await createUser();
   const academyId = await createAcademy(creatorUserId);
@@ -411,13 +423,11 @@ describe("searchStudents — permission matrix (read)", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", true],
-    ["finance_officer", true],
     ["trainer", true],
   ])("role %s: search allowed = %s", async (role, allowed) => {
     const { academyId, userId, context } = await setupAcademy(role);
     const branchId = await insertBranchDirect(academyId);
-    if (role === "admissions_officer" || role === "trainer") {
+    if (role === "trainer") {
       await assignUserToBranches(academyId, userId, [branchId]);
     }
     await insertStudentDirect(academyId, branchId, userId);
@@ -489,8 +499,6 @@ describe("updateStudent — permission matrix", () => {
     ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", true],
-    ["finance_officer", false],
     ["trainer", false],
   ])("role %s: update allowed = %s", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
@@ -499,7 +507,7 @@ describe("updateStudent — permission matrix", () => {
 
     const actingUserId = await createUser();
     await addMembership(actingUserId, owner.academyId, role);
-    if (role === "admissions_officer" || role === "trainer") {
+    if (role === "trainer") {
       await assignUserToBranches(owner.academyId, actingUserId, [branchId]);
     }
     const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
@@ -610,13 +618,13 @@ describe("updateStudent — permission matrix", () => {
     expect(reloaded.fullName).toBe(student.fullName);
   });
 
-  it("admissions_officer (branch-limited) is refused if the update includes a branchId, even unchanged", async () => {
+  it("a branch-limited manager is refused if the update includes a branchId, even unchanged", async () => {
     const owner = await setupAcademy("academy_owner");
     const branchId = await insertBranchDirect(owner.academyId);
     const student = await insertStudentDirect(owner.academyId, branchId, owner.userId);
 
     const actingUserId = await createUser();
-    await addMembership(actingUserId, owner.academyId, "admissions_officer");
+    await addMembership(actingUserId, owner.academyId, BRANCH_MANAGER);
     await assignUserToBranches(owner.academyId, actingUserId, [branchId]);
     const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
 
@@ -629,8 +637,8 @@ describe("updateStudent — permission matrix", () => {
   });
 });
 
-describe("branch-scoped IDOR — Admissions Officer (mutation-side; unaffected by the visibility-scope change)", () => {
-  it.each<AcademyRole>(["admissions_officer", "trainer"])(
+describe("branch-scoped IDOR — branch-limited roles (mutation-side; unaffected by the visibility-scope change)", () => {
+  it.each<AcademyRole>(["trainer"])(
     "role %s: getStudent on a guessed/nonexistent id returns the identical 'not_found'",
     async (role) => {
       const { academyId, userId, context } = await setupAcademy(role);
@@ -643,14 +651,14 @@ describe("branch-scoped IDOR — Admissions Officer (mutation-side; unaffected b
     },
   );
 
-  it("admissions_officer cannot update a student in an unassigned branch (IDOR on write)", async () => {
+  it("a branch-limited manager cannot update a student in an unassigned branch (IDOR on write)", async () => {
     const owner = await setupAcademy("academy_owner");
     const assignedBranch = await insertBranchDirect(owner.academyId);
     const otherBranch = await insertBranchDirect(owner.academyId);
     const outOfScope = await insertStudentDirect(owner.academyId, otherBranch, owner.userId);
 
     const actingUserId = await createUser();
-    await addMembership(actingUserId, owner.academyId, "admissions_officer");
+    await addMembership(actingUserId, owner.academyId, BRANCH_MANAGER);
     await assignUserToBranches(owner.academyId, actingUserId, [assignedBranch]);
     const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
 
@@ -668,12 +676,13 @@ async function grantAllBranches(academyId: string, userId: string): Promise<void
     .where(and(eq(academyMemberships.academyId, academyId), eq(academyMemberships.userId, userId)));
 }
 
-// Multi-branch (migration 0037): an Admissions Officer now works in their
+// Multi-branch (migration 0037): a branch-limited Manager (formerly an
+// Admissions Officer, migration 0044) works in their
 // assigned branches like every other member without all-branch access; the
 // owner can grant all-branch access (Main Branch staff only).
-describe("Admissions Officer — branch-scoped student visibility", () => {
+describe("branch-limited Manager — branch-scoped student visibility", () => {
   it("sees no students without a branch, only their branch once assigned, and every branch with all-branch access", { timeout: 60_000 }, async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
+    const { academyId, userId, context } = await setupAcademy(BRANCH_MANAGER);
     const branchA = await insertBranchDirect(academyId);
     const branchB = await insertBranchDirect(academyId);
     const creatorId = await createUser();
@@ -693,7 +702,7 @@ describe("Admissions Officer — branch-scoped student visibility", () => {
   });
 
   it("getStudent succeeds for a student of their branch and is not_found for another branch's", { timeout: 60_000 }, async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
+    const { academyId, userId, context } = await setupAcademy(BRANCH_MANAGER);
     const ownBranch = await insertBranchDirect(academyId);
     const otherBranch = await insertBranchDirect(academyId);
     await assignUserToBranches(academyId, userId, [ownBranch]);
@@ -712,7 +721,7 @@ describe("Admissions Officer — branch-scoped student visibility", () => {
     const otherBranch = await insertBranchDirect(other.academyId);
     await insertStudentDirect(other.academyId, otherBranch, other.userId);
 
-    const { context } = await setupAcademy("admissions_officer");
+    const { context } = await setupAcademy(BRANCH_MANAGER);
     const result = await searchStudents(context);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.rows).toEqual([]);
@@ -729,7 +738,7 @@ describe("Admissions Officer — branch-scoped student visibility", () => {
       createdBy: creatorUserId,
     });
     const userId = await createUser();
-    await addMembership(userId, academyId, "admissions_officer");
+    await addMembership(userId, academyId, BRANCH_MANAGER);
 
     const result = await searchStudents({ userId, branchIds: [], academyWide: false });
     expect(result.ok).toBe(false);
@@ -737,7 +746,7 @@ describe("Admissions Officer — branch-scoped student visibility", () => {
   });
 
   it("an explicit branchId filter only narrows — it never widens past their branches", { timeout: 60_000 }, async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
+    const { academyId, userId, context } = await setupAcademy(BRANCH_MANAGER);
     const branchA = await insertBranchDirect(academyId);
     const branchB = await insertBranchDirect(academyId);
     await assignUserToBranches(academyId, userId, [branchA]);
@@ -908,7 +917,7 @@ describe("Trainer — teaching/enrollment-based student visibility", () => {
 
 describe("Owner/Manager/Admin — unchanged academy-wide visibility", () => {
   it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
-    "role %s sees every student in their academy across multiple branches, unaffected by the Admissions Officer/Trainer visibility change",
+    "role %s sees every student in their academy across multiple branches, unaffected by the branch-limited visibility change",
     async (role) => {
       const { academyId, userId, context } = await setupAcademy(role);
       const branchA = await insertBranchDirect(academyId);
@@ -1175,8 +1184,8 @@ describe("getAdmissionsView — applied (not-yet-enrolled) candidates", () => {
     expect(result.data.rows.map((r) => r.id)).not.toContain(archived.id);
   });
 
-  it("Admissions Officer sees admissions candidates of their branch, and of every branch with all-branch access", { timeout: 60_000 }, async () => {
-    const { academyId, userId, context } = await setupAcademy("admissions_officer");
+  it("a branch-limited manager sees admissions candidates of their branch, and of every branch with all-branch access", { timeout: 60_000 }, async () => {
+    const { academyId, userId, context } = await setupAcademy(BRANCH_MANAGER);
     const branchA = await insertBranchDirect(academyId);
     const branchB = await insertBranchDirect(academyId);
     await assignUserToBranches(academyId, userId, [branchA]);
@@ -1372,17 +1381,15 @@ describe("getStudentDeletionEligibility / deleteStudent", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_admin", true],
     ["manager", true],
-    ["admissions_officer", false],
-    ["finance_officer", false],
     ["trainer", false],
-  ])("role %s: delete allowed = %s (Admissions Officer's own-branch manage access does not extend to delete)", async (role, allowed) => {
+  ])("role %s: delete allowed = %s (own-branch manage access does not extend to delete)", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
     const branchId = await insertBranchDirect(owner.academyId);
     const student = await insertStudentDirect(owner.academyId, branchId, owner.userId);
 
     const actingUserId = await createUser();
     await addMembership(actingUserId, owner.academyId, role);
-    if (role === "trainer" || role === "admissions_officer") {
+    if (role === "trainer") {
       await assignUserToBranches(owner.academyId, actingUserId, [branchId]);
     }
     const actingContext: AuthContext = { userId: actingUserId, branchIds: [], academyWide: false };
