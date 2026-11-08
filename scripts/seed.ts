@@ -29,7 +29,7 @@ import {
 } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/auth/password";
 import { regenerateRecoveryCodesForUser } from "@/lib/auth/mfa";
-import type { AcademyRole } from "@/lib/auth/roles";
+import type { AcademyRole, RetiredAcademyRole } from "@/lib/auth/roles";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
@@ -132,23 +132,20 @@ const DEMO_PLAN_NAME = "Demo Academy Plan";
 const DEMO_PASSWORD =
   process.env.SEED_DEMO_PASSWORD ?? "DemoPassw0rd!2026";
 
-const DEMO_ROLE_EMAILS: Record<AcademyRole, string> = {
+/** The roles the demo academy seeds: every assignable academy role. */
+type DemoRole = Exclude<AcademyRole, RetiredAcademyRole>;
+
+const DEMO_ROLE_EMAILS: Record<DemoRole, string> = {
   academy_owner: process.env.SEED_DEMO_OWNER_EMAIL ?? "demo-owner@example.com",
   academy_admin: process.env.SEED_DEMO_ADMIN_EMAIL ?? "demo-admin@example.com",
   manager: process.env.SEED_DEMO_MANAGER_EMAIL ?? "demo-manager@example.com",
-  admissions_officer:
-    process.env.SEED_DEMO_ADMISSIONS_EMAIL ?? "demo-admissions@example.com",
-  finance_officer:
-    process.env.SEED_DEMO_FINANCE_EMAIL ?? "demo-finance@example.com",
   trainer: process.env.SEED_DEMO_TRAINER_EMAIL ?? "demo-trainer@example.com",
 };
 
-const DEMO_ROLE_NAMES: Record<AcademyRole, string> = {
+const DEMO_ROLE_NAMES: Record<DemoRole, string> = {
   academy_owner: "Demo Owner",
   academy_admin: "Demo Admin",
   manager: "Demo Manager",
-  admissions_officer: "Demo Admissions Officer",
-  finance_officer: "Demo Finance Officer",
   trainer: "Demo Trainer",
 };
 
@@ -291,7 +288,7 @@ async function ensureSubscription(
 async function getOrCreateStaffProfile(
   academyId: string,
   userId: string,
-  role: AcademyRole,
+  role: DemoRole,
   branchId: string,
 ): Promise<string> {
   const [existingProfile] = await db
@@ -842,7 +839,7 @@ async function seedDemoData(): Promise<void> {
   console.log("Seeded demo academy dataset:");
   console.log(`  Academy:  Demo Academy (slug: ${DEMO_ACADEMY_SLUG})`);
   console.log(`  Demo password (all demo accounts, override via SEED_DEMO_PASSWORD): ${DEMO_PASSWORD}`);
-  for (const role of Object.keys(DEMO_ROLE_EMAILS) as AcademyRole[]) {
+  for (const role of Object.keys(DEMO_ROLE_EMAILS) as DemoRole[]) {
     console.log(`  ${role}: ${DEMO_ROLE_EMAILS[role]}`);
   }
 }

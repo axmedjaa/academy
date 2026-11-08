@@ -6,6 +6,9 @@ sign-off review, not new implementation — every decision below either
 points at code/tests that already exist, or names an explicit,
 PLAN.md-sanctioned deferral.
 
+**Last reviewed:** 2026-11-08 (updated from the original Item 67 sign-off to
+reflect email, file storage, worker and security work completed since).
+
 ## Deployment & Ops Decisions
 
 PLAN.md's own table marks every row below **"Deferred — non-blocking"** —
@@ -18,9 +21,9 @@ below reflects whether that fixed requirement is actually met today.
 | Production hosting provider | Deferred | N/A — provider choice only |
 | PostgreSQL hosting | Deferred | N/A — provider choice only |
 | Redis hosting | Deferred | N/A — provider choice only |
-| Object storage provider | Deferred | ⚠️ See "Known limitation" below — no interface exists yet, not even a stub |
-| Email provider | Deferred | ⚠️ See "Known limitation" below — log-only stub, no interface |
-| SMS provider | Deferred | ⚠️ See "Known limitation" below — log-only stub, no interface |
+| Object storage provider | Deferred | ✅ Implemented behind `lib/storage/`: an S3-compatible client (Cloudflare R2 via the AWS SDK) with presigned uploads, a shared upload policy (`lib/storage/upload-policy.ts`) and server-side verification of each upload (`lib/storage/verify-upload.ts`). Used for academy logos, book covers, course images and student photos. Production needs its own private bucket and credentials. |
+| Email provider | Deferred | ✅ Implemented behind `lib/email/client.ts` (Resend). Used for password reset, invitations, email-change verification, sign-in verification codes for platform staff, and queued notifications. Production needs a sending domain verified in Resend (plus SPF/DKIM/DMARC); with Resend's test sender, mail only reaches the Resend account owner. |
+| SMS provider | Deferred | ⚠️ Not implemented. There is no SMS provider and no `lib/sms`; the notification worker marks SMS jobs as skipped (`sms_not_configured`). |
 | Domain / DNS / TLS management | Deferred | N/A — provider choice only |
 | Secrets-management approach | Deferred (fixed requirement: env-injected, never committed/logged) | ✅ Met — every credential in this codebase is read via `lib/env.ts` from environment variables; `.env.local` is gitignored; `lib/redact.ts` strips password/token/secret fields from logs and audit rows |
 | Monitoring provider | Deferred (fixed requirement: Sentry-class tool required) | ✅ Requirement met via `lib/monitoring/` (Item 62) — a real, working `MonitoringSink` interface with a log-based default sink; the *provider* (an actual Sentry account, etc.) remains a deployment-time choice, exactly as PLAN.md frames it |
@@ -28,13 +31,13 @@ below reflects whether that fixed requirement is actually met today.
 
 ## Checklist bullets
 
-- **Environment variables** — ✅ Complete. `.env.example` inventories every required/optional var (DB, Redis, session/MFA encryption keys, every rate-limit threshold, seed credentials). `lib/env.ts` fails loudly at startup (Zod-validated) if a required var is missing.
-- **Local development setup** — ✅ Complete. `README.md` documents the native-Windows PostgreSQL + Memurai setup (no Docker/containers anywhere), `npm install && npm run migrate && npm run seed`.
-- **Seed & Demonstration Data** — ✅ Complete as of this Item 67 pass. `scripts/seed.ts` now seeds, in addition to the one MFA-enrolled `platform_owner`: one demo academy, 2 branches, one account per academy role (owner/admin/manager/admissions officer/finance officer/trainer), 10 students, 2 courses/batches with a fully published result set, 4 student charges with a mix of paid/partially-paid/open payments, 2 income records, 2 expense records, and 1 issued certificate. Idempotent (verified: running it twice produces zero duplicate rows) and guarded against `NODE_ENV=production`, same as the original platform_owner seed.
-- **Database migrations** — ✅ Complete. Drizzle Kit-generated, checked into `drizzle/`, applied in CI on every run (`npm run migrate`); `drizzle-kit check` reports no drift as of this review.
-- **Deployment** — ⚠️ Deployment-dependent. Provider-agnostic steps are implied by the existing scripts (`npm run build`, `npm run migrate`, start the app + a separate BullMQ worker process), but no specific hosting target has been chosen, consistent with PLAN.md's own "Deployment target is undecided" stance.
+- **Environment variables** — ✅ Complete. `.env.example` inventories every required/optional var (DB, Redis, MFA encryption key, email, object storage, every rate-limit threshold, trusted-proxy hop count, seed credentials). `lib/env.ts` fails loudly at startup (Zod-validated) if a required var is missing, and a production server refuses to start without `TRUSTED_PROXY_HOP_COUNT`.
+- **Local development setup** — ✅ Complete. `README.md` documents the requirements (Node.js, PostgreSQL, a Redis-compatible server such as Memurai on Windows), `.env.local` setup, and `npm install`, `npm run migrate`, `npm run seed`, `npm run dev`.
+- **Seed & Demonstration Data** — ✅ Complete. `scripts/seed.ts` seeds one `platform_owner` (with one-time recovery codes; sign-in verification is by emailed code) plus one demo academy, 2 branches, one account per assignable academy role (owner/admin/manager/trainer), 10 students, 2 courses/batches with a fully published result set, 4 student charges with a mix of paid/partially-paid/open payments, 2 income records, 2 expense records, and 1 issued certificate. Idempotent and guarded against `NODE_ENV=production`. CI runs it as a smoke test on every push.
+- **Database migrations** — ✅ Complete. Drizzle Kit-generated and checked into `drizzle/`. `npm run migrate` (development, reads `.env.local`) and `npm run migrate:prod` (production, `DATABASE_URL` only) both run `scripts/migrate.mjs`; CI applies every migration to fresh databases on every run.
+- **Deployment** — ⚠️ Deployment-dependent. The pieces exist (`npm run build` and `npm start`, `npm run migrate:prod`, and the bundled notification worker via `npm run build:worker` and `npm run start:worker`), but no hosting target has been chosen and CI does not deploy, consistent with PLAN.md's own "Deployment target is undecided" stance.
 - **Secrets management** — ✅ Requirement met (see table above).
-- **Health checks** — ✅ Complete as of this Item 67 pass. `GET /api/health` (new) checks database connectivity (`select 1`), Redis connectivity (`PING`), and notification-queue health (reusing `lib/monitoring/queue-health.ts`'s existing thresholds) — returns `200`/`{"status":"ok",...}` when healthy, `503`/`{"status":"degraded",...}` otherwise, with per-check `"ok"`/`"error"` verdicts only (no connection strings, stack traces, or raw internal counts ever included in the response).
+- **Health checks** — ✅ Complete. `GET /api/health/live` (process liveness), `GET /api/health/ready` (readiness), and `GET /api/health`, which checks database connectivity (`select 1`), Redis connectivity (`PING`), and notification-queue health (reusing `lib/monitoring/queue-health.ts`'s existing thresholds) — returns `200`/`{"status":"ok",...}` when healthy, `503`/`{"status":"degraded",...}` otherwise, with per-check `"ok"`/`"error"` verdicts only (no connection strings, stack traces, or raw internal counts ever included in the response).
 - **Monitoring** — ✅ Requirement met (see table above); provider choice deferred.
 - **Backup / restore** — ✅ Complete — see `docs/backup-restore-drill.md`.
 - **Incident response** — ✅ Requirement met by design. `platform_owner` is the incident-response owner for MVP; no on-call rotation is in scope, consistent with PLAN.md's "single-operator SaaS at MVP stage" framing.
@@ -49,39 +52,25 @@ assumption. None are part of Item 67's own scope.
 
 | Limitation | Documented at |
 |---|---|
-| Student-payment reversal does not recalculate the linked charge's status | `lib/academies/student-payments.ts` (~line 925) |
-| Subscription-expiry-reminder BullMQ job is built but has no live consumer wired at process startup | `lib/subscriptions/expiry-reminder-job.ts` |
-| Rate limiting (login, MFA, certificate verification) derives the client IP via `lib/http/client-ip.ts`'s `TRUSTED_PROXY_HOP_COUNT`-aware extraction (defaults to 0 = trust nothing, shared bucket); still requires the actual production deployment to terminate behind a verified trusted reverse proxy/CDN, with `TRUSTED_PROXY_HOP_COUNT` set to match it, once a hosting provider is chosen (still deferred, see above) | `lib/http/client-ip.ts`, `lib/auth/actions.ts`, `lib/auth/mfa-actions.ts`, `lib/academies/certificate-verify-rate-limit.ts`, `app/verify/[certificateCode]/page.tsx` |
+| Per-IP rate limits (login, MFA, certificate verification) derive the client IP via `lib/http/client-ip.ts`'s `TRUSTED_PROXY_HOP_COUNT`-aware extraction. The production deployment must sit behind a verified trusted reverse proxy/CDN with `TRUSTED_PROXY_HOP_COUNT` set to match it; a production server refuses to start if it is unset. The per-account login and per-user MFA limits do not depend on the IP. | `lib/http/client-ip.ts`, `lib/http/proxy-trust-check.ts`, `lib/auth/login-rate-limit.ts` |
 | Notification preferences are stored but not yet consulted by `enqueueNotification` — every event currently sends regardless of a user's toggle | `lib/notifications/preferences.ts` |
 | A notification addressed to "any current member of an academy" (null `user_id`) is a single shared row — one viewer marking it read does not, and cannot yet, hide it individually for others | `lib/notifications/list-notifications.ts` |
 | `/academy/finance-reports` and `/academy/reports`'s Finance tab both exist and both work, rendering the same component — not yet consolidated into one route | `app/academy/reports/page.tsx` |
-| `npm audit` reports 9 vulnerabilities (4 moderate, 5 high), entirely from two dev-tooling-only chains (`drizzle-kit`'s transitive `esbuild`; `eslint-config-next`'s transitive `braces`/`micromatch`/`fast-glob`), neither reaching production; the only available fix for either is a breaking downgrade, intentionally not applied. The critical Next.js RCE and the `sharp`/`source-map-js` findings previously listed here have been fixed. | `docs/npm-audit-findings.md` |
+| `npm audit` (2026-11-08) reports 0 vulnerabilities in production dependencies and 12 moderate findings in development-only tooling. CI fails on any high or critical advisory in production dependencies (`npm run audit:prod`). | `docs/dependency-advisories.md`, `docs/npm-audit-findings.md` |
 
-## Documentation inaccuracy in PLAN.md
+## PLAN.md accuracy note
 
-PLAN.md states, in two places (line 16 and line 740), that
-**`lib/storage`, `lib/email`, and `lib/sms` "are already built behind
-provider-agnostic interfaces."** This is not accurate as of this review:
-
-- No `lib/storage`, `lib/email`, or `lib/sms` directory or file exists
-  anywhere in this repository.
-- Email/SMS "sending" (`lib/notifications/worker.ts`'s `sendEmail`/
-  `sendSms`) is two `logger.info(...)` calls — a log statement, not an
-  interface, adapter, or even a stub class implementing a defined
-  contract.
-- File-upload handling does not exist at all: `staffDocuments`/
-  `studentDocuments`'s `file_ref` columns have no attached storage
-  adapter, and no multipart/upload code exists anywhere in the codebase.
-
-This does not block release — every provider each of these would back is
-independently listed "Deferred — non-blocking" in the table above — but
-the specific claim that they are "already built" should be corrected in
-PLAN.md itself so a future reader does not mistake this for a completed
-deliverable. Not corrected as part of this document, per this task's own
-instruction to report rather than fix it.
+PLAN.md states that `lib/storage`, `lib/email` and `lib/sms` "are already
+built behind provider-agnostic interfaces." As of this review that is true
+for `lib/storage` (S3-compatible object storage) and `lib/email` (Resend),
+but not for SMS: there is no `lib/sms`, and SMS notification jobs are
+skipped. PLAN.md itself has not been edited.
 
 ## Sign-off
 
 All items in PLAN.md's Final Documentation & Release Checklist are either
-complete, or explicitly and correctly deferred to a future hosting
-decision per PLAN.md's own stated posture. Phase 5, Item 67 is complete.
+complete, or explicitly deferred to a future hosting decision per PLAN.md's
+own stated posture. Before a production launch, the remaining work is the
+deployment itself: choosing a host, TLS and the trusted proxy setup, a
+verified email sending domain, a private storage bucket, a monitoring
+provider, scheduled backups, and running the web app and worker together.
