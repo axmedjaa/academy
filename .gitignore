@@ -64,3 +64,20 @@ next-env.d.ts
 
 # local dev server output
 .dev-server.log
+
+# Local AI-assistant and design tooling (kept on developer machines only)
+/.claude/
+/.agents/
+/.github/agents/
+/.github/skills/
+/.github/hooks/
+/.impeccable/
+/.design-sync/
+/skills-lock.json
+
+# Local design references and working notes (not part of the public repo)
+/stitch_resource_file_manager/
+/CLAUDE_DESIGN_PROMPT.md
+/ACADEMY_CONTENT_SPEC.md
+/Afoogy-DESIGN-Alexandria.md
+/PERFORMANCE_*.md
