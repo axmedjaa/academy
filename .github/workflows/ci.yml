@@ -122,3 +122,27 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci_test
           REDIS_URL: redis://localhost:6379
           MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
+
+      # Release artifact for a manual deploy. These steps run only after
+      # every check above has passed, and reuse the .next build and worker
+      # bundle produced earlier (E2E builds into .next-e2e, so .next is
+      # untouched). Dev dependencies are pruned first so the archive
+      # carries production node_modules only. No .env file or secret is
+      # packaged: the script refuses to run if it finds one.
+      - name: Prune dev dependencies
+        run: npm prune --omit=dev
+
+      - name: Package release
+        run: bash scripts/package-release.sh
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: |
+            release/release.tar.gz
+            release/release.sha256
+          if-no-files-found: error
+          retention-days: 14
+          # The tarball is already gzip-compressed.
+          compression-level: 0

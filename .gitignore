@@ -81,3 +81,6 @@ next-env.d.ts
 /ACADEMY_CONTENT_SPEC.md
 /Afoogy-DESIGN-Alexandria.md
 /PERFORMANCE_*.md
+
+# release packaging output (scripts/package-release.sh)
+/release/
