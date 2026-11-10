@@ -53,8 +53,12 @@ NODE=/usr/bin/node
 SYSTEMCTL=/usr/bin/systemctl
 SUDO=/usr/bin/sudo
 
+# The variables the application cannot start without (lib/env.ts, and
+# instrumentation.ts for TRUSTED_PROXY_HOP_COUNT in production).
+REQUIRED_ENV_NAMES=(DATABASE_URL REDIS_URL MFA_ENCRYPTION_KEY TRUSTED_PROXY_HOP_COUNT)
+
 SHA="" CHECKSUM="" WORK="" RELEASES_REAL="" NEW_RELEASE="" PREV_RELEASE="" PARTIAL=""
-REUSED_RELEASE=0 ENV_CHANGED=0 HAD_ENV=0 IN_TRANSACTION=0 FINISHED=0
+REUSED_RELEASE=0 ENV_CHANGED=0 HAD_ENV=0 PREV_ENV_USABLE=0 IN_TRANSACTION=0 FINISHED=0
 
 log() {
   printf 'myapp-deploy: %s\n' "$*" >&2 || true
@@ -65,6 +69,18 @@ reject() { log "rejected: $*"; exit 3; }
 restart_service() { "$SUDO" -n "$SYSTEMCTL" restart "$1"; }
 service_prop() { "$SYSTEMCTL" show -p "$2" --value "$1"; }
 current_target() { readlink -f -- "$CURRENT_LINK" 2>/dev/null || true; }
+
+# Prints the required names that $1 lacks a non-empty value for (one line,
+# space-separated; empty output = complete). A value is non-empty when the
+# first character after "=" is not a space, and is not an empty "" or ''.
+# Only names are ever printed or logged, never values.
+missing_env_names() {
+  local name missing=()
+  for name in "${REQUIRED_ENV_NAMES[@]}"; do
+    grep -Eq "^${name}=([^\"'[:space:]]|\"[^\"]|'[^'])" -- "$1" 2>/dev/null || missing+=("$name")
+  done
+  echo "${missing[*]}"
+}
 
 # ---- Lock: one deployment at a time, including manual runs. ----------------
 acquire_lock() {
@@ -96,6 +112,13 @@ check_bundle() {
   local actual
   actual="$(sha256sum "$WORK/bundle/release.tar.gz" | cut -d' ' -f1)"
   [ "$actual" = "$CHECKSUM" ] || reject "release.tar.gz checksum does not match"
+  # A received app.env must be complete (the workflow checks this too):
+  # installing an incomplete one could only produce a release that cannot start.
+  if [ -f "$WORK/bundle/app.env" ]; then
+    local missing
+    missing="$(missing_env_names "$WORK/bundle/app.env")"
+    [ -z "$missing" ] || reject "app.env in the bundle has no value for: $missing"
+  fi
 }
 
 # ---- Safe extraction into releases/<sha>. Not yet a production change. ------
@@ -130,11 +153,21 @@ extract_release() {
 }
 
 # ---- app.env: previous copy kept, new one swapped in atomically. ------------
+# The previous file is always saved as app.env.previous. It counts as usable
+# (and is restored on rollback) only if it has every required variable;
+# otherwise a rollback keeps the new, complete file instead.
 install_env() {
   [ -f "$WORK/bundle/app.env" ] || { log "bundle has no app.env; keeping the current one"; return 0; }
   if [ -f "$ENV_FILE" ]; then
     cp -p -- "$ENV_FILE" "$ENV_BACKUP" || { log "could not back up app.env"; return 1; }
     HAD_ENV=1
+    local missing
+    missing="$(missing_env_names "$ENV_FILE")"
+    if [ -z "$missing" ]; then
+      PREV_ENV_USABLE=1
+    else
+      log "previous app.env is incomplete (no value for: $missing); it is kept as app.env.previous but will not be restored"
+    fi
   fi
   ENV_CHANGED=1
   install -m 600 -- "$WORK/bundle/app.env" "$ENV_DIR/.app.env.new" || { log "could not stage app.env"; return 1; }
@@ -144,10 +177,14 @@ install_env() {
 restore_env() {
   [ "$ENV_CHANGED" = 1 ] || return 0
   rm -f -- "$ENV_DIR/.app.env.new" "$ENV_DIR/.app.env.restore"
-  if [ "$HAD_ENV" = 1 ]; then
+  if [ "$PREV_ENV_USABLE" = 1 ]; then
     cp -p -- "$ENV_BACKUP" "$ENV_DIR/.app.env.restore" \
       && mv -f -- "$ENV_DIR/.app.env.restore" "$ENV_FILE" || return 1
     log "restored the previous app.env"
+  elif [ "$HAD_ENV" = 1 ]; then
+    # The previous file could not have started the app (or the previous
+    # release); restoring it would only guarantee a failed rollback.
+    log "previous app.env was incomplete; keeping the new one (the old file stays in app.env.previous)"
   else
     # There was no app.env before this deployment, so the previous release
     # could not start without one either; keep the new file for it.

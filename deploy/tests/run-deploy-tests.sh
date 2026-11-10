@@ -39,14 +39,19 @@ if [ "$MSYS_HOST" = 1 ]; then
 # Stand-in for util-linux flock -n (missing on Git Bash): "held" while a marker exists.
 [ -e "$DEPLOY_TEST_ROOT/lock.held" ] && exit 1; exit 0
 EOF
-  cat > "$GEN/safe-extract" <<EOF
-#!/usr/bin/env bash
-exec python -I "\$(cygpath -w "$DEPLOY_DIR/myapp-safe-extract")" "\$1" "\$(cygpath -w "\$2")" "\$(cygpath -w "\$3")"
-EOF
+  EXTRACT_CMD="python -I \"\$(cygpath -w \"$DEPLOY_DIR/myapp-safe-extract\")\" \"\$1\" \"\$(cygpath -w \"\$2\")\" \"\$(cygpath -w \"\$3\")\""
 else
   rm -f "$GEN/flock"
-  printf '#!/usr/bin/env bash\nexec python3 -I "%s" "$@"\n' "$DEPLOY_DIR/myapp-safe-extract" > "$GEN/safe-extract"
+  EXTRACT_CMD="python3 -I \"$DEPLOY_DIR/myapp-safe-extract\" \"\$@\""
 fi
+# PAUSE_EXTRACT=<seconds> (test only): announce "extraction started" with a
+# marker file and pause, so a signal can be delivered while the deployment is
+# provably still before any production change.
+cat > "$GEN/safe-extract" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${PAUSE_EXTRACT:-}" ]; then touch "\$DEPLOY_TEST_ROOT/state/extract-started"; sleep "\$PAUSE_EXTRACT"; fi
+exec $EXTRACT_CMD
+EOF
 chmod +x "$GEN/"* "$HERE/bin/systemctl"
 export PATH="$GEN:$HERE/bin:$PATH"
 
@@ -80,11 +85,24 @@ new_root() {  # $1 name, [$2 max bundle bytes], [$3 health timeout]
 
 sha_of() { printf '%s' "$1" | sha1sum | cut -c1-40; }
 
+# A complete app.env (all four required names). VERSION= comes first so that
+# envtag can identify it; the values are fake but distinctive for leak checks.
+complete_env() {
+  printf 'VERSION=%s\nDATABASE_URL=postgresql://fake:not-a-real-db-pw@db.invalid/x\nREDIS_URL=redis://127.0.0.1:6379\nMFA_ENCRYPTION_KEY=not-a-real-mfa-key\nTRUSTED_PROXY_HOP_COUNT=1\n' "$1"
+}
+env_is_complete() {
+  local n
+  for n in DATABASE_URL REDIS_URL MFA_ENCRYPTION_KEY TRUSTED_PROXY_HOP_COUNT; do
+    grep -q "^$n=." "$ROOT/env/app.env" 2>/dev/null || return 1
+  done
+}
+no_values_logged() { ! grep -qE 'not-a-real-db-pw|not-a-real-mfa-key|redis://127' "$ROOT/out.log"; }
+
 artifact() {  # $1 name, $2 health-mode, $3 worker-mode, [$4 env|none]
   local d="$ROOT/art/$1"; rm -rf "$d"; mkdir -p "$d/src/.next" "$d/b"
   echo "$2" > "$d/src/health-mode"; echo "$3" > "$d/src/worker-mode"; echo "$1" > "$d/src/.next/BUILD_ID"
   tar -czf "$d/b/release.tar.gz" -C "$d/src" .
-  if [ "${4:-env}" = env ]; then printf 'VERSION=%s\nDATABASE_URL=x\n' "$1" > "$d/b/app.env"; fi
+  if [ "${4:-env}" = env ]; then complete_env "$1" > "$d/b/app.env"; fi
   (cd "$d/b" && tar -cf ../bundle.tar release.tar.gz $( [ -f app.env ] && echo app.env ))
   sha256sum "$d/b/release.tar.gz" | cut -d' ' -f1 > "$d/sum"
 }
@@ -94,12 +112,16 @@ deploy() {  # $1 artifact, [$2 override command]
   SSH_ORIGINAL_COMMAND="${2:-$(command_for "$1")}" bash "$ROOT/myapp-deploy" < "$ROOT/art/$1/bundle.tar" > "$ROOT/out.log" 2>&1
   RC=$?
 }
-deploy_signal() {  # $1 artifact, $2 signal, $3 extra delay, [$4 log line to wait for first]
+deploy_signal() {  # $1 artifact, $2 signal, $3 extra delay, [$4 log line | file:<path> to wait for first]
   : > "$ROOT/out.log"   # the baseline's log must not satisfy the wait below
   SSH_ORIGINAL_COMMAND="$(command_for "$1")" bash "$ROOT/myapp-deploy" < "$ROOT/art/$1/bundle.tar" > "$ROOT/out.log" 2>&1 &
   local pid=$! waited=0
   if [ -n "${4:-}" ]; then   # wait (max 60 s) until the deployment has reached that point
-    until grep -q -- "$4" "$ROOT/out.log" 2>/dev/null || [ "$waited" -ge 600 ]; do sleep 0.1; waited=$((waited + 1)); done
+    if [[ "$4" == file:* ]]; then
+      until [ -e "${4#file:}" ] || [ "$waited" -ge 600 ]; do sleep 0.1; waited=$((waited + 1)); done
+    else
+      until grep -q -- "$4" "$ROOT/out.log" 2>/dev/null || [ "$waited" -ge 600 ]; do sleep 0.1; waited=$((waited + 1)); done
+    fi
   fi
   sleep "$3"; kill -s "$2" "$pid"; wait "$pid"; RC=$?
 }
@@ -196,7 +218,10 @@ check "exit 0" '[ "$RC" = 0 ]'
 check "current is B" '[ "$(current)" = "$B" ]'
 check_clean; stop_app
 echo "== SIGTERM before any production change -> stops, nothing touched"
-new_root sigterm-early; baseline; artifact B ok ok; B=$(sha_of B); deploy_signal B TERM 0.2
+new_root sigterm-early; baseline; artifact B ok ok; B=$(sha_of B)
+# The extraction stand-in pauses and drops a marker: the signal then provably
+# arrives before any production change (a fixed delay raced process start-up).
+export PAUSE_EXTRACT=5; deploy_signal B TERM 0.5 "file:$ROOT/state/extract-started"; unset PAUSE_EXTRACT
 check "exit 143 (terminated)" '[ "$RC" = 143 ]'
 check "never reached production" '! grep -q "deploying " "$ROOT/out.log"'
 check "current still A" '[ "$(current)" = "$A" ]'
@@ -231,7 +256,7 @@ check_clean; stop_app
 echo "### The VPS today: current -> /srv/myapp/releases/first (absolute link)"
 setup_first() {
   mkdir -p "$ROOT/releases/first"; echo ok > "$ROOT/releases/first/health-mode"; echo ok > "$ROOT/releases/first/worker-mode"
-  printf 'VERSION=first\n' > "$ROOT/env/app.env"; "$REAL_LN" -s "$ROOT/releases/first" "$ROOT/current"
+  complete_env first > "$ROOT/env/app.env"; "$REAL_LN" -s "$ROOT/releases/first" "$ROOT/current"
 }
 echo "== deploy over 'first' succeeds"
 new_root first-layout-ok; setup_first; artifact B ok ok; deploy B; B=$(sha_of B)
@@ -262,6 +287,63 @@ check "new app.env kept" '[ "$(envtag)" = VERSION=B ]'
 check "app restarted on first with the new app.env" '[ "$(last_restart myapp.service)" = "restart myapp.service release=first env=VERSION=B" ]'
 check "worker restarted on first with the new app.env" '[ "$(last_restart myapp-worker.service)" = "restart myapp-worker.service release=first env=VERSION=B" ]'
 check_clean; stop_app
+
+echo "### The VPS right now: app.env holds only TRUSTED_PROXY_HOP_COUNT"
+TPHC_ONLY='TRUSTED_PROXY_HOP_COUNT=1'
+setup_incomplete_env() {  # $1 content of the existing (incomplete) app.env
+  setup_first; printf '%s\n' "$1" > "$ROOT/env/app.env"
+}
+echo "== deploy succeeds: complete app.env installed, old one kept as app.env.previous"
+new_root tphc-only-ok; setup_incomplete_env "$TPHC_ONLY"; artifact B ok ok; deploy B; B=$(sha_of B)
+check "exit 0" '[ "$RC" = 0 ]'; check "current is B" '[ "$(current)" = "$B" ]'
+check "app.env is the new, complete file" '[ "$(envtag)" = VERSION=B ] && env_is_complete'
+check "old file preserved verbatim as app.env.previous" '[ "$(cat "$ROOT/env/app.env.previous")" = "$TPHC_ONLY" ]'
+check_log "log: previous incomplete (names only)" "previous app.env is incomplete (no value for: DATABASE_URL REDIS_URL MFA_ENCRYPTION_KEY)"
+check "app and worker on B with the new app.env" '[ "$(tail -2 "$ROOT/state/calls" | tr "\n" "|")" = "restart myapp.service release=$B env=VERSION=B|restart myapp-worker.service release=$B env=VERSION=B|" ]'
+check "no values in the log" 'no_values_logged'
+check_clean; stop_app
+
+expect_keep_new_env() {  # $1 label, $2 previous env content, $3 health-mode, $4 worker-mode, [$5 signal]
+  echo "== $1"
+  PREV_CONTENT="$2"   # check() evaluates in its own scope, where $2 is something else
+  new_root "keep-$1"; setup_incomplete_env "$2"; artifact B "$3" "$4"; B=$(sha_of B)
+  if [ -n "${5:-}" ]; then deploy_signal B "$5" 2 "deploying "; else deploy B; fi
+  check "exit 1 (rolled back)" '[ "$RC" = 1 ]'
+  check "current back to first" '[ "$(current)" = first ]'
+  check "incomplete file NOT restored: app.env is the new, complete one" '[ "$(envtag)" = VERSION=B ] && env_is_complete'
+  check "old file still preserved as app.env.previous" '[ "$(cat "$ROOT/env/app.env.previous")" = "$PREV_CONTENT" ]'
+  check_log "log: keeping the new one" "previous app.env was incomplete; keeping the new one"
+  check "app restarted on first with the new app.env" '[ "$(last_restart myapp.service)" = "restart myapp.service release=first env=VERSION=B" ]'
+  check "worker restarted on first with the new app.env" '[ "$(last_restart myapp-worker.service)" = "restart myapp-worker.service release=first env=VERSION=B" ]'
+  check_log "log: rollback complete" "rollback complete; first is running"
+  check "failed release B removed" '[ ! -e "$ROOT/releases/$B" ]'
+  check "no values in the log" 'no_values_logged'
+  check_clean; stop_app
+}
+expect_keep_new_env "health gate fails"               "$TPHC_ONLY" db ok
+expect_keep_new_env "worker fails"                    "$TPHC_ONLY" ok crash
+expect_keep_new_env "SIGTERM during the health gate"  "$TPHC_ONLY" never ok TERM
+expect_keep_new_env "previous has an empty value"     "$(complete_env first | sed 's/^DATABASE_URL=.*/DATABASE_URL=/')" db ok
+expect_keep_new_env "previous has a quoted empty value" "$(complete_env first | sed 's/^MFA_ENCRYPTION_KEY=.*/MFA_ENCRYPTION_KEY=""/')" db ok
+
+echo "== a complete previous app.env IS restored on rollback"
+new_root complete-prev-rb; setup_first; artifact B db ok; deploy B
+check "exit 1" '[ "$RC" = 1 ]'; check "app.env back to first" '[ "$(envtag)" = VERSION=first ] && env_is_complete'
+check_log "log: restored" "restored the previous app.env"
+check "no 'incomplete' message" '! grep -q "incomplete" "$ROOT/out.log"'
+stop_app
+
+echo "== an incomplete app.env in the bundle is rejected before any change"
+new_root incoming-incomplete; setup_incomplete_env "$TPHC_ONLY"; artifact C ok ok
+printf 'VERSION=C\nDATABASE_URL=postgresql://fake:not-a-real-db-pw@db.invalid/x\n' > "$ROOT/art/C/b/app.env"
+(cd "$ROOT/art/C/b" && tar -cf ../bundle.tar release.tar.gz app.env); deploy C
+check "exit 3 (rejected)" '[ "$RC" = 3 ]'
+check_log "log: names the missing variables" "app.env in the bundle has no value for: REDIS_URL MFA_ENCRYPTION_KEY TRUSTED_PROXY_HOP_COUNT"
+check "existing app.env untouched" '[ "$(cat "$ROOT/env/app.env")" = "$TPHC_ONLY" ]'
+check "current still first" '[ "$(current)" = first ]'
+check "no service restarted" '[ ! -s "$ROOT/state/calls" ]'
+check "no values in the log" 'no_values_logged'
+check_clean
 
 echo "### Retention"
 echo "== 'first' + seven deploys"
@@ -303,7 +385,7 @@ check "bundle over the cap: exit 3" '[ "$RC" = 3 ]'; check_log "bundle over the 
 
 echo "### Environment-only redeploy of the current commit"
 new_root env-only; baseline
-mkdir -p "$ROOT/art/A2/b"; cp "$ROOT/art/A/b/release.tar.gz" "$ROOT/art/A2/b/"; printf 'VERSION=A2\n' > "$ROOT/art/A2/b/app.env"
+mkdir -p "$ROOT/art/A2/b"; cp "$ROOT/art/A/b/release.tar.gz" "$ROOT/art/A2/b/"; complete_env A2 > "$ROOT/art/A2/b/app.env"
 (cd "$ROOT/art/A2/b" && tar -cf ../bundle.tar release.tar.gz app.env); cp "$ROOT/art/A/sum" "$ROOT/art/A2/sum"
 deploy A2 "$A $(cat "$ROOT/art/A/sum")"
 check "exit 0" '[ "$RC" = 0 ]'; check "same release" '[ "$(current)" = "$A" ]'; check "env updated" '[ "$(envtag)" = VERSION=A2 ]'
