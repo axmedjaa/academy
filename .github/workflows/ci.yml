@@ -12,6 +12,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Read-only token for every job. Nothing here writes to the repository;
+# artifact upload/download use the run's own runtime token, not this one.
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -146,3 +151,164 @@ jobs:
           retention-days: 14
           # The tarball is already gzip-compressed.
           compression-level: 0
+
+  # Production deploy over restricted SSH. Runs only for a push to main,
+  # only after the ci job above succeeded, and never for pull requests.
+  # It does not check out or rebuild anything: it ships the exact release
+  # artifact the ci job tested. The VPS key is locked to
+  # /usr/local/bin/myapp-deploy (source: deploy/myapp-deploy), which takes
+  # "<commit-sha> <release-sha256>" via SSH_ORIGINAL_COMMAND and a tar bundle
+  # (release.tar.gz + app.env) on standard input; it verifies, switches the
+  # release, restarts myapp.service and myapp-worker.service behind health
+  # and stability checks, and rolls back on failure.
+  # Database migrations are NOT run here; they stay a manual step.
+  deploy:
+    name: Deploy to production
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    # One production deploy at a time. A deploy that has started is never
+    # cancelled; a newer push only replaces a deploy still waiting to start.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+
+      - name: Verify release checksum
+        id: release
+        working-directory: release
+        run: |
+          [ -f release.tar.gz ] && [ -f release.sha256 ] || { echo "::error::release artifact is incomplete"; exit 1; }
+          sha256sum --check --strict release.sha256
+          recorded="$(cut -d' ' -f1 release.sha256)"
+          actual="$(sha256sum release.tar.gz | cut -d' ' -f1)"
+          [ "$recorded" = "$actual" ] || { echo "::error::release.sha256 does not describe release.tar.gz"; exit 1; }
+          [[ "$actual" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::malformed checksum"; exit 1; }
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::malformed commit SHA"; exit 1; }
+          echo "checksum=$actual" >> "$GITHUB_OUTPUT"
+
+      # APP_ENV is the full production environment file. It is written to a
+      # mode-600 file and only ever travels inside the bundle on standard
+      # input, never on a command line. Only variable NAMES are reported.
+      # Required names come from the app itself: lib/env.ts (DATABASE_URL,
+      # REDIS_URL, MFA_ENCRYPTION_KEY) and instrumentation.ts, which refuses
+      # a production start without TRUSTED_PROXY_HOP_COUNT.
+      # app.env is built from APP_ENV (the complete production environment
+      # file) and, when the TRUSTED_PROXY_HOP_COUNT secret is set, that one
+      # variable is replaced by the secret's value; every other line of
+      # APP_ENV is kept as is. Individual GitHub secrets never reach the VPS
+      # on their own -- only what is written into app.env does. Format:
+      # plain NAME=value lines, as systemd's EnvironmentFile= reads them.
+      - name: Build deployment bundle
+        env:
+          APP_ENV: ${{ secrets.APP_ENV }}
+          TRUSTED_PROXY_HOP_COUNT: ${{ secrets.TRUSTED_PROXY_HOP_COUNT }}
+        run: |
+          umask 077
+          bundle_dir="$RUNNER_TEMP/deploy-bundle"
+          env_file="$bundle_dir/app.env"
+          mkdir -p "$bundle_dir"
+          [ -n "${APP_ENV//[[:space:]]/}" ] || { echo "::error::APP_ENV secret is empty"; exit 1; }
+          if [[ "$APP_ENV" == *$'\r'* ]]; then
+            echo "::error::APP_ENV contains Windows line endings (CR); re-save it with LF line endings"
+            exit 1
+          fi
+          printf '%s\n' "$APP_ENV" > "$env_file"
+          chmod 600 "$env_file"
+          if grep -Eq '^[[:space:]]*export[[:space:]]' "$env_file"; then
+            echo "::error::APP_ENV must use plain NAME=value lines without 'export' (systemd EnvironmentFile format)"
+            exit 1
+          fi
+          if [ -n "$TRUSTED_PROXY_HOP_COUNT" ]; then
+            [[ "$TRUSTED_PROXY_HOP_COUNT" =~ ^[1-9][0-9]*$ ]] \
+              || { echo "::error::TRUSTED_PROXY_HOP_COUNT secret must be a whole number of at least 1"; exit 1; }
+            { grep -Ev '^[[:space:]]*TRUSTED_PROXY_HOP_COUNT=' "$env_file" || true; } > "$env_file.new"
+            printf 'TRUSTED_PROXY_HOP_COUNT=%s\n' "$TRUSTED_PROXY_HOP_COUNT" >> "$env_file.new"
+            mv -f "$env_file.new" "$env_file"
+            chmod 600 "$env_file"
+            echo "TRUSTED_PROXY_HOP_COUNT: taken from its own secret"
+          else
+            echo "TRUSTED_PROXY_HOP_COUNT: no separate secret; using the value in APP_ENV"
+          fi
+          missing=()
+          for name in DATABASE_URL REDIS_URL MFA_ENCRYPTION_KEY TRUSTED_PROXY_HOP_COUNT; do
+            grep -Eq "^${name}=[^[:space:]]" "$env_file" || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::app.env is missing a value for: ${missing[*]}"
+            exit 1
+          fi
+          # The app refuses to start in production unless this is a whole
+          # number of at least 1 (lib/http/proxy-trust-check.ts); one Nginx
+          # in front of the app means 1. Duplicates would be ambiguous.
+          [ "$(grep -cE '^TRUSTED_PROXY_HOP_COUNT=' "$env_file")" = 1 ] \
+            || { echo "::error::TRUSTED_PROXY_HOP_COUNT must appear exactly once in app.env"; exit 1; }
+          grep -Eq '^TRUSTED_PROXY_HOP_COUNT="?[1-9][0-9]*"?[[:space:]]*$' "$env_file" \
+            || { echo "::error::TRUSTED_PROXY_HOP_COUNT must be a whole number of at least 1"; exit 1; }
+          echo "app.env variables (names only): $(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$env_file" | cut -d= -f1 | sort | tr '\n' ' ')"
+          mv release/release.tar.gz "$bundle_dir/release.tar.gz"
+          tar -cf "$RUNNER_TEMP/deploy-bundle.tar" -C "$bundle_dir" release.tar.gz app.env
+          rm -f "$bundle_dir/app.env"
+          echo "Bundle contents:"
+          tar -tvf "$RUNNER_TEMP/deploy-bundle.tar"
+
+      # The remote command is ONE argument, "<commit-sha> <checksum>", which
+      # the forced command receives verbatim as SSH_ORIGINAL_COMMAND. Both
+      # values were validated as plain hex above. The bundle goes on stdin.
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          RELEASE_SHA256: ${{ steps.release.outputs.checksum }}
+        run: |
+          umask 077
+          ssh_dir="$RUNNER_TEMP/deploy-ssh"
+          mkdir -p "$ssh_dir"
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || { echo "::error::DEPLOY_HOST must be a plain hostname or IPv4 address"; exit 1; }
+          [ -n "$DEPLOY_KNOWN_HOSTS" ] || { echo "::error::DEPLOY_KNOWN_HOSTS secret is empty"; exit 1; }
+          [ -n "$DEPLOY_SSH_KEY" ] || { echo "::error::DEPLOY_SSH_KEY secret is empty"; exit 1; }
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$ssh_dir/id_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          chmod 600 "$ssh_dir/id_deploy" "$ssh_dir/known_hosts"
+          [ -s "$RUNNER_TEMP/deploy-bundle.tar" ] || { echo "::error::deployment bundle is missing; nothing was sent"; exit 1; }
+          rc=0
+          ssh -T -F /dev/null \
+            -i "$ssh_dir/id_deploy" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$ssh_dir/known_hosts" \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o ConnectTimeout=20 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=4 \
+            "deploy@${DEPLOY_HOST}" \
+            "${GITHUB_SHA} ${RELEASE_SHA256}" \
+            < "$RUNNER_TEMP/deploy-bundle.tar" || rc=$?
+          # Exit codes of /usr/local/bin/myapp-deploy (deploy/myapp-deploy).
+          case "$rc" in
+            0)   msg="Deployed ${GITHUB_SHA} to production." ;;
+            1)   msg="::error::Deployment failed; the previous release and app.env were restored and are running." ;;
+            2)   msg="::error::Deployment failed AND the rollback did not complete. Production needs manual attention (journalctl -t myapp-deploy)." ;;
+            3)   msg="::error::Deployment rejected before any change (bad arguments, bundle, checksum, or another deployment in progress)." ;;
+            255) msg="::error::SSH failed (connection, host key or authentication), or the connection dropped mid-deployment. A started deployment still finishes or rolls back on the server; check journalctl -t myapp-deploy before retrying." ;;
+            *)   msg="::error::Deployment ended with unexpected exit code $rc." ;;
+          esac
+          echo "$msg"
+          echo "${msg#::error::}" >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+      - name: Remove deployment secrets from the runner
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh" "$RUNNER_TEMP/deploy-bundle" "$RUNNER_TEMP/deploy-bundle.tar" release

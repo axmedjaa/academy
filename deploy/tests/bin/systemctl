@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Test stand-in for systemctl (deploy/tests only). Records each restart with
+# the release and app.env the service would start with, runs stub-app.mjs as
+# myapp.service, and models myapp-worker.service from the release's
+# worker-mode file. FAIL_RESTART="<unit>@<release>" makes that restart fail.
+set -u
+ROOT="$DEPLOY_TEST_ROOT"; STATE="$ROOT/state"; HERE="$(cd "$(dirname "$0")/.." && pwd)"
+mkdir -p "$STATE"
+release() { [ -L "$ROOT/current" ] && basename "$(readlink -f "$ROOT/current")" || echo none; }
+envtag() { head -1 "$ROOT/env/app.env" 2>/dev/null || echo none; }
+mode_of() { cat "$(readlink -f "$ROOT/current" 2>/dev/null)/$1" 2>/dev/null || echo "${2:-ok}"; }
+
+case "$1" in
+  restart)
+    echo "restart $2 release=$(release) env=$(envtag)" >> "$STATE/calls"
+    if [ "${FAIL_RESTART:-}" = "$2@$(release)" ]; then echo "stub: restart $2 failed" >&2; exit 1; fi
+    if [ "$2" = myapp.service ]; then
+      [ -f "$STATE/app.pid" ] && kill "$(cat "$STATE/app.pid")" 2>/dev/null
+      sleep 0.3
+      if [ "$(release)" = none ]; then rm -f "$STATE/app.pid"; exit 1; fi   # no WorkingDirectory
+      node "$HERE/stub-app.mjs" "$(mode_of health-mode)" 3999 >/dev/null 2>&1 &
+      echo $! > "$STATE/app.pid"
+    else
+      if [ "$(release)" = none ]; then echo crash > "$STATE/worker.mode"; exit 1; fi
+      mode_of worker-mode > "$STATE/worker.mode"
+      echo 0 > "$STATE/worker.calls"
+    fi
+    exit 0 ;;
+  show)
+    prop="$3"
+    n=$(( $(cat "$STATE/worker.calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STATE/worker.calls"
+    case "$(cat "$STATE/worker.mode" 2>/dev/null || echo ok)/$prop" in
+      ok/MainPID) echo 4242 ;;
+      ok/ActiveState) echo active ;;
+      ok/SubState) echo running ;;
+      crash/MainPID) echo 0 ;;
+      crash/ActiveState) echo activating ;;
+      crash/SubState) echo auto-restart ;;
+      flap/MainPID) echo $((5000 + n)) ;;
+      flap/ActiveState) echo active ;;
+      flap/SubState) echo running ;;
+    esac
+    exit 0 ;;
+esac
+echo "stub systemctl: unsupported: $*" >&2; exit 1

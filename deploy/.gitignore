@@ -1,0 +1,4 @@
+# Local test output and Python bytecode; never committed.
+__pycache__/
+tests/run/
+tests/run-results.txt

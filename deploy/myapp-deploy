@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+# /usr/local/bin/myapp-deploy -- forced command of the "deploy" SSH key:
+#   restrict,command="/usr/local/bin/myapp-deploy" ssh-ed25519 ... github-actions-deploy
+#
+# Contract (see the deploy job in .github/workflows/ci.yml)
+#   SSH_ORIGINAL_COMMAND = "<40-hex commit sha> <64-hex sha256 of release.tar.gz>"
+#   stdin                = plain tar bundle: release.tar.gz [+ app.env]
+#
+# Flow
+#   lock -> arguments -> receive bundle (size-capped) -> check bundle ->
+#   checksum -> safe extraction into releases/<sha>
+#   == production changes from here; any failure rolls everything back ==
+#   install app.env (previous kept) -> switch current (atomic) ->
+#   restart myapp.service -> health gate -> restart myapp-worker.service ->
+#   worker stability check -> retention.
+#
+# Exit status
+#   0  deployed
+#   1  deployment failed; previous release and app.env restored and running
+#   2  deployment failed AND the rollback failed (or there was nothing to roll
+#      back to on a first deployment): production needs a human
+#   3  rejected before anything in production was changed
+#
+# A dropped SSH connection (e.g. a cancelled GitHub job) does not interrupt a
+# deployment: SIGHUP/SIGPIPE are ignored, so it always finishes or rolls back.
+# Everything is also logged to the journal: journalctl -t myapp-deploy
+set -euo pipefail
+umask 022
+
+# ---- Configuration. Constants on purpose: nothing is read from the caller's
+# environment, so an SSH client cannot redirect any of these.
+APP_ROOT=/srv/myapp
+RELEASES_DIR="$APP_ROOT/releases"
+CURRENT_LINK="$APP_ROOT/current"
+ENV_DIR="$APP_ROOT/env"                     # drwx------ deploy:deploy
+ENV_FILE="$ENV_DIR/app.env"
+ENV_BACKUP="$ENV_DIR/app.env.previous"
+WORK_PARENT="$APP_ROOT/tmp"                 # drwx------ deploy:deploy, same filesystem
+LOCK_FILE="$WORK_PARENT/deploy.lock"
+APP_SERVICE=myapp.service
+WORKER_SERVICE=myapp-worker.service
+APP_GROUP=nextjs                            # deploy is a member
+KEEP_RELEASES=5
+MAX_BUNDLE_BYTES=$((620 * 1024 * 1024))
+HEALTH_URL=http://127.0.0.1:3000/api/health
+HEALTH_TIMEOUT_SECONDS=90
+HEALTH_RETRY_SECONDS=2
+HEALTH_REQUEST_TIMEOUT_SECONDS=5
+WORKER_SETTLE_SECONDS=5
+WORKER_STABLE_SECONDS=10
+SAFE_EXTRACT=/usr/local/bin/myapp-safe-extract
+NODE=/usr/bin/node
+SYSTEMCTL=/usr/bin/systemctl
+SUDO=/usr/bin/sudo
+
+SHA="" CHECKSUM="" WORK="" RELEASES_REAL="" NEW_RELEASE="" PREV_RELEASE="" PARTIAL=""
+REUSED_RELEASE=0 ENV_CHANGED=0 HAD_ENV=0 IN_TRANSACTION=0 FINISHED=0
+
+log() {
+  printf 'myapp-deploy: %s\n' "$*" >&2 || true
+  if command -v logger >/dev/null 2>&1; then logger -t myapp-deploy -- "$*" 2>/dev/null || true; fi
+}
+reject() { log "rejected: $*"; exit 3; }
+
+restart_service() { "$SUDO" -n "$SYSTEMCTL" restart "$1"; }
+service_prop() { "$SYSTEMCTL" show -p "$2" --value "$1"; }
+current_target() { readlink -f -- "$CURRENT_LINK" 2>/dev/null || true; }
+
+# ---- Lock: one deployment at a time, including manual runs. ----------------
+acquire_lock() {
+  exec 9>"$LOCK_FILE"
+  flock -n 9 || reject "another deployment is in progress"
+}
+
+# ---- Arguments: exactly "<sha> <checksum>", nothing else. ------------------
+parse_arguments() {
+  local args="${SSH_ORIGINAL_COMMAND:-}"
+  [[ "$args" =~ ^([0-9a-f]{40})\ ([0-9a-f]{64})$ ]] \
+    || reject "expected \"<40-hex commit sha> <64-hex sha256>\""
+  SHA="${BASH_REMATCH[1]}"
+  CHECKSUM="${BASH_REMATCH[2]}"
+}
+
+# ---- Bundle from stdin, never more than the cap. ----------------------------
+receive_bundle() {
+  local out="$WORK/bundle.tar" size
+  head -c "$((MAX_BUNDLE_BYTES + 1))" > "$out"
+  size="$(stat -c %s "$out")"
+  [ "$size" -le "$MAX_BUNDLE_BYTES" ] || reject "bundle is larger than $MAX_BUNDLE_BYTES bytes"
+  [ "$size" -gt 0 ] || reject "empty bundle"
+}
+
+# ---- Strict bundle check, then the release checksum. ------------------------
+check_bundle() {
+  "$SAFE_EXTRACT" bundle "$WORK/bundle.tar" "$WORK/bundle" || reject "invalid bundle"
+  local actual
+  actual="$(sha256sum "$WORK/bundle/release.tar.gz" | cut -d' ' -f1)"
+  [ "$actual" = "$CHECKSUM" ] || reject "release.tar.gz checksum does not match"
+}
+
+# ---- Safe extraction into releases/<sha>. Not yet a production change. ------
+# Re-deploying the commit that is already current reuses its directory when
+# the artifact is identical (an APP_ENV-only change); a different artifact
+# for the same commit is refused. A stale non-current copy is replaced.
+extract_release() {
+  local target="$RELEASES_REAL/$SHA"
+  NEW_RELEASE="$target"
+  if [ -n "$PREV_RELEASE" ] && [ "$PREV_RELEASE" = "$target" ]; then
+    [ "$(cat "$target/.release-sha256" 2>/dev/null || true)" = "$CHECKSUM" ] \
+      || reject "commit $SHA is current but was deployed from a different artifact"
+    REUSED_RELEASE=1
+    log "commit $SHA is already current; reusing it (environment-only redeploy)"
+    return 0
+  fi
+  PARTIAL="$RELEASES_REAL/.$SHA.partial"
+  rm -rf --one-file-system -- "$PARTIAL"
+  "$SAFE_EXTRACT" release "$WORK/bundle/release.tar.gz" "$PARTIAL" \
+    || reject "release archive failed the safety checks"
+  printf '%s\n' "$CHECKSUM" > "$PARTIAL/.release-sha256"
+  # The only places the app (nextjs) may write. Group-owned by nextjs with
+  # setgid, so files Next creates there stay deletable by deploy (requires
+  # UMask=0002 on myapp.service; see deploy/myapp-umask.conf).
+  mkdir -p "$PARTIAL/.next/cache" "$PARTIAL/.next/server/route-cache"
+  chgrp -R "$APP_GROUP" "$PARTIAL/.next/cache" "$PARTIAL/.next/server/route-cache" \
+    || reject "could not hand the cache folders to group $APP_GROUP"
+  chmod 2770 "$PARTIAL/.next/cache" "$PARTIAL/.next/server/route-cache"
+  rm -rf --one-file-system -- "$target"
+  mv -T -- "$PARTIAL" "$target"
+  PARTIAL=""
+}
+
+# ---- app.env: previous copy kept, new one swapped in atomically. ------------
+install_env() {
+  [ -f "$WORK/bundle/app.env" ] || { log "bundle has no app.env; keeping the current one"; return 0; }
+  if [ -f "$ENV_FILE" ]; then
+    cp -p -- "$ENV_FILE" "$ENV_BACKUP" || { log "could not back up app.env"; return 1; }
+    HAD_ENV=1
+  fi
+  ENV_CHANGED=1
+  install -m 600 -- "$WORK/bundle/app.env" "$ENV_DIR/.app.env.new" || { log "could not stage app.env"; return 1; }
+  mv -f -- "$ENV_DIR/.app.env.new" "$ENV_FILE" || { log "could not install app.env"; return 1; }
+}
+
+restore_env() {
+  [ "$ENV_CHANGED" = 1 ] || return 0
+  rm -f -- "$ENV_DIR/.app.env.new" "$ENV_DIR/.app.env.restore"
+  if [ "$HAD_ENV" = 1 ]; then
+    cp -p -- "$ENV_BACKUP" "$ENV_DIR/.app.env.restore" \
+      && mv -f -- "$ENV_DIR/.app.env.restore" "$ENV_FILE" || return 1
+    log "restored the previous app.env"
+  else
+    # There was no app.env before this deployment, so the previous release
+    # could not start without one either; keep the new file for it.
+    log "no previous app.env existed; keeping the newly installed one"
+  fi
+}
+
+# ---- Atomic switch of "current": new symlink, then rename(2) over it. -------
+# Releases under releases/ are linked relatively ("releases/<name>"), which
+# survives a move of /srv/myapp; anything else keeps its absolute path.
+switch_current() {
+  local target="$1" link="$1"
+  [ "$(dirname -- "$target")" = "$RELEASES_REAL" ] && link="releases/$(basename -- "$target")"
+  ln -sfn -- "$link" "$APP_ROOT/.current.new" \
+    && mv -fT -- "$APP_ROOT/.current.new" "$CURRENT_LINK"
+}
+
+# ---- Health gate on /api/health (app/api/health/route.ts, unchanged). -------
+# The endpoint answers
+#   HTTP 200 + {"status":"ok","checks":{"database":"ok","redis":"ok","queue":"ok"}}
+#   HTTP 503 + {"status":"degraded","checks":{...}} when any check is "error"
+# with every check exactly "ok" or "error". The classifier parses that JSON
+# (no text matching) and exits with:
+#    0  healthy: HTTP 200, status "ok", every check "ok"
+#   10  queue-only: HTTP 503, status "degraded", database "ok", redis "ok",
+#       queue "error" -- accepted with a warning (stored failed jobs or a
+#       backlog must not block deploys)
+#   20  database and/or redis "error" -- retried until the deadline, never accepted
+#   30  anything else: unreadable or invalid JSON, missing or extra fields,
+#       unknown values, a status contradicting the checks, any other HTTP
+#       status -- fails at once
+HEALTH_CLASSIFIER='
+const fs = require("fs");
+const code = process.env.HEALTH_HTTP_CODE;
+const done = (exit, message) => { process.stdout.write(message); process.exit(exit); };
+let body;
+try { body = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); }
+catch { done(30, `HTTP ${code}: response is not valid JSON`); }
+const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+if (!isObject(body)) done(30, `HTTP ${code}: response is not a JSON object`);
+if (Object.keys(body).sort().join(",") !== "checks,status")
+  done(30, `HTTP ${code}: expected exactly the fields status and checks`);
+if (!isObject(body.checks) || Object.keys(body.checks).sort().join(",") !== "database,queue,redis")
+  done(30, `HTTP ${code}: expected exactly checks.database, checks.redis and checks.queue`);
+const { database, redis, queue } = body.checks;
+for (const [name, value] of Object.entries({ database, redis, queue }))
+  if (value !== "ok" && value !== "error") done(30, `HTTP ${code}: checks.${name} is not "ok" or "error"`);
+const summary = `database ${database}, redis ${redis}, queue ${queue}`;
+const allOk = database === "ok" && redis === "ok" && queue === "ok";
+if (code === "200") {
+  if (body.status === "ok" && allOk) done(0, `HTTP 200, ${summary}`);
+  done(30, `HTTP 200 but status "${body.status}" with ${summary}`);
+}
+if (code === "503") {
+  if (body.status !== "degraded" || allOk) done(30, `HTTP 503 but status "${body.status}" with ${summary}`);
+  if (database === "ok" && redis === "ok") done(10, `HTTP 503, ${summary}`);
+  done(20, `HTTP 503, ${summary}`);
+}
+done(30, `unexpected HTTP status ${code}`);
+'
+
+health_gate() {
+  local deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS)) last="no answer yet"
+  local body="$WORK/health.json" curl_rc code verdict reason
+  while :; do
+    rm -f -- "$body"
+    curl_rc=0
+    code="$(curl --silent --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" --max-filesize 65536 \
+              --output "$body" --write-out '%{http_code}' "$HEALTH_URL" 2>/dev/null)" || curl_rc=$?
+    if [ "$curl_rc" -ne 0 ]; then
+      case "$curl_rc" in
+        # Not listening yet / no complete answer yet: normal while starting.
+        7|28|52|56) last="not answering yet (curl exit $curl_rc)" ;;
+        *) log "health: FAILED: response could not be read (curl exit $curl_rc)"; return 1 ;;
+      esac
+    else
+      verdict=0
+      reason="$(HEALTH_HTTP_CODE="$code" "$NODE" -e "$HEALTH_CLASSIFIER" "$body")" || verdict=$?
+      case "$verdict" in
+        0)  log "health: ok ($reason)"; return 0 ;;
+        10) log "health: WARNING: only the notification queue check is failing ($reason)."
+            log "health: WARNING: deploying anyway; inspect failed or backlogged notification jobs."
+            return 0 ;;
+        20) last="$reason" ;;
+        *)  log "health: FAILED: $reason"; return 1 ;;
+      esac
+    fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      log "health: FAILED: not healthy within ${HEALTH_TIMEOUT_SECONDS}s (last: $last)"
+      return 1
+    fi
+    sleep "$HEALTH_RETRY_SECONDS"
+  done
+}
+
+# ---- Worker stability check. ------------------------------------------------
+# active/running with a non-zero PID after the settle time, and the SAME PID
+# after the stability window (a crash loop changes the PID or the state).
+# This proves the process stays up; it does NOT prove jobs are processed.
+verify_worker() {
+  local pid_before pid_after state
+  sleep "$WORKER_SETTLE_SECONDS"
+  pid_before="$(service_prop "$WORKER_SERVICE" MainPID)"
+  state="$(service_prop "$WORKER_SERVICE" ActiveState)/$(service_prop "$WORKER_SERVICE" SubState)"
+  if [ "$state" != "active/running" ] || [ -z "$pid_before" ] || [ "$pid_before" = 0 ]; then
+    log "worker: FAILED: $WORKER_SERVICE is $state"; return 1
+  fi
+  sleep "$WORKER_STABLE_SECONDS"
+  pid_after="$(service_prop "$WORKER_SERVICE" MainPID)"
+  state="$(service_prop "$WORKER_SERVICE" ActiveState)/$(service_prop "$WORKER_SERVICE" SubState)"
+  if [ "$state" != "active/running" ] || [ "$pid_after" != "$pid_before" ]; then
+    log "worker: FAILED: did not stay running (pid $pid_before -> $pid_after, $state)"; return 1
+  fi
+  log "worker: running (pid $pid_after, stable for ${WORKER_STABLE_SECONDS}s)"
+}
+
+# ---- Production changes, in order; the first failure stops the chain. -------
+apply_release() {
+  install_env || return 1
+  switch_current "$NEW_RELEASE" || { log "could not switch current to $(basename "$NEW_RELEASE")"; return 1; }
+  restart_service "$APP_SERVICE" || { log "could not restart $APP_SERVICE"; return 1; }
+  health_gate || return 1
+  restart_service "$WORKER_SERVICE" || { log "could not restart $WORKER_SERVICE"; return 1; }
+  verify_worker || return 1
+}
+
+# ---- Rollback: app.env and current back, then BOTH services restarted. ------
+rollback() {
+  local ok=1
+  if [ -n "$PREV_RELEASE" ]; then
+    log "rolling back to $(basename "$PREV_RELEASE")"
+  else
+    log "first deployment failed; returning to no current release"
+  fi
+  restore_env || { log "CRITICAL: could not restore app.env"; ok=0; }
+  if [ -n "$PREV_RELEASE" ]; then
+    switch_current "$PREV_RELEASE" || { log "CRITICAL: could not switch current back"; ok=0; }
+  else
+    # Nothing healthy existed before: remove the link so neither service can
+    # keep serving the failed release once restarted.
+    rm -f -- "$CURRENT_LINK" "$APP_ROOT/.current.new" || ok=0
+  fi
+  rm -f -- "$APP_ROOT/.current.new"
+  restart_service "$APP_SERVICE" || { log "could not restart $APP_SERVICE during rollback"; ok=0; }
+  if [ "$ok" = 1 ] && [ -n "$PREV_RELEASE" ]; then health_gate || ok=0; fi
+  restart_service "$WORKER_SERVICE" || { log "could not restart $WORKER_SERVICE during rollback"; ok=0; }
+  if [ "$ok" = 1 ] && [ -n "$PREV_RELEASE" ]; then verify_worker || ok=0; fi
+  # Drop the failed release unless it is (still) current or was reused.
+  if [ "$REUSED_RELEASE" = 0 ] && [ -n "$NEW_RELEASE" ] && [ "$(current_target)" != "$NEW_RELEASE" ]; then
+    rm -rf --one-file-system -- "$NEW_RELEASE"
+  fi
+  if [ -z "$PREV_RELEASE" ]; then
+    log "CRITICAL: first deployment failed; no release is current and the services cannot start"
+    return 1
+  fi
+  [ "$ok" = 1 ] || { log "CRITICAL: rollback did not come back healthy; manual action needed"; return 1; }
+  log "rollback complete; $(basename "$PREV_RELEASE") is running"
+}
+
+# ---- Retention, only after success. Keeps the KEEP_RELEASES most recently ---
+# deployed releases (mtime is touched on each successful deploy) plus current
+# and previous, which are never deleted. Only <40-hex> directories are
+# candidates: a manually created release such as "first" is left alone.
+# Failures here are reported but do not fail a successful deployment.
+prune_releases() {
+  local dir n=0
+  touch -m -- "$NEW_RELEASE" 2>/dev/null || true
+  while IFS= read -r dir; do
+    n=$((n + 1))
+    [ "$n" -le "$KEEP_RELEASES" ] && continue
+    if [ "$dir" = "$NEW_RELEASE" ] || [ "$dir" = "$PREV_RELEASE" ] || [ "$dir" = "$(current_target)" ]; then continue; fi
+    log "pruning old release $(basename "$dir")"
+    rm -rf --one-file-system -- "$dir" || log "WARNING: could not fully remove $dir"
+  done < <(find "$RELEASES_REAL" -mindepth 1 -maxdepth 1 -type d \
+             -regextype posix-extended -regex '.*/[0-9a-f]{40}' -printf '%T@ %p\n' \
+           | sort -rn | cut -d' ' -f2-)
+  return 0
+}
+
+# ---- Exit handler: rolls back if the script dies mid-transaction for any ----
+# reason (bug, TERM), then removes temporary files.
+on_exit() {
+  local rc=$?
+  set +e
+  if [ "$IN_TRANSACTION" = 1 ]; then
+    IN_TRANSACTION=0
+    log "unexpected exit (status $rc) during the deployment; rolling back"
+    if rollback; then rc=1; else rc=2; fi
+  fi
+  if [ "$FINISHED" = 0 ] && [ "$REUSED_RELEASE" = 0 ] && [ -n "$NEW_RELEASE" ] \
+     && [ -d "$NEW_RELEASE" ] && [ "$(current_target)" != "$NEW_RELEASE" ]; then
+    rm -rf --one-file-system -- "$NEW_RELEASE"
+  fi
+  [ -n "$PARTIAL" ] && rm -rf --one-file-system -- "$PARTIAL"
+  [ -n "$WORK" ] && rm -rf --one-file-system -- "$WORK"
+  exit "$rc"
+}
+
+main() {
+  trap on_exit EXIT
+  trap '' HUP PIPE
+  trap 'exit 143' TERM INT
+  acquire_lock
+  parse_arguments
+  WORK="$(mktemp -d "$WORK_PARENT/deploy.XXXXXX")"
+  receive_bundle
+  check_bundle
+  RELEASES_REAL="$(readlink -f -- "$RELEASES_DIR")"
+  if [ -L "$CURRENT_LINK" ]; then PREV_RELEASE="$(current_target)"; fi
+  [ -z "$PREV_RELEASE" ] || [ -d "$PREV_RELEASE" ] || reject "current points to a missing release: $PREV_RELEASE"
+  extract_release
+  log "deploying $SHA (previous: ${PREV_RELEASE:+$(basename "$PREV_RELEASE")})"
+
+  IN_TRANSACTION=1
+  if apply_release; then
+    IN_TRANSACTION=0
+    FINISHED=1
+    prune_releases
+    log "deployed $SHA"
+    exit 0
+  fi
+  IN_TRANSACTION=0
+  if rollback; then exit 1; fi
+  exit 2
+}
+
+main "$@"

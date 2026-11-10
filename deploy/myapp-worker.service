@@ -1,0 +1,61 @@
+# /etc/systemd/system/myapp-worker.service
+# BullMQ notification + maintenance worker: dist/worker.mjs from the release
+# (bundled by scripts/build-worker.mjs, packaged by scripts/package-release.sh).
+# Same user, release and environment file as myapp.service.
+# /usr/local/bin/myapp-deploy restarts it after switching /srv/myapp/current
+# and the web app passing its health gate, and on every rollback.
+[Unit]
+Description=myapp BullMQ worker
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nextjs
+Group=nextjs
+# systemd resolves the symlink when the service starts, so a running worker
+# keeps the release it started with until it is restarted.
+WorkingDirectory=/srv/myapp/current
+# Required (no "-" prefix): the worker must not start without its settings.
+EnvironmentFile=/srv/myapp/env/app.env
+# EnvironmentFile= overrides Environment=, so NODE_ENV is set by env(1) in
+# ExecStart instead: it is applied after app.env and always wins.
+ExecStart=/usr/bin/env NODE_ENV=production /usr/bin/node dist/worker.mjs
+Restart=on-failure
+RestartSec=5
+# The worker closes gracefully on SIGTERM and lets active jobs finish; the
+# job lock is 60 s (lib/notifications/worker.ts), so allow a little more.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+UMask=0027
+
+# Hardening. The worker writes no files, so the whole filesystem is read-only
+# to it. Network access is needed for Neon, Redis (127.0.0.1:6379), Resend and
+# R2. Do NOT add MemoryDenyWriteExecute=yes: it breaks V8's JIT compiler.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

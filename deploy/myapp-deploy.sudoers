@@ -1,0 +1,5 @@
+# /etc/sudoers.d/myapp-deploy   (root:root, mode 0440; check: visudo -cf)
+# The deploy key's forced command (/usr/local/bin/myapp-deploy) may restart
+# exactly these two units, with exactly these arguments, and nothing else.
+# The first rule is the existing one, kept as is; the second is new.
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart myapp.service, /usr/bin/systemctl restart myapp-worker.service

@@ -1,0 +1,94 @@
+#!/usr/bin/python3 -I
+"""Safe archive extraction for /usr/local/bin/myapp-deploy.
+
+  myapp-safe-extract bundle  <bundle.tar>     <new-dir>
+  myapp-safe-extract release <release.tar.gz> <new-dir>
+
+bundle:  a plain (uncompressed) tar holding exactly release.tar.gz and,
+         optionally, app.env -- both regular files, each name once, within
+         size limits. Anything else is rejected before extraction.
+release: the gzip release archive. Every member is checked first: only
+         regular files, directories and symlinks; no hard links or device
+         files; capped member count and total size. Extraction then uses
+         Python's "data" filter (PEP 706), which also refuses absolute paths,
+         "..", and links that point outside the destination, and strips
+         setuid/setgid and group/world-write bits.
+
+<new-dir> must not exist yet; it is created with mode 0755. Files are owned
+by the user running this script (ownership in the archive is ignored).
+Exit status is non-zero, with a one-line reason on stderr, on any problem.
+"""
+import os
+import sys
+import tarfile
+
+MiB = 1024 * 1024
+BUNDLE_LIMITS = {"release.tar.gz": 600 * MiB, "app.env": 64 * 1024}
+RELEASE_MAX_BYTES = 3 * 1024 * MiB   # uncompressed; a release is ~0.6-0.8 GB
+RELEASE_MAX_MEMBERS = 150_000        # a release has ~32,000 entries
+
+
+def die(message: str) -> None:
+    print(f"myapp-safe-extract: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def make_dest(dest: str) -> None:
+    try:
+        os.mkdir(dest, 0o755)
+    except FileExistsError:
+        die(f"destination already exists: {dest}")
+
+
+def extract_bundle(path: str, dest: str) -> None:
+    with tarfile.open(path, mode="r:") as archive:
+        members = archive.getmembers()
+        names = sorted(m.name for m in members)
+        if names not in (["app.env", "release.tar.gz"], ["release.tar.gz"]):
+            die(f"bundle must contain exactly release.tar.gz and optionally app.env, got {names[:10]}")
+        for member in members:
+            if not member.isreg():
+                die(f"bundle entry {member.name} is not a regular file")
+            if member.size > BUNDLE_LIMITS[member.name]:
+                die(f"bundle entry {member.name} is too large ({member.size} bytes)")
+        make_dest(dest)
+        archive.extractall(dest, members=members, filter="data")
+
+
+def extract_release(path: str, dest: str) -> None:
+    with tarfile.open(path, mode="r:gz") as archive:
+        total = 0
+        count = 0
+        for member in archive:
+            count += 1
+            if count > RELEASE_MAX_MEMBERS:
+                die(f"release has more than {RELEASE_MAX_MEMBERS} entries")
+            # The data filter would only strip a leading "/" and contain the
+            # entry; a well-formed release never has one, so reject outright.
+            if member.name.startswith("/") or ".." in member.name.split("/"):
+                die(f"unsafe path: {member.name}")
+            if member.islnk():
+                die(f"hard link not allowed: {member.name}")
+            if not (member.isreg() or member.isdir() or member.issym()):
+                die(f"unsupported entry type: {member.name}")
+            total += member.size
+            if total > RELEASE_MAX_BYTES:
+                die(f"release expands beyond {RELEASE_MAX_BYTES} bytes")
+        make_dest(dest)
+        archive.extractall(dest, filter="data")
+
+
+def main() -> None:
+    if not hasattr(tarfile, "data_filter"):
+        die("this Python has no tarfile extraction filters (need 3.12+, or 3.10.12+/3.11.4+)")
+    if len(sys.argv) != 4 or sys.argv[1] not in ("bundle", "release"):
+        die("usage: myapp-safe-extract bundle|release <archive> <new-dir>")
+    mode, path, dest = sys.argv[1:]
+    try:
+        (extract_bundle if mode == "bundle" else extract_release)(path, dest)
+    except (tarfile.TarError, OSError, EOFError) as err:
+        die(f"{type(err).__name__}: {err}")
+
+
+if __name__ == "__main__":
+    main()
