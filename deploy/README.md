@@ -35,18 +35,23 @@ systemd reads it as root for both services.
 
 ## Plain HTTP on the IP address: what does not work yet
 
-The production build deliberately assumes HTTPS (security audit SEC-M-01):
-session, MFA and return-path cookies are `Secure`, and the Content Security
-Policy contains `upgrade-insecure-requests`. Over `http://2.24.58.228`:
+HSTS and the CSP's `upgrade-insecure-requests` are sent only when the release
+was **built** with `APP_HTTPS_ENABLED=true` (GitHub repository variable
+`APP_HTTPS_ENABLED`, passed to the CI build step; `next build` fixes the
+headers, so setting it in `app.env` has no effect). Leave it unset while the
+site is plain http: with it, browsers rewrite every script, stylesheet, font
+and image URL to `https://` and the pages render unstyled. Every other
+security header is sent either way.
 
-- `/api/health` and page HTML load,
-- but browsers rewrite the page's own scripts and styles to `https://`, and
-  refuse to store `Secure` cookies, so pages render without assets and
-  **sign-in cannot work**.
+Over `http://2.24.58.228`, pages and assets load, but session, MFA and
+return-path cookies are still `Secure` in production, so browsers refuse to
+store them and **sign-in cannot work** until the site is served over HTTPS.
 
-Fix it by adding TLS (a domain with a Let's Encrypt certificate is the
-standard route; a certificate for the bare IP or a self-signed one are
-temporary alternatives), not by turning these protections off.
+Fix that by adding TLS (a domain with a Let's Encrypt certificate is the
+standard route), not by turning these protections off. Once HTTPS works, set
+the repository variable `APP_HTTPS_ENABLED` to `true` and deploy a new build.
+HSTS is cached by browsers for a year (`max-age=31536000`, with
+`includeSubDomains`), so only turn it on when HTTPS is permanent.
 
 ## What a deployment does
 

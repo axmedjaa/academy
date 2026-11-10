@@ -196,7 +196,7 @@ A production deployment needs:
 - Passwords are hashed with Argon2. Session tokens are stored only as hashes.
 - Platform staff must pass two-step verification: an emailed one-time code, or a single-use recovery code.
 - Sign-in, verification and password-reset endpoints are rate-limited per IP and per account. They fail closed if Redis is unavailable.
-- Security headers (Content Security Policy, frame protection, `nosniff`, Referrer-Policy, and HSTS in production) are set in `next.config.ts`.
+- Security headers (Content Security Policy, frame protection, `nosniff`, Referrer-Policy and Permissions-Policy) are set in `next.config.ts`. HSTS and `upgrade-insecure-requests` are added only when the build runs with `APP_HTTPS_ENABLED=true` (see `deploy/README.md`).
 - Tenant isolation is enforced server-side on every query. Permissions are checked in Server Actions, not in the UI.
 - Finance submissions use idempotency keys so a repeated submit is not recorded twice.
 - Secrets come only from environment variables, and logs are redacted.

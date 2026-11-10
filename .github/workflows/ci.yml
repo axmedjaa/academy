@@ -61,11 +61,16 @@ jobs:
       # next build's own TypeScript check is the "typecheck" step — it also
       # generates .next/types, which a standalone `tsc --noEmit` depends on
       # without ever having run a build first.
+      # This build becomes the release artifact. APP_HTTPS_ENABLED decides
+      # at build time whether HSTS and upgrade-insecure-requests are sent
+      # (next.config.ts): keep the repository variable unset or "false"
+      # while production is plain http, set it to "true" once HTTPS works.
       - run: npm run build
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
           REDIS_URL: redis://localhost:6379
           MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
+          APP_HTTPS_ENABLED: ${{ vars.APP_HTTPS_ENABLED }}
 
       # Production worker bundle (dist/worker.mjs): proves the worker and
       # everything it imports still compile for plain `node`.

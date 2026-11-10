@@ -13,9 +13,17 @@
  * Browser uploads go straight to Cloudflare R2 with a presigned PUT, and
  * images are read from presigned R2 URLs, so the R2 S3 endpoint is allowed
  * for `connect-src` and `img-src`.
+ *
+ * HTTPS-only policies (`upgrade-insecure-requests`, HSTS) are sent only when
+ * the deployment says it is served over HTTPS (`isHttps`), never inferred
+ * from NODE_ENV: on a plain-http production host (no certificate yet) they
+ * make the browser rewrite every asset URL to https:// and the page loads
+ * without its CSS, fonts and images.
  */
 export interface SecurityHeaderOptions {
   isDev: boolean;
+  /** The site is served to browsers over HTTPS (APP_HTTPS_ENABLED=true at build time). */
+  isHttps: boolean;
 }
 
 export interface HeaderEntry {
@@ -33,7 +41,7 @@ const R2_ORIGIN = "https://*.r2.cloudflarestorage.com";
 /** Pages whose URL carries a one-time token: never send it in a Referer. */
 export const TOKEN_IN_URL_PATHS = ["/reset-password", "/account/verify-email", "/staff-invitation"] as const;
 
-export function contentSecurityPolicy({ isDev }: SecurityHeaderOptions): string {
+export function contentSecurityPolicy({ isDev, isHttps }: SecurityHeaderOptions): string {
   const directives = [
     "default-src 'self'",
     `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
@@ -48,8 +56,9 @@ export function contentSecurityPolicy({ isDev }: SecurityHeaderOptions): string 
     "manifest-src 'self'",
     "worker-src 'self' blob:",
   ];
-  // Would break plain-http local runs (dev server, e2e on localhost).
-  if (!isDev) directives.push("upgrade-insecure-requests");
+  // Only where HTTPS actually exists: on plain http it rewrites every
+  // same-origin asset request to an https:// URL that nothing answers.
+  if (isHttps) directives.push("upgrade-insecure-requests");
   return directives.join("; ");
 }
 
@@ -61,13 +70,14 @@ export function securityHeaderRules(options: SecurityHeaderOptions): HeaderRule[
     { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
     {
       key: "Permissions-Policy",
-      value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+      value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
     },
     { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
   ];
   // HSTS only where the app is actually served over HTTPS. Browsers ignore
-  // it on plain http anyway, but leaving it out of dev keeps localhost clean.
-  if (!options.isDev) {
+  // it on plain http, and once received over https they cache it for a year,
+  // so it must never be sent by a deployment that is not committed to HTTPS.
+  if (options.isHttps) {
     common.push({ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" });
   }
 

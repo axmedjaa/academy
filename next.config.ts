@@ -27,10 +27,18 @@ const nextConfig: NextConfig = {
 
   // Security audit SEC-M-01: no X-Powered-By, and CSP / framing / HSTS /
   // nosniff / Referrer-Policy / Permissions-Policy on every response. See
-  // lib/http/security-headers.ts.
+  // lib/http/security-headers.ts. HSTS and upgrade-insecure-requests are
+  // sent only when APP_HTTPS_ENABLED=true; leave it unset while the site is
+  // served over plain http. The headers are fixed by `next build` (stored in
+  // routes-manifest.json; `next start` ignores a runtime change), so the
+  // variable belongs to the build environment (the CI build step), not to
+  // app.env.
   poweredByHeader: false,
   async headers() {
-    return securityHeaderRules({ isDev: process.env.NODE_ENV !== "production" });
+    return securityHeaderRules({
+      isDev: process.env.NODE_ENV !== "production",
+      isHttps: process.env.APP_HTTPS_ENABLED === "true",
+    });
   },
 };
 
