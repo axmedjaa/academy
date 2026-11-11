@@ -23,6 +23,7 @@ const initialState: SignInState = { ok: false };
  * itself lives in an httpOnly cookie, never in the URL). */
 function InvitationNotice() {
   const params = useSearchParams();
+  if (params.get("passwordChanged") === "1") return <SuccessBanner message="Your password has been changed. Sign in with your new password." />;
   if (params.get("invited") === "1") return <SuccessBanner message="Your account is ready and you've joined the academy. Sign in to start." />;
   if (params.get("continue") === "invitation") return <SuccessBanner message="Sign in to continue to your invitation." />;
   return null;

@@ -122,9 +122,11 @@ export async function applyPasswordReset(
 
   const passwordHash = await hashPassword(newPassword);
 
+  // The person chose this password themselves (proven by the emailed
+  // link), so a temporary password set by an administrator is replaced too.
   await db
     .update(users)
-    .set({ passwordHash, updatedAt: new Date() })
+    .set({ passwordHash, mustChangePassword: false, updatedAt: new Date() })
     .where(eq(users.id, resetToken.userId));
 
   await db

@@ -25,6 +25,7 @@ import { ACADEMY_ROLES, type AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { ACADEMY_STAFF_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { checkAllowance } from "@/lib/subscriptions/usage";
+import { verifyPassword } from "@/lib/auth/password";
 import {
   assignStaffRole,
   createStaff,
@@ -37,7 +38,7 @@ import {
 } from "./staff";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
-import { inviteAndAccept } from "@/lib/testing/staff-invitation-helpers";
+import { TEST_TEMPORARY_PASSWORD } from "@/lib/testing/staff-account-helpers";
 
 // Same "one top-level cleanup, every test builds its own fully isolated
 // fixture set" convention as lib/academies/settings.test.ts, plus the same
@@ -276,14 +277,14 @@ function validCreateInput(overrides: Partial<CreateStaffInput> = {}): CreateStaf
     employeeNumber: "EMP-100",
     hireDate: "2024-01-01",
     role: "trainer",
+    temporaryPassword: TEST_TEMPORARY_PASSWORD,
     ...overrides,
   };
 }
 
-/** SEC-H-01: staff are created by invitation + acceptance. This runs both
- * (accepting as the invited person) and tracks the user for cleanup. */
+/** Direct staff account creation; tracks the new user for cleanup. */
 async function createStaffTracked(context: AuthContext, input: CreateStaffInput) {
-  const result = await inviteAndAccept(context, input);
+  const result = await createStaff(context, input);
   if (result.ok) createdUserIds.push(result.userId);
   return result;
 }
@@ -325,7 +326,7 @@ afterAll(async () => {
   for (const userId of createdUserIds) {
     await db.delete(users).where(eq(users.id, userId));
   }
-});
+}, 300_000);
 
 describe("academy.staff permission levels (Master Permission Matrix 'Staff' row)", () => {
   it("matches Full/Full/Manage/none/none/View exactly", () => {
@@ -430,7 +431,7 @@ describe("createStaff — hard block at the plan's staff allowance limit", () =>
 
     const afterArchive = await createStaffTracked(context, validCreateInput());
     expect(afterArchive.ok).toBe(true);
-  });
+  }, 60_000); // two Argon2id hashes plus setup against the remote test branch
 });
 
 describe("createStaff — the create/reuse/audit transaction", () => {
@@ -470,32 +471,21 @@ describe("createStaff — the create/reuse/audit transaction", () => {
     expect(audit?.actorRole).toBe("academy_owner");
   });
 
-  it("reuses an existing users row for an email that already has an account, rather than creating a duplicate", async () => {
-    const { context } = await setupAcademy("academy_owner");
+  it("refuses an email that already has an account, and leaves that account untouched (no duplicate, no attach)", async () => {
+    const { academyId, context } = await setupAcademy("academy_owner");
     const existingUserId = await createUser();
     const [existingUser] = await db.select().from(users).where(eq(users.id, existingUserId));
 
-    const result = await createStaffTracked(
-      context,
-      validCreateInput({ email: existingUser.email }),
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.userId).toBe(existingUserId);
+    const result = await createStaff(context, validCreateInput({ email: existingUser.email.toUpperCase() }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("conflict");
 
     const matchingUsers = await db.select().from(users).where(eq(users.email, existingUser.email));
-    expect(matchingUsers.length).toBe(1);
-  });
-
-  it("inviting creates no account, no membership and no staff profile until the invitation is accepted (SEC-H-01)", async () => {
-    const { academyId, context } = await setupAcademy("academy_owner");
-    const input = validCreateInput();
-    const result = await createStaff(context, input, { deliver: async () => true });
-    expect(result.ok).toBe(true);
-    const [account] = await db.select().from(users).where(eq(users.email, input.email));
-    expect(account).toBeUndefined();
-    const profiles = await db.select().from(staffProfiles).where(and(eq(staffProfiles.academyId, academyId), eq(staffProfiles.email, input.email)));
-    expect(profiles).toHaveLength(0);
+    expect(matchingUsers).toHaveLength(1);
+    expect(matchingUsers[0].passwordHash).toBe(existingUser.passwordHash);
+    expect(matchingUsers[0].mustChangePassword).toBe(false);
+    const memberships = await db.select().from(academyMemberships).where(and(eq(academyMemberships.userId, existingUserId), eq(academyMemberships.academyId, academyId)));
+    expect(memberships).toHaveLength(0);
   });
 
   it("refuses when the target is already staff at this academy", async () => {
@@ -505,7 +495,7 @@ describe("createStaff — the create/reuse/audit transaction", () => {
     const first = await createStaffTracked(context, input);
     expect(first.ok).toBe(true);
 
-    const second = await createStaff(context, input, { deliver: async () => true });
+    const second = await createStaff(context, input);
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.error.code).toBe("already_staff");
   });
@@ -529,12 +519,17 @@ describe("createStaff — the create/reuse/audit transaction", () => {
     // place, not treated as a live conflict (this was the actual bug: a
     // naive "any existing membership row = already staff" check blocked
     // re-hiring forever after a single deletion).
-    const rehired = await inviteAndAccept(context, { ...input, role: "manager" });
+    const rehired = await createStaff(context, { ...input, role: "manager", temporaryPassword: "rehire-Temporary-456" });
     expect(rehired.ok).toBe(true);
     if (rehired.ok) {
-      createdUserIds.push(rehired.userId);
       expect(rehired.userId).toBe(created.userId);
     }
+    // The re-hired account must replace the new temporary password, and
+    // only the new one works.
+    const [account] = await db.select().from(users).where(eq(users.id, created.userId));
+    expect(account.mustChangePassword).toBe(true);
+    expect(await verifyPassword(account.passwordHash, "rehire-Temporary-456")).toBe(true);
+    expect(await verifyPassword(account.passwordHash, TEST_TEMPORARY_PASSWORD)).toBe(false);
 
     // Reactivated in place — still exactly one membership row for this
     // (user, academy) pair, now active with the new role, never a second
@@ -546,7 +541,7 @@ describe("createStaff — the create/reuse/audit transaction", () => {
     expect(memberships).toHaveLength(1);
     expect(memberships[0].status).toBe("active");
     expect(memberships[0].role).toBe("manager");
-  });
+  }, 60_000); // two Argon2id hashes, removal and deletion against the remote test branch
 
   it("deleteStaff's audit row preserves the deleted staff member's login email, since it disappears from every other view once the profile is gone", async () => {
     const { context } = await setupAcademy("academy_owner");

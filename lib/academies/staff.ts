@@ -7,8 +7,10 @@ import {
   batchTrainerAssignments,
   branches,
   courses,
+  platformMemberships,
   staffBranchAssignments,
   staffDocuments,
+  staffInvitations,
   staffProfiles,
   timetables,
   users,
@@ -21,11 +23,9 @@ import {
 } from "@/lib/auth/academy-permissions";
 import { checkAllowance } from "@/lib/subscriptions/usage";
 import { recordAudit } from "@/lib/audit";
-import {
-  issueStaffInvitation,
-  type InvitationDeliverer,
-  type IssueStaffInvitationResult,
-} from "@/lib/academies/staff-invitations";
+import { hashPassword, passwordSchema } from "@/lib/auth/password";
+import { revokeAllSessionsForUser } from "@/lib/auth/session";
+import { checkRateLimit } from "@/lib/rate-limit";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { canChangeStaffRoles, canModifyStaffWithRole, rolesAssignableBy } from "@/lib/academies/staff-role-rules";
 import { ACADEMY_ROLES, isRetiredAcademyRole, type AcademyRole } from "@/lib/auth/roles";
@@ -43,8 +43,8 @@ import { ACADEMY_ROLES, isRetiredAcademyRole, type AcademyRole } from "@/lib/aut
  * table's own doc comment in lib/db/schema.ts. A staff member's system
  * role/access lives entirely on their `academy_memberships` row. So
  * "create a staff member" here is really three things in one transaction:
- * (1) a `users` row for the person (create-or-reuse — see createStaff's own
- * comment), (2) a `staff_profiles` row (the employment record), and (3) an
+ * (1) a new `users` row for the person (never an existing one — see
+ * createStaff's own comment), (2) a `staff_profiles` row (the employment record), and (3) an
  * `academy_memberships` row carrying the role (`assignStaffRole`'s own
  * concern, reused inline here for the create path so a brand-new staff
  * member is never left without a role).
@@ -133,6 +133,11 @@ export const createStaffSchema = z.object({
   // for an all-branch creator, the creator's own branches otherwise.
   workplace: z.enum(["all", "specific"]).optional(),
   branchIds: z.array(z.string().uuid("Choose a valid branch")).max(200).optional(),
+  // The temporary password the administrator gives the new staff member.
+  // Same policy as every other password (passwordSchema); the upper bound
+  // only caps Argon2 input size. Hashed with Argon2id and never stored,
+  // logged, audited or returned.
+  temporaryPassword: passwordSchema.max(128, "Password must be at most 128 characters"),
 });
 
 export type CreateStaffInput = z.input<typeof createStaffSchema>;
@@ -205,10 +210,19 @@ function toRecord(row: typeof staffProfiles.$inferSelect): StaffRecord {
   };
 }
 
-/** Success means an invitation was recorded — never that anyone gained
- * access. The response is the same whether or not the email already has an
- * account (SEC-H-01). */
-export type CreateStaffResult = IssueStaffInvitationResult;
+/** Never carries the password or its hash. */
+export type CreateStaffResult =
+  | { ok: true; staffProfileId: string; userId: string; email: string; role: AcademyRole }
+  | { ok: false; error: StaffActionError };
+
+/** Accounts one staff manager may create per hour. Same budget the
+ * invitation flow had (each creation also pays one Argon2id hash). */
+const CREATE_STAFF_RATE_LIMIT = { maxAttempts: 30, windowSeconds: 3600 };
+
+const EMAIL_ALREADY_REGISTERED: StaffActionError = {
+  code: "conflict",
+  message: "This email is already registered. Use a different email address for this staff account.",
+};
 
 class AllowanceExceeded extends Error {
   constructor(public readonly current: number, public readonly limit: number) {
@@ -223,24 +237,41 @@ class StaffUpdateRefused extends Error {
   }
 }
 
+function isUniqueViolation(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === "23505" || e?.cause?.code === "23505";
+}
+
 /**
  * PLAN.md §4: `createStaff`, gated by the `academy.staff` row
  * (lib/auth/academy-permissions.ts): only Full/Manage (Owner, Admin,
  * Manager) may add staff.
  *
- * SEC-H-01: this no longer creates or reuses an account. Every check about
- * WHAT may be granted runs here (ownership, retired roles, roles the
- * inviter may give, all-branch access, the inviter's own branches) and the
- * result is an invitation (lib/academies/staff-invitations.ts) bound to the
- * email, academy, role and branches. Access starts only when the owner of
- * that email accepts — signed in as that account if one exists, or by
- * choosing their own password if not.
+ * Direct account creation (replaces the SEC-H-01 invitation flow): the
+ * administrator gives the new staff member a temporary password and the
+ * account is usable at once. In ONE transaction this creates the `users`
+ * row (Argon2id hash, `must_change_password = true`), the membership with
+ * the role, the staff profile, the branch assignments and the `createStaff`
+ * audit row — all or nothing.
+ *
+ * What may be granted is checked exactly as before: ownership, retired
+ * roles, roles this creator may give, all-branch access (owner only), and
+ * branches that belong to this academy and that the creator works in.
+ * Only academy roles exist here; platform roles cannot be granted.
+ *
+ * SEC-H-01's consent rule is kept: an email that already has an account
+ * is refused. An existing account is never attached to this academy and its
+ * password is never set by someone else — except a former staff member of
+ * THIS academy whose account opens nothing anywhere (see the re-hire check
+ * in the transaction), which is how a removed person is re-hired. That refusal does
+ * tell a staff manager that the email is registered; it is limited by the
+ * per-creator rate limit below and only reachable by Owner/Admin/Manager.
+ *
+ * Until the person signs in and replaces the temporary password, their
+ * sessions resolve no AuthContext (lib/auth/auth-context.ts), so the
+ * temporary password only opens /change-password.
  */
-export async function createStaff(
-  actorContext: AuthContext,
-  input: CreateStaffInput,
-  options: { deliver?: InvitationDeliverer } = {},
-): Promise<CreateStaffResult> {
+export async function createStaff(actorContext: AuthContext, input: CreateStaffInput): Promise<CreateStaffResult> {
   const access = await checkAcademyAccessForContext(actorContext);
   if (access.level === "blocked") {
     return { ok: false, error: { code: "blocked", message: access.message } };
@@ -276,10 +307,10 @@ export async function createStaff(
     return { ok: false, error: { code: "validation", message: RETIRED_ROLE_MESSAGE } };
   }
   // Privilege-escalation guard: creating staff must never hand out a role
-  // the creator couldn't grant by changing a role. A Manager (who can't
+  // the creator could not grant by changing a role. A Manager (who cannot
   // change roles at all) may only create roles below Manager — otherwise
   // they could register an Admin account they control and promote
-  // themselves with it. Applies to brand-new and re-used accounts alike.
+  // themselves with it.
   if (!rolesAssignableBy(access.membershipRole, "create").includes(data.role)) {
     return {
       ok: false,
@@ -302,23 +333,223 @@ export async function createStaff(
     return { ok: false, error: { code: "validation", message: "Choose at least one branch where this person works." } };
   }
 
-  return issueStaffInvitation({
-    actorContext,
-    academyId,
-    actorRole: access.membershipRole,
-    actorAcademyWide: access.academyWide,
-    email: data.email,
-    role: data.role,
-    fullName: data.fullName,
-    phone: data.phone,
-    employeeNumber: data.employeeNumber,
-    hireDate: data.hireDate,
-    grantAllBranches,
-    workplace,
-    chosenBranchIds,
-    deliver: options.deliver,
-  });
+  // Checked after every authorization check and before any Argon2 work.
+  const limit = await checkRateLimit(`staff-create:${actorContext.userId}`, CREATE_STAFF_RATE_LIMIT);
+  if (!limit.allowed) {
+    return { ok: false, error: { code: "conflict", message: "Too many staff accounts created. Try again later." } };
+  }
+
+  // Hashed before the transaction so no row lock waits on Argon2id. The
+  // plaintext goes no further than this line.
+  const passwordHash = await hashPassword(data.temporaryPassword);
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const allowance = await checkAllowance(academyId, "staff", tx);
+      if (!allowance.ok) throw new AllowanceExceeded(0, 0);
+      if (!allowance.result.allowed) {
+        throw new AllowanceExceeded(allowance.result.current, allowance.result.limit ?? 0);
+      }
+
+      // Already staff here? (own-academy information, clearer message)
+      const [alreadyHere] = await tx
+        .select({ id: staffProfiles.id })
+        .from(staffProfiles)
+        .innerJoin(users, eq(users.id, staffProfiles.userId))
+        .where(and(eq(staffProfiles.academyId, academyId), eq(users.email, data.email)))
+        .limit(1);
+      if (alreadyHere) {
+        throw new StaffUpdateRefused({ code: "already_staff", message: "This person is already a staff member of this academy." });
+      }
+      // An existing account is refused — never attached, never
+      // re-passworded — with ONE exception: re-hiring someone who used to
+      // work HERE. Their account is reused only if it is active, holds no
+      // platform role (archived or not), and every membership it has ever
+      // had is a removed one in this academy. Such an account opens nothing
+      // today, so setting a new temporary password takes nothing from
+      // anyone; any other account could be someone else's.
+      const [existingUser] = await tx
+        .select({ id: users.id, status: users.status })
+        .from(users)
+        .where(eq(users.email, data.email))
+        .limit(1);
+      let rehireUserId: string | null = null;
+      let rehireMembershipId: string | null = null;
+      if (existingUser) {
+        const [platform] = await tx
+          .select({ id: platformMemberships.id })
+          .from(platformMemberships)
+          .where(eq(platformMemberships.userId, existingUser.id))
+          .limit(1);
+        const history = await tx
+          .select({ id: academyMemberships.id, academyId: academyMemberships.academyId, status: academyMemberships.status })
+          .from(academyMemberships)
+          .where(eq(academyMemberships.userId, existingUser.id));
+        const formerStaffHere =
+          existingUser.status === "active" &&
+          !platform &&
+          history.length === 1 &&
+          history[0].academyId === academyId &&
+          history[0].status === "removed";
+        if (!formerStaffHere) throw new StaffUpdateRefused(EMAIL_ALREADY_REGISTERED);
+        rehireUserId = existingUser.id;
+        rehireMembershipId = history[0].id;
+      }
+
+      // Branches: must belong to THIS academy (and be active); a creator
+      // without all-branch access may only use their own branches.
+      let assignedBranchIds: string[] = [];
+      if (grantAllBranches) {
+        // All-branch access is only for Main Branch staff.
+        const [main] = await tx
+          .select({ id: branches.id })
+          .from(branches)
+          .where(and(eq(branches.academyId, academyId), eq(branches.isMain, true)))
+          .limit(1);
+        if (!main) throw new StaffUpdateRefused({ code: "validation", message: "This academy has no Main Branch yet. Add a branch first." });
+        assignedBranchIds = [main.id];
+      } else if (workplace === "specific") {
+        const found = await tx
+          .select({ id: branches.id })
+          .from(branches)
+          .where(and(eq(branches.academyId, academyId), eq(branches.status, "active"), inArray(branches.id, chosenBranchIds)));
+        if (found.length !== chosenBranchIds.length) {
+          throw new StaffUpdateRefused({ code: "validation", message: "One of the chosen branches is not available. Refresh and try again." });
+        }
+        if (!access.academyWide) {
+          const own = new Set(await getAssignedBranchIds(tx, academyId, actorContext.userId));
+          if (!chosenBranchIds.every((id) => own.has(id))) {
+            throw new StaffUpdateRefused({ code: "forbidden", message: "You can only add staff to the branches you work in." });
+          }
+        }
+        assignedBranchIds = chosenBranchIds;
+      } else if (!access.academyWide) {
+        // Earlier default: staff added by someone without all-branch access
+        // start in that person's own branches (otherwise they could never
+        // see or manage the person they just added).
+        assignedBranchIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
+      }
+
+      let user: { id: string };
+      if (rehireUserId && rehireMembershipId) {
+        // Re-hire: the earlier password stops working, and nothing from the
+        // earlier employment (role, all-branch access) carries over.
+        await tx
+          .update(users)
+          .set({ passwordHash, mustChangePassword: true, updatedAt: new Date() })
+          .where(eq(users.id, rehireUserId));
+        await tx
+          .update(academyMemberships)
+          .set({ role: data.role, status: "active", academyWide: grantAllBranches })
+          .where(eq(academyMemberships.id, rehireMembershipId));
+        user = { id: rehireUserId };
+      } else {
+        [user] = await tx
+          .insert(users)
+          .values({ email: data.email, passwordHash, mustChangePassword: true })
+          .returning({ id: users.id });
+        await tx.insert(academyMemberships).values({
+          userId: user.id,
+          academyId,
+          role: data.role,
+          status: "active",
+          academyWide: grantAllBranches,
+        });
+      }
+
+      const [profile] = await tx
+        .insert(staffProfiles)
+        .values({
+          academyId,
+          userId: user.id,
+          employeeNumber: data.employeeNumber,
+          fullName: data.fullName,
+          phone: data.phone,
+          email: data.email,
+          hireDate: data.hireDate,
+        })
+        .returning();
+
+      if (assignedBranchIds.length > 0) {
+        await tx
+          .insert(staffBranchAssignments)
+          .values(assignedBranchIds.map((branchId) => ({ academyId, staffProfileId: profile.id, branchId })));
+      }
+
+      // A legacy invitation still waiting for this email in this academy
+      // would now only fail on acceptance; close it.
+      const closed = await tx
+        .update(staffInvitations)
+        .set({ status: "revoked", revokedAt: new Date(), revokedBy: actorContext.userId, updatedAt: new Date() })
+        .where(and(eq(staffInvitations.academyId, academyId), eq(staffInvitations.email, data.email), eq(staffInvitations.status, "pending")))
+        .returning({ id: staffInvitations.id });
+      for (const invitation of closed) {
+        await recordAudit(
+          {
+            actorUserId: actorContext.userId,
+            actorRole: access.membershipRole,
+            academyId,
+            action: "revokeStaffInvitation",
+            entityType: "staff_invitation",
+            entityId: invitation.id,
+            context: { reason: "replaced by a directly created staff account" },
+          },
+          tx,
+        );
+      }
+
+      // Same-transaction audit write (Cross-Cutting Architecture Decisions:
+      // "a sensitive mutation cannot succeed if its audit write fails").
+      // Never includes the password or its hash.
+      await recordAudit(
+        {
+          actorUserId: actorContext.userId,
+          actorRole: access.membershipRole,
+          academyId,
+          action: "createStaff",
+          entityType: "staff_profile",
+          entityId: profile.id,
+          after: {
+            ...toRecord(profile),
+            role: data.role,
+            email: data.email,
+            branchIds: assignedBranchIds,
+            allBranchAccess: grantAllBranches,
+            mustChangePassword: true,
+          },
+          context: { method: "direct_account", temporaryPassword: true, rehired: rehireUserId !== null },
+        },
+        tx,
+      );
+
+      return { staffProfileId: profile.id, userId: user.id, rehired: rehireUserId !== null };
+    });
+
+    // A re-hired account's earlier sessions must not survive its new
+    // temporary password (they already resolve nothing while it is set).
+    if (result.rehired) await revokeAllSessionsForUser(result.userId);
+
+    return { ok: true, staffProfileId: result.staffProfileId, userId: result.userId, email: data.email, role: data.role };
+  } catch (err) {
+    if (err instanceof StaffUpdateRefused) return { ok: false, error: err.error };
+    if (err instanceof AllowanceExceeded) {
+      return {
+        ok: false,
+        error: {
+          code: "allowance_exceeded",
+          message:
+            err.limit > 0
+              ? `Staff allowance limit reached (${err.current}/${err.limit}). Archive an existing staff member or upgrade your plan.`
+              : "Staff allowance could not be verified for this academy.",
+        },
+      };
+    }
+    // A concurrent creation for the same email meets users_email_unique.
+    if (isUniqueViolation(err)) return { ok: false, error: EMAIL_ALREADY_REGISTERED };
+    throw err;
+  }
 }
+
 
 export const updateStaffSchema = z.object({
   fullName: z.string().trim().min(1, "Full name is required").max(200),

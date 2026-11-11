@@ -17,7 +17,7 @@ import {
   type ResetPasswordError,
 } from "@/lib/auth/password-reset";
 import { passwordSchema } from "@/lib/auth/password";
-import { getPlatformRole, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
+import { CHANGE_PASSWORD_PATH, getPlatformRole, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
 import { sendMfaEmailOtp } from "@/lib/auth/mfa-email-otp";
 import { logger } from "@/lib/logger";
 import { checkSuspiciousLogin } from "@/lib/auth/suspicious-login";
@@ -177,7 +177,12 @@ export async function signIn(
   if (storedReturn !== undefined) {
     cookieStore.delete({ name: RETURN_PATH_COOKIE, path: returnPathCookieOptions().path });
   }
-  redirect(sanitizeReturnPath(storedReturn) ?? (await getPostLoginRedirectPath(result.userId)));
+  // A temporary password (direct staff account creation) goes straight to
+  // /change-password, ahead of any stored destination. The session issued
+  // above cannot reach anything else anyway (lib/auth/auth-context.ts).
+  const home = await getPostLoginRedirectPath(result.userId);
+  if (home === CHANGE_PASSWORD_PATH) redirect(home);
+  redirect(sanitizeReturnPath(storedReturn) ?? home);
 }
 
 export async function signOut(): Promise<void> {

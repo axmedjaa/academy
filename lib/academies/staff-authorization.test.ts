@@ -16,7 +16,7 @@ import {
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
-import { inviteAndAccept } from "@/lib/testing/staff-invitation-helpers";
+import { TEST_TEMPORARY_PASSWORD } from "@/lib/testing/staff-account-helpers";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
@@ -118,12 +118,13 @@ function newStaff(overrides: Partial<CreateStaffInput> = {}): CreateStaffInput {
     fullName: "New Person",
     phone: "+1-555-0123",
     role: "trainer",
+    temporaryPassword: TEST_TEMPORARY_PASSWORD,
     ...overrides,
   };
 }
 
 async function createTracked(context: AuthContext, input: CreateStaffInput) {
-  const result = await inviteAndAccept(context, input);
+  const result = await createStaff(context, input);
   if (result.ok) createdUserIds.push(result.userId);
   return result;
 }

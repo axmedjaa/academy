@@ -34,6 +34,11 @@ export const users = pgTable(
     failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
     lockedUntil: timestamp("locked_until", { withTimezone: true }),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    // Migration 0047. True for a staff account an administrator created with
+    // a temporary password, until its owner chooses their own. While true,
+    // the account's sessions resolve no AuthContext (lib/auth/auth-context.ts)
+    // and only /change-password accepts them.
+    mustChangePassword: boolean("must_change_password").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -1017,14 +1022,13 @@ export const staffBranchAssignments = pgTable(
   ],
 );
 
-// SEC-H-01 (SECURITY_AUDIT_PRE_DEPLOYMENT.md): "Add staff" no longer
-// creates or attaches an account. It records an invitation bound to one
-// email, academy, role and branch scope; the person proves they own the
-// email (the emailed link) and, for an existing account, signs in as it and
-// accepts. Only acceptance creates the membership and staff profile
-// (lib/academies/staff-invitations.ts). The raw token is never stored — only
-// its SHA-256 hash, like password_reset_tokens. Migration
-// drizzle/0045_staff_invitations.sql.
+// SEC-H-01 (SECURITY_AUDIT_PRE_DEPLOYMENT.md), migration
+// drizzle/0045_staff_invitations.sql. LEGACY: staff are now created directly
+// with a temporary password (lib/academies/staff.ts createStaff) and no new
+// invitations are issued. Rows already pending can still be accepted until
+// they expire or are cancelled (lib/academies/staff-invitations.ts); the
+// table and its history are kept. The raw token was never stored — only its
+// SHA-256 hash, like password_reset_tokens.
 export const staffInvitationStatusEnum = pgEnum("staff_invitation_status", [
   "pending",
   "accepted",

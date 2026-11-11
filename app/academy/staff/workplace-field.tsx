@@ -6,7 +6,7 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import { ChoiceChips, DField, invalidProps } from "@/app/academy/_shell/design-form";
 
 /**
- * Multi-branch "Where they work" field, shared by Register staff member and
+ * Multi-branch "Where they work" field, shared by Create staff member and
  * the staff list's Edit branches dialog: all branches (owner only) or
  * specific branches — only those the viewer works in are offered. Submits
  * `workplace` and `branchIds`; the server checks the same rules.

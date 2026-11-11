@@ -3,14 +3,16 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { StaffInvitationRecord } from "@/lib/academies/staff-invitations";
-import { resendStaffInvitation, revokeStaffInvitation } from "@/lib/academies/staff-actions";
+import { revokeStaffInvitation } from "@/lib/academies/staff-actions";
 import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 
 /**
- * Invitations waiting to be accepted (SEC-H-01). Only invitations this
- * person could have sent are listed; Resend issues a new link (the old one
- * stops working) and Cancel revokes it. Both are re-checked on the server.
+ * LEGACY: invitations emailed before staff accounts were created directly
+ * (lib/academies/staff-invitations.ts). They can still be accepted until
+ * they expire; none can be sent or re-sent any more. Only invitations this
+ * person could have sent are listed; Cancel revokes one (re-checked on the
+ * server). Disappears once none is pending.
  */
 export function PendingInvitations({
   invitations,
@@ -40,8 +42,12 @@ export function PendingInvitations({
   return (
     <section aria-labelledby="pending-invitations-title" className="mb-6 rounded-2xl border border-border bg-surface p-4 shadow-card sm:p-5">
       <h2 id="pending-invitations-title" className="mb-3 text-base font-semibold text-ink">
-        Pending invitations <span className="ml-1 text-sm font-medium text-muted">({invitations.length})</span>
+        Earlier invitations <span className="ml-1 text-sm font-medium text-muted">({invitations.length})</span>
       </h2>
+      <p className="mb-2 text-sm text-muted">
+        Sent before staff accounts were created directly. Each can still be accepted until it expires. Creating a staff account for the
+        same email cancels its invitation.
+      </p>
       <ul className="divide-y divide-border">
         {invitations.map((invite) => {
           const where = invite.allBranchAccess
@@ -60,21 +66,6 @@ export function PendingInvitations({
                 {invite.expired ? "Expired" : `Expires ${invite.expiresAt.toISOString().slice(0, 10)}`}
               </span>
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    run(invite.id, async () => {
-                      const result = await resendStaffInvitation(invite.id);
-                      if (!result.ok) showErrorToast(result.error.message);
-                      else if (result.emailSent) showSuccessToast(`Invitation sent again to ${invite.email}.`);
-                      else showErrorToast("The invitation was renewed, but the email could not be sent. Check the email settings.");
-                    })
-                  }
-                  className="inline-flex min-h-10 items-center rounded-lg border border-border-strong bg-surface px-3 text-sm font-semibold text-ink hover:bg-app disabled:opacity-60"
-                >
-                  Resend
-                </button>
                 <button
                   type="button"
                   disabled={busy}

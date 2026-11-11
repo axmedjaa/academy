@@ -1,9 +1,12 @@
 /**
- * SEC-H-01 regression suite (SECURITY_AUDIT_PRE_DEPLOYMENT.md): staff are
- * added by invitation, and only the owner of the invited email — signed in as
- * that account, or creating it with their own password — can turn an
- * invitation into access. Runs against TEST_DATABASE_URL only and removes
- * every row it creates.
+ * LEGACY staff invitations (SEC-H-01). Staff are now created directly
+ * (lib/academies/staff.ts createStaff) and no invitation is issued or
+ * re-sent; invitations already pending keep working until they expire or
+ * are cancelled. These tests seed such invitations the way the retired flow
+ * stored them, and check that acceptance keeps every SEC-H-01 guarantee:
+ * only the owner of the invited email — signed in as that account, or
+ * creating it with their own password — can turn one into access. Runs
+ * against TEST_DATABASE_URL only and removes every row it creates.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, inArray, or } from "drizzle-orm";
@@ -24,18 +27,17 @@ import {
 } from "@/lib/db/schema";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import type { AcademyRole } from "@/lib/auth/roles";
-import { createSession, validateSessionToken } from "@/lib/auth/session";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
-import { captureInvitations } from "@/lib/testing/staff-invitation-helpers";
+import { TEST_TEMPORARY_PASSWORD, seedLegacyInvitation } from "@/lib/testing/staff-account-helpers";
+import * as invitationModule from "./staff-invitations";
 import { checkAcademyAccess } from "./access-gate";
 import { deleteAcademy } from "./delete-academy";
-import { createStaff, type CreateStaffInput } from "./staff";
+import { createStaff } from "./staff";
 import {
   acceptStaffInvitation,
   acceptStaffInvitationWithNewAccount,
   describeStaffInvitation,
   listStaffInvitations,
-  resendStaffInvitation,
   revokeStaffInvitation,
 } from "./staff-invitations";
 
@@ -90,6 +92,7 @@ async function addMember(academyId: string, role: AcademyRole, branchIds: string
     .values({ academyId, userId: user.id, fullName: `Member ${role}`, phone: "+1-555-0100", email: user.email })
     .returning({ id: staffProfiles.id });
   for (const branchId of branchIds) await db.insert(staffBranchAssignments).values({ academyId, staffProfileId: profile.id, branchId });
+  academyOfInviter.set(user.id, academyId);
   return { ...user, profileId: profile.id };
 }
 
@@ -99,15 +102,21 @@ async function addBranch(academyId: string, isMain = false): Promise<string> {
   return row.id;
 }
 
-function input(email: string, overrides: Partial<CreateStaffInput> = {}): CreateStaffInput {
-  return { email, fullName: "Invited Person", phone: "+1-555-0123", role: "trainer", ...overrides };
+interface InviteOptions {
+  role?: AcademyRole;
+  branchIds?: string[];
+  academyWide?: boolean;
+  expiresAt?: Date;
 }
 
-/** Invite through the real createStaff path, capturing the emailed token. */
-async function invite(actor: string, email: string, overrides: Partial<CreateStaffInput> = {}) {
-  const mail = captureInvitations();
-  const result = await createStaff(ctx(actor), input(email, overrides), { deliver: mail.deliver });
-  return { result, token: mail.lastToken() };
+const academyOfInviter = new Map<string, string>();
+
+/** A pending invitation from `actor`, stored as the retired flow stored it. */
+async function invite(actor: string, email: string, options: InviteOptions = {}) {
+  const academyId = academyOfInviter.get(actor);
+  if (!academyId) throw new Error("inviter has no fixture academy");
+  const seeded = await seedLegacyInvitation({ academyId, invitedBy: actor, email, ...options });
+  return { result: { ok: true as const, invitationId: seeded.invitationId }, token: seeded.token };
 }
 
 const membershipsOf = (userId: string) =>
@@ -131,35 +140,7 @@ afterAll(async () => {
   for (const userId of userIds) await db.delete(users).where(eq(users.id, userId));
 }, 240_000);
 
-describe("SEC-H-01 — no direct attachment (tests 1, 2, 3, 10)", () => {
-  it("Academy B's invitation never attaches Academy A's user; A's membership, password and session are untouched", async () => {
-    const A = await createAcademy();
-    const B = await createAcademy();
-    const victim = await addMember(A, "trainer");
-    const bOwner = await addMember(B, "academy_owner");
-    const { token: sessionToken } = await createSession(victim.id);
-    const [userBefore] = await db.select().from(users).where(eq(users.id, victim.id));
-    const membershipsBefore = await membershipsOf(victim.id);
-
-    const { result } = await invite(bOwner.id, victim.email);
-    expect(result.ok).toBe(true);
-
-    // 1: nothing in B.
-    const inB = await db.select().from(academyMemberships).where(and(eq(academyMemberships.userId, victim.id), eq(academyMemberships.academyId, B)));
-    expect(inB).toHaveLength(0);
-    const profileInB = await db.select().from(staffProfiles).where(and(eq(staffProfiles.userId, victim.id), eq(staffProfiles.academyId, B)));
-    expect(profileInB).toHaveLength(0);
-    // 2: A membership identical.
-    expect(await membershipsOf(victim.id)).toEqual(membershipsBefore);
-    // 3: password and session unchanged.
-    const [userAfter] = await db.select().from(users).where(eq(users.id, victim.id));
-    expect(userAfter.passwordHash).toBe(userBefore.passwordHash);
-    expect(userAfter.status).toBe(userBefore.status);
-    expect(await validateSessionToken(sessionToken)).not.toBeNull();
-    // 10: still reaches A.
-    expect((await checkAcademyAccess(victim.id)).level).toBe("full");
-  }, 120_000);
-
+describe("SEC-H-01 — no attachment through a legacy invitation", () => {
   it("even if A's user follows B's link and accepts, they are refused and keep access to A", async () => {
     const A = await createAcademy();
     const B = await createAcademy();
@@ -238,18 +219,14 @@ describe("Token lifecycle (tests 6, 7, 8)", () => {
     const academy = await createAcademy();
     const owner = await addMember(academy, "academy_owner");
     const invitee = await createUser();
-    const { result, token } = await invite(owner.id, invitee.email);
-    if (!result.ok) throw new Error("invite failed");
-    await db.update(staffInvitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(staffInvitations.id, result.invitationId));
+    const { token } = await invite(owner.id, invitee.email, { expiresAt: new Date(Date.now() - 1000) });
 
     const accepted = await acceptStaffInvitation(ctx(invitee.id), token);
     expect(accepted.ok).toBe(false);
     if (!accepted.ok) expect(accepted.error.code).toBe("not_found");
 
     const fresh = `sec-h01-exp-${randomUUID()}@example.com`;
-    const second = await invite(owner.id, fresh);
-    if (!second.result.ok) throw new Error("invite failed");
-    await db.update(staffInvitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(staffInvitations.id, second.result.invitationId));
+    const second = await invite(owner.id, fresh, { expiresAt: new Date(Date.now() - 1000) });
     const created = await acceptStaffInvitationWithNewAccount(second.token, PASSWORD);
     expect(created.ok).toBe(false);
     expect(await db.select().from(users).where(eq(users.email, fresh))).toHaveLength(0);
@@ -300,7 +277,7 @@ describe("Token lifecycle (tests 6, 7, 8)", () => {
     expect(await db.select().from(users).where(eq(users.email, email))).toHaveLength(1);
   }, 120_000);
 
-  it("only the token's hash is stored, and resend invalidates the old link", async () => {
+  it("only the token's hash is stored", async () => {
     const academy = await createAcademy();
     const owner = await addMember(academy, "academy_owner");
     const invitee = await createUser();
@@ -309,38 +286,18 @@ describe("Token lifecycle (tests 6, 7, 8)", () => {
     const row = await invitationRow(result.invitationId);
     expect(row.tokenHash).not.toBe(token);
     expect(row.tokenHash).toBe(createHash("sha256").update(token).digest("hex"));
-
-    const mail = captureInvitations();
-    const resent = await resendStaffInvitation(ctx(owner.id), result.invitationId, { deliver: mail.deliver });
-    expect(resent.ok).toBe(true);
-    const stale = await acceptStaffInvitation(ctx(invitee.id), token);
-    expect(stale.ok).toBe(false);
-    const fresh = await acceptStaffInvitation(ctx(invitee.id), mail.lastToken());
-    expect(fresh.ok).toBe(true);
+    expect((await acceptStaffInvitation(ctx(invitee.id), token)).ok).toBe(true);
   }, 120_000);
 });
 
 describe("Scope cannot exceed what was authorized (test 9)", () => {
-  it("a Manager cannot invite above Trainer, and an accepted invitation grants exactly its role and branches", async () => {
+  it("an accepted invitation grants exactly its role and branches", async () => {
     const academy = await createAcademy();
     const branchX = await addBranch(academy, true);
-    const branchY = await addBranch(academy);
     const manager = await addMember(academy, "manager", [branchX]);
 
-    for (const role of ["academy_admin", "academy_owner", "manager", "admissions_officer", "finance_officer"] as const) {
-      const attempt = await invite(manager.id, `sec-h01-esc-${randomUUID()}@example.com`, { role });
-      expect(attempt.result.ok, role).toBe(false);
-    }
-    // Outside the Manager's own branch.
-    const outside = await invite(manager.id, `sec-h01-y-${randomUUID()}@example.com`, { workplace: "specific", branchIds: [branchY] });
-    expect(outside.result.ok).toBe(false);
-    // All branches is owner-only.
-    const all = await invite(manager.id, `sec-h01-all-${randomUUID()}@example.com`, { workplace: "all" });
-    expect(all.result.ok).toBe(false);
-
     const invitee = await createUser();
-    const ok = await invite(manager.id, invitee.email, { workplace: "specific", branchIds: [branchX] });
-    expect(ok.result.ok).toBe(true);
+    const ok = await invite(manager.id, invitee.email, { branchIds: [branchX] });
     const accepted = await acceptStaffInvitation(ctx(invitee.id), ok.token);
     expect(accepted.ok).toBe(true);
     if (!accepted.ok) return;
@@ -366,73 +323,14 @@ describe("Scope cannot exceed what was authorized (test 9)", () => {
   }, 120_000);
 });
 
-describe("No account enumeration (tests 11, 12)", () => {
-  it("existing and unknown emails get the same response shape and values", async () => {
-    const A = await createAcademy();
-    const B = await createAcademy();
-    const bOwner = await addMember(B, "academy_owner");
-    const elsewhere = await addMember(A, "trainer"); // account in another academy
-    const bare = await createUser(); // account with no membership
-    const unknown = `sec-h01-unknown-${randomUUID()}@example.com`;
-
-    const strip = (r: Awaited<ReturnType<typeof createStaff>>) => {
-      if (!r.ok) return r;
-      const { invitationId, email, ...rest } = r;
-      void invitationId;
-      void email;
-      return rest;
-    };
-    const responses = await Promise.all([elsewhere.email, bare.email, unknown].map((email) => invite(bOwner.id, email).then((x) => x.result)));
-    for (const r of responses) {
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(Object.keys(r).sort()).toEqual(["email", "emailSent", "invitationId", "ok", "role"]);
-    }
-    expect(strip(responses[0])).toEqual(strip(responses[2]));
-    expect(strip(responses[1])).toEqual(strip(responses[2]));
-  }, 120_000);
-
-  it("response time does not depend on whether the email has an account", async () => {
-    const academy = await createAcademy();
-    const owner = await addMember(academy, "academy_owner");
-    const other = await createAcademy();
-    const existing: string[] = [];
-    for (let i = 0; i < 6; i += 1) existing.push((await addMember(other, "trainer")).email);
-    const unknown = Array.from({ length: 6 }, () => `sec-h01-t-${randomUUID()}@example.com`);
-
-    const time = async (email: string) => {
-      const started = performance.now();
-      const { result } = await invite(owner.id, email);
-      expect(result.ok).toBe(true);
-      return performance.now() - started;
-    };
-    const tExisting: number[] = [];
-    const tUnknown: number[] = [];
-    // Interleaved so network drift affects both groups alike.
-    for (let i = 0; i < 6; i += 1) {
-      tExisting.push(await time(existing[i]));
-      tUnknown.push(await time(unknown[i]));
-    }
-    const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
-    const diff = Math.abs(median(tExisting) - median(tUnknown));
-    // The issue path never reads `users`; any gap is remote-database jitter.
-    expect(diff, `median existing ${median(tExisting).toFixed(0)}ms vs unknown ${median(tUnknown).toFixed(0)}ms`).toBeLessThan(
-      Math.max(150, 0.5 * Math.min(median(tExisting), median(tUnknown))),
-    );
-  }, 240_000);
-});
-
-describe("Who may create and revoke invitations (test 13)", () => {
-  it("trainers cannot invite, revoke or resend; other academies cannot touch an invitation; a Manager cannot cancel an Admin's invitation", async () => {
+describe("Who may list and cancel legacy invitations", () => {
+  it("trainers and other academies cannot cancel an invitation; a Manager cannot cancel an Admin's invitation", async () => {
     const academy = await createAcademy();
     const other = await createAcademy();
     const owner = await addMember(academy, "academy_owner");
     const trainer = await addMember(academy, "trainer");
     const manager = await addMember(academy, "manager");
     const otherOwner = await addMember(other, "academy_owner");
-
-    const byTrainer = await invite(trainer.id, `sec-h01-tr-${randomUUID()}@example.com`);
-    expect(byTrainer.result.ok).toBe(false);
-    if (!byTrainer.result.ok) expect(byTrainer.result.error.code).toBe("forbidden");
 
     const adminInvite = await invite(owner.id, `sec-h01-adm-${randomUUID()}@example.com`, { role: "academy_admin" });
     if (!adminInvite.result.ok) throw new Error("invite failed");
@@ -441,8 +339,6 @@ describe("Who may create and revoke invitations (test 13)", () => {
     for (const actor of [trainer.id, manager.id, otherOwner.id]) {
       const revoked = await revokeStaffInvitation(ctx(actor), id);
       expect(revoked.ok).toBe(false);
-      const resent = await resendStaffInvitation(ctx(actor), id, { deliver: async () => true });
-      expect(resent.ok).toBe(false);
     }
     // The Manager doesn't even see it; the other academy can't list it.
     const managerList = await listStaffInvitations(ctx(manager.id));
@@ -459,16 +355,13 @@ describe("Who may create and revoke invitations (test 13)", () => {
 });
 
 describe("Audit trail (test 14)", () => {
-  it("records create, resend, accept and revoke, and never the token", async () => {
+  it("records accept and revoke, and never the token", async () => {
     const academy = await createAcademy();
     const owner = await addMember(academy, "academy_owner");
     const invitee = await createUser();
 
     const first = await invite(owner.id, invitee.email);
-    if (!first.result.ok) throw new Error("invite failed");
-    const mail = captureInvitations();
-    await resendStaffInvitation(ctx(owner.id), first.result.invitationId, { deliver: mail.deliver });
-    const accepted = await acceptStaffInvitation(ctx(invitee.id), mail.lastToken());
+    const accepted = await acceptStaffInvitation(ctx(invitee.id), first.token);
     expect(accepted.ok).toBe(true);
 
     const second = await invite(owner.id, `sec-h01-rv-${randomUUID()}@example.com`);
@@ -482,13 +375,11 @@ describe("Audit trail (test 14)", () => {
       .from(auditLogs)
       .where(and(eq(auditLogs.academyId, academy), inArray(auditLogs.entityId, [firstId, secondId])));
     const actions = rows.map((r) => `${r.action}:${r.entityId === firstId ? 1 : 2}`).sort();
-    expect(actions).toEqual(
-      ["acceptStaffInvitation:1", "createStaffInvitation:1", "createStaffInvitation:2", "resendStaffInvitation:1", "revokeStaffInvitation:2"].sort(),
-    );
+    expect(actions).toEqual(["acceptStaffInvitation:1", "revokeStaffInvitation:2"].sort());
     const accept = rows.find((r) => r.action === "acceptStaffInvitation");
     expect(accept?.actorUserId).toBe(invitee.id);
     const serialized = JSON.stringify(rows);
-    for (const token of [first.token, mail.lastToken(), second.token]) expect(serialized).not.toContain(token);
+    for (const token of [first.token, second.token]) expect(serialized).not.toContain(token);
   }, 120_000);
 });
 
@@ -530,9 +421,7 @@ describe("Return after sign-in: the page re-checks everything and never accepts 
     const academy = await createAcademy();
     const owner = await addMember(academy, "academy_owner");
     const invitee = await createUser();
-    const { result, token } = await invite(owner.id, invitee.email);
-    if (!result.ok) throw new Error("invite failed");
-    await db.update(staffInvitations).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(staffInvitations.id, result.invitationId));
+    const { token } = await invite(owner.id, invitee.email, { expiresAt: new Date(Date.now() - 1000) });
 
     expect(await describeStaffInvitation(token, ctx(invitee.id))).toEqual({ valid: false });
     expect((await acceptStaffInvitation(ctx(invitee.id), token)).ok).toBe(false);
@@ -565,5 +454,36 @@ describe("Academy deletion removes that academy's invitations only", () => {
     expect((await invitationRow(other.result.invitationId))?.status).toBe("pending");
     // A link to the deleted academy no longer works.
     expect(await describeStaffInvitation(pending.token, null)).toEqual({ valid: false });
+  }, 120_000);
+});
+
+describe("Retired: no invitation is issued, re-sent or emailed", () => {
+  it("the module no longer offers issuing, re-sending or emailing", () => {
+    expect("issueStaffInvitation" in invitationModule).toBe(false);
+    expect("resendStaffInvitation" in invitationModule).toBe(false);
+    expect("deliverInvitationByEmail" in invitationModule).toBe(false);
+  });
+
+  it("creating staff writes no invitation row, and closes a pending legacy invitation for the same email", async () => {
+    const academy = await createAcademy();
+    const owner = await addMember(academy, "academy_owner");
+    const email = `sec-h01-direct-${randomUUID()}@example.com`;
+    const legacy = await invite(owner.id, email);
+
+    const created = await createStaff(ctx(owner.id), {
+      email,
+      fullName: "Direct Person",
+      phone: "+1-555-0123",
+      role: "trainer",
+      temporaryPassword: TEST_TEMPORARY_PASSWORD,
+    });
+    expect(created.ok).toBe(true);
+    if (created.ok) userIds.push(created.userId);
+
+    const rows = await db.select().from(staffInvitations).where(eq(staffInvitations.academyId, academy));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("revoked");
+    // The old link no longer works.
+    expect(await describeStaffInvitation(legacy.token, null)).toEqual({ valid: false });
   }, 120_000);
 });

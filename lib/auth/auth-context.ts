@@ -53,8 +53,24 @@ export async function getPlatformRole(
  * console to send someone toward, not whether they're allowed in.
  */
 export async function getPostLoginRedirectPath(userId: string): Promise<string> {
+  // A temporary password must be replaced before anything else opens.
+  if (await mustChangePassword(userId)) return CHANGE_PASSWORD_PATH;
   const platformRole = await getPlatformRole(userId);
   return platformRole ? "/platform/dashboard" : "/academy/dashboard";
+}
+
+/** The only page a session with a temporary password may use. */
+export const CHANGE_PASSWORD_PATH = "/change-password";
+
+/** Whether this account still holds a temporary password an administrator
+ * set (users.must_change_password, migration 0047). */
+export async function mustChangePassword(userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ mustChangePassword: users.mustChangePassword })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.mustChangePassword ?? false;
 }
 
 /** Resolves the AuthContext for an already-authenticated user. Pure/testable. */
@@ -112,6 +128,7 @@ export async function resolveAuthContextForSessionToken(token: string): Promise<
       expiresAt: sessions.expiresAt,
       revokedAt: sessions.revokedAt,
       userStatus: users.status,
+      mustChangePassword: users.mustChangePassword,
       platformRole: platformMemberships.role,
     })
     .from(sessions)
@@ -133,6 +150,12 @@ export async function resolveAuthContextForSessionToken(token: string): Promise<
   // also rejects any session that existed before the account was disabled
   // (defense in depth alongside the session revocation archiving performs).
   if (row.userStatus !== "active") return null;
+  // Temporary password (direct staff account creation): this session is
+  // valid ONLY for /change-password (resolvePasswordChangeSession below).
+  // Returning null here is what makes every page, server action and API
+  // that authorizes through getAuthContext refuse it — enforcement on the
+  // server, not just a redirect in the browser. Checked on every request.
+  if (row.mustChangePassword) return null;
 
   return {
     userId: row.userId,
@@ -157,3 +180,45 @@ export async function getCurrentSessionId(): Promise<string | null> {
   const session = await validateSessionToken(token);
   return session?.id ?? null;
 }
+
+export interface PasswordChangeSession {
+  userId: string;
+  sessionId: string;
+}
+
+/**
+ * The counterpart of the mustChangePassword refusal above: resolves a
+ * session ONLY while its account must still replace a temporary password.
+ * Used by /change-password and its server action, nothing else. Same
+ * revoked/expired/disabled checks as resolveAuthContextForSessionToken.
+ */
+export async function resolvePasswordChangeSession(token: string): Promise<PasswordChangeSession | null> {
+  const [row] = await db
+    .select({
+      sessionId: sessions.id,
+      userId: sessions.userId,
+      expiresAt: sessions.expiresAt,
+      revokedAt: sessions.revokedAt,
+      userStatus: users.status,
+      mustChangePassword: users.mustChangePassword,
+    })
+    .from(sessions)
+    .innerJoin(users, eq(users.id, sessions.userId))
+    .where(eq(sessions.tokenHash, hashSessionToken(token)))
+    .limit(1);
+
+  if (!row) return null;
+  if (row.revokedAt !== null) return null;
+  if (row.expiresAt.getTime() <= Date.now()) return null;
+  if (row.userStatus !== "active") return null;
+  if (!row.mustChangePassword) return null;
+  return { userId: row.userId, sessionId: row.sessionId };
+}
+
+/** Cookie-reading wrapper for resolvePasswordChangeSession (next/headers). */
+export const getPasswordChangeSession = cache(async (): Promise<PasswordChangeSession | null> => {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) return null;
+  return resolvePasswordChangeSession(token);
+});

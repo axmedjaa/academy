@@ -15,22 +15,19 @@ import {
   type UpdateStaffInput,
 } from "@/lib/academies/staff";
 import type { AcademyRole } from "@/lib/auth/roles";
-import {
-  resendStaffInvitation as resendStaffInvitationForActor,
-  revokeStaffInvitation as revokeStaffInvitationForActor,
-} from "@/lib/academies/staff-invitations";
+import { revokeStaffInvitation as revokeStaffInvitationForActor } from "@/lib/academies/staff-invitations";
 
 const UNAUTHENTICATED: StaffActionError = {
   code: "forbidden",
   message: "You must be signed in.",
 };
 
+/** Never carries the temporary password: the browser that typed it keeps
+ * it for the one-time success screen; the server never sends it back. */
 export interface CreateStaffFormState {
   ok: boolean;
   error?: StaffActionError;
-  /** Set on success: the invitation exists either way; this says whether
-   * the email reached the provider (SEC-H-01). */
-  emailSent?: boolean;
+  /** Set on success: the login email of the account that now exists. */
   email?: string;
 }
 
@@ -52,10 +49,14 @@ function parseCreateStaffFormData(formData: FormData): CreateStaffInput {
     // createStaff's default; any other value is checked there.
     workplace: formData.has("workplace") ? (formData.get("workplace") === "all" ? "all" : "specific") : undefined,
     branchIds: formData.getAll("branchIds").map(String),
+    temporaryPassword: String(formData.get("temporaryPassword") ?? ""),
   };
 }
 
-/** PLAN.md §4 server action name, form-bound via useActionState by the Register staff member dialog. */
+/** PLAN.md §4 server action name, form-bound via useActionState by the
+ * Create staff member dialog. Creates the account directly; no email is
+ * sent. Form posts are server actions, so Next.js's Origin check applies
+ * (CSRF). */
 export async function createStaff(
   _prevState: CreateStaffFormState,
   formData: FormData,
@@ -71,27 +72,16 @@ export async function createStaff(
   }
 
   revalidatePath("/academy/staff");
-  return { ok: true, emailSent: result.emailSent, email: result.email };
+  return { ok: true, email: result.email };
 }
 
-/** Cancels a pending invitation (SEC-H-01). */
+/** Cancels a legacy pending invitation (sent before direct account creation). */
 export async function revokeStaffInvitation(
   invitationId: string,
 ): Promise<{ ok: true } | { ok: false; error: StaffActionError }> {
   const context = await getAuthContext();
   if (!context) return { ok: false, error: UNAUTHENTICATED };
   const result = await revokeStaffInvitationForActor(context, invitationId);
-  if (result.ok) revalidatePath("/academy/staff");
-  return result;
-}
-
-/** Sends a fresh invitation link; the previous link stops working. */
-export async function resendStaffInvitation(
-  invitationId: string,
-): Promise<{ ok: true; emailSent: boolean } | { ok: false; error: StaffActionError }> {
-  const context = await getAuthContext();
-  if (!context) return { ok: false, error: UNAUTHENTICATED };
-  const result = await resendStaffInvitationForActor(context, invitationId);
   if (result.ok) revalidatePath("/academy/staff");
   return result;
 }

@@ -200,4 +200,18 @@ describe("applyPasswordReset", () => {
     const reuseResult = await applyPasswordReset(resetToken, NEW_PASSWORD);
     expect(reuseResult.ok).toBe(false);
   });
+
+  it("clears a pending temporary-password requirement: the person chose this password themselves", async () => {
+    await db.update(users).set({ mustChangePassword: true }).where(eq(users.id, activeUserId));
+    const resetToken = await insertResetToken(activeUserId);
+
+    const result = await applyPasswordReset(resetToken, NEW_PASSWORD);
+    expect(result.ok).toBe(true);
+
+    const [updatedUser] = await db
+      .select({ mustChangePassword: users.mustChangePassword })
+      .from(users)
+      .where(eq(users.id, activeUserId));
+    expect(updatedUser.mustChangePassword).toBe(false);
+  });
 });
