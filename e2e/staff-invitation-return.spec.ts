@@ -2,10 +2,9 @@ import { randomUUID } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { academyMemberships, auditLogs, notifications, sessions, staffBranchAssignments, staffInvitations, staffProfiles, users } from "@/lib/db/schema";
+import { academies, academyMemberships, auditLogs, notifications, sessions, staffBranchAssignments, staffInvitations, staffProfiles, users } from "@/lib/db/schema";
 import { hashPassword } from "@/lib/auth/password";
-import { createStaff } from "@/lib/academies/staff";
-import { captureInvitations } from "@/lib/testing/staff-invitation-helpers";
+import { seedLegacyInvitation } from "@/lib/testing/staff-account-helpers";
 import { ACADEMY_A } from "./fixtures/constants";
 
 /**
@@ -13,6 +12,9 @@ import { ACADEMY_A } from "./fixtures/constants";
  * out, signs in, and is returned to the invitation — which it must still
  * accept explicitly. Also: a tampered return destination is ignored, a wrong
  * account cannot accept, an expired invitation is unavailable.
+ * LEGACY: no new invitations are issued (staff accounts are created
+ * directly); this covers invitations that were already pending, seeded the
+ * way the retired flow stored them.
  * Runs against the isolated e2e server and TEST database only.
  */
 
@@ -34,11 +36,11 @@ async function createInvitee(): Promise<{ id: string; email: string }> {
 }
 
 async function inviteFromAcademyA(email: string): Promise<{ token: string; invitationId: string }> {
-  const mail = captureInvitations();
-  const result = await createStaff({ userId: await ownerUserId(), branchIds: [], academyWide: false }, { email, fullName: "E2E Invitee", phone: "+1-555-0199", role: "trainer" }, { deliver: mail.deliver });
-  if (!result.ok) throw new Error(`invite failed: ${result.error.message}`);
-  createdInvitations.push(result.invitationId);
-  return { token: mail.lastToken(), invitationId: result.invitationId };
+  const [academy] = await db.select({ id: academies.id }).from(academies).where(eq(academies.slug, ACADEMY_A.slug)).limit(1);
+  if (!academy) throw new Error("e2e academy fixture missing");
+  const seeded = await seedLegacyInvitation({ academyId: academy.id, invitedBy: await ownerUserId(), email, fullName: "E2E Invitee" });
+  createdInvitations.push(seeded.invitationId);
+  return seeded;
 }
 
 async function signInOnLoginPage(page: Page, email: string, password: string) {

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { and, asc, eq, gt, inArray, ne, notExists } from "drizzle-orm";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
@@ -20,89 +20,40 @@ import { ACADEMY_ROLE_LABELS } from "@/lib/auth/role-labels";
 import { isRetiredAcademyRole, type AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { recordAudit } from "@/lib/audit";
-import { sendEmail } from "@/lib/email/client";
-import { staffInvitationEmail } from "@/lib/email/templates";
-import { env } from "@/lib/env";
-import { logger } from "@/lib/logger";
-import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAllowance } from "@/lib/subscriptions/usage";
 import type { StaffActionError } from "@/lib/academies/staff";
 
 /**
- * Staff invitations — the fix for SEC-H-01 (SECURITY_AUDIT_PRE_DEPLOYMENT.md).
+ * LEGACY staff invitations (SEC-H-01, migration 0045).
  *
- * Before: "Add staff" with an email that already had an account attached that
- * account to the inviting academy at once — no password, no consent — and,
- * because the console serves one academy per account, locked the person out
- * of their own academy ("You belong to more than one academy"). The response
- * also told the inviter whether the email had an account anywhere.
+ * Staff accounts are now created directly by an administrator with a
+ * temporary password (lib/academies/staff.ts createStaff); no new
+ * invitations are issued or re-sent, and no invitation email is sent.
  *
- * Now:
- *  1. `issueStaffInvitation` (called by `createStaff`) stores an invitation
- *     bound to one lower-cased email, this academy, the role and the branch
- *     scope the inviter is allowed to grant, and emails a one-time link. It
- *     never creates or changes an account, and never asks whether the email
- *     has one: its only email lookup is "already staff of THIS academy",
- *     which runs identically for every email. Its work and its response are
- *     the same whether or not the email has an account.
- *  2. The person opens the link (proving they control the email).
- *     - If an account exists for that email, they must be signed in AS that
- *       account and press Accept (`acceptStaffInvitation`).
- *     - If none exists, they choose their own password
- *       (`acceptStaffInvitationWithNewAccount`); nobody else ever knows it.
- *  3. Acceptance, in one transaction with the invitation row locked:
- *     re-checks status, expiry, the email match, that the account does not
- *     already work at another academy, that the inviter still holds the
- *     authority to grant this role and scope, the staff allowance and the
- *     branches; then creates the membership, profile and branch assignments
- *     and marks the invitation used. Audited on create, accept, revoke and
- *     resend. The raw token is never stored or logged — only its SHA-256.
+ * What remains serves invitations sent before that change, so none of them
+ * breaks: until it expires (at most 7 days after it was last sent) or is
+ * cancelled, a pending invitation can still be accepted exactly as before.
+ *  - If an account exists for the invited email, the person must be signed
+ *    in AS that account and press Accept (`acceptStaffInvitation`).
+ *  - If none exists, they choose their own password
+ *    (`acceptStaffInvitationWithNewAccount`).
+ * Acceptance, in one transaction with the invitation row locked, re-checks
+ * status, expiry, the email match, that the account does not already work
+ * at another academy, that the inviter still holds the authority to grant
+ * this role and scope, the staff allowance and the branches; then creates
+ * the membership, profile and branch assignments and marks the invitation
+ * used. Staff managers can still list and cancel pending invitations.
+ * The raw token is never stored or logged — only its SHA-256.
+ *
+ * Once no pending invitation is left anywhere, this module, /staff-invitation
+ * and the pending-invitations list can be removed.
  */
 
-const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-/** Invitation emails one staff member may trigger per hour (create + resend). */
-const INVITE_RATE_LIMIT = { maxAttempts: 30, windowSeconds: 3600 };
-
 export type StaffInvitationStatus = "pending" | "accepted" | "revoked";
-
-export function generateInvitationToken(): string {
-  return randomBytes(32).toString("base64url");
-}
 
 export function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
-
-/** Delivers the link. Injectable so tests can capture the token, which no
- * other path ever exposes. Returns whether the email was handed to the
- * provider. */
-export type InvitationDeliverer = (input: {
-  email: string;
-  token: string;
-  academyName: string;
-  role: AcademyRole;
-  expiresAt: Date;
-}) => Promise<boolean>;
-
-export const deliverInvitationByEmail: InvitationDeliverer = async ({ email, token, academyName, role, expiresAt }) => {
-  // Test runs inject their own deliverer; never email fixture addresses.
-  if (env.NODE_ENV === "test") return false;
-  if (!env.APP_URL) {
-    logger.error("staff invitation email not sent: APP_URL is not configured");
-    return false;
-  }
-  const acceptUrl = `${env.APP_URL.replace(/\/$/, "")}/staff-invitation?token=${encodeURIComponent(token)}`;
-  const content = staffInvitationEmail({
-    academyName,
-    roleLabel: ACADEMY_ROLE_LABELS[role],
-    acceptUrl,
-    expiresOn: expiresAt.toISOString().slice(0, 10),
-  });
-  const result = await sendEmail({ to: email, subject: content.subject, html: content.html, text: content.text });
-  // Never log the token or the link.
-  if (!result.ok) logger.error("staff invitation email failed to send");
-  return result.ok;
-};
 
 class InvitationRefused extends Error {
   constructor(public readonly error: StaffActionError) {
@@ -110,202 +61,9 @@ class InvitationRefused extends Error {
   }
 }
 
-const refuse = (code: StaffActionError["code"], message: string): never => {
-  throw new InvitationRefused({ code, message });
-};
-
 function isUniqueViolation(err: unknown): boolean {
   const e = err as { code?: string; cause?: { code?: string } } | null;
   return e?.code === "23505" || e?.cause?.code === "23505";
-}
-
-// ---------------------------------------------------------------------------
-// Issue
-// ---------------------------------------------------------------------------
-
-export interface IssueStaffInvitationInput {
-  actorContext: AuthContext;
-  academyId: string;
-  actorRole: AcademyRole;
-  actorAcademyWide: boolean;
-  email: string;
-  role: AcademyRole;
-  fullName: string;
-  phone: string;
-  employeeNumber?: string;
-  hireDate?: string;
-  grantAllBranches: boolean;
-  workplace: "all" | "specific" | undefined;
-  chosenBranchIds: string[];
-  deliver?: InvitationDeliverer;
-}
-
-export type IssueStaffInvitationResult =
-  | { ok: true; invitationId: string; email: string; role: AcademyRole; emailSent: boolean }
-  | { ok: false; error: StaffActionError };
-
-/** The branches the invitation will grant, authorized against the inviter. */
-async function resolveInvitationBranches(
-  tx: DbClient,
-  input: Pick<IssueStaffInvitationInput, "academyId" | "actorContext" | "actorAcademyWide" | "grantAllBranches" | "workplace" | "chosenBranchIds">,
-): Promise<string[]> {
-  const { academyId } = input;
-  if (input.grantAllBranches) {
-    // All-branch access is only for Main Branch staff.
-    const [main] = await tx
-      .select({ id: branches.id })
-      .from(branches)
-      .where(and(eq(branches.academyId, academyId), eq(branches.isMain, true)))
-      .limit(1);
-    if (!main) refuse("validation", "This academy has no Main Branch yet. Add a branch first.");
-    return [main!.id];
-  }
-  if (input.workplace === "specific") {
-    const found = await tx
-      .select({ id: branches.id })
-      .from(branches)
-      .where(and(eq(branches.academyId, academyId), eq(branches.status, "active"), inArray(branches.id, input.chosenBranchIds)));
-    if (found.length !== input.chosenBranchIds.length) {
-      refuse("validation", "One of the chosen branches is not available. Refresh and try again.");
-    }
-    if (!input.actorAcademyWide) {
-      const own = new Set(await getAssignedBranchIds(tx, academyId, input.actorContext.userId));
-      if (!input.chosenBranchIds.every((id) => own.has(id))) {
-        refuse("forbidden", "You can only add staff to the branches you work in.");
-      }
-    }
-    return input.chosenBranchIds;
-  }
-  // Earlier default: staff added by someone without all-branch access start
-  // in that person's own branches.
-  return input.actorAcademyWide ? [] : getAssignedBranchIds(tx, academyId, input.actorContext.userId);
-}
-
-/**
- * Records the invitation and emails the link. The inviter's permission,
- * role and branch checks have already run in `createStaff`.
- *
- * Enumeration: nothing here reads `users`. The one lookup that depends on
- * the email asks only whether that email is ALREADY STAFF OF THIS ACADEMY —
- * information the inviter can already see in their own staff list — and it
- * runs identically for every email.
- */
-export async function issueStaffInvitation(input: IssueStaffInvitationInput): Promise<IssueStaffInvitationResult> {
-  const { academyId, actorContext, email } = input;
-
-  const limit = await checkRateLimit(`staff-invite:${actorContext.userId}`, INVITE_RATE_LIMIT);
-  if (!limit.allowed) {
-    return { ok: false, error: { code: "conflict", message: "Too many invitations sent. Try again later." } };
-  }
-
-  const token = generateInvitationToken();
-  const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
-
-  let invitationId: string;
-  let academyName: string;
-  try {
-    ({ invitationId, academyName } = await db.transaction(async (tx) => {
-      const allowance = await checkAllowance(academyId, "staff", tx);
-      if (!allowance.ok) refuse("allowance_exceeded", "Staff allowance could not be verified for this academy.");
-      if (allowance.ok && !allowance.result.allowed) {
-        refuse(
-          "allowance_exceeded",
-          `Staff allowance limit reached (${allowance.result.current}/${allowance.result.limit ?? 0}). Archive an existing staff member or upgrade your plan.`,
-        );
-      }
-
-      // Already staff here? (own-academy information only)
-      const [alreadyHere] = await tx
-        .select({ id: staffProfiles.id })
-        .from(staffProfiles)
-        .innerJoin(users, eq(users.id, staffProfiles.userId))
-        .where(and(eq(staffProfiles.academyId, academyId), eq(users.email, email)))
-        .limit(1);
-      if (alreadyHere) refuse("already_staff", "This person is already a staff member of this academy.");
-
-      const [open] = await tx
-        .select({ id: staffInvitations.id, expiresAt: staffInvitations.expiresAt })
-        .from(staffInvitations)
-        .where(and(eq(staffInvitations.academyId, academyId), eq(staffInvitations.email, email), eq(staffInvitations.status, "pending")))
-        .for("update")
-        .limit(1);
-      if (open) {
-        if (open.expiresAt.getTime() > Date.now()) {
-          refuse("conflict", "An invitation to this email is already waiting to be accepted. Resend or cancel it from the invitations list.");
-        }
-        // An expired invitation is closed so a new one can be sent.
-        await tx
-          .update(staffInvitations)
-          .set({ status: "revoked", revokedAt: new Date(), revokedBy: actorContext.userId, updatedAt: new Date() })
-          .where(eq(staffInvitations.id, open.id));
-        await recordAudit(
-          {
-            actorUserId: actorContext.userId,
-            actorRole: input.actorRole,
-            academyId,
-            action: "revokeStaffInvitation",
-            entityType: "staff_invitation",
-            entityId: open.id,
-            context: { reason: "expired; replaced by a new invitation" },
-          },
-          tx,
-        );
-      }
-
-      const branchIds = await resolveInvitationBranches(tx, input);
-
-      const [row] = await tx
-        .insert(staffInvitations)
-        .values({
-          academyId,
-          email,
-          tokenHash: hashInvitationToken(token),
-          role: input.role,
-          academyWide: input.grantAllBranches,
-          branchIds,
-          fullName: input.fullName,
-          phone: input.phone,
-          employeeNumber: input.employeeNumber,
-          hireDate: input.hireDate,
-          invitedBy: actorContext.userId,
-          expiresAt,
-        })
-        .returning({ id: staffInvitations.id });
-
-      await recordAudit(
-        {
-          actorUserId: actorContext.userId,
-          actorRole: input.actorRole,
-          academyId,
-          action: "createStaffInvitation",
-          entityType: "staff_invitation",
-          entityId: row.id,
-          after: {
-            email,
-            role: input.role,
-            fullName: input.fullName,
-            branchIds,
-            allBranchAccess: input.grantAllBranches,
-            expiresAt: expiresAt.toISOString(),
-          },
-        },
-        tx,
-      );
-
-      const [academy] = await tx.select({ name: academies.name }).from(academies).where(eq(academies.id, academyId)).limit(1);
-      return { invitationId: row.id, academyName: academy?.name ?? "" };
-    }));
-  } catch (err) {
-    if (err instanceof InvitationRefused) return { ok: false, error: err.error };
-    if (isUniqueViolation(err)) {
-      return { ok: false, error: { code: "conflict", message: "An invitation to this email is already waiting to be accepted." } };
-    }
-    throw err;
-  }
-
-  const deliver = input.deliver ?? deliverInvitationByEmail;
-  const emailSent = await deliver({ email, token, academyName, role: input.role, expiresAt });
-  return { ok: true, invitationId, email, role: input.role, emailSent };
 }
 
 // ---------------------------------------------------------------------------
@@ -747,53 +505,4 @@ export async function revokeStaffInvitation(actorContext: AuthContext, invitatio
     if (err instanceof InvitationRefused) return { ok: false, error: err.error };
     throw err;
   }
-}
-
-/** Sends a fresh link: the old token stops working and the expiry restarts. */
-export async function resendStaffInvitation(
-  actorContext: AuthContext,
-  invitationId: string,
-  options: { deliver?: InvitationDeliverer } = {},
-): Promise<{ ok: true; emailSent: boolean } | { ok: false; error: StaffActionError }> {
-  const resolved = await resolveInvitationManager(actorContext);
-  if (!resolved.ok) return resolved;
-  const { manager } = resolved;
-
-  const limit = await checkRateLimit(`staff-invite:${actorContext.userId}`, INVITE_RATE_LIMIT);
-  if (!limit.allowed) return { ok: false, error: { code: "conflict", message: "Too many invitations sent. Try again later." } };
-
-  const token = generateInvitationToken();
-  const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
-  let sent: { email: string; role: AcademyRole; academyName: string };
-  try {
-    sent = await db.transaction(async (tx) => {
-      const invitation = await lockManagedInvitation(tx, manager, invitationId);
-      await tx
-        .update(staffInvitations)
-        .set({ tokenHash: hashInvitationToken(token), expiresAt, updatedAt: new Date() })
-        .where(eq(staffInvitations.id, invitation.id));
-      await recordAudit(
-        {
-          actorUserId: actorContext.userId,
-          actorRole: manager.role,
-          academyId: manager.academyId,
-          action: "resendStaffInvitation",
-          entityType: "staff_invitation",
-          entityId: invitation.id,
-          before: { expiresAt: invitation.expiresAt.toISOString() },
-          after: { expiresAt: expiresAt.toISOString() },
-        },
-        tx,
-      );
-      const [academy] = await tx.select({ name: academies.name }).from(academies).where(eq(academies.id, manager.academyId)).limit(1);
-      return { email: invitation.email, role: invitation.role, academyName: academy?.name ?? "" };
-    });
-  } catch (err) {
-    if (err instanceof InvitationRefused) return { ok: false, error: err.error };
-    throw err;
-  }
-
-  const deliver = options.deliver ?? deliverInvitationByEmail;
-  const emailSent = await deliver({ email: sent.email, token, academyName: sent.academyName, role: sent.role, expiresAt });
-  return { ok: true, emailSent };
 }

@@ -1,0 +1,35 @@
+-- =========================================================================
+-- 0047 — Mandatory password change for directly created staff accounts
+-- =========================================================================
+--
+-- Registered in drizzle/meta/_journal.json after 0046. Apply through
+-- `npm run migrate` (or `npm run migrate:prod`), one environment at a time.
+--
+-- What it does
+--   Adds `users.must_change_password`. Staff accounts created directly by an
+--   academy administrator (lib/academies/staff.ts createStaff) start with a
+--   temporary password and this flag set to true. While it is true the
+--   account's sessions resolve no AuthContext (lib/auth/auth-context.ts), so
+--   every page, server action and API refuses them; only /change-password
+--   accepts the session. Changing the password clears the flag.
+--
+-- Existing data
+--   No existing row is changed in meaning: the column is NOT NULL DEFAULT
+--   false, so every existing account (owners, staff who accepted an
+--   invitation, platform staff) keeps signing in exactly as before and is
+--   never asked to change its password. On PostgreSQL 11+ adding a column
+--   with a constant default is a catalog-only change (no table rewrite).
+--
+-- Invitations
+--   `staff_invitations` is left untouched. New invitations are no longer
+--   issued; already-sent pending invitations can still be accepted until
+--   they expire (at most 7 days) or are cancelled from the Staff page.
+--
+-- Rollback (manual)
+--   ALTER TABLE "users" DROP COLUMN "must_change_password";
+--   Only after rolling the application back to a version that does not read
+--   the column. Accounts still holding a temporary password would then sign
+--   in with it without being asked to change it.
+-- =========================================================================
+
+ALTER TABLE "users" ADD COLUMN "must_change_password" boolean DEFAULT false NOT NULL;

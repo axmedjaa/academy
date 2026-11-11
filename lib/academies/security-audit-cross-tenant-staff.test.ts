@@ -100,10 +100,12 @@ describe("SEC-H-01: Add staff must not attach another academy's existing account
       employeeNumber: "SEC-1",
       hireDate: "2024-01-01",
       role: "trainer",
-    }, { deliver: async () => true });
+      temporaryPassword: "attacker-Chosen-123",
+    });
 
-    // Secure behaviour: refused (or turned into an invitation the account
-    // holder must accept) — never an immediate active membership.
+    // Secure behaviour: refused — never an immediate active membership,
+    // and the victim's password is never replaced.
+    expect(result.ok).toBe(false);
     const [attached] = await db
       .select({ status: academyMemberships.status })
       .from(academyMemberships)

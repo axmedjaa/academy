@@ -21,7 +21,7 @@ import {
   subscriptionPlans,
   users,
 } from "@/lib/db/schema";
-import { inviteAndAccept } from "@/lib/testing/staff-invitation-helpers";
+import { createStaffAccount } from "@/lib/testing/staff-account-helpers";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { archiveBranch, createBranch, deleteBranch, listBranches } from "./branches";
@@ -348,7 +348,7 @@ describe("staff assignments and all-branch access", () => {
 
 describe("registering staff: where they work", () => {
   async function register(actorId: string, extra: Partial<CreateStaffInput>) {
-    const result = await inviteAndAccept(ctx(actorId), {
+    const result = await createStaffAccount(ctx(actorId), {
       email: `multi-branch-test-${randomUUID()}@example.com`,
       fullName: "New Staff",
       phone: "+1-555-0102",
