@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual CI run (Actions tab or `gh workflow run ci.yml --ref <branch>`).
+  # Runs the ci job only: the deploy job below requires a push event, so a
+  # manual run never deploys.
+  workflow_dispatch:
 
 # One run per branch or pull request at a time. A newer push to a pull
 # request cancels its superseded run; runs on main are never cancelled
