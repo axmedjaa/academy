@@ -121,6 +121,33 @@ describe("email delivery", () => {
     expect(updated).toMatchObject({ status: "pending", attemptCount: 1 });
   });
 
+  it("a permanent provider rejection (e.g. Resend's 403 sandbox restriction) is not retried: the job completes and the row records why", async () => {
+    const user = await createUser();
+    const row = await createRow({ userId: user.id, academyId: null, templateId: "security.new_device_signin" });
+    const { deps, calls } = sender({ ok: false, error: "Failed to send email.", permanent: true, statusCode: 403 });
+    await expect(processNotificationJob(job(row), db, deps)).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(await rowById(row.id)).toMatchObject({ status: "failed", attemptCount: 1, lastError: "rejected: provider_403" });
+  });
+
+  it("email that is not configured at all is a permanent rejection too", async () => {
+    const user = await createUser();
+    const row = await createRow({ userId: user.id, academyId: null, templateId: "security.new_device_signin" });
+    const { deps } = sender({ ok: false, error: "Email delivery is not configured.", permanent: true });
+    await expect(processNotificationJob(job(row), db, deps)).resolves.toBeUndefined();
+    expect(await rowById(row.id)).toMatchObject({ status: "failed", lastError: "rejected: provider_not_configured" });
+  });
+
+  it("with email notifications turned off, a pending email row is closed without sending", async () => {
+    const user = await createUser();
+    const row = await createRow({ userId: user.id, academyId: null, templateId: "security.new_device_signin" });
+    const { deps, calls } = sender();
+    deps.emailEnabled = false;
+    await expect(processNotificationJob(job(row), db, deps)).resolves.toBeUndefined();
+    expect(calls).toHaveLength(0);
+    expect(await rowById(row.id)).toMatchObject({ status: "failed", lastError: "skipped: email_disabled" });
+  });
+
   it("the final failed attempt marks the row failed", async () => {
     const user = await createUser();
     const row = await createRow({ userId: user.id, academyId: null, templateId: "security.new_device_signin" });

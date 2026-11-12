@@ -161,6 +161,32 @@ describe("enqueueNotification", () => {
     );
   });
 
+  it("with email notifications turned off, creates only the in_app row (academy and platform-level)", async () => {
+    const owner = await createUser();
+    const academyId = await createAcademy(owner, true);
+    const academyResults = await enqueueNotification(
+      { eventType: "result.published", entityId: randomUUID(), templateId: "result.published", academyId, userId: owner },
+      undefined,
+      { emailEnabled: false },
+    );
+    expect(academyResults.map((r) => r.channel).sort()).toEqual(["in_app", "sms"]);
+
+    const entityId = randomUUID();
+    const platformResults = await enqueueNotification(
+      { eventType: "security.new_device_signin", entityId, templateId: "security.new_device_signin", academyId: null, userId: null },
+      undefined,
+      { emailEnabled: false },
+    );
+    expect(platformResults.map((r) => r.channel)).toEqual(["in_app"]);
+    const emailRows = await db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(and(eq(notifications.idempotencyKey, `security.new_device_signin:${entityId}`), eq(notifications.channel, "email")));
+    expect(emailRows).toHaveLength(0);
+
+    await db.delete(notifications).where(eq(notifications.idempotencyKey, `security.new_device_signin:${entityId}`));
+  });
+
   it("is idempotent: re-enqueuing the same (eventType, entityId) never duplicates a channel row", async () => {
     const creatorUserId = await createUser();
     const academyId = await createAcademy(creatorUserId, false);

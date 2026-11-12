@@ -97,6 +97,15 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().optional(),
   APP_URL: z.string().optional(),
+  // Email copies of queued notifications (lib/notifications/notifications.ts
+  // and the worker). "false" turns them off: no email rows or jobs are
+  // created, in-app notifications are unchanged, and pending email rows are
+  // closed as `skipped: email_disabled`. Direct sign-in/security emails
+  // (password reset, email change, MFA code) are not affected. Default: on.
+  EMAIL_NOTIFICATIONS_ENABLED: z
+    .enum(["true", "false"], { message: 'EMAIL_NOTIFICATIONS_ENABLED must be "true" or "false"' })
+    .optional()
+    .transform((value) => value !== "false"),
   // Email-change verification token lifetime in minutes. Same "no value
   // specified, pick a sane default, tunable via env" convention as
   // PASSWORD_RESET_TOKEN_TTL_MINUTES above. Default: 60.

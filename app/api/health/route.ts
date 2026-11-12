@@ -53,8 +53,11 @@ async function checkRedis(): Promise<CheckStatus> {
 /**
  * Reuses `checkQueueHealth` (lib/monitoring/queue-health.ts, Item 62)
  * rather than re-deriving queue liveness — "healthy" means the queue's own
- * Redis connection is ready AND neither of its already-established alert
- * thresholds (failed-job count, queue depth) is currently breached. The
+ * Redis connection is ready, at least one worker is connected, and neither
+ * of its alert thresholds (failed jobs in the last 24 hours, queue depth)
+ * is currently breached. Email the provider refuses permanently (e.g. an
+ * unverified sending domain) is recorded on the notification row, not as a
+ * failed job, so it does not hold this check at "error". The
  * underlying counts themselves are intentionally not surfaced here.
  */
 async function checkQueue(): Promise<CheckStatus> {
@@ -62,6 +65,7 @@ async function checkQueue(): Promise<CheckStatus> {
     const report = await checkQueueHealth();
     const healthy =
       report.redisConnectionStatus === "ready" &&
+      !report.noWorkerConnected &&
       !report.failedThresholdBreached &&
       !report.queueDepthThresholdBreached;
     return healthy ? "ok" : "error";

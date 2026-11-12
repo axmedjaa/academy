@@ -38,6 +38,14 @@ import { checkThreshold, logSink, type MonitoringSink } from "@/lib/monitoring/m
  */
 export const QUEUE_HEALTH_THRESHOLDS = {
   failedJobAlertThreshold: 3,
+  /**
+   * Only jobs that failed within this window count toward
+   * `failedJobAlertThreshold`. Failed jobs are kept forever
+   * (`removeOnFail: false`), so an all-time count would hold the alert on
+   * long after the cause is fixed; with a window it clears by itself while
+   * every failed job stays on the queue for inspection.
+   */
+  failedJobWindowMs: 24 * 60 * 60 * 1000,
   queueDepthAlertThreshold: 100,
   /**
    * A delayed job is considered "stuck" once it's this far past the
@@ -52,7 +60,10 @@ export const QUEUE_HEALTH_THRESHOLDS = {
 
 export interface QueueHealthReport {
   queueName: string;
+  /** Every failed job still on the queue (all time). */
   failedCount: number;
+  /** Failed jobs that finished within `failedJobWindowMs`; drives the alert. */
+  recentFailedCount: number;
   waitingCount: number;
   activeCount: number;
   delayedCount: number;
@@ -72,6 +83,8 @@ export interface QueueHealthReport {
   redisConnectionStatus: string;
   failedThresholdBreached: boolean;
   queueDepthThresholdBreached: boolean;
+  /** True when no worker is connected: queued jobs will not be processed. */
+  noWorkerConnected: boolean;
 }
 
 /**
@@ -85,10 +98,17 @@ export async function checkQueueHealth(
   sink: MonitoringSink = logSink,
   now: Date = new Date(),
 ): Promise<QueueHealthReport> {
-  const [counts, workersConnected, delayedJobs] = await Promise.all([
+  // BullMQ scores its failed set by the time each job finished.
+  const failedSince = now.getTime() - QUEUE_HEALTH_THRESHOLDS.failedJobWindowMs;
+  const [counts, workersConnected, delayedJobs, recentFailedCount] = await Promise.all([
     notificationQueue.getJobCounts("failed", "waiting", "active", "delayed"),
     notificationQueue.getWorkersCount(),
     notificationQueue.getJobs(["delayed"], 0, -1),
+    // The producer connection has no offline queue: wait until BullMQ has
+    // connected it before sending a raw command.
+    notificationQueue
+      .waitUntilReady()
+      .then(() => notificationQueueConnection.zcount(notificationQueue.toKey("failed"), failedSince, "+inf")),
   ]);
 
   const failedCount = counts.failed ?? 0;
@@ -103,7 +123,7 @@ export async function checkQueueHealth(
 
   const failedResult = checkThreshold({
     name: "queue.failed_jobs",
-    value: failedCount,
+    value: recentFailedCount,
     threshold: QUEUE_HEALTH_THRESHOLDS.failedJobAlertThreshold,
     context: { queueName: NOTIFICATION_QUEUE_NAME },
     sink,
@@ -121,6 +141,7 @@ export async function checkQueueHealth(
   return {
     queueName: NOTIFICATION_QUEUE_NAME,
     failedCount,
+    recentFailedCount,
     waitingCount,
     activeCount,
     delayedCount,
@@ -129,5 +150,6 @@ export async function checkQueueHealth(
     redisConnectionStatus: notificationQueueConnection.status,
     failedThresholdBreached: failedResult.breached,
     queueDepthThresholdBreached: depthResult.breached,
+    noWorkerConnected: workersConnected === 0,
   };
 }
