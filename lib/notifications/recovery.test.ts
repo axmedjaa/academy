@@ -9,7 +9,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { notifications } from "@/lib/db/schema";
 import { NotificationQueueUnavailableError } from "./queue";
-import { requeuePendingNotifications, type JobAdder } from "./recovery";
+import { eq } from "drizzle-orm";
+import { requeuePendingNotifications, type JobAdder, type JobLookup } from "./recovery";
 
 const ids: string[] = [];
 const MINUTE = 60_000;
@@ -84,6 +85,40 @@ describe("requeuePendingNotifications", () => {
     };
     const result = await requeuePendingNotifications(options, { add, executor: db, now });
     expect(result).toMatchObject({ requeued: 0, stoppedEarly: true });
+  });
+
+  it("leaves rows whose job is still waiting/delayed alone, and closes rows whose job already failed", async () => {
+    const live = await row({ channel: "email", status: "pending", ageMinutes: 7 });
+    const dead = await row({ channel: "email", status: "pending", ageMinutes: 8 });
+    const orphan = await row({ channel: "email", status: "pending", ageMinutes: 9 });
+    const lookup: JobLookup = async (jobId) => {
+      if (jobId === `${live.idempotencyKey}:email`) return { state: "delayed" };
+      if (jobId === `${dead.idempotencyKey}:email`) return { state: "failed", failedReason: "job stalled more than allowable limit" };
+      return null;
+    };
+    const { add, calls } = recordingAdder();
+    const result = await requeuePendingNotifications(options, { add, executor: db, now, lookup });
+
+    const added = calls.map((c) => c.notificationId);
+    expect(added).toContain(orphan.id);
+    expect(added).not.toContain(live.id);
+    expect(added).not.toContain(dead.id);
+    expect(result.alreadyQueued).toBeGreaterThanOrEqual(1);
+    expect(result.closedFailed).toBe(1);
+    const [closed] = await db.select().from(notifications).where(eq(notifications.id, dead.id));
+    expect(closed).toMatchObject({ status: "failed", lastError: "job_failed: job stalled more than allowable limit" });
+    const [stillPending] = await db.select().from(notifications).where(eq(notifications.id, live.id));
+    expect(stillPending.status).toBe("pending");
+  });
+
+  it("stops early, without throwing, when the job lookup cannot reach Redis", async () => {
+    const lookup: JobLookup = async () => {
+      throw new Error("connect ECONNREFUSED");
+    };
+    const { add, calls } = recordingAdder();
+    const result = await requeuePendingNotifications(options, { add, executor: db, now, lookup });
+    expect(calls).toHaveLength(0);
+    expect(result.stoppedEarly).toBe(true);
   });
 
   it("skips a single bad row and carries on with the rest", async () => {

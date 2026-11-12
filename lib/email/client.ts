@@ -8,7 +8,27 @@ export interface SendEmailInput {
   text: string;
 }
 
-export type SendEmailResult = { ok: true } | { ok: false; error: string };
+/**
+ * `permanent: true` means sending the same message again cannot succeed
+ * (email not configured, or the provider rejected the request itself, e.g.
+ * Resend's 403 "verify a domain" sandbox restriction). Callers that retry
+ * (the notification worker) stop at once; temporary failures (network,
+ * timeouts, 429, 5xx) leave it unset and stay retryable.
+ */
+export type SendEmailResult = { ok: true } | { ok: false; error: string; permanent?: boolean; statusCode?: number };
+
+/** 4xx means the request itself was refused; 408/409/429 are worth retrying. */
+const RETRYABLE_CLIENT_STATUS = new Set([408, 409, 429]);
+
+export function isPermanentProviderStatus(statusCode: number | null | undefined): boolean {
+  return typeof statusCode === "number" && statusCode >= 400 && statusCode < 500 && !RETRYABLE_CLIENT_STATUS.has(statusCode);
+}
+
+/** Logs keep the domain only: enough to diagnose, without the person's address. */
+export function maskRecipient(to: string): string {
+  const at = to.lastIndexOf("@");
+  return at === -1 ? "<redacted>" : `<redacted>${to.slice(at)}`;
+}
 
 export interface SendEmailOptions {
   /**
@@ -31,8 +51,9 @@ export interface SendEmailOptions {
  * error) instead of the whole app crashing at startup.
  *
  * Never logs `html`/`text` (they carry the caller's reset/verification
- * link, which embeds the raw one-time token) — only recipient/subject and,
- * on failure, the provider's own error message.
+ * link, which embeds the raw one-time token) or the full recipient address
+ * — only the recipient's domain, the subject and, on failure, the
+ * provider's own error message.
  */
 export async function sendEmail(input: SendEmailInput, options: SendEmailOptions = {}): Promise<SendEmailResult> {
   const apiKey = process.env.RESEND_API_KEY;
@@ -42,7 +63,7 @@ export async function sendEmail(input: SendEmailInput, options: SendEmailOptions
     logger.error("email not sent: email provider is not configured", {
       missingEnvVars: [!apiKey && "RESEND_API_KEY", !from && "EMAIL_FROM"].filter(Boolean),
     });
-    return { ok: false, error: "Email delivery is not configured." };
+    return { ok: false, error: "Email delivery is not configured.", permanent: true };
   }
 
   try {
@@ -64,20 +85,26 @@ export async function sendEmail(input: SendEmailInput, options: SendEmailOptions
       // sandbox sender/recipient restriction) — never the API key or the
       // email body (which may embed a one-time token/code).
       logger.error("email send failed", {
-        to: input.to,
+        to: maskRecipient(input.to),
         subject: input.subject,
         providerErrorName: error.name,
         providerErrorMessage: error.message,
         providerStatusCode: error.statusCode,
       });
-      return { ok: false, error: "Failed to send email." };
+      const statusCode = typeof error.statusCode === "number" ? error.statusCode : undefined;
+      return {
+        ok: false,
+        error: "Failed to send email.",
+        ...(statusCode !== undefined ? { statusCode } : {}),
+        ...(isPermanentProviderStatus(statusCode) ? { permanent: true } : {}),
+      };
     }
 
-    logger.info("email sent", { to: input.to, subject: input.subject });
+    logger.info("email sent", { to: maskRecipient(input.to), subject: input.subject });
     return { ok: true };
   } catch (err) {
     logger.error("email send threw", {
-      to: input.to,
+      to: maskRecipient(input.to),
       subject: input.subject,
       error: err instanceof Error ? err.message : String(err),
     });

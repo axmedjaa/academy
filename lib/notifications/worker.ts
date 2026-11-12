@@ -38,6 +38,14 @@ import { withTimeout } from "@/lib/with-timeout";
  *   individual recipient,        noise in the failed-job count)
  *   recipient opted out or
  *   inactive)
+ * - rejected by the provider   -> row `failed` with a `rejected: <reason>`
+ *   (a permanent error: email    note; the job completes after this one
+ *   not configured, or a 4xx     attempt (no retries — the same request
+ *   such as Resend's 403         would be refused again — and no noise in
+ *   sandbox restriction)         the failed-job count)
+ * - email notifications turned -> row `failed` with `skipped: email_disabled`;
+ *   off (EMAIL_NOTIFICATIONS_    nothing is sent
+ *   ENABLED=false)
  * - programming error          -> UnrecoverableError; row `failed`
  *   (unknown template)
  *
@@ -59,13 +67,20 @@ export interface NotificationDeliveryDeps {
   sendEmail: EmailSender;
   appUrl: string | undefined;
   deliveryTimeoutMs: number;
+  /** EMAIL_NOTIFICATIONS_ENABLED; treated as true when omitted. */
+  emailEnabled?: boolean;
 }
 
 function defaultDeps(): NotificationDeliveryDeps {
-  return { sendEmail: defaultEmailSender, appUrl: env.APP_URL, deliveryTimeoutMs: EMAIL_DELIVERY_TIMEOUT_MS };
+  return {
+    sendEmail: defaultEmailSender,
+    appUrl: env.APP_URL,
+    deliveryTimeoutMs: EMAIL_DELIVERY_TIMEOUT_MS,
+    emailEnabled: env.EMAIL_NOTIFICATIONS_ENABLED,
+  };
 }
 
-type DeliveryOutcome = { kind: "sent" } | { kind: "skipped"; reason: string };
+type DeliveryOutcome = { kind: "sent" } | { kind: "skipped"; reason: string } | { kind: "rejected"; reason: string };
 
 type NotificationRow = typeof notifications.$inferSelect;
 
@@ -77,6 +92,7 @@ async function deliverEmail(row: NotificationRow, executor: DbClient, deps: Noti
   if (!isNotificationTemplateId(row.templateId)) {
     throw new UnrecoverableError("unknown_template");
   }
+  if (deps.emailEnabled === false) return { kind: "skipped", reason: "email_disabled" };
   // Shared academy-wide rows (no user_id) have no individual email recipient.
   if (!row.userId) return { kind: "skipped", reason: "no_individual_recipient" };
 
@@ -126,7 +142,12 @@ async function deliverEmail(row: NotificationRow, executor: DbClient, deps: Noti
     deps.deliveryTimeoutMs,
     "email delivery",
   );
-  if (!result.ok) throw new Error(`email_delivery_failed: ${result.error}`);
+  if (!result.ok) {
+    if (result.permanent) {
+      return { kind: "rejected", reason: result.statusCode ? `provider_${result.statusCode}` : "provider_not_configured" };
+    }
+    throw new Error(`email_delivery_failed: ${result.error}`);
+  }
   return { kind: "sent" };
 }
 
@@ -138,6 +159,13 @@ async function markSkipped(notificationId: string, reason: string, executor: DbC
   await executor
     .update(notifications)
     .set({ status: "failed", lastError: `skipped: ${reason}` })
+    .where(eq(notifications.id, notificationId));
+}
+
+async function markRejected(notificationId: string, attemptCount: number, reason: string, executor: DbClient): Promise<void> {
+  await executor
+    .update(notifications)
+    .set({ status: "failed", attemptCount, lastError: `rejected: ${reason}` })
     .where(eq(notifications.id, notificationId));
 }
 
@@ -197,6 +225,9 @@ export async function processNotificationJob(
     if (outcome.kind === "sent") {
       await markSent(row.id, executor);
       logger.info("notification.delivered", { notificationId: row.id, channel: row.channel, templateId: row.templateId });
+    } else if (outcome.kind === "rejected") {
+      await markRejected(row.id, job.attemptsMade + 1, outcome.reason, executor);
+      logger.warn("notification.rejected", { notificationId: row.id, channel: row.channel, templateId: row.templateId, reason: outcome.reason });
     } else {
       await markSkipped(row.id, outcome.reason, executor);
       logger.info("notification.not_delivered", { notificationId: row.id, channel: row.channel, templateId: row.templateId, reason: outcome.reason });

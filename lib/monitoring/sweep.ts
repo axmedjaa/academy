@@ -50,6 +50,8 @@ export async function runMonitoringSweep(sink: MonitoringSink = logSink): Promis
     message: "Monitoring sweep completed",
     context: {
       queueFailedCount: queue.failedCount,
+      queueRecentFailedCount: queue.recentFailedCount,
+      queueNoWorkerConnected: queue.noWorkerConnected,
       queueStuckCount: queue.stuckCount,
       queueDepthThresholdBreached: queue.queueDepthThresholdBreached,
       failedThresholdBreached: queue.failedThresholdBreached,

@@ -49,7 +49,7 @@ function spySink(): { sink: MonitoringSink; recordEvent: ReturnType<typeof vi.fn
   return { sink: { recordEvent, recordMetric: vi.fn() }, recordEvent };
 }
 
-async function addFailedJob(): Promise<string> {
+async function addFailedJob(finishedOn: number = Date.now()): Promise<string> {
   const jobId = `monitoring-test-failed-${randomUUID()}`;
   await notificationQueue.add(
     "sendEmail",
@@ -58,10 +58,10 @@ async function addFailedJob(): Promise<string> {
   );
   // Move it out of "wait" and directly into "failed" state (see module comment).
   await notificationQueueConnection.lrem(notificationQueue.toKey("wait"), 0, jobId);
-  await notificationQueueConnection.zadd(notificationQueue.toKey("failed"), Date.now(), jobId);
+  await notificationQueueConnection.zadd(notificationQueue.toKey("failed"), finishedOn, jobId);
   await notificationQueueConnection.hset(notificationQueue.toKey(jobId), {
     failedReason: "monitoring test simulated failure",
-    finishedOn: Date.now(),
+    finishedOn,
   });
   addedFailedJobIds.push(jobId);
   return jobId;
@@ -92,6 +92,29 @@ afterAll(async () => {
   await notificationQueue.close();
 });
 
+describe("checkQueueHealth — failed-job window and worker presence", () => {
+  it("counts a job that failed more than 24 hours ago in failedCount but not in recentFailedCount", async () => {
+    const before = await checkQueueHealth(noopSink());
+    await addFailedJob(Date.now() - QUEUE_HEALTH_THRESHOLDS.failedJobWindowMs - 60_000);
+    const after = await checkQueueHealth(noopSink());
+    expect(after.failedCount).toBe(before.failedCount + 1);
+    expect(after.recentFailedCount).toBe(before.recentFailedCount);
+  });
+
+  it("does not breach the failed-job threshold on old failures alone", async () => {
+    // Evaluated two days ahead: every failed job now on the queue is outside the window.
+    const later = new Date(Date.now() + 2 * QUEUE_HEALTH_THRESHOLDS.failedJobWindowMs);
+    const report = await checkQueueHealth(noopSink(), later);
+    expect(report.recentFailedCount).toBe(0);
+    expect(report.failedThresholdBreached).toBe(false);
+  });
+
+  it("reports noWorkerConnected exactly when no worker is connected", async () => {
+    const report = await checkQueueHealth(noopSink());
+    expect(report.noWorkerConnected).toBe(report.workersConnected === 0);
+  });
+});
+
 describe("checkQueueHealth", () => {
   it("reports the queue name, a numeric worker count, and a live Redis connection status", async () => {
     const report = await checkQueueHealth(noopSink());
@@ -114,8 +137,8 @@ describe("checkQueueHealth", () => {
   });
 
   it("emits an alert-level event once the failed-job count exceeds the threshold, and reports the breach", async () => {
-    const before = await notificationQueue.getJobCounts("failed");
-    const baseline = before.failed ?? 0;
+    // The alert counts failures within the window, not the all-time total.
+    const baseline = (await checkQueueHealth(noopSink())).recentFailedCount;
     const needed = Math.max(1, QUEUE_HEALTH_THRESHOLDS.failedJobAlertThreshold - baseline + 1);
     for (let i = 0; i < needed; i += 1) {
       await addFailedJob();

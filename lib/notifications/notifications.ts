@@ -7,6 +7,7 @@ import { redact } from "@/lib/redact";
 import { NOTIFICATION_TEMPLATE_IDS, type NotificationTemplateId } from "@/lib/notifications/templates";
 import { addNotificationJob, type NotificationJobData } from "@/lib/notifications/queue";
 import { logger } from "@/lib/logger";
+import { env } from "@/lib/env";
 
 /**
  * PLAN.md Phase 5, Item 58a — the core `enqueueNotification` entry point.
@@ -174,10 +175,17 @@ export function notificationJobId(idempotencyKey: string, channel: NotificationC
   return `${idempotencyKey}:${channel}`;
 }
 
+export interface EnqueueNotificationOptions {
+  /** Defaults to EMAIL_NOTIFICATIONS_ENABLED (lib/env.ts). */
+  emailEnabled?: boolean;
+}
+
 export async function enqueueNotification(
   rawInput: EnqueueNotificationInput,
   executor: DbClient = db,
+  options: EnqueueNotificationOptions = {},
 ): Promise<EnqueuedNotificationChannelResult[]> {
+  const emailEnabled = options.emailEnabled ?? env.EMAIL_NOTIFICATIONS_ENABLED;
   const input = enqueueNotificationInputSchema.parse(rawInput);
   const academyId = input.academyId ?? null;
   const userId = input.userId ?? null;
@@ -188,12 +196,14 @@ export async function enqueueNotification(
   // notifications get an email copy only when its plan includes email, and
   // SMS only when it includes SMS. Platform-level notifications (no academy)
   // always get email. Sign-in and security emails don't go through here.
+  // With EMAIL_NOTIFICATIONS_ENABLED=false no email row (and so no email
+  // job) is created at all; the in-app row is unaffected.
   const channels: NotificationChannel[] = ["in_app"];
   if (academyId) {
     const entitlements = await getAcademyEntitlements(academyId, executor);
-    if (entitlements.email) channels.push("email");
+    if (emailEnabled && entitlements.email) channels.push("email");
     if (entitlements.sms) channels.push("sms");
-  } else {
+  } else if (emailEnabled) {
     channels.push("email");
   }
 

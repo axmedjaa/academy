@@ -115,6 +115,51 @@ describe("sendEmail", () => {
   });
 });
 
+describe("sendEmail — permanent vs temporary failures", () => {
+  beforeEach(() => {
+    process.env.RESEND_API_KEY = "test-key";
+    process.env.EMAIL_FROM = "no-reply@example.com";
+  });
+
+  it("marks a 403 (Resend's unverified-domain sandbox restriction) as permanent, with its status code", async () => {
+    sendMock.mockResolvedValue({
+      data: null,
+      error: { name: "validation_error", statusCode: 403, message: "You can only send testing emails to your own email address." },
+    });
+    const result = await sendEmail({ to: "user@example.com", subject: "s", html: "h", text: "t" });
+    expect(result).toMatchObject({ ok: false, permanent: true, statusCode: 403 });
+  });
+
+  it.each([429, 500, 503])("keeps %i retryable", async (statusCode) => {
+    sendMock.mockResolvedValue({ data: null, error: { name: "x", statusCode, message: "try later" } });
+    const result = await sendEmail({ to: "user@example.com", subject: "s", html: "h", text: "t" });
+    expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty("permanent");
+  });
+
+  it("keeps a thrown network error retryable", async () => {
+    sendMock.mockRejectedValue(new Error("network down"));
+    const result = await sendEmail({ to: "user@example.com", subject: "s", html: "h", text: "t" });
+    expect(result).not.toHaveProperty("permanent");
+  });
+
+  it("treats missing configuration as permanent", async () => {
+    delete process.env.RESEND_API_KEY;
+    const result = await sendEmail({ to: "user@example.com", subject: "s", html: "h", text: "t" });
+    expect(result).toMatchObject({ ok: false, permanent: true });
+  });
+
+  it("logs only the recipient's domain, never the full address", async () => {
+    sendMock.mockResolvedValueOnce({ data: { id: "a" }, error: null });
+    await sendEmail({ to: "person.name@example.com", subject: "s", html: "h", text: "t" });
+    sendMock.mockResolvedValueOnce({ data: null, error: { name: "x", statusCode: 403, message: "no" } });
+    await sendEmail({ to: "person.name@example.com", subject: "s", html: "h", text: "t" });
+    const logged = JSON.stringify([...vi.mocked(logger.error).mock.calls, ...vi.mocked(logger.info).mock.calls]);
+    expect(logged).not.toContain("person.name");
+    expect(logged).toContain("<redacted>@example.com");
+  });
+});
+
 describe("sendEmail — idempotency key (notification worker)", () => {
   it("forwards the idempotency key to Resend when given", async () => {
     process.env.RESEND_API_KEY = "test-key";
