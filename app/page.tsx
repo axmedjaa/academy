@@ -1,9 +1,18 @@
+
 import type { Metadata } from "next";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getLandingPlans } from "@/lib/marketing/landing";
 import { getPublicContactSettings, hasPublicContact } from "@/lib/marketing/website-settings";
 import { SITE_URL } from "@/lib/marketing/seo";
 import { LandingPage } from "./_landing/landing-page";
+
+const websiteJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  name: "Dardar School System",
+  alternateName: "Dardar",
+  url: SITE_URL,
+};
 
 export const metadata: Metadata = {
   title: "Dardar School System — Academy management platform",
@@ -26,16 +35,34 @@ export const metadata: Metadata = {
  * saved change shows on the next page load with no redeploy.
  */
 export default async function Home() {
-  const [context, plans, contact] = await Promise.all([getAuthContext(), getLandingPlans(), getPublicContactSettings()]);
-  const consoleHref = context ? (context.platformRole ? "/platform/dashboard" : "/academy/dashboard") : null;
+  const [context, plans, contact] = await Promise.all([
+    getAuthContext(),
+    getLandingPlans(),
+    getPublicContactSettings(),
+  ]);
+
+  const consoleHref = context
+    ? context.platformRole
+      ? "/platform/dashboard"
+      : "/academy/dashboard"
+    : null;
 
   return (
-    <LandingPage
-      consoleHref={consoleHref}
-      contact={contact}
-      showContact={hasPublicContact(contact)}
-      plans={plans}
-      year={new Date().getFullYear()}
-    />
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(websiteJsonLd),
+        }}
+      />
+
+      <LandingPage
+        consoleHref={consoleHref}
+        contact={contact}
+        showContact={hasPublicContact(contact)}
+        plans={plans}
+        year={new Date().getFullYear()}
+      />
+    </>
   );
 }
