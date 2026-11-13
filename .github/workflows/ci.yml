@@ -69,12 +69,17 @@ jobs:
       # at build time whether HSTS and upgrade-insecure-requests are sent
       # (next.config.ts): keep the repository variable unset or "false"
       # while production is plain http, set it to "true" once HTTPS works.
+      # NEXT_PUBLIC_SITE_URL (repository variable, e.g. https://example.com)
+      # is the canonical domain for the sitemap, robots.txt and metadata
+      # (lib/marketing/seo.ts). It is fixed at build time, and the build
+      # fails when it is missing or not a valid URL.
       - run: npm run build
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/academy_management_saas_ci
           REDIS_URL: redis://localhost:6379
           MFA_ENCRYPTION_KEY: ${{ secrets.CI_MFA_ENCRYPTION_KEY }}
           APP_HTTPS_ENABLED: ${{ vars.APP_HTTPS_ENABLED }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
 
       # Production worker bundle (dist/worker.mjs): proves the worker and
       # everything it imports still compile for plain `node`.

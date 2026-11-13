@@ -1,7 +1,11 @@
+import type { Metadata } from "next";
+import { NO_INDEX } from "@/lib/marketing/seo";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getAcademyConsoleShellData, getPlatformConsoleShellData } from "@/lib/console/shell-data";
 import { ConsoleShell } from "@/app/_console/console-shell";
+
+export const metadata: Metadata = { robots: NO_INDEX };
 
 /**
  * Shared account pages (Screen Inventory S01/S02) open inside the signed-in

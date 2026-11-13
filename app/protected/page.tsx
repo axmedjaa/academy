@@ -1,6 +1,10 @@
+import type { Metadata } from "next";
+import { NO_INDEX } from "@/lib/marketing/seo";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { hasPermission } from "@/lib/auth/permissions";
+
+export const metadata: Metadata = { robots: NO_INDEX };
 
 // Phase 0, Item 12: a temporary stub proving the auth+permission gate works
 // end-to-end. No path is named in PLAN.md for this; real routes replace it

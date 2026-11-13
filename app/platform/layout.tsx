@@ -1,8 +1,12 @@
+import type { Metadata } from "next";
+import { NO_INDEX } from "@/lib/marketing/seo";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getPlatformConsoleShellData } from "@/lib/console/shell-data";
 import { ConsoleShell } from "@/app/_console/console-shell";
 import { PageMessage } from "@/app/academy/_shell/ui";
+
+export const metadata: Metadata = { robots: NO_INDEX };
 
 
 /**

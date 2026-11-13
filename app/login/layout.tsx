@@ -1,6 +1,10 @@
+import type { Metadata } from "next";
+import { NO_INDEX } from "@/lib/marketing/seo";
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { CHANGE_PASSWORD_PATH, getPasswordChangeSession } from "@/lib/auth/auth-context";
+
+export const metadata: Metadata = { robots: NO_INDEX };
 
 /**
  * A session that still holds a temporary password resolves no AuthContext,

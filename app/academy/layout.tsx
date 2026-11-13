@@ -1,9 +1,13 @@
+import type { Metadata } from "next";
+import { NO_INDEX } from "@/lib/marketing/seo";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getAcademyConsoleShellData } from "@/lib/console/shell-data";
 import { AcademyAccessMessage } from "./academy-access-message";
 import { ConsoleShell } from "@/app/_console/console-shell";
+
+export const metadata: Metadata = { robots: NO_INDEX };
 
 /**
  * PLAN.md Item 28 — "Minimal `/academy/dashboard` shell." This is the

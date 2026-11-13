@@ -1,7 +1,11 @@
+import type { Metadata } from "next";
+import { NO_INDEX } from "@/lib/marketing/seo";
 import { redirect } from "next/navigation";
 import { getAuthContext, getPasswordChangeSession, getPostLoginRedirectPath } from "@/lib/auth/auth-context";
 import { AuthCard } from "@/lib/ui/auth-components";
 import { ChangePasswordForm } from "./change-password-form";
+
+export const metadata: Metadata = { robots: NO_INDEX };
 
 /**
  * First sign-in with a temporary password set by an academy administrator

@@ -2,6 +2,7 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { describeStaffInvitation } from "@/lib/academies/staff-invitations";
 import { AuthCard, AuthLink, ErrorBanner } from "@/lib/ui/auth-components";
 import { color } from "@/lib/ui/theme";
+import { NO_INDEX } from "@/lib/marketing/seo";
 import { AcceptInvitationForm, CreateAccountForm, SignInToAcceptForm } from "./invitation-forms";
 
 /**
@@ -12,7 +13,7 @@ import { AcceptInvitationForm, CreateAccountForm, SignInToAcceptForm } from "./i
  */
 export const dynamic = "force-dynamic";
 
-export const metadata = { referrer: "no-referrer" as const };
+export const metadata = { referrer: "no-referrer" as const, robots: NO_INDEX };
 
 export default async function StaffInvitationPage({
   searchParams,

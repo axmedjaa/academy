@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Alexandria, JetBrains_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
+import { SITE_URL } from "@/lib/marketing/seo";
 import "./globals.css";
 
 const alexandria = Alexandria({
@@ -14,8 +15,9 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "Dardar School System",
-  description: "Dardar School System — multi-tenant academy management platform (in development).",
+  description: "Dardar School System — multi-tenant academy management platform.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

@@ -2,12 +2,14 @@ import type { Metadata } from "next";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { getLandingPlans } from "@/lib/marketing/landing";
 import { getPublicContactSettings, hasPublicContact } from "@/lib/marketing/website-settings";
+import { SITE_URL } from "@/lib/marketing/seo";
 import { LandingPage } from "./_landing/landing-page";
 
 export const metadata: Metadata = {
   title: "Dardar School System — Academy management platform",
   description:
     "Manage students, courses, batches, fee records, staff, and certificates in one organized platform built for growing training academies.",
+  alternates: { canonical: SITE_URL },
 };
 
 /**
