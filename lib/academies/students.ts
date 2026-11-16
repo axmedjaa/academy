@@ -1,4 +1,4 @@
-import { and, count, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, getTableName, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { checkStorageAllowance, enforceStoredUploadWithinAllowance, storageFullMessage } from "@/lib/subscriptions/usage";
 import { checkAllowance } from "@/lib/subscriptions/usage";
 import { getAssignedBranchIds } from "@/lib/academies/branch-access";
@@ -7,10 +7,16 @@ import { db, type DbClient } from "@/lib/db";
 import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 import {
   batchEnrollments,
+  bookIssues,
+  bookOrders,
+  bookPreorders,
+  bookSales,
   branches,
   certificates,
   examResults,
+  programEnrollments,
   studentCharges,
+  studentCourseRefunds,
   studentDocuments,
   studentIdCards,
   studentPayments,
@@ -577,13 +583,7 @@ export async function searchStudents(
     ok: true,
     data: {
       rows: rows.map((row) => {
-        const counts = countsByStudentId.get(row.id) ?? {
-          enrollmentCount: 0,
-          examResultCount: 0,
-          chargeCount: 0,
-          paymentCount: 0,
-          certificateCount: 0,
-        };
+        const counts = countsByStudentId.get(row.id) ?? zeroStudentDependentCounts();
         const reasons = buildStudentDeletionReasons(counts);
         return { ...toRecord(row), deletionEligibility: { eligible: reasons.length === 0, reasons } };
       }),
@@ -1388,12 +1388,15 @@ export async function getAdmissionsView(
  * the archive/restore status toggle
  * ---------------------------------------------------------------------
  * Direct inbound FKs to `students` (lib/db/schema.ts): studentDocuments,
- * studentIdCards, batchEnrollments, examResults, studentCharges,
- * studentPayments, certificates. The last five are protected — PLAN.md's
- * no-hard-delete principle covers enrollment history, exam results, and
- * every financial/certificate record explicitly, so any row in any of
- * them (regardless of status — a withdrawn enrollment or a cancelled
- * certificate is still a real historical fact) blocks deletion outright.
+ * studentIdCards, and every table in STUDENT_DEPENDENTS below. Those are
+ * protected — PLAN.md's no-hard-delete principle covers enrollment
+ * history, exam results, and every financial/certificate/book record
+ * explicitly, so any row in any of them (regardless of status — a
+ * withdrawn enrollment or a cancelled order is still a real historical
+ * fact) blocks deletion outright. Their FKs are all ON DELETE NO ACTION,
+ * so a table missing from this list makes Postgres refuse the delete
+ * (23503) instead of it being refused here with a reason; keep the list
+ * in step with the schema whenever a new table references `students`.
  *
  * studentDocuments/studentIdCards are treated as safely disposable — they
  * carry no historical value beyond the student's own existence (same
@@ -1402,58 +1405,66 @@ export async function getAdmissionsView(
  * They are deleted explicitly, by name, inside the same transaction —
  * never a blind cascade.
  */
-export interface StudentDeletionEligibility {
+const STUDENT_DEPENDENTS = [
+  { key: "enrollmentCount", table: batchEnrollments, column: batchEnrollments.studentId, one: "batch enrollment", many: "batch enrollments" },
+  { key: "programEnrollmentCount", table: programEnrollments, column: programEnrollments.studentId, one: "program enrollment", many: "program enrollments" },
+  { key: "examResultCount", table: examResults, column: examResults.studentId, one: "exam result", many: "exam results" },
+  { key: "chargeCount", table: studentCharges, column: studentCharges.studentId, one: "charge", many: "charges" },
+  { key: "paymentCount", table: studentPayments, column: studentPayments.studentId, one: "payment", many: "payments" },
+  { key: "refundCount", table: studentCourseRefunds, column: studentCourseRefunds.studentId, one: "refund", many: "refunds" },
+  { key: "certificateCount", table: certificates, column: certificates.studentId, one: "certificate", many: "certificates" },
+  { key: "bookOrderCount", table: bookOrders, column: bookOrders.studentId, one: "book order", many: "book orders" },
+  { key: "bookSaleCount", table: bookSales, column: bookSales.studentId, one: "book sale", many: "book sales" },
+  { key: "bookPreorderCount", table: bookPreorders, column: bookPreorders.studentId, one: "book pre-order", many: "book pre-orders" },
+  { key: "bookIssueCount", table: bookIssues, column: bookIssues.studentId, one: "book handout", many: "book handouts" },
+] as const;
+
+/** Tables whose rows block permanent deletion (for the schema-coverage
+ * test in students.test.ts, which compares this against every foreign key
+ * that references `students`). */
+export const STUDENT_DELETION_BLOCKING_TABLES: readonly string[] = STUDENT_DEPENDENTS.map((dep) => getTableName(dep.table));
+
+type StudentDependentKey = (typeof STUDENT_DEPENDENTS)[number]["key"];
+type StudentDependentCounts = Record<StudentDependentKey, number>;
+
+function zeroStudentDependentCounts(): StudentDependentCounts {
+  return Object.fromEntries(STUDENT_DEPENDENTS.map((dep) => [dep.key, 0])) as StudentDependentCounts;
+}
+
+export interface StudentDeletionEligibility extends StudentDependentCounts {
   studentId: string;
   studentName: string;
   eligible: boolean;
   reasons: string[];
-  enrollmentCount: number;
-  examResultCount: number;
-  chargeCount: number;
-  paymentCount: number;
-  certificateCount: number;
 }
 
 export type GetStudentDeletionEligibilityResult =
   | { ok: true; eligibility: StudentDeletionEligibility }
   | { ok: false; error: StudentActionError };
 
-type StudentDependentCounts = {
-  enrollmentCount: number;
-  examResultCount: number;
-  chargeCount: number;
-  paymentCount: number;
-  certificateCount: number;
-};
-
 /** Bulk per-student dependent counts, for the students list's Delete
- * button — five grouped queries for the whole visible page rather than
- * N+1 (bounded by page size, never the whole academy). */
+ * button — one grouped query per dependent table for the whole visible
+ * page rather than N+1 (bounded by page size, never the whole academy). */
 async function countStudentDependentsBulk(studentIds: string[]): Promise<Map<string, StudentDependentCounts>> {
-  if (studentIds.length === 0) return new Map();
-  const [enrollmentRows, examResultRows, chargeRows, paymentRows, certificateRows] = await Promise.all([
-    db.select({ studentId: batchEnrollments.studentId, count: sql<number>`count(*)::int` }).from(batchEnrollments).where(inArray(batchEnrollments.studentId, studentIds)).groupBy(batchEnrollments.studentId),
-    db.select({ studentId: examResults.studentId, count: sql<number>`count(*)::int` }).from(examResults).where(inArray(examResults.studentId, studentIds)).groupBy(examResults.studentId),
-    db.select({ studentId: studentCharges.studentId, count: sql<number>`count(*)::int` }).from(studentCharges).where(inArray(studentCharges.studentId, studentIds)).groupBy(studentCharges.studentId),
-    db.select({ studentId: studentPayments.studentId, count: sql<number>`count(*)::int` }).from(studentPayments).where(inArray(studentPayments.studentId, studentIds)).groupBy(studentPayments.studentId),
-    db.select({ studentId: certificates.studentId, count: sql<number>`count(*)::int` }).from(certificates).where(inArray(certificates.studentId, studentIds)).groupBy(certificates.studentId),
-  ]);
-  const enrollmentByStudent = new Map(enrollmentRows.map((r) => [r.studentId, r.count]));
-  const examResultByStudent = new Map(examResultRows.map((r) => [r.studentId, r.count]));
-  const chargeByStudent = new Map(chargeRows.map((r) => [r.studentId, r.count]));
-  const paymentByStudent = new Map(paymentRows.map((r) => [r.studentId, r.count]));
-  const certificateByStudent = new Map(certificateRows.map((r) => [r.studentId, r.count]));
-
   const result = new Map<string, StudentDependentCounts>();
-  for (const studentId of studentIds) {
-    result.set(studentId, {
-      enrollmentCount: enrollmentByStudent.get(studentId) ?? 0,
-      examResultCount: examResultByStudent.get(studentId) ?? 0,
-      chargeCount: chargeByStudent.get(studentId) ?? 0,
-      paymentCount: paymentByStudent.get(studentId) ?? 0,
-      certificateCount: certificateByStudent.get(studentId) ?? 0,
-    });
-  }
+  if (studentIds.length === 0) return result;
+  for (const studentId of studentIds) result.set(studentId, zeroStudentDependentCounts());
+
+  const grouped = await Promise.all(
+    STUDENT_DEPENDENTS.map((dep) =>
+      db
+        .select({ studentId: sql<string>`${dep.column}`, count: sql<number>`count(*)::int` })
+        .from(dep.table)
+        .where(inArray(dep.column, studentIds))
+        .groupBy(dep.column),
+    ),
+  );
+  STUDENT_DEPENDENTS.forEach((dep, index) => {
+    for (const row of grouped[index]) {
+      const counts = result.get(row.studentId);
+      if (counts) counts[dep.key] = row.count;
+    }
+  });
   return result;
 }
 
@@ -1461,46 +1472,34 @@ async function countStudentDependents(
   executor: DbClient,
   studentId: string,
 ): Promise<StudentDependentCounts> {
-  const [[enrollmentRow], [examResultRow], [chargeRow], [paymentRow], [certificateRow]] = await Promise.all([
-    executor.select({ count: sql<number>`count(*)::int` }).from(batchEnrollments).where(eq(batchEnrollments.studentId, studentId)),
-    executor.select({ count: sql<number>`count(*)::int` }).from(examResults).where(eq(examResults.studentId, studentId)),
-    executor.select({ count: sql<number>`count(*)::int` }).from(studentCharges).where(eq(studentCharges.studentId, studentId)),
-    executor.select({ count: sql<number>`count(*)::int` }).from(studentPayments).where(eq(studentPayments.studentId, studentId)),
-    executor.select({ count: sql<number>`count(*)::int` }).from(certificates).where(eq(certificates.studentId, studentId)),
-  ]);
-  return {
-    enrollmentCount: enrollmentRow?.count ?? 0,
-    examResultCount: examResultRow?.count ?? 0,
-    chargeCount: chargeRow?.count ?? 0,
-    paymentCount: paymentRow?.count ?? 0,
-    certificateCount: certificateRow?.count ?? 0,
-  };
+  const rows = await Promise.all(
+    STUDENT_DEPENDENTS.map((dep) =>
+      executor.select({ count: sql<number>`count(*)::int` }).from(dep.table).where(eq(dep.column, studentId)),
+    ),
+  );
+  const counts = zeroStudentDependentCounts();
+  STUDENT_DEPENDENTS.forEach((dep, index) => {
+    counts[dep.key] = rows[index][0]?.count ?? 0;
+  });
+  return counts;
 }
 
-function buildStudentDeletionReasons(counts: {
-  enrollmentCount: number;
-  examResultCount: number;
-  chargeCount: number;
-  paymentCount: number;
-  certificateCount: number;
-}): string[] {
+function buildStudentDeletionReasons(counts: StudentDependentCounts): string[] {
   const reasons: string[] = [];
-  if (counts.enrollmentCount > 0) {
-    reasons.push(`${counts.enrollmentCount} batch enrollment${counts.enrollmentCount === 1 ? "" : "s"}`);
-  }
-  if (counts.examResultCount > 0) {
-    reasons.push(`${counts.examResultCount} exam result${counts.examResultCount === 1 ? "" : "s"}`);
-  }
-  if (counts.chargeCount > 0) {
-    reasons.push(`${counts.chargeCount} charge${counts.chargeCount === 1 ? "" : "s"}`);
-  }
-  if (counts.paymentCount > 0) {
-    reasons.push(`${counts.paymentCount} payment${counts.paymentCount === 1 ? "" : "s"}`);
-  }
-  if (counts.certificateCount > 0) {
-    reasons.push(`${counts.certificateCount} certificate${counts.certificateCount === 1 ? "" : "s"}`);
+  for (const dep of STUDENT_DEPENDENTS) {
+    const n = counts[dep.key];
+    if (n > 0) reasons.push(`${n} ${n === 1 ? dep.one : dep.many}`);
   }
   return reasons;
+}
+
+/** Postgres foreign_key_violation (23503), whether thrown directly by `pg`
+ * or wrapped by Drizzle as the error's `cause`. */
+function isForeignKeyViolation(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  if ((err as { code?: unknown }).code === "23503") return true;
+  const cause = (err as { cause?: unknown }).cause;
+  return typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === "23503";
 }
 
 /** Read-only preview for the UI's Delete button — `deleteStudent` below
@@ -1579,6 +1578,32 @@ export async function deleteStudent(
     return { ok: false, error: NOT_FOUND };
   }
 
+  try {
+    return await deleteStudentInTransaction(actorContext, academyId, membershipRole, studentId, confirmedName);
+  } catch (err) {
+    // Safety net: a table referencing `students` that STUDENT_DEPENDENTS
+    // does not list makes Postgres refuse the delete. The transaction has
+    // rolled back (student and audit row untouched), so report the same
+    // "archive instead" outcome rather than throwing to the error page.
+    if (!isForeignKeyViolation(err)) throw err;
+    logger.error("deleteStudent refused by an unlisted reference to the student", { studentId, academyId, constraint: (err as { cause?: { constraint?: string } }).cause?.constraint });
+    return {
+      ok: false,
+      error: {
+        code: "ineligible",
+        message: "This student cannot be permanently deleted because other records still refer to them. Archive the student instead.",
+      },
+    };
+  }
+}
+
+async function deleteStudentInTransaction(
+  actorContext: AuthContext,
+  academyId: string,
+  membershipRole: AcademyRole,
+  studentId: string,
+  confirmedName: string,
+): Promise<DeleteStudentResult> {
   return db.transaction(async (tx) => {
     const [existing] = await tx
       .select()

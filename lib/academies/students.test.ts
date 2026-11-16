@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
@@ -11,6 +11,7 @@ import {
   batchEnrollments,
   batchTrainerAssignments,
   batches,
+  bookOrders,
   branches,
   certificates,
   courses,
@@ -37,8 +38,11 @@ import {
   getStudent,
   getStudentDeletionEligibility,
   searchStudents,
+  STUDENT_DELETION_BLOCKING_TABLES,
   updateStudent,
 } from "./students";
+import { getStudentsOverview } from "./students-overview";
+import { getAcademyDashboardData } from "./dashboard";
 import { enrollStudentInBatch, type PaymentPlanInput } from "./batch-assignments";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
@@ -362,6 +366,7 @@ afterAll(async () => {
         ...createdUserIds.map((id) => eq(auditLogs.actorUserId, id)),
       ),
     );
+  if (createdAcademyIds.length) await db.delete(bookOrders).where(inArray(bookOrders.academyId, createdAcademyIds));
   for (const academyId of createdAcademyIds) {
     await db.delete(certificates).where(eq(certificates.academyId, academyId));
     await db.delete(examResults).where(eq(examResults.academyId, academyId));
@@ -1364,6 +1369,91 @@ describe("getStudentDeletionEligibility / deleteStudent", () => {
     expect(deleted.ok).toBe(false);
     if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
   });
+
+  it("a student with a book order is blocked from deletion (list and detail checks), and nothing is deleted", async () => {
+    // Production regression: book orders were not counted, so Delete was
+    // offered and the database then refused the delete (FK 23503), which
+    // surfaced as the academy error page.
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const student = await insertStudentDirect(academyId, branchId, userId, { fullName: "Book Order Student" });
+    await db.insert(bookOrders).values({
+      academyId,
+      buyerType: "student",
+      studentId: student.id,
+      orderNumber: 1,
+      orderDate: "2026-11-01",
+      currency: "USD",
+      totalCents: 0,
+      idempotencyKey: randomUUID(),
+      createdBy: userId,
+    });
+
+    const eligibility = await getStudentDeletionEligibility(context, student.id);
+    expect(eligibility.ok).toBe(true);
+    if (eligibility.ok) {
+      expect(eligibility.eligibility.eligible).toBe(false);
+      expect(eligibility.eligibility.bookOrderCount).toBe(1);
+      expect(eligibility.eligibility.reasons).toEqual(["1 book order"]);
+    }
+
+    const listed = await searchStudents(context, {});
+    expect(listed.ok).toBe(true);
+    if (listed.ok) {
+      const row = listed.data.rows.find((r) => r.id === student.id);
+      expect(row?.deletionEligibility).toEqual({ eligible: false, reasons: ["1 book order"] });
+    }
+
+    const deleted = await deleteStudent(context, student.id, "Book Order Student");
+    expect(deleted.ok).toBe(false);
+    if (!deleted.ok) expect(deleted.error.code).toBe("ineligible");
+
+    const stillThere = await getStudent(context, student.id);
+    expect(stillThere.ok).toBe(true);
+  });
+
+  it("every foreign key that references students is either a deletion blocker or deleted with the student", async () => {
+    // If a new table references students without being added to
+    // STUDENT_DEPENDENTS, Delete would be offered and then fail in Postgres.
+    const disposable = ["student_documents", "student_id_cards"];
+    const result = await db.execute<{ table_name: string }>(sql`
+      select distinct cl.relname as table_name
+      from pg_constraint con
+      join pg_class cl on cl.oid = con.conrelid
+      where con.contype = 'f' and con.confrelid = 'public.students'::regclass
+    `);
+    const referencing = result.rows.map((row) => row.table_name).sort();
+    expect(referencing).toEqual([...STUDENT_DELETION_BLOCKING_TABLES, ...disposable].sort());
+  });
+
+  it("deleting every student down to zero keeps the Students page and dashboard data loading", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const created = [];
+    for (let i = 1; i <= 3; i++) {
+      created.push(await insertStudentDirect(academyId, branchId, userId, { fullName: `Zero Path Student ${i}` }));
+    }
+
+    for (const [index, student] of created.entries()) {
+      const result = await deleteStudent(context, student.id, student.fullName);
+      expect(result.ok).toBe(true);
+
+      const remaining = created.length - index - 1;
+      const [list, overview, dashboard] = await Promise.all([
+        searchStudents(context, {}),
+        getStudentsOverview(context, {}),
+        getAcademyDashboardData(context, {}),
+      ]);
+      expect(list.ok).toBe(true);
+      if (list.ok) {
+        expect(list.data.totalCount).toBe(remaining);
+        expect(list.data.rows).toHaveLength(remaining);
+      }
+      expect(overview.ok).toBe(true);
+      if (overview.ok) expect(overview.overview.total).toBe(remaining);
+      expect(dashboard.ok).toBe(true);
+    }
+  }, 120000);
 
   it("rejects a wrong confirmation name, and nothing is deleted", async () => {
     const { academyId, userId, context } = await setupAcademy("academy_owner");
