@@ -393,6 +393,11 @@ export default async function AcademyDashboardPage({
                 hint={[
                   `${plural(data.paymentsCollected.count, "posted payment", "posted payments")}`,
                   ...collected.others,
+                  ...(data.paymentsRefunded && data.paymentsRefunded.count > 0
+                    ? data.paymentsRefunded.totalsByCurrency.map(
+                        (row) => `after ${formatMoneyHeadline(row.amountCents, row.currency)} refunded`,
+                      )
+                    : []),
                 ].join(" · ")}
                 href="/academy/finance"
               />

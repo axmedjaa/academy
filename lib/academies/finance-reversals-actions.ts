@@ -4,8 +4,8 @@ import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   adjustExpenseRecord as adjustExpenseRecordForActor,
-  adjustIncomeRecord as adjustIncomeRecordForActor,
-  adjustStudentPayment as adjustStudentPaymentForActor,
+  partiallyReverseIncomeRecord as partiallyReverseIncomeRecordForActor,
+  partiallyReverseStudentPayment as partiallyReverseStudentPaymentForActor,
   reverseExpenseRecord as reverseExpenseRecordForActor,
   reverseIncomeRecord as reverseIncomeRecordForActor,
   reverseStudentPayment as reverseStudentPaymentForActor,
@@ -54,17 +54,18 @@ export async function reverseStudentPaymentAction(
   return { ok: true };
 }
 
-export async function adjustStudentPaymentAction(
+/** Reverses part of a payment; the rest stays as a new approved payment. */
+export async function partiallyReverseStudentPaymentAction(
   studentPaymentId: string,
   reason: string,
-  correctedAmountCents: number,
+  reverseAmountCents: number,
 ): Promise<FinanceReversalActionResult> {
   const context = await getAuthContext();
   if (!context) {
     return { ok: false, error: UNAUTHENTICATED };
   }
 
-  const result = await adjustStudentPaymentForActor(context, studentPaymentId, reason, correctedAmountCents);
+  const result = await partiallyReverseStudentPaymentForActor(context, studentPaymentId, reason, reverseAmountCents);
   if (!result.ok) {
     return { ok: false, error: result.error };
   }
@@ -92,17 +93,18 @@ export async function reverseIncomeRecordAction(
   return { ok: true };
 }
 
-export async function adjustIncomeRecordAction(
+/** Reverses part of an income record; the rest stays as a new record. */
+export async function partiallyReverseIncomeRecordAction(
   incomeRecordId: string,
   reason: string,
-  correctedAmountCents: number,
+  reverseAmountCents: number,
 ): Promise<FinanceReversalActionResult> {
   const context = await getAuthContext();
   if (!context) {
     return { ok: false, error: UNAUTHENTICATED };
   }
 
-  const result = await adjustIncomeRecordForActor(context, incomeRecordId, reason, correctedAmountCents);
+  const result = await partiallyReverseIncomeRecordForActor(context, incomeRecordId, reason, reverseAmountCents);
   if (!result.ok) {
     return { ok: false, error: result.error };
   }

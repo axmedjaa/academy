@@ -267,8 +267,19 @@ export function flattenFinanceReport(report: FinanceReportsData): Record<string,
   }
 
   if (report.income.visible) {
+    // Total Income is net of book-sale refunds; the two lines below it show
+    // how it was reached (only when a refund exists, so a refund-free export
+    // keeps its previous shape).
     for (const t of report.income.totalsByCurrency) {
       rows.push(financeRow("Income", "Total Income", t.currency, t.amountCents, t.count));
+    }
+    if (report.income.bookRefunds.count > 0) {
+      for (const t of report.income.grossByCurrency) {
+        rows.push(financeRow("Income", "Posted Income", t.currency, t.amountCents, t.count));
+      }
+      for (const t of report.income.bookRefunds.totalsByCurrency) {
+        rows.push(financeRow("Income", "Book Refunds", t.currency, t.amountCents, t.count));
+      }
     }
   }
 

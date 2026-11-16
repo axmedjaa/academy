@@ -3,7 +3,7 @@ import { requireFeature } from "@/lib/subscriptions/entitlements";
 import { getBranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { expenseRecords, feePeriods, incomeRecords, paymentAllocations, studentCharges, studentCourseRefunds, studentPayments, students } from "@/lib/db/schema";
+import { bookSalePayments, bookSaleRefunds, bookSales, expenseRecords, feePeriods, incomeRecords, paymentAllocations, studentCharges, studentCourseRefunds, studentPayments, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_EXPENSES_ACTION,
@@ -240,7 +240,17 @@ export type StudentPaymentsReportSection =
 
 export type IncomeReportSection =
   | { visible: false }
-  | { visible: true; count: number; totalsByCurrency: AmountByCurrency[] };
+  | {
+      visible: true;
+      count: number;
+      /** Net income: posted income minus book-sale refunds in the same
+       * period (refunds are money returned, so they lower income). */
+      totalsByCurrency: AmountByCurrency[];
+      /** Posted income before refunds. */
+      grossByCurrency: AmountByCurrency[];
+      /** Book-sale refunds subtracted from `grossByCurrency`. */
+      bookRefunds: { count: number; totalsByCurrency: AmountByCurrency[] };
+    };
 
 export type ExpensesReportSection =
   | { visible: false }
@@ -286,6 +296,18 @@ function toAmountsByCurrency(
     amountCents: row.amountCents,
     count: row.count,
   }));
+}
+
+/** `gross` minus `minus`, per currency (counts kept from `gross`). Used for
+ * net figures: income after book refunds, payments after course refunds. */
+export function subtractByCurrency(gross: AmountByCurrency[], minus: AmountByCurrency[]): AmountByCurrency[] {
+  const net = new Map(gross.map((row) => [row.currency, { ...row }]));
+  for (const row of minus) {
+    const target = net.get(row.currency) ?? { currency: row.currency, amountCents: 0, count: 0 };
+    target.amountCents -= row.amountCents;
+    net.set(row.currency, target);
+  }
+  return [...net.values()];
 }
 
 function totalCount(rows: { count: number }[]): number {
@@ -428,11 +450,17 @@ async function computePaymentsReceived(
 }
 
 /** Income: defaults to `status = "posted"` (excludes `reversed`) unless the
- * filter names a valid `income_records` status explicitly. */
+ * filter names a valid `income_records` status explicitly.
+ *
+ * Book-sale refunds (book_sale_refunds, by the date the refund was recorded,
+ * branch from the sale) are money given back, so for the default "posted"
+ * view they are subtracted to give net income. The original income rows are
+ * never changed. A "reversed" status view lists reversed records only and is
+ * not netted. */
 async function computeIncomeTotals(
   academyId: string,
   filters: ParsedFinanceReportFilters,
-): Promise<{ count: number; totalsByCurrency: AmountByCurrency[] }> {
+): Promise<Omit<Extract<IncomeReportSection, { visible: true }>, "visible">> {
   const status: IncomeRecordStatus = matchesEnum(filters.status, INCOME_RECORD_STATUSES) ?? "posted";
   const conditions: SQL[] = [eq(incomeRecords.academyId, academyId), eq(incomeRecords.status, status)];
   if (filters.branchId) conditions.push(eq(incomeRecords.branchId, filters.branchId));
@@ -440,17 +468,81 @@ async function computeIncomeTotals(
   if (filters.dateFrom) conditions.push(gte(incomeRecords.createdAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(incomeRecords.createdAt, filters.dateTo));
 
-  const rows = await db
-    .select({
-      currency: incomeRecords.currency,
-      amountCents: sql<number>`coalesce(sum(${incomeRecords.amountCents}), 0)::int`,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(incomeRecords)
-    .where(and(...conditions))
-    .groupBy(incomeRecords.currency);
+  const [rows, bookRefunds] = await Promise.all([
+    db
+      .select({
+        currency: incomeRecords.currency,
+        amountCents: sql<number>`coalesce(sum(${incomeRecords.amountCents}), 0)::int`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(incomeRecords)
+      .where(and(...conditions))
+      .groupBy(incomeRecords.currency),
+    status === "posted" ? computeBookSaleRefunds(academyId, filters) : Promise.resolve({ count: 0, totalsByCurrency: [] }),
+  ]);
 
-  return { count: totalCount(rows), totalsByCurrency: toAmountsByCurrency(rows) };
+  const gross = toAmountsByCurrency(rows);
+  return {
+    count: totalCount(rows),
+    totalsByCurrency: subtractByCurrency(gross, bookRefunds.totalsByCurrency),
+    grossByCurrency: gross,
+    bookRefunds,
+  };
+}
+
+/**
+ * Book-sale refunds recorded in the period that are still to come off
+ * income, with income's branch filters (the branch is the sale's).
+ *
+ * A refund only lowers income for money that is still in income: per sale,
+ * at most the sale's linked income records that are still "posted", minus
+ * what earlier refunds on that sale already took off. A sale whose income
+ * was reversed in Finance (possible before book-sale reversals were
+ * blocked) has nothing left in income, so refunding it later subtracts
+ * nothing — otherwise the same money would come off twice and income could
+ * go negative.
+ */
+async function computeBookSaleRefunds(
+  academyId: string,
+  filters: ParsedFinanceReportFilters,
+): Promise<{ count: number; totalsByCurrency: AmountByCurrency[] }> {
+  const conditions: SQL[] = [eq(bookSaleRefunds.academyId, academyId)];
+  if (filters.branchId) conditions.push(eq(bookSales.branchId, filters.branchId));
+  if (filters.scopeBranchIds) conditions.push(filters.scopeBranchIds.length ? inArray(bookSales.branchId, filters.scopeBranchIds) : sql`false`);
+  if (filters.dateTo) conditions.push(lte(bookSaleRefunds.createdAt, filters.dateTo));
+
+  const inPeriod = filters.dateFrom ? sql`${bookSaleRefunds.createdAt} >= ${filters.dateFrom}` : sql`true`;
+  const perSale = await db
+    .select({
+      bookSaleId: bookSales.id,
+      currency: bookSales.currency,
+      inPeriodCents: sql<number>`coalesce(sum(${bookSaleRefunds.amountCents}) filter (where ${inPeriod}), 0)::int`,
+      inPeriodCount: sql<number>`(count(*) filter (where ${inPeriod}))::int`,
+      earlierCents: sql<number>`coalesce(sum(${bookSaleRefunds.amountCents}) filter (where not (${inPeriod})), 0)::int`,
+      postedIncomeCents: sql<number>`coalesce((
+        select sum(${incomeRecords.amountCents})
+        from ${bookSalePayments}
+        join ${incomeRecords} on ${incomeRecords.id} = ${bookSalePayments.incomeRecordId}
+        where ${bookSalePayments.bookSaleId} = ${bookSales.id} and ${incomeRecords.status} = 'posted'
+      ), 0)::int`,
+    })
+    .from(bookSaleRefunds)
+    .innerJoin(bookSales, eq(bookSales.id, bookSaleRefunds.bookSaleId))
+    .where(and(...conditions))
+    .groupBy(bookSales.id, bookSales.currency);
+
+  const byCurrency = new Map<string, AmountByCurrency>();
+  for (const sale of perSale) {
+    const stillInIncome = Math.max(0, sale.postedIncomeCents - sale.earlierCents);
+    const subtract = Math.min(sale.inPeriodCents, stillInIncome);
+    if (subtract <= 0) continue;
+    const row = byCurrency.get(sale.currency) ?? { currency: sale.currency, amountCents: 0, count: 0 };
+    row.amountCents += subtract;
+    row.count += sale.inPeriodCount;
+    byCurrency.set(sale.currency, row);
+  }
+  const totalsByCurrency = [...byCurrency.values()];
+  return { count: totalCount(totalsByCurrency), totalsByCurrency };
 }
 
 /** Expenses: defaults to `status = "approved"` unless the filter names a
@@ -519,7 +611,13 @@ export type GetStudentPaymentTotalsResult =
       ok: true;
       totals:
         | { visible: false }
-        | { visible: true; outstandingCharges: OutstandingChargesSection; paymentsReceived: PaymentsReceivedSection };
+        | {
+            visible: true;
+            outstandingCharges: OutstandingChargesSection;
+            paymentsReceived: PaymentsReceivedSection;
+            /** Course/program refunds in the same period. */
+            refundsRecorded: { count: number; totalsByCurrency: AmountByCurrency[] };
+          };
     }
   | { ok: false; error: FinanceReportsActionError };
 
@@ -528,8 +626,10 @@ export type GetStudentPaymentTotalsResult =
  * dashboard shows (outstanding charges, payments received), computed by the
  * exact same `computeOutstandingCharges` / `computePaymentsReceived` calls
  * `getFinanceReports` makes, behind the same gate, filter validation and
- * `academy.student_payments` permission check. The report's refunds, income
- * and expense sections — never shown on the dashboard — are not computed.
+ * `academy.student_payments` permission check, plus the period's course
+ * refunds so the dashboard can show payments net of refunds. The report's
+ * income and expense sections — never shown on the dashboard — are not
+ * computed.
  */
 export async function getStudentPaymentTotals(
   actorContext: AuthContext,
@@ -555,11 +655,20 @@ export async function getStudentPaymentTotals(
   const scopedFilters: ParsedFinanceReportFilters = totalsScope.academyWide
     ? parsed.data
     : { ...parsed.data, scopeBranchIds: totalsScope.branchIds };
-  const [outstandingCharges, paymentsReceived] = await Promise.all([
+  const [outstandingCharges, paymentsReceived, refundsRecorded] = await Promise.all([
     computeOutstandingCharges(access.academyId, scopedFilters),
     computePaymentsReceived(access.academyId, scopedFilters),
+    computeRefundsRecorded(access.academyId, scopedFilters),
   ]);
-  return { ok: true, totals: { visible: true, outstandingCharges, paymentsReceived } };
+  return {
+    ok: true,
+    totals: {
+      visible: true,
+      outstandingCharges,
+      paymentsReceived,
+      refundsRecorded: { count: refundsRecorded.count, totalsByCurrency: refundsRecorded.totalsByCurrency },
+    },
+  };
 }
 
 export async function getFinanceReports(

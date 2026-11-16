@@ -1,9 +1,9 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import { branchScopeCondition, getBranchScope, inBranchScope, type BranchScope } from "@/lib/academies/branch-access";
 import { IDEMPOTENCY_INDEX, IDEMPOTENCY_KEY_REUSED, idempotencyKeyField, isIdempotencyViolation } from "@/lib/academies/idempotency";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { academies, branches, incomeRecords } from "@/lib/db/schema";
+import { academies, bookSalePayments, branches, incomeRecords } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_INCOME_ACTION,
@@ -104,6 +104,11 @@ export interface IncomeRecordRecord {
   status: "posted" | "reversed";
   reversedRecordId: string | null;
   createdAt: Date;
+  /** Posted by a book sale payment (book_sale_payments.income_record_id).
+   * Such income is corrected with a Refund on the Books page, never a
+   * Finance reversal (lib/academies/finance-reversals.ts refuses it). Only
+   * `listIncomeRecords` resolves it; elsewhere it is false. */
+  fromBookSale: boolean;
 }
 
 function toRecord(row: typeof incomeRecords.$inferSelect): IncomeRecordRecord {
@@ -119,6 +124,7 @@ function toRecord(row: typeof incomeRecords.$inferSelect): IncomeRecordRecord {
     status: row.status,
     reversedRecordId: row.reversedRecordId,
     createdAt: row.createdAt,
+    fromBookSale: false,
   };
 }
 
@@ -202,12 +208,23 @@ export async function listIncomeRecords(actorContext: AuthContext): Promise<List
   if (!resolved.ok) return resolved;
   const { academyId, permissionLevel, scope } = resolved.access;
 
-  const rows = await db
-    .select()
-    .from(incomeRecords)
-    .where(and(eq(incomeRecords.academyId, academyId), branchScopeCondition(scope, incomeRecords.branchId)));
+  const [rows, bookSaleLinks] = await Promise.all([
+    db
+      .select()
+      .from(incomeRecords)
+      .where(and(eq(incomeRecords.academyId, academyId), branchScopeCondition(scope, incomeRecords.branchId))),
+    db
+      .select({ incomeRecordId: bookSalePayments.incomeRecordId })
+      .from(bookSalePayments)
+      .where(and(eq(bookSalePayments.academyId, academyId), isNotNull(bookSalePayments.incomeRecordId))),
+  ]);
+  const bookSaleIncomeIds = new Set(bookSaleLinks.map((link) => link.incomeRecordId));
 
-  return { ok: true, records: rows.map(toRecord), canCreate: canCreate(permissionLevel) };
+  return {
+    ok: true,
+    records: rows.map((row) => ({ ...toRecord(row), fromBookSale: bookSaleIncomeIds.has(row.id) })),
+    canCreate: canCreate(permissionLevel),
+  };
 }
 
 export type CreateIncomeRecordResult =

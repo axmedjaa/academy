@@ -48,7 +48,7 @@ import type { BookIssueView } from "@/lib/academies/book-orders";
 import { StudentBooksCard } from "./student-books-card";
 import { nextDuePeriod, outstandingCents, previewAllocation, previewScheduleChange } from "@/lib/ui/fee-allocation";
 import { formatDate } from "@/lib/ui/date";
-import { PaymentHistoryPanel, RefundHistoryPanel, type RefundHistoryRow } from "./payment-history";
+import { PaymentHistoryPanel, PaymentTotalsStrip, RefundHistoryPanel, type RefundHistoryRow } from "./payment-history";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { getStatusTone } from "@/lib/ui/status";
 import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
@@ -353,6 +353,7 @@ export function StudentDetail({
       {tab === "payments" &&
         (paymentsSectionVisible ? (
           <>
+            <PaymentTotalsStrip payments={historyRows} refunds={refundRows} />
             <PaymentHistoryPanel
               rows={historyRows}
               studentName={student.fullName}

@@ -9,8 +9,8 @@ import type { ExpenseRecordRecord } from "@/lib/academies/expense-records";
 import { issueReceiptAction } from "@/lib/academies/student-payments-actions";
 import {
   adjustExpenseRecordAction,
-  adjustIncomeRecordAction,
-  adjustStudentPaymentAction,
+  partiallyReverseIncomeRecordAction,
+  partiallyReverseStudentPaymentAction,
   reverseExpenseRecordAction,
   reverseIncomeRecordAction,
   reverseStudentPaymentAction,
@@ -57,7 +57,28 @@ const ADJUST_RULES: DesignFormRule[] = [
   { name: "reason", label: "Reason", required: true },
 ];
 
-type Correction = { mode: "reverse" | "adjust"; id: string; label: string; amount: string };
+type Correction = { mode: "reverse" | "adjust"; id: string; label: string; amount: string; amountCents?: number };
+
+/** "Reverse part" (payments, income): the amount taken back, more than zero
+ * and less than the original; the rest stays posted as a new record. */
+function partialRules(originalCents: number | undefined): DesignFormRule[] {
+  return [
+    {
+      name: "amountDollars",
+      label: "Amount to reverse (USD)",
+      required: true,
+      check: (value) => {
+        const cents = dollarsToCents(value);
+        if (cents === null || cents <= 0) return "Enter the amount to reverse, for example 1.00.";
+        if (originalCents !== undefined && cents >= originalCents) {
+          return "Must be less than the original. To reverse all of it, choose Reverse in full.";
+        }
+        return null;
+      },
+    },
+    { name: "reason", label: "Reason", required: true },
+  ];
+}
 
 /** Runs a direct-call action; resolves to an error message or null. */
 async function call(action: () => Promise<{ ok: true } | { ok: false; error: { message: string } }>): Promise<string | null> {
@@ -76,35 +97,44 @@ function CorrectionDialog({
   reverse,
   adjust,
   switchable = false,
+  partial = false,
 }: {
   correction: Correction | null;
   noun: "payment" | "income" | "expense";
   onClose: () => void;
   reverse: (id: string, reason: string) => Promise<string | null>;
+  /** The second correction: "Reverse part" when `partial`, else the
+   * existing "Adjust amount" (expenses). */
   adjust: (id: string, reason: string, cents: number) => Promise<string | null>;
   /** One "Reverse" row action (design `pay` table) that offers both
-   * corrections inside the dialog: reverse in full, or adjust the amount. */
+   * corrections inside the dialog: reverse in full, or the second one. */
   switchable?: boolean;
+  /** Payments and income: the second correction reverses PART of the
+   * record and keeps the rest posted, instead of the old adjust. */
+  partial?: boolean;
 }) {
   const router = useRouter();
   const [chosen, setChosen] = useState<{ id: string; mode: Correction["mode"] } | null>(null);
   const mode = switchable && chosen && chosen.id === correction?.id ? chosen.mode : correction?.mode;
   const adjusting = mode === "adjust";
+  const title = adjusting ? (partial ? `Reverse part of ${noun}` : `Adjust ${noun}`) : `Reverse ${noun}`;
   return (
     <ActionDialog
       open={correction !== null}
       onOpenChange={(open) => !open && onClose()}
-      title={`${adjusting ? "Adjust" : "Reverse"} ${noun}`}
+      title={title}
       description={
         adjusting
-          ? "The original is reversed and a corrected record is added in its place. A reason is required."
+          ? partial
+            ? "Only the amount you enter is reversed. The rest stays posted as a new record on the same date. A reason is required."
+            : "The original is reversed and a corrected record is added in its place. A reason is required."
           : "The original stays on record and a linked reversal is added. A reason is required."
       }
       summary={correction ? [{ label: noun === "payment" ? "Payment" : "Record", value: correction.label }, { label: "Amount", value: correction.amount }] : undefined}
-      submitLabel={adjusting ? `Adjust ${noun}` : `Reverse ${noun}`}
-      pendingLabel={adjusting ? "Adjusting…" : "Reversing…"}
-      danger={!adjusting}
-      rules={adjusting ? ADJUST_RULES : REASON_RULES}
+      submitLabel={adjusting ? (partial ? "Reverse part" : `Adjust ${noun}`) : `Reverse ${noun}`}
+      pendingLabel={adjusting && !partial ? "Adjusting…" : "Reversing…"}
+      danger={!adjusting || partial}
+      rules={adjusting ? (partial ? partialRules(correction?.amountCents) : ADJUST_RULES) : REASON_RULES}
       run={(data) => {
         const reason = String(data.get("reason") ?? "").trim();
         if (!correction) return Promise.resolve(null);
@@ -113,7 +143,11 @@ function CorrectionDialog({
           : reverse(correction.id, reason);
       }}
       onDone={() => {
-        showSuccessToast(`${noun.charAt(0).toUpperCase()}${noun.slice(1)} ${adjusting ? "adjusted" : "reversed"}.`);
+        showSuccessToast(
+          adjusting && partial
+            ? "Part reversed. The rest stays posted."
+            : `${noun.charAt(0).toUpperCase()}${noun.slice(1)} ${adjusting ? "adjusted" : "reversed"}.`,
+        );
         onClose();
         router.refresh();
       }}
@@ -126,7 +160,7 @@ function CorrectionDialog({
                 {(
                   [
                     ["reverse", "Reverse in full"],
-                    ["adjust", "Adjust amount"],
+                    ["adjust", partial ? "Reverse part" : "Adjust amount"],
                   ] as const
                 ).map(([value, label]) => (
                   <label
@@ -148,7 +182,12 @@ function CorrectionDialog({
             </DField>
           )}
           {adjusting && (
-            <DField label="Corrected amount (USD)" name="amountDollars" required error={errors.amountDollars}>
+            <DField
+              label={partial ? "Amount to reverse (USD)" : "Corrected amount (USD)"}
+              name="amountDollars"
+              required
+              error={errors.amountDollars}
+            >
               <input
                 type="text"
                 inputMode="decimal"
@@ -167,7 +206,15 @@ function CorrectionDialog({
   );
 }
 
-function CorrectionButtons({ onReverse, onAdjust }: { onReverse: () => void; onAdjust: () => void }) {
+function CorrectionButtons({
+  onReverse,
+  onAdjust,
+  adjustLabel = "Adjust",
+}: {
+  onReverse: () => void;
+  onAdjust: () => void;
+  adjustLabel?: string;
+}) {
   return (
     <>
       <button type="button" className={ROW_BTN_DANGER} onClick={onReverse}>
@@ -175,7 +222,7 @@ function CorrectionButtons({ onReverse, onAdjust }: { onReverse: () => void; onA
         Reverse
       </button>
       <button type="button" className={ROW_BTN} onClick={onAdjust}>
-        Adjust
+        {adjustLabel}
       </button>
     </>
   );
@@ -331,8 +378,16 @@ export function PaymentsTable({
                       <button
                         type="button"
                         className={ROW_BTN_DANGER}
-                        title="Reverse in full, or adjust the amount"
-                        onClick={() => setCorrection({ mode: "reverse", id: payment.id, label, amount: formatMoney(payment.amountCents, payment.currency) })}
+                        title="Reverse in full, or reverse part of it"
+                        onClick={() =>
+                          setCorrection({
+                            mode: "reverse",
+                            id: payment.id,
+                            label,
+                            amount: formatMoney(payment.amountCents, payment.currency),
+                            amountCents: payment.amountCents,
+                          })
+                        }
                       >
                         <Icon name="autorenew" width={16} height={16} />
                         Reverse
@@ -349,9 +404,10 @@ export function PaymentsTable({
         correction={correction}
         noun="payment"
         switchable
+        partial
         onClose={() => setCorrection(null)}
         reverse={(id, reason) => call(() => reverseStudentPaymentAction(id, reason))}
-        adjust={(id, reason, cents) => call(() => adjustStudentPaymentAction(id, reason, cents))}
+        adjust={(id, reason, cents) => call(() => partiallyReverseStudentPaymentAction(id, reason, cents))}
       />
     </>
   );
@@ -410,11 +466,18 @@ export function IncomeTable({
                 </td>
                 {canReverse && (
                   <td className={`${rtTd} text-right`} data-actions="">
-                    {record.status === "posted" && !reversalRow && (
+                    {record.status === "posted" && !reversalRow && record.fromBookSale && (
+                      // Corrected with a Refund on the sale (the server refuses a reversal).
+                      <span className="text-xs text-muted">Refund in Books</span>
+                    )}
+                    {record.status === "posted" && !reversalRow && !record.fromBookSale && (
                       <span className="inline-flex flex-wrap items-center justify-end gap-2">
                         <CorrectionButtons
+                          adjustLabel="Reverse part"
                           onReverse={() => setCorrection({ mode: "reverse", id: record.id, label: record.category, amount })}
-                          onAdjust={() => setCorrection({ mode: "adjust", id: record.id, label: record.category, amount })}
+                          onAdjust={() =>
+                            setCorrection({ mode: "adjust", id: record.id, label: record.category, amount, amountCents: record.amountCents })
+                          }
                         />
                       </span>
                     )}
@@ -428,9 +491,10 @@ export function IncomeTable({
       <CorrectionDialog
         correction={correction}
         noun="income"
+        partial
         onClose={() => setCorrection(null)}
         reverse={(id, reason) => call(() => reverseIncomeRecordAction(id, reason))}
-        adjust={(id, reason, cents) => call(() => adjustIncomeRecordAction(id, reason, cents))}
+        adjust={(id, reason, cents) => call(() => partiallyReverseIncomeRecordAction(id, reason, cents))}
       />
     </>
   );

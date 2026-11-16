@@ -27,7 +27,7 @@ import {
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { dollarsToCents } from "@/lib/ui/money";
-import { adjustStudentPayment, reverseStudentPayment } from "./finance-reversals";
+import { partiallyReverseStudentPayment, reverseStudentPayment } from "./finance-reversals";
 import { issueReceipt } from "./student-payments";
 import { withdrawStudentFromBatch } from "./batch-assignments";
 import {
@@ -3606,17 +3606,20 @@ describe("refund basis — what counts as paid for a course (feeds the refund ca
     expect(await paidFor(context, fixture.enrollmentId)).toBe(2_000);
   });
 
-  it("an adjusted fee-period payment drops out entirely (existing adjustment model: the corrected row carries no allocation)", async () => {
+  it("a partly reversed fee-period payment keeps paying the same fees with what remains", async () => {
     const fixture = await setupFixture();
     const { context } = await addActingUser(fixture.academyId, "manager");
     await scheduledEnrollment(fixture, context, fixture.enrollmentId, 10_000);
     const payment = await pay(context, fixture, fixture.enrollmentId, 3_000);
 
-    const adjusted = await adjustStudentPayment(context, payment.id, "Was 2,500.", 2_500);
-    expect(adjusted.ok).toBe(true);
-    // Pins the current behaviour the refund cap relies on: never MORE than
-    // what remains approved-allocated, so a cap can't exceed money held.
-    expect(await paidFor(context, fixture.enrollmentId)).toBe(0);
+    const partial = await partiallyReverseStudentPayment(context, payment.id, "500 was entered by mistake.", 500);
+    expect(partial.ok).toBe(true);
+    // The 2,500 remainder carries the original's allocations (oldest
+    // installment first), so the enrollment counts exactly 2,500 paid.
+    expect(await paidFor(context, fixture.enrollmentId)).toBe(2_500);
+    if (!partial.ok || !partial.remainder) return;
+    const carried = await db.select().from(paymentAllocations).where(eq(paymentAllocations.studentPaymentId, partial.remainder.id));
+    expect(carried.reduce((n, row) => n + row.amountCents, 0)).toBe(2_500);
   });
 
   it("withdrawing keeps an issued receipt exactly as it was", async () => {

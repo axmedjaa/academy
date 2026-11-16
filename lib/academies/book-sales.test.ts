@@ -22,6 +22,9 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { createBook } from "./books";
 import { addBookSalePayment, computeBookSalePricing, createBookSale, listBookSales, refundBookSale } from "./book-sales";
+import { getFinanceReports, subtractByCurrency } from "./finance-reports";
+import { partiallyReverseIncomeRecord, reverseIncomeRecord } from "./finance-reversals";
+import { listIncomeRecords } from "./income-records";
 
 // `createBook` (used by `insertBookDirect` below) now requires a verified
 // cover — same mock pattern as lib/academies/books.test.ts.
@@ -74,6 +77,8 @@ async function createPlan(): Promise<string> {
       maxCourses: 10,
       maxStorageBytes: 1_073_741_824,
       reportsLevel: "basic",
+      // getFinanceReports (refund-netting tests below) is a plan feature.
+      advancedReportsEnabled: true,
     })
     .returning({ id: subscriptionPlans.id });
   createdPlanIds.push(plan.id);
@@ -462,5 +467,129 @@ describe("listBookSales — history enrichment", () => {
     const [payment] = await db.select().from(bookSalePayments).where(eq(bookSalePayments.bookSaleId, sale.sale.id));
     expect(payment.paidAt.toISOString()).toBe(backdated.toISOString());
     expect(payment.createdAt.toISOString()).not.toBe(backdated.toISOString());
+  });
+});
+
+describe("book refunds and Finance income", () => {
+  async function incomeLinkedToSale(saleId: string): Promise<string> {
+    const [payment] = await db.select().from(bookSalePayments).where(eq(bookSalePayments.bookSaleId, saleId));
+    if (!payment?.incomeRecordId) throw new Error("expected a linked income record");
+    return payment.incomeRecordId;
+  }
+
+  it("a book refund lowers Finance income (net), keeping gross and the refund visible", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 3000, 5);
+    const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "xasan", quantity: 1, amountPaidCents: 3000, method: "cash" });
+    if (!sale.ok) throw new Error("expected ok");
+
+    const before = await getFinanceReports(fixture.managerContext);
+    expect(before.ok).toBe(true);
+    if (before.ok && before.report.income.visible) {
+      expect(before.report.income.totalsByCurrency).toEqual([{ currency: "USD", amountCents: 3000, count: 1 }]);
+      expect(before.report.income.bookRefunds.count).toBe(0);
+    }
+
+    const refund = await refundBookSale(fixture.managerContext, { bookSaleId: sale.sale.id, amountCents: 3000, reason: "Returned", returnedQuantity: 1 });
+    expect(refund.ok).toBe(true);
+
+    const after = await getFinanceReports(fixture.managerContext);
+    expect(after.ok).toBe(true);
+    if (!after.ok || !after.report.income.visible) throw new Error("expected visible income");
+    expect(after.report.income.totalsByCurrency).toEqual([{ currency: "USD", amountCents: 0, count: 1 }]);
+    expect(after.report.income.grossByCurrency).toEqual([{ currency: "USD", amountCents: 3000, count: 1 }]);
+    expect(after.report.income.bookRefunds).toEqual({ count: 1, totalsByCurrency: [{ currency: "USD", amountCents: 3000, count: 1 }] });
+
+    // The original income record itself is never changed by a refund.
+    const [income] = await db.select().from(incomeRecords).where(eq(incomeRecords.id, await incomeLinkedToSale(sale.sale.id)));
+    expect(income.status).toBe("posted");
+    expect(income.amountCents).toBe(3000);
+  });
+
+  it("Finance refuses to reverse or adjust income posted by a book sale, and the list flags it", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 3000, 5);
+    const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "xasan", quantity: 1, amountPaidCents: 3000, method: "cash" });
+    if (!sale.ok) throw new Error("expected ok");
+    const incomeId = await incomeLinkedToSale(sale.sale.id);
+
+    const reversed = await reverseIncomeRecord(fixture.managerContext, incomeId, "test");
+    expect(reversed.ok).toBe(false);
+    if (!reversed.ok) {
+      expect(reversed.error.code).toBe("invalid_state");
+      expect(reversed.error.message).toContain("Record a refund on the sale in Books");
+    }
+    const adjusted = await partiallyReverseIncomeRecord(fixture.managerContext, incomeId, "test", 1000);
+    expect(adjusted.ok).toBe(false);
+
+    const [income] = await db.select().from(incomeRecords).where(eq(incomeRecords.id, incomeId));
+    expect(income.status).toBe("posted");
+    const reversalRows = await db.select().from(incomeRecords).where(eq(incomeRecords.reversedRecordId, incomeId));
+    expect(reversalRows).toHaveLength(0);
+
+    const listed = await listIncomeRecords(fixture.managerContext);
+    expect(listed.ok).toBe(true);
+    if (listed.ok) expect(listed.records.find((record) => record.id === incomeId)?.fromBookSale).toBe(true);
+  });
+
+  it("a payment whose income was already reversed in Finance cannot be refunded again", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 3000, 5);
+    const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "xasan", quantity: 1, amountPaidCents: 3000, method: "cash" });
+    if (!sale.ok) throw new Error("expected ok");
+    // A reversal recorded before the block above existed (production "ecell").
+    await db.update(incomeRecords).set({ status: "reversed" }).where(eq(incomeRecords.id, await incomeLinkedToSale(sale.sale.id)));
+
+    const refund = await refundBookSale(fixture.managerContext, { bookSaleId: sale.sale.id, amountCents: 3000, reason: "Would double count" });
+    expect(refund.ok).toBe(false);
+    if (!refund.ok) expect(refund.error.code).toBe("conflict");
+    const refunds = await db.select().from(bookSaleRefunds).where(eq(bookSaleRefunds.bookSaleId, sale.sale.id));
+    expect(refunds).toHaveLength(0);
+  });
+
+  it("a refund on a sale whose income was already reversed takes nothing more off income (no negative income)", async () => {
+    // Production "Afoogy": income reversed in Finance, then the sale was
+    // refunded too (before either guard existed) — income showed -$180.
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 3000, 5);
+    const reversedSale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "xasan", quantity: 1, amountPaidCents: 3000, method: "cash" });
+    const normalSale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "ali", quantity: 1, amountPaidCents: 3000, method: "cash" });
+    if (!reversedSale.ok || !normalSale.ok) throw new Error("expected ok");
+    await db.update(incomeRecords).set({ status: "reversed" }).where(eq(incomeRecords.id, await incomeLinkedToSale(reversedSale.sale.id)));
+    await db.insert(bookSaleRefunds).values({
+      academyId: fixture.academyId,
+      bookSaleId: reversedSale.sale.id,
+      amountCents: 3000,
+      reason: "Legacy double correction",
+      recordedBy: fixture.creatorUserId,
+    });
+    // A normal partial refund still nets, up to what is in income.
+    expect((await refundBookSale(fixture.managerContext, { bookSaleId: normalSale.sale.id, amountCents: 1000, reason: "Part back" })).ok).toBe(true);
+
+    const report = await getFinanceReports(fixture.managerContext);
+    expect(report.ok).toBe(true);
+    if (!report.ok || !report.report.income.visible) throw new Error("expected visible income");
+    expect(report.report.income.grossByCurrency).toEqual([{ currency: "USD", amountCents: 3000, count: 1 }]);
+    expect(report.report.income.bookRefunds.totalsByCurrency).toEqual([{ currency: "USD", amountCents: 1000, count: 1 }]);
+    expect(report.report.income.totalsByCurrency).toEqual([{ currency: "USD", amountCents: 2000, count: 1 }]);
+  });
+
+  it("subtractByCurrency nets per currency and keeps currencies only on one side", () => {
+    expect(
+      subtractByCurrency(
+        [
+          { currency: "USD", amountCents: 1500, count: 1 },
+          { currency: "EUR", amountCents: 900, count: 2 },
+        ],
+        [
+          { currency: "USD", amountCents: 1500, count: 1 },
+          { currency: "KES", amountCents: 100, count: 1 },
+        ],
+      ),
+    ).toEqual([
+      { currency: "USD", amountCents: 0, count: 1 },
+      { currency: "EUR", amountCents: 900, count: 2 },
+      { currency: "KES", amountCents: -100, count: 0 },
+    ]);
   });
 });

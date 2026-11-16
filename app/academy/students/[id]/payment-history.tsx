@@ -2,12 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { issueReceiptAction } from "@/lib/academies/student-payments-actions";
-import { adjustStudentPaymentAction, reverseStudentPaymentAction } from "@/lib/academies/finance-reversals-actions";
+import { useRouter } from "next/navigation";
+import { partiallyReverseStudentPaymentAction, reverseStudentPaymentAction } from "@/lib/academies/finance-reversals-actions";
 import { formatDate } from "@/lib/ui/date";
 import { dollarsToCents, formatMoney } from "@/lib/ui/money";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { Badge, LinkButton, trHover } from "@/app/academy/_shell/ui";
-import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { DataTable, StatRow, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { ActionDialog, DField, ReasonField, controlClass, invalidProps } from "@/app/academy/_shell/design-form";
 import { Icon } from "@/app/academy/_shell/icons";
 import { StudentAvatar } from "../student-avatar";
@@ -40,7 +41,7 @@ const PAGER_BUTTON =
 /**
  * Payments tab (design A02, the academy `payRows` table): Date, Student
  * (who paid and who recorded it), Applies to, Method, Amount, Status and
- * the row's actions — Receipt, plus Reverse / Adjust for those allowed.
+ * the row's actions — Receipt, plus Reverse / Reverse part for those allowed.
  * Reference and notes stay on the row under "Applies to". Stacks into one
  * card per payment where the seven columns do not fit (design: below
  * about 1,030px of content), and pages at six rows.
@@ -65,6 +66,7 @@ export function PaymentHistoryPanel({
   const [, startIssue] = useTransition();
   const [issuedReceipts, setIssuedReceipts] = useState<Map<string, { id: string; receiptNumber: string }>>(new Map());
   const [changed, setChanged] = useState<Map<string, PaymentHistoryRow["status"]>>(new Map());
+  const router = useRouter();
   const [acting, setActing] = useState<{ row: PaymentHistoryRow; mode: "reverse" | "adjust" } | null>(null);
 
   const pages = Math.max(1, Math.ceil(rows.length / PAGE_ROWS));
@@ -200,7 +202,7 @@ export function PaymentHistoryPanel({
                           className={ROW_ACTION}
                           onClick={() => setActing({ row, mode: "adjust" })}
                         >
-                          Adjust
+                          Reverse part
                         </button>
                       </>
                     )}
@@ -231,27 +233,34 @@ export function PaymentHistoryPanel({
           key={`${acting.row.paymentId}-${acting.mode}`}
           open
           onOpenChange={(open) => !open && setActing(null)}
-          title={acting.mode === "reverse" ? "Reverse payment" : "Adjust payment"}
+          title={acting.mode === "reverse" ? "Reverse payment" : "Reverse part of payment"}
           description={
             acting.mode === "reverse"
               ? "The original stays on record and a linked reversal is added. A reason is required."
-              : "The original is reversed and a corrected payment is recorded in its place. A reason is required."
+              : "Only the amount you enter is reversed. The rest stays posted as a new payment on the same date, paying the same fees. A reason is required."
           }
           summary={[
             { label: "Payment", value: `${formatDate(acting.row.receivedAt)} · ${formatMoney(acting.row.amountCents, acting.row.currency)}` },
             { label: "Applies to", value: acting.row.appliesTo },
           ]}
-          submitLabel={acting.mode === "reverse" ? "Reverse payment" : "Adjust payment"}
-          pendingLabel={acting.mode === "reverse" ? "Reversing…" : "Adjusting…"}
-          danger={acting.mode === "reverse"}
+          submitLabel={acting.mode === "reverse" ? "Reverse payment" : "Reverse part"}
+          pendingLabel="Reversing…"
+          danger
           rules={[
             ...(acting.mode === "adjust"
               ? [
                   {
                     name: "amount",
-                    label: "Corrected amount",
+                    label: "Amount to reverse",
                     required: true,
-                    check: (value: string) => (dollarsToCents(value) === null ? "Enter a valid corrected amount." : null),
+                    check: (value: string) => {
+                      const cents = dollarsToCents(value);
+                      if (cents === null || cents <= 0) return "Enter the amount to reverse, for example 1.00.";
+                      if (cents >= acting.row.amountCents) {
+                        return "Must be less than the payment. To reverse all of it, use Reverse.";
+                      }
+                      return null;
+                    },
                   },
                 ]
               : []),
@@ -261,20 +270,22 @@ export function PaymentHistoryPanel({
             const reason = String(data.get("reason") ?? "").trim();
             const result =
               acting.mode === "adjust"
-                ? await adjustStudentPaymentAction(acting.row.paymentId, reason, dollarsToCents(String(data.get("amount") ?? ""))!)
+                ? await partiallyReverseStudentPaymentAction(acting.row.paymentId, reason, dollarsToCents(String(data.get("amount") ?? ""))!)
                 : await reverseStudentPaymentAction(acting.row.paymentId, reason);
             return result.ok ? null : result.error.message;
           }}
           onDone={() => {
             setChanged((prev) => new Map(prev).set(acting.row.paymentId, "reversed"));
-            showSuccessToast(acting.mode === "adjust" ? "Payment adjusted." : "Payment reversed.");
+            showSuccessToast(acting.mode === "adjust" ? "Part reversed. The rest stays posted." : "Payment reversed.");
             setActing(null);
+            // Shows the new remainder payment, the reversal row and updated totals.
+            router.refresh();
           }}
         >
           {({ errors, blur }) => (
             <>
               {acting.mode === "adjust" && (
-                <DField label={`Corrected amount (${acting.row.currency})`} name="amount" required error={errors.amount}>
+                <DField label={`Amount to reverse (${acting.row.currency})`} name="amount" required error={errors.amount}>
                   <input
                     name="amount"
                     inputMode="decimal"
@@ -313,6 +324,55 @@ export interface RefundHistoryRow {
  * academy returned, listed apart from payments so a refund is never read
  * as money received or as a reversal. Hidden when there are none.
  */
+/**
+ * Paid / Refunded / Net for this student: posted payments, minus every
+ * refund given back (course or program, on withdrawal). The payments
+ * themselves stay posted — a refund is its own record — so the net is the
+ * money the academy actually kept. One line per currency.
+ */
+export function PaymentTotalsStrip({ payments, refunds }: { payments: PaymentHistoryRow[]; refunds: RefundHistoryRow[] }) {
+  const byCurrency = new Map<string, { paid: number; refunded: number; posted: number; refundCount: number }>();
+  const entry = (currency: string) => {
+    let row = byCurrency.get(currency);
+    if (!row) {
+      row = { paid: 0, refunded: 0, posted: 0, refundCount: 0 };
+      byCurrency.set(currency, row);
+    }
+    return row;
+  };
+  for (const payment of payments) {
+    if (payment.status !== "approved") continue;
+    const row = entry(payment.currency);
+    row.paid += payment.amountCents;
+    row.posted += 1;
+  }
+  for (const refund of refunds) {
+    const row = entry(refund.currency);
+    row.refunded += refund.amountCents;
+    row.refundCount += 1;
+  }
+  if (byCurrency.size === 0) return null;
+  const totals = [...byCurrency.entries()];
+  const line = (pick: (row: { paid: number; refunded: number }) => number) =>
+    totals.map(([currency, row]) => formatMoney(pick(row), currency)).join(" + ");
+  const posted = totals.reduce((n, [, row]) => n + row.posted, 0);
+  const refundCount = totals.reduce((n, [, row]) => n + row.refundCount, 0);
+  return (
+    <StatRow
+      items={[
+        { label: "Paid", value: line((row) => row.paid), hint: `${posted} posted`, icon: "payments" },
+        {
+          label: "Refunded",
+          value: line((row) => row.refunded),
+          hint: refundCount === 0 ? "no refunds" : `${refundCount} refund${refundCount === 1 ? "" : "s"}`,
+          icon: "autorenew",
+        },
+        { label: "Net paid", value: line((row) => row.paid - row.refunded), hint: "paid minus refunds", icon: "bank" },
+      ]}
+    />
+  );
+}
+
 export function RefundHistoryPanel({ rows }: { rows: RefundHistoryRow[] }) {
   if (rows.length === 0) return null;
   return (
