@@ -31,9 +31,10 @@ test.describe("Cross-tenant isolation", () => {
 
     // Proves the id is real and the row is genuinely viewable by its own
     // tenant — the necessary control for the IDOR test below.
-    await expect(page.getByText(ACADEMY_B.batchName)).toBeVisible();
-    // The batch code leads the page heading ("CODE, Course").
-    await expect(page.getByRole("heading", { level: 1, name: new RegExp(ACADEMY_B.batchCode) })).toBeVisible();
+    // The page heading is the batch's own name; its code is listed in the
+    // Batch details card (the code also appears in the line under the title).
+    await expect(page.getByRole("heading", { level: 1, name: ACADEMY_B.batchName })).toBeVisible();
+    await expect(page.getByRole("definition").filter({ hasText: new RegExp(`^${ACADEMY_B.batchCode}$`) })).toBeVisible();
   });
 
   test("Academy A's student list never contains Academy B's students", async ({ page }) => {
