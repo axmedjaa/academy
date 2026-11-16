@@ -371,7 +371,7 @@ function SellBookForm({ initialBookId, onCancel, onDone }: { initialBookId?: str
             <option value="">Choose a book</option>
             {sellable.map((b) => (
               <option key={b.id} value={b.id}>
-                {b.name}, {formatMoney(b.priceCents, b.currency)}, {b.stockQuantity} left
+                {b.name}
               </option>
             ))}
           </select>
@@ -707,11 +707,28 @@ function BookOrderForm({ initialStudentId, onCancel, onSaved }: { initialStudent
                         <option value="">Choose a book</option>
                         {orderable.map((b) => (
                           <option key={b.id} value={b.id}>
-                            {b.name}, {formatMoney(b.priceCents, b.currency)}, {b.stockQuantity} in stock
+                            {b.name}
                           </option>
                         ))}
                       </select>
                     </DField>
+                    {line.book && (
+                      // Shown once a book is chosen (the dropdown lists names only).
+                      <p className="mt-1.5 flex flex-wrap gap-x-3 text-xs tabular-nums text-muted">
+                        <span
+                          className={`font-semibold ${
+                            line.book.stockQuantity === 0
+                              ? "text-[#B91C1C]"
+                              : line.quantityN !== null && line.quantityN > line.book.stockQuantity
+                                ? "text-warning"
+                                : "text-success"
+                          }`}
+                        >
+                          {line.book.stockQuantity === 0 ? "Out of stock" : `${line.book.stockQuantity} in stock`}
+                        </span>
+                        <span>{m(line.book.priceCents)} each</span>
+                      </p>
+                    )}
                   </div>
                   <DField label="Quantity" name={`qty-${i}`} required error={errors[`qty-${i}`]}>
                     <input inputMode="numeric" value={line.quantity} onChange={(e) => setLine(line.key, { quantity: e.target.value })} className={controlClass(Boolean(errors[`qty-${i}`]))} {...invalidProps(`qty-${i}`, errors[`qty-${i}`])} />
