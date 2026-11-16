@@ -459,18 +459,8 @@ describe("reverseStudentPayment — mechanics, state, reason, self-reversal, aud
     expect(audit.reason).toBe("Recorded it twice.");
   });
 
-  it("a Finance Officer (manage-level) can't reverse a payment a colleague recorded", async () => {
-    const { academyId, studentId } = await setupAcademy("manager");
-    const recorder = await addActingUser(academyId, "finance_officer");
-    const colleague = await addActingUser(academyId, "finance_officer");
-    const paymentId = await insertPaymentDirect(academyId, studentId, recorder.userId, "approved");
-
-    const result = await reverseStudentPayment(colleague.context, paymentId, "Not mine.");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-    const [still] = await db.select().from(studentPayments).where(eq(studentPayments.id, paymentId));
-    expect(still.status).toBe("approved");
-  });
+  // Removed: this case needs the retired Finance Officer role, which migration 0044 forbids in the
+  // database (academy_memberships_role_not_retired). No assignable role has that permission level.
 
   it("writes an audit row with before/after status and the reason", async () => {
     const { academyId, studentId, recorderUserId } = await setupAcademy("manager");
@@ -746,15 +736,8 @@ describe("adjustStudentPayment", () => {
     if (result.ok) expect(result.reversal.amountCents).toBe(4_000);
   });
 
-  it("still requires full authority to adjust someone else's payment", async () => {
-    const { academyId, studentId, recorderUserId } = await setupAcademy("finance_officer");
-    const selfRecorder = await addActingUser(academyId, "finance_officer");
-    const paymentId = await insertPaymentDirect(academyId, studentId, recorderUserId, "approved");
-
-    const result = await adjustStudentPayment(selfRecorder.context, paymentId, "Trying to adjust.", 1_000);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
+  // Removed: this case needs the retired Finance Officer role, which migration 0044 forbids in the
+  // database (academy_memberships_role_not_retired). No assignable role has that permission level.
 });
 
 // =============================================================================
@@ -992,21 +975,8 @@ describe("reverseExpenseRecord — mechanics, state, reason, self-reversal, audi
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
-  it("a Finance Officer can adjust their own expense but not a colleague's", async () => {
-    const { academyId } = await setupAcademy("manager");
-    const mine = await addActingUser(academyId, "finance_officer");
-    const colleague = await addActingUser(academyId, "finance_officer");
-    const ownId = await insertExpenseDirect(academyId, mine.userId, "approved");
-    const theirsId = await insertExpenseDirect(academyId, colleague.userId, "approved");
-
-    const own = await adjustExpenseRecord(mine.context, ownId, "Receipt said 100.", 10_000);
-    expect(own.ok).toBe(true);
-    const theirs = await adjustExpenseRecord(mine.context, theirsId, "Not mine.", 10_000);
-    expect(theirs.ok).toBe(false);
-    if (!theirs.ok) expect(theirs.error.code).toBe("forbidden");
-    const [still] = await db.select().from(expenseRecords).where(eq(expenseRecords.id, theirsId));
-    expect(still.status).toBe("approved");
-  });
+  // Removed: this case needs the retired Finance Officer role, which migration 0044 forbids in the
+  // database (academy_memberships_role_not_retired). No assignable role has that permission level.
 
   it("writes an audit row with before/after status and the reason", async () => {
     const { academyId, recorderUserId } = await setupAcademy("academy_admin");

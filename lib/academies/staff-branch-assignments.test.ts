@@ -384,40 +384,29 @@ describe("listAssignedBranches", () => {
   });
 });
 
-describe("listStaff branch-scoped filter (Item 36) — Trainer 'View self/assigned' vs. academy-wide roles", () => {
-  it("a Trainer's listStaff returns only self + branch-shared staff", async () => {
+// Trainer rule: a Trainer has no Staff access at all (academy.staff "none"),
+// so listStaff refuses them outright — stricter than the earlier
+// "self + branch-shared staff" view. Academy-wide roles are unchanged.
+describe("listStaff — Trainer rule vs. academy-wide roles", () => {
+  it("a Trainer's listStaff is refused, even with colleagues in a shared branch", async () => {
     const { academyId, userId: trainerUserId, context } = await setupAcademy("trainer");
     const sharedBranch = await insertBranchDirect(academyId);
-    const otherBranch = await insertBranchDirect(academyId);
-
-    const trainerProfileId = await giveActorStaffProfile(academyId, trainerUserId, [sharedBranch]);
-
+    await giveActorStaffProfile(academyId, trainerUserId, [sharedBranch]);
     const sharedColleague = await createTargetStaff(academyId);
     await assignBranchesDirect(academyId, sharedColleague.staffProfileId, [sharedBranch]);
 
-    const unsharedColleague = await createTargetStaff(academyId);
-    await assignBranchesDirect(academyId, unsharedColleague.staffProfileId, [otherBranch]);
-
-    const unassignedColleague = await createTargetStaff(academyId);
-    // (no branch assignment at all for unassignedColleague)
-
     const result = await listStaff(context);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    const ids = result.staff.map((s) => s.id).sort();
-    expect(ids).toEqual([trainerProfileId, sharedColleague.staffProfileId].sort());
-    expect(ids).not.toContain(unsharedColleague.staffProfileId);
-    expect(ids).not.toContain(unassignedColleague.staffProfileId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
-  it("a Trainer with no staff_profiles row of their own sees nothing (defensive empty, not an error)", async () => {
+  it("a Trainer with no staff_profiles row of their own is refused too", async () => {
     const { academyId, context } = await setupAcademy("trainer");
     await createTargetStaff(academyId);
 
     const result = await listStaff(context);
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.staff).toEqual([]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it.each<AcademyRole>(["academy_owner", "academy_admin", "manager"])(
@@ -453,15 +442,14 @@ describe("listStaff branch-scoped filter (Item 36) — Trainer 'View self/assign
     const stranger = await createTargetStaff(academyId);
     await assignBranchesDirect(academyId, stranger.staffProfileId, [strangerBranch]);
 
+    // The list itself is refused (Trainer rule), so the stranger never shows.
     const result = await listStaff(context);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.staff.map((s) => s.id)).not.toContain(stranger.staffProfileId);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
 
-    // The Trainer also has no manage-level access to the stranger's
-    // staffProfileId at all (guessed or not) — assignStaffBranches/
-    // updateStaff both refuse "forbidden" regardless of branch overlap,
-    // since Trainer's academy.staff level is "view", never "manage"/"full".
+    // The Trainer also has no access to the stranger's staffProfileId at
+    // all (guessed or not) — assignStaffBranches/updateStaff both refuse
+    // "forbidden" regardless of branch overlap (academy.staff is "none").
     const guessResult = await assignStaffBranches(context, stranger.staffProfileId, []);
     expect(guessResult.ok).toBe(false);
     if (!guessResult.ok) expect(guessResult.error.code).toBe("forbidden");

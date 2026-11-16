@@ -319,21 +319,8 @@ describe("submitExpenseForApproval — draft -> pending_approval", () => {
     expect(await fetchApprovalRequestForExpense(expenseId)).toBeFalsy();
   });
 
-  it("someone else's legacy draft, submitted by a role without general approve authority, still goes to pending_approval with a pending approval_requests row", async () => {
-    const { academyId, userId } = await setupAcademy("academy_owner");
-    const expenseId = await insertExpenseDirect(academyId, userId, "draft");
-    const other = await addActingUser(academyId, "finance_officer");
-
-    const result = await submitExpenseForApproval(other.context, expenseId);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.record.status).toBe("pending_approval");
-
-    const request = await fetchApprovalRequestForExpense(expenseId);
-    expect(request?.status).toBe("pending");
-    expect(request?.requestedBy).toBe(other.userId);
-    expect(request?.academyId).toBe(academyId);
-  });
+  // Removed: this case needs the retired Finance Officer role, which migration 0044 forbids in the
+  // database (academy_memberships_role_not_retired). No assignable role has that permission level.
 
   it("refuses to submit a non-draft expense with code 'invalid_state'", async () => {
     const { academyId, userId, context } = await setupAcademy("academy_owner");
@@ -474,22 +461,8 @@ describe("approveExpense — pending_approval -> approved", () => {
     },
   );
 
-  it("a self-approve-only role (Finance Officer) still cannot approve a DIFFERENT Finance Officer's submission — self-approval is scoped to their own record, not unrestricted authority", async () => {
-    const submitterAcademy = await setupAcademy("finance_officer");
-    const created = await createLegacyDraft(submitterAcademy.context);
-    expect(created.ok).toBe(true);
-    if (!created.ok) return;
-    const submitted = await submitAsLegacyPending(submitterAcademy.context, created.record.id);
-    expect(submitted.ok).toBe(true);
-
-    // A DIFFERENT Owner in the SAME academy — self-approve-eligible as a
-    // role, but this isn't their own submission, and Owner holds no
-    // GENERAL approve authority.
-    const otherOwner = await addActingUser(submitterAcademy.academyId, "finance_officer");
-    const result = await approveExpense(otherOwner.context, created.record.id);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
+  // Removed: this case needs the retired Finance Officer role, which migration 0044 forbids in the
+  // database (academy_memberships_role_not_retired). No assignable role has that permission level.
 
   it("a real pending expense id belonging to a DIFFERENT academy is rejected as not_found — never approved, even for a same-role self-approve attempt (tenant isolation)", async () => {
     const other = await setupAcademy("academy_owner");
@@ -574,19 +547,8 @@ describe("rejectExpense — pending_approval -> rejected", () => {
     },
   );
 
-  it("a self-approve-only role (Finance Officer) still cannot reject a DIFFERENT Finance Officer's submission", async () => {
-    const submitterAcademy = await setupAcademy("finance_officer");
-    const created = await createLegacyDraft(submitterAcademy.context);
-    expect(created.ok).toBe(true);
-    if (!created.ok) return;
-    const submitted = await submitAsLegacyPending(submitterAcademy.context, created.record.id);
-    expect(submitted.ok).toBe(true);
-
-    const otherOwner = await addActingUser(submitterAcademy.academyId, "finance_officer");
-    const result = await rejectExpense(otherOwner.context, created.record.id, "Not mine to decide.");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
-  });
+  // Removed: this case needs the retired Finance Officer role, which migration 0044 forbids in the
+  // database (academy_memberships_role_not_retired). No assignable role has that permission level.
 
   it("refuses to reject an expense that isn't pending approval with code 'invalid_state'", async () => {
     const owner = await setupAcademy("academy_owner");
@@ -680,16 +642,8 @@ describe("listExpenseRecords — tenant isolation", () => {
     }
   });
 
-  it("Finance Officer (manage on expenses): canCreate, canSelfApprove, but NOT general canApprove", async () => {
-    const { context } = await setupAcademy("finance_officer");
-    const result = await listExpenseRecords(context);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.canCreate).toBe(true);
-      expect(result.canApprove).toBe(false);
-      expect(result.canSelfApprove).toBe(true);
-    }
-  });
+  // Removed: this case needs the retired Finance Officer role, which migration 0044 forbids in the
+  // database (academy_memberships_role_not_retired). No assignable role has that permission level.
 
   it("Trainer rule: a trainer has no expense access at all — listing is refused", async () => {
     const ownerFixture = await setupAcademy("academy_owner");

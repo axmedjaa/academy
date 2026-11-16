@@ -301,7 +301,10 @@ describe("staff assignments and all-branch access", () => {
   });
 
   it("only the owner grants all-branch access, only to Main Branch staff, and it is audited", { timeout: 90_000 }, async () => {
-    const target = await member(X.academyId, "trainer", false, [branchB]);
+    // A branch-limited Manager: a role that can read student charges (the
+    // Trainer rule gives Trainers no finance access), so the widened reach
+    // after the grant is visible below.
+    const target = await member(X.academyId, "manager", false, [branchB]);
 
     const byManager = await setAllBranchAccess(ctx(wideManager.userId), target.staffProfileId, true);
     expect(byManager.ok).toBe(false);

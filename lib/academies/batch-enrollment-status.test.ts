@@ -254,10 +254,11 @@ describe("course enrollment follows the batch status (server-side, every entry p
     auth.current = null;
     expect((await enrollAction({ ok: false }, rosterForm(batchId, studentId))).error?.code).toBe("forbidden");
 
-    auth.current = await addMember(f.academyId, "admissions_officer");
+    // A trainer with no branch in this academy: refused before anything else.
+    auth.current = await addMember(f.academyId, "trainer");
     const viewer = await enrollAction({ ok: false }, rosterForm(batchId, studentId));
     expect(viewer.ok).toBe(false);
-    expect(viewer.error?.code).toBe("forbidden");
+    expect(["forbidden", "not_found"]).toContain(viewer.error?.code);
 
     auth.current = f.owner;
     expect((await enrollAction({ ok: false }, rosterForm(batchId, studentId))).ok).toBe(true);

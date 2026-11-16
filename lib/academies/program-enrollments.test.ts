@@ -680,10 +680,11 @@ describe("program courses leave only with their program", () => {
     const enrolled = await enroll(f, await newStudent(f));
     if (!enrolled.ok) throw new Error(enrolled.error.message);
     const [courseRow] = await db.select().from(batchEnrollments).where(eq(batchEnrollments.programEnrollmentId, enrolled.enrollment.id));
-    const viewer = await addMember(f.academyId, "admissions_officer");
+    // A trainer with no branch in this academy (Admissions Officer is retired).
+    const viewer = await addMember(f.academyId, "trainer");
     const refused = await withdrawStudentFromBatch(viewer, courseRow.id, { reason: "Not allowed" });
     expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.error.code).toBe("forbidden");
+    if (!refused.ok) expect(["forbidden", "not_found"]).toContain(refused.error.code);
     const [after] = await db.select().from(batchEnrollments).where(eq(batchEnrollments.id, courseRow.id));
     expect(after.status).toBe("active");
   });

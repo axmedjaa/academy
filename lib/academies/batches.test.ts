@@ -1038,9 +1038,11 @@ describe("batch status — Edit batch, Archive and Restore", () => {
     expect(row.status).toBe("archived");
   });
 
-  it("only roles that manage batches can change status (trainer and admissions officer can't)", async () => {
+  // Trainer rule: a Trainer can't edit a batch, even in their own branch.
+  // (Admissions Officer was retired in migration 0044 and can't be created.)
+  it("only roles that manage batches can change status (a trainer can't)", async () => {
     const s = await newBatch();
-    for (const role of ["trainer", "admissions_officer"] as const) {
+    for (const role of ["trainer"] as const) {
       const userId = await createUser();
       await addMembership(userId, s.academyId, role);
       await assignUserToBranches(s.academyId, userId, [s.branchId]);
