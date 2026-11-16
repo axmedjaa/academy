@@ -17,6 +17,12 @@ const CATEGORY_ICONS: [RegExp, string, "brand" | "gold" | "slate"][] = [
   [/exam|certificate/i, "workspace_premium", "brand"],
 ];
 
+/** The category's icon alone, for places where a full chip is too heavy
+ * (the expense row's meta line). */
+export function categoryIcon(label: string): string {
+  return CATEGORY_ICONS.find(([pattern]) => pattern.test(label))?.[1] ?? "receipt_long";
+}
+
 export function categoryChip(label: string) {
   const hit = CATEGORY_ICONS.find(([pattern]) => pattern.test(label));
   return <Chip label={label} icon={hit?.[1] ?? "receipt_long"} tone={hit?.[2] ?? "slate"} />;

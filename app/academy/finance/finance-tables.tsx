@@ -36,7 +36,7 @@ import {
   invalidProps,
   type DesignFormRule,
 } from "@/app/academy/_shell/design-form";
-import { categoryChip, methodChip } from "./finance-chips";
+import { categoryIcon, methodChip } from "./finance-chips";
 
 /**
  * Finance tab tables with their row actions (design A13). Every action is
@@ -225,6 +225,42 @@ function CorrectionButtons({
         {adjustLabel}
       </button>
     </>
+  );
+}
+
+/**
+ * The Income and Expenses tables' first cell: what the record was for as
+ * the main line, then a quiet line with its category (icon + name) and who
+ * recorded it. One cell instead of separate Category / Description /
+ * Recorded-by columns, so the row reads in one glance and every other
+ * column holds one short value. Heads the card on narrow screens.
+ */
+function LedgerItemCell({
+  label,
+  title,
+  category,
+  byLine,
+  children,
+}: {
+  label: string;
+  title: string;
+  category: string;
+  byLine: string;
+  children?: ReactNode;
+}) {
+  return (
+    <td className={`${rtTd} min-w-[16rem]`} data-label={label}>
+      <span className="block max-w-[52ch] font-semibold leading-snug text-ink [overflow-wrap:break-word]">{title}</span>
+      <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-snug text-muted">
+        <span className="inline-flex items-center gap-1.5 font-medium text-[#374151]">
+          <Icon name={categoryIcon(category)} width={15} height={15} className="shrink-0 text-brand" />
+          {category}
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>{byLine}</span>
+      </span>
+      {children}
+    </td>
   );
 }
 
@@ -427,16 +463,16 @@ export function IncomeTable({
   const [correction, setCorrection] = useState<Correction | null>(null);
   return (
     <>
+      {/* Same five-column layout as the Expenses table (see there). */}
       <DataTable stackBelow={900}>
         <thead>
           <tr>
-            <th className={rtTh}>Category</th>
-            <th className={rtTh}>Description</th>
-            <th className={rtTh}>Date</th>
-            <th className={`${rtTh} text-right`}>Amount</th>
-            <th className={rtTh}>Status</th>
+            <th className={rtTh}>Income</th>
+            <th className={`${rtTh} w-px whitespace-nowrap`}>Date</th>
+            <th className={`${rtTh} w-px whitespace-nowrap text-right`}>Amount</th>
+            <th className={`${rtTh} w-px whitespace-nowrap`}>Status</th>
             {canReverse && (
-              <th className={rtTh}>
+              <th className={`${rtTh} w-px`}>
                 <span className="sr-only">Actions</span>
               </th>
             )}
@@ -448,30 +484,29 @@ export function IncomeTable({
             const amount = formatMoney(record.amountCents, record.currency);
             return (
               <tr key={record.id} className={trHover}>
-                <td className={rtTd} data-label="Category">
-                  {categoryChip(record.category)}
-                </td>
-                <td className={rtTd} data-label="Description">
-                  {record.description ?? <span className="text-muted">No description</span>}
-                  <span className="block text-xs text-muted">Recorded by {recordedByName}</span>
-                </td>
+                <LedgerItemCell
+                  label="Income"
+                  title={record.description ?? record.category}
+                  category={record.category}
+                  byLine={`by ${recordedByName}`}
+                />
                 <td className={`${rtTd} whitespace-nowrap tabular-nums`} data-label="Date">
                   {formatDate(record.createdAt)}
                 </td>
-                <td className={`${rtTd} text-right font-semibold tabular-nums`} data-label="Amount">
+                <td className={`${rtTd} whitespace-nowrap text-right font-semibold tabular-nums`} data-label="Amount">
                   {amount}
                 </td>
-                <td className={rtTd} data-label="Status">
+                <td className={`${rtTd} whitespace-nowrap`} data-label="Status">
                   <Badge label={ledgerStatus(record.status, reversalRow)} tone={ledgerTone(record.status, reversalRow)} />
                 </td>
                 {canReverse && (
-                  <td className={`${rtTd} text-right`} data-actions="">
+                  <td className={`${rtTd} whitespace-nowrap text-right`} data-actions="">
                     {record.status === "posted" && !reversalRow && record.fromBookSale && (
                       // Corrected with a Refund on the sale (the server refuses a reversal).
                       <span className="text-xs text-muted">Refund in Books</span>
                     )}
                     {record.status === "posted" && !reversalRow && !record.fromBookSale && (
-                      <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                      <span className="inline-flex flex-nowrap items-center justify-end gap-2">
                         <CorrectionButtons
                           adjustLabel="Reverse part"
                           onReverse={() => setCorrection({ mode: "reverse", id: record.id, label: record.category, amount })}
@@ -538,16 +573,18 @@ export function ExpensesTable({
 
   return (
     <>
+      {/* Five columns, not seven: the expense itself (what it was for, its
+          category and who submitted it) reads as one cell, and every other
+          column holds one short value on one line. Below ~900px of content
+          each row becomes a card headed by the expense. */}
       <DataTable stackBelow={900}>
         <thead>
           <tr>
-            <th className={rtTh}>Category</th>
-            <th className={rtTh}>Description</th>
-            <th className={rtTh}>Submitted by</th>
-            <th className={rtTh}>Date</th>
-            <th className={`${rtTh} text-right`}>Amount</th>
-            <th className={rtTh}>Status</th>
-            <th className={rtTh}>
+            <th className={rtTh}>Expense</th>
+            <th className={`${rtTh} w-px whitespace-nowrap`}>Date</th>
+            <th className={`${rtTh} w-px whitespace-nowrap text-right`}>Amount</th>
+            <th className={`${rtTh} w-px whitespace-nowrap`}>Status</th>
+            <th className={`${rtTh} w-px`}>
               <span className="sr-only">Actions</span>
             </th>
           </tr>
@@ -561,29 +598,27 @@ export function ExpensesTable({
             const working = busy && busyId === record.id;
             return (
               <tr key={record.id} className={trHover}>
-                <td className={rtTd} data-label="Category">
-                  {categoryChip(record.category)}
-                </td>
-                <td className={rtTd} data-label="Description">
-                  {record.description ?? <span className="text-muted">No description</span>}
+                <LedgerItemCell
+                  label="Expense"
+                  title={record.description ?? record.category}
+                  category={record.category}
+                  byLine={`by ${submittedByName}`}
+                >
                   {record.status === "rejected" && record.rejectionReason && (
-                    <span className="block text-xs text-[#B91C1C]">Rejected: {record.rejectionReason}</span>
+                    <span className="mt-1.5 block text-[13px] text-[#B91C1C]">Rejected: {record.rejectionReason}</span>
                   )}
-                </td>
-                <td className={rtTd} data-label="Submitted by">
-                  <PersonCell name={submittedByName} />
-                </td>
+                </LedgerItemCell>
                 <td className={`${rtTd} whitespace-nowrap tabular-nums`} data-label="Date">
                   {formatDate(record.createdAt)}
                 </td>
-                <td className={`${rtTd} text-right font-semibold tabular-nums`} data-label="Amount">
+                <td className={`${rtTd} whitespace-nowrap text-right font-semibold tabular-nums`} data-label="Amount">
                   {amount}
                 </td>
-                <td className={rtTd} data-label="Status">
+                <td className={`${rtTd} whitespace-nowrap`} data-label="Status">
                   <Badge label={ledgerStatus(record.status, reversalRow)} tone={ledgerTone(record.status, reversalRow)} />
                 </td>
-                <td className={`${rtTd} text-right`} data-actions="">
-                  <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                <td className={`${rtTd} whitespace-nowrap text-right`} data-actions="">
+                  <span className="inline-flex flex-nowrap items-center justify-end gap-2">
                     {canCreate && record.status === "draft" && (
                       <button
                         type="button"

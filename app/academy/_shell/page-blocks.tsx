@@ -405,11 +405,14 @@ export function StackBar({
 /** Design `stats`: a row of compact metric cards on a 24px gap. */
 export function StatRow({ items }: { items: { label: string; value: ReactNode; hint?: ReactNode; icon: string }[] }) {
   // Design `stat` card: label top left, icon tile top right, the value
-  // large underneath and a muted hint; one row of equal cards when there
-  // is room, two columns on tablets, one on phones.
+  // large underneath and a muted hint. One on phones, two on tablets; on
+  // wider screens at most four per row (each card is at least a quarter of
+  // the row and never under 13rem), wrapping the rest — so six cards read
+  // as 4 + 2 instead of six cramped ones, and fewer cards still share the
+  // row evenly.
   return (
     <div className="@container mb-8">
-      <div className="grid grid-cols-1 gap-6 @[480px]:grid-cols-2 @[880px]:grid-cols-[repeat(auto-fit,minmax(0,1fr))]">
+      <div className="grid grid-cols-1 gap-6 @[480px]:grid-cols-2 @[880px]:grid-cols-[repeat(auto-fit,minmax(max(13rem,calc((100%_-_4.5rem)/4)),1fr))]">
         {items.map((item) => (
           <div key={item.label} className="flex min-w-0 flex-col rounded-card border border-border bg-surface p-5 shadow-card">
             <span className="flex items-start justify-between gap-3">
