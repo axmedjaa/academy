@@ -862,14 +862,14 @@ export async function assignStaffRole(
     case "owner_only":
       return {
         ok: false,
-        error: { code: "forbidden", message: "Only an academy owner can change another owner's role." },
+        error: { code: "forbidden", message: "Only an Academy Owner can change another Academy Owner's role." },
       };
     case "last_owner":
       return {
         ok: false,
         error: {
           code: "conflict",
-          message: "This is the only remaining owner. Promote another member to owner first.",
+          message: "This is the only remaining Academy Owner. Make another member an Academy Owner first.",
         },
       };
     case "ok":
@@ -996,14 +996,14 @@ export async function removeStaffMembership(
     case "owner_only":
       return {
         ok: false,
-        error: { code: "forbidden", message: "Only an academy owner can remove another owner's access." },
+        error: { code: "forbidden", message: "Only an Academy Owner can remove another Academy Owner's access." },
       };
     case "last_owner":
       return {
         ok: false,
         error: {
           code: "conflict",
-          message: "This is the only remaining owner. Promote another member to owner first.",
+          message: "This is the only remaining Academy Owner. Make another member an Academy Owner first.",
         },
       };
     case "ok":

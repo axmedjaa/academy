@@ -9,6 +9,7 @@ import { getStockStatus } from "@/lib/academies/book-stock";
 import {
   confirmBookCoverUploadAction,
   createBookAction,
+  removeBookCoverAction,
   requestBookCoverUploadUrlAction,
   requestNewBookCoverUploadUrlAction,
   updateBookAction,
@@ -19,6 +20,7 @@ import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
 import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
 import { Badge, Button } from "@/app/academy/_shell/ui";
+import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ROW_BTN, ROW_BTN_DANGER, ROW_BTN_PRIMARY } from "@/app/academy/_shell/page-blocks";
 import { StudentPicker, type StudentPickerOption } from "@/app/academy/_shell/student-picker";
@@ -99,7 +101,6 @@ const amountRule = (name: string, label: string, allowZero = false): DesignFormR
 });
 
 const BOOK_RULES: DesignFormRule[] = [
-  { name: "coverKey", label: "Cover image", required: true, check: () => null },
   { name: "name", label: "Title", required: true },
   amountRule("priceDollars", "Price (USD)", true),
   {
@@ -119,7 +120,7 @@ export function AddBookButton() {
         <Icon name="book" width={18} height={18} />
         Add book
       </Button>
-      <DesignDialog open={open} onOpenChange={setOpen} title="Add book" description="A cover image is required.">
+      <DesignDialog open={open} onOpenChange={setOpen} title="Add book" description="A cover image is optional. Books without one show a placeholder.">
         {open && (
           <AddBookForm
             onCancel={() => setOpen(false)}
@@ -163,9 +164,9 @@ function SubjectClassFields({ suggestions, subject, classLevel }: { suggestions?
 export function AddBookForm({ onCancel, onSaved, suggestions }: { onCancel: () => void; onSaved: () => void; suggestions?: BookSuggestions }) {
   const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(BOOK_RULES);
   const [pending, startTransition] = useTransition();
-  // The cover goes to storage as soon as it is chosen (before the book row
-  // exists; see requestNewBookCoverUploadUrl). Create is allowed only once
-  // the upload has finished and returned its key.
+  // The cover is optional. When chosen it goes to storage straight away
+  // (before the book row exists; see requestNewBookCoverUploadUrl), and the
+  // server verifies it on create. Create waits while an upload is running.
   const [coverKey, setCoverKey] = useState<string | null>(null);
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [coverUploading, setCoverUploading] = useState(false);
@@ -186,14 +187,21 @@ export function AddBookForm({ onCancel, onSaved, suggestions }: { onCancel: () =
       }
       await uploadCoverFile(requested.uploadUrl, file);
       setCoverKey(requested.key);
+      if (coverPreview) URL.revokeObjectURL(coverPreview);
       setCoverPreview(URL.createObjectURL(file));
-      // Re-check once the hidden key field has re-rendered.
-      window.setTimeout(blur("coverKey"), 0);
     } catch (err) {
       setCoverError(err instanceof Error && !/fetch/i.test(err.message) ? err.message : NETWORK_ERROR_MESSAGE);
     } finally {
       setCoverUploading(false);
     }
+  }
+
+  // Drop the chosen cover before saving; the book is then created without one.
+  function removeChosenCover() {
+    if (coverPreview) URL.revokeObjectURL(coverPreview);
+    setCoverKey(null);
+    setCoverPreview(null);
+    setCoverError(null);
   }
 
   return (
@@ -223,7 +231,7 @@ export function AddBookForm({ onCancel, onSaved, suggestions }: { onCancel: () =
                 classLevel: text("classLevel"),
                 priceCents: dollarsToCents(String(data.get("priceDollars") ?? ""))!,
                 stockQuantity: Number(data.get("stockQuantity")),
-                coverRef: coverKey!,
+                coverRef: coverKey ?? undefined,
               });
               if (!result.ok) {
                 showServerError(result.error?.message ?? "The book couldn't be added.", [
@@ -244,7 +252,7 @@ export function AddBookForm({ onCancel, onSaved, suggestions }: { onCancel: () =
     >
       <DialogBody>
         <FieldGrid>
-          <DField label="Cover image" name="coverKey" required error={coverError ?? (errors.coverKey ? "Choose a cover image." : undefined)} full>
+          <DField label="Cover image (optional)" name="coverKey" error={coverError ?? undefined} full>
             <input type="hidden" name="coverKey" value={coverKey ?? ""} />
             <span className="flex items-center gap-3.5">
               <span className="flex h-[88px] w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-brand-tint to-[#E9C3CC] text-xs font-semibold text-brand">
@@ -265,9 +273,18 @@ export function AddBookForm({ onCancel, onSaved, suggestions }: { onCancel: () =
                     disabled={coverUploading}
                     onChange={(event) => chooseCover(event.target.files?.[0])}
                     className="absolute inset-0 cursor-pointer opacity-0"
-                    {...invalidProps("coverKey", coverError ?? errors.coverKey)}
+                    {...invalidProps("coverKey", coverError ?? undefined)}
                   />
                 </span>
+                {coverKey && !coverUploading && (
+                  <button
+                    type="button"
+                    onClick={removeChosenCover}
+                    className="w-fit text-sm font-semibold text-danger hover:underline"
+                  >
+                    Remove image
+                  </button>
+                )}
                 <span className="text-xs font-normal text-muted">JPEG, PNG, WebP or AVIF, up to 10 MB.</span>
               </span>
             </span>
@@ -473,7 +490,25 @@ export function EditBookForm({
                     aria-label={`Change the cover of ${book.name}`}
                   />
                 </span>
-                <span className="text-xs font-normal text-muted">The new cover is saved as soon as it uploads.</span>
+                {preview && !uploading && (
+                  <ConfirmButton
+                    label="Remove cover"
+                    variant="danger"
+                    title="Remove this book's cover?"
+                    description={<>{book.name} will show a placeholder instead. You can upload a new cover at any time.</>}
+                    confirmLabel="Remove cover"
+                    className="w-fit"
+                    successMessage="Cover removed."
+                    onConfirm={() => removeBookCoverAction(book.id)}
+                    onSuccess={() => {
+                      setPreview(null);
+                      router.refresh();
+                    }}
+                  />
+                )}
+                <span className="text-xs font-normal text-muted">
+                  Optional. A new or removed cover is saved straight away. JPEG, PNG, WebP or AVIF, up to 10 MB.
+                </span>
               </span>
             </span>
           </DField>

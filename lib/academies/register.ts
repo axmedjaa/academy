@@ -82,7 +82,7 @@ export const registerAcademySchema = z.object({
 
   // Owner account (DESIGN.md §8, step 2) — the academy_owner user created in
   // the same transaction (Phase 1 §2 "Onboarding, end to end", step 1).
-  ownerEmail: z.string().trim().toLowerCase().email("Enter a valid owner email address"),
+  ownerEmail: z.string().trim().toLowerCase().email("Enter a valid Academy Owner email address"),
   ownerPassword: passwordSchema,
 
   // Default branch (DESIGN.md §8, step 3) — every academy gets exactly one
@@ -228,7 +228,7 @@ export async function registerAcademy(
       ok: false,
       error: {
         code: "owner_email_taken",
-        message: "An account with that owner email already exists.",
+        message: "An account with that Academy Owner email already exists.",
       },
     };
   }

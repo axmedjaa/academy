@@ -1,94 +1,147 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { BOOK_ORDER_PAYMENT_STATUS_LABEL, type BookOrderPaymentStatus } from "@/lib/academies/book-order-math";
+import { formatMoney } from "@/lib/ui/money";
 import { PageMessage } from "@/app/academy/_shell/ui";
-import { FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
+import { ClearFilters, DateParamField, FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
 import { getBooksOverview } from "../../books-data";
-import { GatedAction, PillChips } from "../../books-sections";
-import { BTN_SECONDARY, EmptyCard, KpiGrid, Pager, SectionHead, paginate, readParams } from "../../books-ui";
-import { OrderCard } from "../../order-card";
-import { buyerSearchText, sumByCurrency } from "../../books-view";
+import { GatedAction, ToneBadge } from "../../books-sections";
+import { CARD, EmptyCard, KpiGrid, Pager, SectionHead, paginate, readParams } from "../../books-ui";
+import { BUYER_TYPE_LABEL, buyerOrderStatusBadge, formatIsoDate, issueBadge, issueStatusOf, orderNo, orderPaymentBadge, plural, sumByCurrency } from "../../books-view";
 
-const PAGE_SIZE = 6;
+const PAGE_SIZE = 10;
+const PAYMENT_STATUSES: BookOrderPaymentStatus[] = ["unpaid", "partially_paid", "paid"];
 
 /**
- * Student Orders (design B03, step 3): one order per student with several
- * books, its reference, totals and payment progress. Search by student
- * name, number or order reference; filter by campaign and payment status.
- * Members limited to some branches see only their branches' orders.
+ * Orders: every book order from a Student or an Other Buyer, in one list —
+ * order number, buyer and buyer type, copies, total, paid, balance, and the
+ * payment, order and giving statuses. Search by order number, buyer, student
+ * number, phone or email; filter by buyer type, payment status, order status
+ * and order date. Create Order opens the one order form. Figures come from
+ * the server (book-orders.ts), already limited to the member's branches.
  */
-export default async function StudentOrdersPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+export default async function OrdersPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const overview = await getBooksOverview();
   if (!overview) redirect("/login");
-  const { preordersResult } = overview;
-  if (!preordersResult.ok) {
-    return <PageMessage title={preordersResult.error.code === "blocked" ? "Access unavailable" : "Access denied"} message={preordersResult.error.message} />;
+  const { ordersResult } = overview;
+  if (!ordersResult.ok) {
+    return <PageMessage title={ordersResult.error.code === "blocked" ? "Access unavailable" : "Access denied"} message={ordersResult.error.message} />;
   }
   const params = await searchParams;
   const { get, page } = readParams(params);
-  const q = get("q").toLowerCase();
-  const campaign = get("campaign");
+  const q = get("q").toLowerCase().replace(/^#/, "");
+  const type = get("type");
   const pay = get("pay");
-  const { orders, campaigns } = preordersResult.overview;
+  const status = get("status");
+  const from = get("from");
+  const to = get("to");
+  const { orders } = ordersResult.overview;
 
-  const base = orders.filter(
-    (o) => (!campaign || o.campaignId === campaign) && (!q || buyerSearchText(o).includes(q)),
+  const rows = orders.filter(
+    (o) =>
+      (!q || `${o.orderNumber} ${o.buyerName} ${o.studentNumber ?? ""} ${o.buyerPhone ?? ""} ${o.buyerEmail ?? ""}`.toLowerCase().includes(q)) &&
+      (!type || o.buyerType === type) &&
+      (!pay || (o.status !== "cancelled" && o.paymentStatus === pay)) &&
+      (!status || (status === "cancelled" ? o.status === "cancelled" : o.status !== "cancelled")) &&
+      (!from || o.orderDate >= from) &&
+      (!to || o.orderDate <= to),
   );
-  const rows = base.filter((o) => !pay || o.paymentStatus === pay);
-  const visible = paginate(rows, page, PAGE_SIZE);
-  const money = (pick: (o: (typeof rows)[number]) => number) => sumByCurrency(rows.map((o) => ({ cents: pick(o), currency: o.currency })));
+  const open = orders.filter((o) => o.status !== "cancelled");
+  const filtered = Boolean(q || type || pay || status || from || to);
 
   return (
     <>
-      <SectionHead title="Student Orders" description="One order can include several books. Record payments on each order." />
+      <SectionHead title="Orders" description="Books bought by students and other buyers. Open an order to see its payments and the books given." />
       <KpiGrid
         items={[
-          { label: "Orders", value: rows.length },
-          { label: "Paid", value: money((o) => o.paidCents) },
-          { label: "Balance", value: money((o) => o.balanceCents) },
+          { label: "Open orders", value: open.length, sub: `${open.filter((o) => o.outstandingCents > 0).length} with a balance` },
+          { label: "Total ordered", value: sumByCurrency(open.map((o) => ({ cents: o.totalCents, currency: o.currency }))) },
+          { label: "Balance to collect", value: sumByCurrency(open.map((o) => ({ cents: o.outstandingCents, currency: o.currency }))) },
         ]}
       />
       {orders.length > 0 && (
-        <>
-          <div className="mb-3 flex flex-wrap gap-3">
-            <SearchField placeholder="Search name, student ID, phone or order" />
-            <FilterSelect param="campaign" label="Campaign" options={[{ value: "", label: "All campaigns" }, ...campaigns.map((c) => ({ value: c.id, label: c.name }))]} />
-          </div>
-          <PillChips
-            param="pay"
-            label="Filter by payment"
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          <SearchField placeholder="Order number, buyer, student number, phone or email" />
+          <FilterSelect
+            param="type"
+            label="Buyer type"
             options={[
-              { value: "", label: "All orders", count: base.length },
-              { value: "unpaid", label: "Unpaid", count: base.filter((o) => o.paymentStatus === "unpaid").length },
-              { value: "partially_paid", label: "Partially paid", count: base.filter((o) => o.paymentStatus === "partially_paid").length },
-              { value: "paid", label: "Paid in full", count: base.filter((o) => o.paymentStatus === "paid").length },
+              { value: "", label: "All buyers" },
+              { value: "student", label: "Students" },
+              { value: "other_person", label: "Other buyers" },
             ]}
           />
-        </>
+          <FilterSelect param="pay" label="Payment status" options={[{ value: "", label: "Any payment status" }, ...PAYMENT_STATUSES.map((s) => ({ value: s, label: BOOK_ORDER_PAYMENT_STATUS_LABEL[s] }))]} />
+          <FilterSelect
+            param="status"
+            label="Order status"
+            options={[
+              { value: "", label: "Open and cancelled" },
+              { value: "open", label: "Open" },
+              { value: "cancelled", label: "Cancelled" },
+            ]}
+          />
+          <DateParamField param="from" label="From" />
+          <DateParamField param="to" label="To" />
+          {filtered && <ClearFilters params={["q", "type", "pay", "status", "from", "to"]} />}
+        </div>
       )}
-      {visible.length === 0 ? (
+      {rows.length === 0 ? (
         orders.length === 0 ? (
           <EmptyCard
             title="No orders yet"
-            description="Create the first order for a student or other buyer. One order can include several books."
+            description="Create an order when a student or another buyer wants books."
             action={
-              <GatedAction need="canManage" dialog={{ kind: "order" }} variant="secondary">
+              <GatedAction need="canManageOrders" dialog={{ kind: "order" }} variant="secondary">
                 Create Order
               </GatedAction>
             }
           />
         ) : (
-          <EmptyCard
-            title="No orders match"
-            description="Try a different search or clear the filters."
-            action={
-              <Link href="/academy/books/orders" className={BTN_SECONDARY}>
-                Clear filters
-              </Link>
-            }
-          />
+          <EmptyCard title="No orders match" description="Try a different search or filter." />
         )
       ) : (
-        visible.map((o) => <OrderCard key={o.id} order={o} />)
+        <div className={`${CARD} overflow-hidden`}>
+          {paginate(rows, page, PAGE_SIZE).map((o, i) => (
+            <Link
+              key={o.id}
+              href={`/academy/books/orders/${o.id}`}
+              className={`grid grid-cols-2 items-center gap-x-3 gap-y-2 px-4 py-3 !text-ink !no-underline hover:bg-app hover:!no-underline md:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)] ${i ? "border-t border-border" : ""}`}
+            >
+              <div className="col-span-2 min-w-0 md:col-span-1">
+                <p className="truncate font-semibold">
+                  <span className="text-muted tabular-nums">{orderNo(o.orderNumber)}</span> {o.buyerName}
+                </p>
+                <p className="truncate text-xs text-muted">
+                  {o.buyerType ? BUYER_TYPE_LABEL[o.buyerType] : "Buyer"}
+                  {o.studentNumber ? ` · ${o.studentNumber}` : ""} · {formatIsoDate(o.orderDate)} · {plural(o.copies, "copy", "copies")}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted">Total</p>
+                <p className="font-semibold tabular-nums">{formatMoney(o.totalCents, o.currency)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted">Paid</p>
+                <p className="tabular-nums">{formatMoney(o.paidCents, o.currency)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted">Balance</p>
+                <p className="font-semibold tabular-nums">{o.status === "cancelled" ? "—" : formatMoney(o.outstandingCents, o.currency)}</p>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {o.status === "cancelled" ? (
+                  <ToneBadge badge={buyerOrderStatusBadge(o.status)} />
+                ) : (
+                  <>
+                    <ToneBadge badge={orderPaymentBadge(o.paymentStatus)} />
+                    <ToneBadge badge={issueBadge(issueStatusOf(o.issuedCopies, o.copies))} />
+                  </>
+                )}
+              </div>
+            </Link>
+          ))}
+        </div>
       )}
       <div className="mt-2">
         <Pager page={page} pageSize={PAGE_SIZE} total={rows.length} params={params} />

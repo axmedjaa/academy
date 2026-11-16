@@ -210,11 +210,15 @@ export const createBookSchema = z.object({
   // see `requestNewBookCoverUploadUrl`'s own doc comment for why a NEW
   // book's cover is uploaded before the book row exists, unlike an EXISTING
   // book's cover replace flow (requestBookCoverUploadUrl/
-  // confirmBookCoverUpload, which still needs a bookId). Required: every
-  // newly created book must have a cover (this task's own requirement) —
-  // legacy books created before this requirement remain nullable and
-  // unaffected (display falls back to a placeholder, see books-manager.tsx).
-  coverRef: z.string().trim().min(1, "A cover image is required."),
+  // confirmBookCoverUpload, which still needs a bookId). Optional: a book
+  // can be created without a cover (books.cover_ref is nullable; every view
+  // falls back to a placeholder). When given, it is verified below before
+  // the row is created, so a failed or foreign upload never creates a book.
+  coverRef: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value && value.length > 0 ? value : null)),
 });
 
 export type CreateBookInput = z.input<typeof createBookSchema>;
@@ -233,8 +237,10 @@ export async function createBook(actorContext: AuthContext, input: CreateBookInp
   }
   const data = parsed.data;
 
-  const coverVerification = await verifyCoverUpload(data.coverRef, academyId);
-  if (!coverVerification.ok) return { ok: false, error: coverVerification.error };
+  if (data.coverRef) {
+    const coverVerification = await verifyCoverUpload(data.coverRef, academyId);
+    if (!coverVerification.ok) return { ok: false, error: coverVerification.error };
+  }
 
   const result = await db.transaction(async (tx) => {
     const currency = await resolveCurrency(tx, academyId, data.currency);
@@ -514,6 +520,47 @@ export async function confirmBookCoverUpload(
   }
 
   return { ok: true, coverRef: input.key };
+}
+
+export type RemoveBookCoverResult = { ok: true } | { ok: false; error: BookActionError };
+
+/**
+ * Removes a book's cover: clears books.cover_ref (the book then shows the
+ * placeholder everywhere) and deletes the stored object. Same manage gate
+ * and academy-scoped lookup as confirmBookCoverUpload, so another academy's
+ * book id is a generic not_found. Removing when there is no cover is a
+ * harmless no-op success.
+ */
+export async function removeBookCover(actorContext: AuthContext, bookId: string): Promise<RemoveBookCoverResult> {
+  const resolved = await resolveBooksAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
+  if (!z.string().uuid().safeParse(bookId).success) return { ok: false, error: NOT_FOUND };
+
+  const result = await db.transaction(async (tx) => {
+    const existing = await getScopedBook(tx, bookId, academyId);
+    if (!existing) return null;
+    const previousKey = existing.coverRef;
+    if (!previousKey) return { previousKey: null };
+
+    await tx.update(books).set({ coverRef: null, updatedAt: new Date() }).where(eq(books.id, bookId));
+    await recordAudit(
+      { actorUserId: actorContext.userId, actorRole: membershipRole, academyId, action: "removeBookCover", entityType: "book", entityId: bookId, before: { coverRef: previousKey }, after: { coverRef: null } },
+      tx,
+    );
+    return { previousKey };
+  });
+
+  if (!result) return { ok: false, error: NOT_FOUND };
+
+  if (result.previousKey) {
+    const deleted = await deleteObject(result.previousKey);
+    if (!deleted.ok) {
+      logger.warn("book cover removal: R2 object could not be deleted (orphaned)", { bookId });
+    }
+  }
+  return { ok: true };
 }
 
 /** Same "display-field fetch on an already-authorized value" pattern as

@@ -1,12 +1,10 @@
 import { formatMoney } from "@/lib/ui/money";
 import {
-  CAMPAIGN_STATUS_LABEL,
-  PREORDER_DISTRIBUTION_LABEL,
-  PREORDER_PAYMENT_STATUS_LABEL,
-  type CampaignStatus,
-  type PreorderDistributionStatus,
-  type PreorderPaymentStatus,
-} from "@/lib/academies/book-preorder-math";
+  BOOK_ORDER_PAYMENT_STATUS_LABEL,
+  BOOK_ORDER_STATUS_LABEL,
+  type BookOrderPaymentStatus,
+  type BookOrderStatus,
+} from "@/lib/academies/book-order-math";
 
 /**
  * Presentation helpers for Book Management (design B01-B12), safe on the
@@ -16,22 +14,33 @@ import {
 
 export type Tone = "gray" | "amber" | "green" | "red" | "blue" | "slate";
 
-/** Badge tones from the design's status table. */
-export const CAMPAIGN_TONE: Record<CampaignStatus, Tone> = {
-  draft: "gray",
-  scheduled: "blue",
-  open: "green",
-  closed: "amber",
-  receiving: "blue",
-  completed: "gray",
-  cancelled: "red",
-};
-export const PAYMENT_TONE: Record<PreorderPaymentStatus, Tone> = { unpaid: "red", partially_paid: "amber", paid: "green" };
-export const DISTRIBUTION_TONE: Record<PreorderDistributionStatus, Tone> = { none: "gray", partial: "blue", all: "green" };
+/** Order badges: order status and the derived payment status. */
+export const ORDER_STATUS_TONE: Record<BookOrderStatus, Tone> = { ordered: "blue", received: "green", cancelled: "gray" };
+export const ORDER_PAYMENT_TONE: Record<BookOrderPaymentStatus, Tone> = { unpaid: "red", partially_paid: "amber", paid: "green" };
+export const orderStatusBadge = (status: BookOrderStatus) => ({ label: BOOK_ORDER_STATUS_LABEL[status], tone: ORDER_STATUS_TONE[status] });
+export const orderPaymentBadge = (status: BookOrderPaymentStatus) => ({ label: BOOK_ORDER_PAYMENT_STATUS_LABEL[status], tone: ORDER_PAYMENT_TONE[status] });
 
-export const campaignBadge = (status: CampaignStatus) => ({ label: CAMPAIGN_STATUS_LABEL[status], tone: CAMPAIGN_TONE[status] });
-export const paymentBadge = (status: PreorderPaymentStatus) => ({ label: PREORDER_PAYMENT_STATUS_LABEL[status], tone: PAYMENT_TONE[status] });
-export const distributionBadge = (status: PreorderDistributionStatus) => ({ label: PREORDER_DISTRIBUTION_LABEL[status], tone: DISTRIBUTION_TONE[status] });
+/** Order status as staff read it: open (active) or cancelled. */
+export const buyerOrderStatusBadge = (status: BookOrderStatus) =>
+  status === "cancelled" ? { label: "Cancelled", tone: "gray" as Tone } : { label: "Open", tone: "blue" as Tone };
+
+/** How many of the ordered copies were given to the buyer. */
+export type IssueStatus = "not_given" | "partly_given" | "all_given";
+export function issueStatusOf(issued: number, ordered: number): IssueStatus {
+  if (ordered > 0 && issued >= ordered) return "all_given";
+  return issued > 0 ? "partly_given" : "not_given";
+}
+const ISSUE_BADGE: Record<IssueStatus, { label: string; tone: Tone }> = {
+  not_given: { label: "Not given yet", tone: "gray" },
+  partly_given: { label: "Partly given", tone: "blue" },
+  all_given: { label: "All given", tone: "green" },
+};
+export const issueBadge = (status: IssueStatus) => ISSUE_BADGE[status];
+
+/** "#12" — the academy's order number. */
+export const orderNo = (n: number) => `#${n}`;
+
+export const BUYER_TYPE_LABEL = { student: "Student", other_person: "Other buyer" } as const;
 
 /** Amounts in several currencies are never added together: "USD 10.00 + SLSH 5,000". */
 export function sumByCurrency(rows: { cents: number; currency: string }[], fallbackCurrency = "USD"): string {
@@ -91,29 +100,4 @@ export function todayIso(): string {
 export function percent(part: number, whole: number): number {
   if (whole <= 0) return 0;
   return Math.round(Math.min(part / whole, 1) * 100);
-}
-
-export interface BuyerFields {
-  buyerType: "student" | "other_person";
-  buyerName: string;
-  studentNumber: string | null;
-  buyerPhone: string | null;
-  branchName: string;
-}
-
-/**
- * How an order's buyer is shown everywhere (design update: Student and
- * Other Person buyers). A student shows the student number; another person
- * shows the phone when there is one. Both show the order's branch.
- */
-export function buyerOf(order: BuyerFields): { name: string; id: string; sub: string; isOther: boolean } {
-  if (order.buyerType === "other_person") {
-    return { name: order.buyerName, id: order.buyerPhone || "No phone", sub: `Other person · ${order.branchName}`, isOther: true };
-  }
-  return { name: order.buyerName, id: order.studentNumber ?? "", sub: order.branchName, isOther: false };
-}
-
-/** Text an order matches in searches: reference, name, student number, phone. */
-export function buyerSearchText(order: BuyerFields & { reference: string }): string {
-  return `${order.reference} ${order.buyerName} ${order.studentNumber ?? ""} ${order.buyerPhone ?? ""} ${(order.buyerPhone ?? "").replace(/\D/g, "")}`.toLowerCase();
 }

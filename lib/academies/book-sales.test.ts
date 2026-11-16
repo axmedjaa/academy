@@ -251,14 +251,13 @@ describe("createBookSale", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it("Owner/Admin (view-only) cannot sell a book", async () => {
+  it("Owner can sell a book (Academy Owner rule)", async () => {
     const fixture = await setupFixture();
     const book = await insertBookDirect(fixture.academyId, fixture.managerContext);
     const ownerUserId = await createUser();
     await addMembership(ownerUserId, fixture.academyId, "academy_owner");
     const result = await createBookSale({ userId: ownerUserId, branchIds: [], academyWide: false }, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 1, amountPaidCents: 0 });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("forbidden");
+    expect(result.ok).toBe(true);
   });
 });
 

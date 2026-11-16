@@ -3,6 +3,10 @@ import { getAuthContext } from "@/lib/auth/auth-context";
 import { getAdmissionsView, getStudentPhotoUrl } from "@/lib/academies/students";
 import { listBranches } from "@/lib/academies/branches";
 import { getEnrollBatchOptions } from "@/lib/academies/enroll-options";
+import { listProgramBatchOptions } from "@/lib/academies/program-enrollments";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { canManageFeePeriodPayments } from "@/lib/academies/fee-periods";
+import { ACADEMY_FEE_PERIODS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { AdmissionsList } from "./admissions-list";
 import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 import { ClearFilters, FilterBar, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
@@ -101,7 +105,15 @@ export default async function AcademyAdmissionsPage({
   // BATCHES_ACTION's "full"/"manage" gate — the exact permission
   // enrollStudentInBatch itself checks), rather than re-deriving a second
   // copy of that permission decision here.
-  const { canEnroll, batches: enrollBatches } = await getEnrollBatchOptions(context);
+  const [{ canEnroll, batches: enrollBatches }, programBatchResult, enrollAccess] = await Promise.all([
+    getEnrollBatchOptions(context),
+    listProgramBatchOptions(context),
+    checkAcademyAccessForContext(context),
+  ]);
+  // Same payment gate as the Students page: recording a payment while
+  // enrolling needs fee-periods "manage" (the server re-checks it).
+  const canRecordPayments =
+    enrollAccess.level !== "blocked" && canManageFeePeriodPayments(getAcademyPermissionLevel(enrollAccess.membershipRole, ACADEMY_FEE_PERIODS_ACTION));
 
   return (
     <div className={PAGE_WRAP}>
@@ -110,6 +122,8 @@ export default async function AcademyAdmissionsPage({
         canManage={canManage}
         canEnroll={canEnroll}
         enrollBatches={enrollBatches}
+        programBatches={canEnroll && programBatchResult.ok ? programBatchResult.batches : []}
+        canRecordPayments={canRecordPayments}
         photoUrlByStudentId={photoUrlByStudentId}
         filters={
           <FilterBar>

@@ -180,7 +180,7 @@ export function PlatformDashboardView({ data }: { data: PlatformDashboardData })
             <KpiRow
               label="Pending approvals"
               value={pendingCount !== null ? pendingCount.toLocaleString() : "—"}
-              hint={pendingCount !== null ? "Academies waiting for review" : "Owner only"}
+              hint={pendingCount !== null ? "Academies waiting for review" : "Platform Owner only"}
               icon="pending"
               href={pendingCount !== null ? "/platform/academies" : undefined}
             />
@@ -194,7 +194,7 @@ export function PlatformDashboardView({ data }: { data: PlatformDashboardData })
             <KpiRow
               label="Total collected"
               value={data.revenue ? formatAmount(data.revenue.totals.collectedCents) : "—"}
-              hint={data.revenue ? "Verified payments" : "Owner only"}
+              hint={data.revenue ? "Verified payments" : "Platform Owner only"}
               icon="payments"
               href={data.revenue ? "/platform/reports" : undefined}
             />

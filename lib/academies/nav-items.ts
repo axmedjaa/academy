@@ -110,7 +110,14 @@ export const ACADEMY_NAV_ITEMS: readonly AcademyNavItem[] = [
   { key: "settings", label: "Settings", href: "/academy/settings", icon: "settings", group: "Account", requiredAction: ACADEMY_SETTINGS_ACTION },
 ] as const;
 
+/** A Trainer sees only their assigned students, timetable, exams and
+ * results (plus their dashboard) — nothing else, even sections whose
+ * permission row they hold for other reasons. The routes outside this list
+ * also refuse a Trainer directly (app/academy/_shell/trainer-blocked.tsx). */
+export const TRAINER_NAV_KEYS: readonly string[] = ["dashboard", "students", "timetable", "exams", "results"];
+
 function isVisible(role: AcademyRole, item: AcademyNavItem): boolean {
+  if (role === "trainer" && !TRAINER_NAV_KEYS.includes(item.key)) return false;
   if (item.requiredAction === null) return true;
   if (getAcademyPermissionLevel(role, item.requiredAction) !== "none") return true;
   return item.alternateAction !== undefined && getAcademyPermissionLevel(role, item.alternateAction) !== "none";

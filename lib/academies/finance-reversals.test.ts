@@ -330,10 +330,10 @@ afterAll(async () => {
 // reverseStudentPayment
 // =============================================================================
 
-describe("reverseStudentPayment — permission matrix for SOMEONE ELSE'S payment (Manager only)", () => {
+describe("reverseStudentPayment — permission matrix for SOMEONE ELSE'S payment (Owner/Admin/Manager)", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
-    ["academy_admin", false],
+    ["academy_owner", true],
+    ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
   ])("role %s: reverse allowed = %s", async (role, allowed) => {
@@ -348,7 +348,7 @@ describe("reverseStudentPayment — permission matrix for SOMEONE ELSE'S payment
 
 describe("reverseStudentPayment — permission matrix for a payment the actor RECORDED THEMSELVES (any role that records payments)", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false], // view-only on student payments: can't record, so can't correct
+    ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
@@ -459,10 +459,10 @@ describe("reverseStudentPayment — mechanics, state, reason, self-reversal, aud
     expect(audit.reason).toBe("Recorded it twice.");
   });
 
-  it("an Academy Administrator can't reverse a payment a colleague recorded", async () => {
+  it("a Finance Officer (manage-level) can't reverse a payment a colleague recorded", async () => {
     const { academyId, studentId } = await setupAcademy("manager");
-    const recorder = await addActingUser(academyId, "academy_admin");
-    const colleague = await addActingUser(academyId, "academy_admin");
+    const recorder = await addActingUser(academyId, "finance_officer");
+    const colleague = await addActingUser(academyId, "finance_officer");
     const paymentId = await insertPaymentDirect(academyId, studentId, recorder.userId, "approved");
 
     const result = await reverseStudentPayment(colleague.context, paymentId, "Not mine.");
@@ -746,9 +746,9 @@ describe("adjustStudentPayment", () => {
     if (result.ok) expect(result.reversal.amountCents).toBe(4_000);
   });
 
-  it("still requires Manager authority to adjust someone else's payment", async () => {
-    const { academyId, studentId, recorderUserId } = await setupAcademy("academy_admin");
-    const selfRecorder = await addActingUser(academyId, "academy_admin");
+  it("still requires full authority to adjust someone else's payment", async () => {
+    const { academyId, studentId, recorderUserId } = await setupAcademy("finance_officer");
+    const selfRecorder = await addActingUser(academyId, "finance_officer");
     const paymentId = await insertPaymentDirect(academyId, studentId, recorderUserId, "approved");
 
     const result = await adjustStudentPayment(selfRecorder.context, paymentId, "Trying to adjust.", 1_000);
@@ -761,10 +761,10 @@ describe("adjustStudentPayment", () => {
 // reverseIncomeRecord
 // =============================================================================
 
-describe("reverseIncomeRecord — permission matrix (reuses the create-level authority: Manager)", () => {
+describe("reverseIncomeRecord — permission matrix (reuses the create-level authority: Owner/Admin/Manager)", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
-    ["academy_admin", false],
+    ["academy_owner", true],
+    ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
   ])("role %s: reverse allowed = %s", async (role, allowed) => {
@@ -900,9 +900,9 @@ describe("adjustIncomeRecord", () => {
 // reverseExpenseRecord
 // =============================================================================
 
-describe("reverseExpenseRecord — permission matrix for SOMEONE ELSE'S expense (same authority as approveExpense: Admin/Manager only)", () => {
+describe("reverseExpenseRecord — permission matrix for SOMEONE ELSE'S expense (same authority as approveExpense: Owner/Admin/Manager)", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
+    ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
@@ -980,7 +980,7 @@ describe("reverseExpenseRecord — mechanics, state, reason, self-reversal, audi
   });
 
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", true], // "manage" on expenses: can submit, so can correct their own
+    ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
@@ -992,10 +992,10 @@ describe("reverseExpenseRecord — mechanics, state, reason, self-reversal, audi
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
-  it("an Owner can adjust their own expense but not a colleague's", async () => {
+  it("a Finance Officer can adjust their own expense but not a colleague's", async () => {
     const { academyId } = await setupAcademy("manager");
-    const mine = await addActingUser(academyId, "academy_owner");
-    const colleague = await addActingUser(academyId, "academy_owner");
+    const mine = await addActingUser(academyId, "finance_officer");
+    const colleague = await addActingUser(academyId, "finance_officer");
     const ownId = await insertExpenseDirect(academyId, mine.userId, "approved");
     const theirsId = await insertExpenseDirect(academyId, colleague.userId, "approved");
 

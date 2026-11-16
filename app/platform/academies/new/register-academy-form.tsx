@@ -18,7 +18,7 @@ const fieldInput = controlClass(false);
 // six-step sequence DESIGN.md describes.
 const STEPS = [
   "Academy profile",
-  "Owner account",
+  "Academy Owner account",
   "Default branch",
   "Plan & allowances",
   "Subscription dates",
@@ -338,12 +338,12 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
 
         {step === 1 && (
           <div>
-            <h2 className="text-base font-semibold text-ink">Owner account</h2>
+            <h2 className="text-base font-semibold text-ink">Academy Owner account</h2>
             <p className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-muted">
-              This creates the academy&apos;s first sign-in, with the <Badge label="academy_owner" tone="blue" /> role.
+              This creates the academy&apos;s first sign-in, with the <Badge label="Academy Owner" tone="blue" /> role.
             </p>
             <div className="mt-6 flex max-w-md flex-col gap-3">
-              <Field label="Owner email">
+              <Field label="Academy Owner email">
                 <input
                   type="email"
                   className={fieldInput}
@@ -533,7 +533,7 @@ export function RegisterAcademyForm({ activePlans }: RegisterAcademyFormProps) {
 
               <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
                 <div>
-                  <div className="text-xs text-muted">Owner</div>
+                  <div className="text-xs text-muted">Academy Owner</div>
                   <div className="mt-0.5 font-medium text-ink">{form.ownerEmail}</div>
                 </div>
                 <button type="button" onClick={() => setStep(1)} className="shrink-0 text-sm text-brand hover:underline">

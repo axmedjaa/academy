@@ -294,12 +294,12 @@ afterAll(async () => {
 
 describe("createStudentCharge — permission matrix", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
+    ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
   ])(
-    "role %s: create allowed = %s (Owner/Trainer are view-only; Admin was raised to manage-level per the manual student-payment verification report)",
+    "role %s: create allowed = %s (Owner/Admin/Manager can; Trainer is view-only)",
     async (role, allowed) => {
       const { studentId, context } = await setupAcademy(role);
       const result = await createStudentCharge(context, validCharge(studentId));
@@ -357,7 +357,7 @@ describe("createStudentCharge — permission matrix", () => {
 
 describe("recordStudentPayment — permission matrix", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
+    ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
@@ -631,7 +631,7 @@ describe("recordStudentPayment — linked student_charge status recalculation (i
 
 describe("issueReceipt", () => {
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
+    ["academy_owner", true],
     ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
@@ -877,7 +877,7 @@ describe("listStudentCharges / listStudentPayments — tenant isolation", () => 
     if (payments.ok) expect(payments.payments).toEqual([]);
   });
 
-  it("view-only roles (Owner/Admin/Trainer) can list but canManage is false", async () => {
+  it("the Owner can list and manage charges (Academy Owner rule)", async () => {
     const { academyId, studentId, creatorUserId } = await setupAcademy("manager");
     await insertChargeDirect(academyId, studentId, creatorUserId);
     const viewer = await addActingUser(academyId, "academy_owner");
@@ -886,7 +886,7 @@ describe("listStudentCharges / listStudentPayments — tenant isolation", () => 
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.charges).toHaveLength(1);
-      expect(result.canManage).toBe(false);
+      expect(result.canManage).toBe(true);
     }
   });
 

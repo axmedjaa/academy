@@ -148,11 +148,11 @@ describe("createIncomeRecord — permission matrix", () => {
   // Manager view-only (see lib/auth/academy-permissions.ts's module
   // comment on ACADEMY_INCOME_ACTION).
   it.each<[AcademyRole, boolean]>([
-    ["academy_owner", false],
-    ["academy_admin", false],
+    ["academy_owner", true],
+    ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
-  ])("role %s: create allowed = %s (Manager)", async (role, allowed) => {
+  ])("role %s: create allowed = %s (Owner/Admin/Manager)", async (role, allowed) => {
     const { context } = await setupAcademy(role);
     const result = await createIncomeRecord(context, validInput());
     expect(result.ok).toBe(allowed);
@@ -293,7 +293,7 @@ describe("listIncomeRecords — tenant isolation", () => {
     if (result.ok) expect(result.records).toEqual([]);
   });
 
-  it("view-only roles (Owner/Admin) can list but canCreate is false", async () => {
+  it("the Owner can list and canCreate is true (Academy Owner rule)", async () => {
     const recorderFixture = await setupAcademy("manager");
     await createIncomeRecord(recorderFixture.context, validInput());
 
@@ -305,12 +305,12 @@ describe("listIncomeRecords — tenant isolation", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.records).toHaveLength(1);
-      expect(result.canCreate).toBe(false);
+      expect(result.canCreate).toBe(true);
     }
   });
 
   // Manager has the "manage" level on income (see the permission matrix
-  // test above) — canCreate must reflect that, unlike Owner/Admin.
+  // test above) — canCreate must reflect that.
   it("manager can list and canCreate is true", async () => {
     const recorderFixture = await setupAcademy("manager");
     await createIncomeRecord(recorderFixture.context, validInput());

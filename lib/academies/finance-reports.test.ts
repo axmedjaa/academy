@@ -317,14 +317,14 @@ describe("getFinanceReports — structural guarantee: platform billing is unreac
 });
 
 describe("getFinanceReports — per-entity permission scoping", () => {
-  it("a Trainer sees student-payment and expense sections (view level) but the income section is invisible (no entry = none)", async () => {
+  it("Trainer rule: a Trainer sees no finance section at all (payments, income and expenses all invisible)", async () => {
     const { context } = await setupAcademy("trainer");
     const result = await getFinanceReports(context);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.report.studentPayments.visible).toBe(true);
-    expect(result.report.expenses.visible).toBe(true);
+    expect(result.report.studentPayments.visible).toBe(false);
+    expect(result.report.expenses.visible).toBe(false);
     expect(result.report.income.visible).toBe(false);
   });
 
@@ -575,8 +575,8 @@ describe("getFinanceReports — cross-academy tenant isolation", () => {
       visible: true,
       outstandingCharges: { count: 0, totalsByCurrency: [] },
       // Nothing from the other academy in the totals or the month/method breakdowns.
-      paymentsReceived: { count: 0, totalsByCurrency: [], byMethod: [], byMonth: [] },
-      refundsRecorded: { count: 0, totalsByCurrency: [] },
+      paymentsReceived: { count: 0, totalsByCurrency: [], byMethod: [], byMonth: [], bySource: [] },
+      refundsRecorded: { count: 0, totalsByCurrency: [], bySource: [] },
     });
     expect(result.report.income).toEqual({ visible: true, count: 0, totalsByCurrency: [] });
     expect(result.report.expenses).toEqual({
@@ -604,7 +604,8 @@ describe("getFinanceReports — role coverage matches the underlying entities' o
     ["academy_owner", true, true, true],
     ["academy_admin", true, true, true],
     ["manager", true, true, true],
-    ["trainer", true, false, true],
+    // Trainer rule: a trainer has no finance access at all.
+    ["trainer", false, false, false],
   ])(
     "role %s: studentPayments visible=%s, income visible=%s, expenses visible=%s",
     async (role, paymentsVisible, incomeVisible, expensesVisible) => {

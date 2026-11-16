@@ -6,7 +6,8 @@ import Link from "next/link";
 import type { AdmissionsRow } from "@/lib/academies/students";
 import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
 import { Badge, Button, EmptyState, FormDialog, PageHeader, Section, trHover } from "@/app/academy/_shell/ui";
-import { EnrollCoursesDialog } from "@/app/academy/_shell/enroll-courses-dialog";
+import { EnrollStudentDialog } from "@/app/academy/students/enroll-dialog";
+import type { ProgramBatchOption } from "@/lib/academies/program-enrollments";
 import { Icon } from "@/app/academy/_shell/icons";
 import { DataTable, NoteBlock, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { StudentAvatar } from "@/app/academy/students/student-avatar";
@@ -28,6 +29,10 @@ interface Props {
   canEnroll: boolean;
   /** Planned and active batches with the courses each runs (scoped). */
   enrollBatches: EnrollBatchOption[];
+  /** Program-based batches open for complete-program enrollment. */
+  programBatches: ProgramBatchOption[];
+  /** May record a payment while enrolling. */
+  canRecordPayments: boolean;
   /** Each photo-having row's own short-lived signed R2 GET url,
    * pre-resolved server-side (page.tsx, via students.ts's
    * `getStudentPhotoUrl`) — see StudentAvatar's own doc comment. */
@@ -40,9 +45,9 @@ interface Props {
 const ROW_BTN =
   "inline-flex h-10 items-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3.5 text-[13px] font-semibold !text-ink no-underline transition-colors duration-150 hover:bg-app hover:no-underline";
 
-export function AdmissionsList({ admissions, canManage, canEnroll: canEnrollRole, enrollBatches, photoUrlByStudentId, filters }: Props) {
+export function AdmissionsList({ admissions, canManage, canEnroll: canEnrollRole, enrollBatches, programBatches, canRecordPayments, photoUrlByStudentId, filters }: Props) {
   // Enroll is offered only when there is a planned or active batch to join.
-  const canEnroll = canEnrollRole && enrollBatches.length > 0;
+  const canEnroll = canEnrollRole && (enrollBatches.length > 0 || programBatches.length > 0);
   const router = useRouter();
   // Photo preview, kept from the previous list (clicking a student's photo
   // opens the full view, as on Students).
@@ -128,20 +133,21 @@ export function AdmissionsList({ admissions, canManage, canEnroll: canEnrollRole
       )}
 
       <NoteBlock>
-        {canEnrollRole && enrollBatches.length === 0
+        {canEnrollRole && enrollBatches.length === 0 && programBatches.length === 0
           ? "No planned or active batch is open for enrollment yet. Create one in Batches, then enroll from here."
           : canEnroll
-          ? "Enroll picks a batch and one or more of its courses. Each course always gets its own fee schedule."
+          ? "Enroll in individual courses (each with its own batch, fee and payment) or in a complete program (one program fee in monthly installments)."
           : "Enrolling needs course and batch management access, which this role does not have, so no Enroll control is shown."}
       </NoteBlock>
 
       {canEnroll && (
-        <EnrollCoursesDialog
+        <EnrollStudentDialog
           open={pickerOpen}
           onOpenChange={setPickerOpen}
           students={admissions.map((row) => ({ id: row.id, fullName: row.fullName, studentNumber: row.studentNumber }))}
-          batches={enrollBatches}
-          enrolledPairs={{}}
+          enrollBatches={enrollBatches}
+          programBatches={programBatches}
+          canRecordPayments={canRecordPayments}
           onEnrolled={refresh}
         />
       )}
@@ -167,12 +173,13 @@ export function AdmissionsList({ admissions, canManage, canEnroll: canEnrollRole
       )}
 
       {canEnroll && enrollingRow && (
-        <EnrollCoursesDialog
+        <EnrollStudentDialog
           open={enrollingId !== null}
           onOpenChange={(nextOpen) => !nextOpen && setEnrollingId(null)}
           student={{ id: enrollingRow.id, fullName: enrollingRow.fullName, studentNumber: enrollingRow.studentNumber }}
-          batches={enrollBatches}
-          enrolledPairs={{}}
+          enrollBatches={enrollBatches}
+          programBatches={programBatches}
+          canRecordPayments={canRecordPayments}
           onEnrolled={refresh}
         />
       )}

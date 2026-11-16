@@ -11,13 +11,14 @@ import {
   getBook,
   getStockStatus,
   listBooks,
+  removeBookCover,
   requestBookCoverUploadUrl,
   requestNewBookCoverUploadUrl,
   updateBook,
   type CreateBookInput,
 } from "./books";
 
-// Every `createBook` call now requires a verified cover — same mock pattern
+// A cover is optional; one that is given must verify — same mock pattern
 // as lib/academies/academy-logo.test.ts (never hits real R2 in tests).
 vi.mock("@/lib/storage/client", () => ({
   // Plan storage allowance (lib/subscriptions/usage.ts): an empty bucket.
@@ -157,12 +158,11 @@ describe("createBook", () => {
     }
   });
 
-  it("Owner/Admin (view-only) cannot create a book", async () => {
+  it("Owner/Admin can create a book (Academy Owner rule)", async () => {
     for (const role of ["academy_owner", "academy_admin"] as const) {
       const { academyId, context } = await setupAcademy(role);
       const result = await createTestBook(context, academyId);
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error.code).toBe("forbidden");
+      expect(result.ok).toBe(true);
     }
   });
 
@@ -182,12 +182,17 @@ describe("createBook", () => {
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
-  it("rejects creation with no cover reference at all (required field)", async () => {
+  it("creates a book with no cover (the cover is optional) without touching storage", async () => {
     const { context } = await setupAcademy("manager");
-    // @ts-expect-error deliberately omitting the required coverRef
-    const result = await createBook(context, { name: "No Cover", priceCents: 500, stockQuantity: 5 });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("validation");
+    for (const input of [
+      { name: "No Cover", priceCents: 500, stockQuantity: 5 },
+      { name: "Empty Cover", priceCents: 500, stockQuantity: 5, coverRef: "" },
+    ]) {
+      const result = await createBook(context, input);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.book.coverRef).toBeNull();
+    }
+    expect(headObjectMock).not.toHaveBeenCalled();
   });
 
   it("rejects creation whose cover key belongs to a different academy", async () => {
@@ -367,11 +372,11 @@ describe("book cover upload — permission and validation gate", () => {
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
-  it("view-only roles cannot request a cover upload", async () => {
+  it("roles without book access cannot request a cover upload", async () => {
     const { academyId, context } = await setupAcademy("manager");
     const created = await createTestBook(context, academyId, { priceCents: 500 });
     if (!created.ok) throw new Error("expected ok");
-    const owner = await setupAcademy("academy_owner");
+    const owner = await setupAcademy("trainer");
     const result = await requestBookCoverUploadUrl(owner.context, created.book.id, { contentType: "image/png", fileSizeBytes: 1000 });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("forbidden");
@@ -383,9 +388,64 @@ describe("book cover upload — permission and validation gate", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.key).toContain("book-covers/");
 
-    const owner = await setupAcademy("academy_owner");
+    const owner = await setupAcademy("trainer");
     const forbidden = await requestNewBookCoverUploadUrl(owner.context, { contentType: "image/png", fileSizeBytes: 1000 });
     expect(forbidden.ok).toBe(false);
     if (!forbidden.ok) expect(forbidden.error.code).toBe("forbidden");
+  });
+});
+
+describe("removeBookCover", () => {
+  it("clears the cover, deletes the stored object and audits it", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const created = await createTestBook(context, academyId);
+    if (!created.ok) throw new Error("expected ok");
+    const key = created.book.coverRef;
+    expect(key).not.toBeNull();
+
+    const result = await removeBookCover(context, created.book.id);
+    expect(result.ok).toBe(true);
+    const [row] = await db.select().from(books).where(eq(books.id, created.book.id));
+    expect(row.coverRef).toBeNull();
+    expect(deleteObjectMock).toHaveBeenCalledWith(key);
+    const audit = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, created.book.id), eq(auditLogs.action, "removeBookCover")));
+    expect(audit).toHaveLength(1);
+  });
+
+  it("is a harmless no-op for a book that has no cover", async () => {
+    const { context } = await setupAcademy("manager");
+    const created = await createBook(context, { name: "Bare", priceCents: 100, stockQuantity: 1 });
+    if (!created.ok) throw new Error("expected ok");
+    const result = await removeBookCover(context, created.book.id);
+    expect(result.ok).toBe(true);
+    expect(deleteObjectMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a role without book management (Trainer) and leaves the cover in place", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const created = await createTestBook(context, academyId);
+    if (!created.ok) throw new Error("expected ok");
+    const trainer = await setupAcademy("trainer");
+    const result = await removeBookCover(trainer.context, created.book.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
+    const [row] = await db.select().from(books).where(eq(books.id, created.book.id));
+    expect(row.coverRef).toBe(created.book.coverRef);
+  });
+
+  it("never removes another academy's book cover (tenant isolation: not_found)", async () => {
+    const owner = await setupAcademy("manager");
+    const created = await createTestBook(owner.context, owner.academyId);
+    if (!created.ok) throw new Error("expected ok");
+    const attacker = await setupAcademy("manager");
+    const result = await removeBookCover(attacker.context, created.book.id);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+    const [row] = await db.select().from(books).where(eq(books.id, created.book.id));
+    expect(row.coverRef).toBe(created.book.coverRef);
+    expect(deleteObjectMock).not.toHaveBeenCalled();
   });
 });

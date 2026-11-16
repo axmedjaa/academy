@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
-import { listBatches, type BatchRecord } from "@/lib/academies/batches";
+import { listBatches } from "@/lib/academies/batches";
 import {
   listBatchEnrollments,
   listBatchTrainerAssignments,
@@ -14,13 +14,17 @@ import { listStaff } from "@/lib/academies/staff";
 import { searchStudents } from "@/lib/academies/students";
 import { getStudentsOverview } from "@/lib/academies/students-overview";
 import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
+import { listProgramBatchOptions } from "@/lib/academies/program-enrollments";
+import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
+import { ACADEMY_FEE_PERIODS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
+import { canManageFeePeriodPayments } from "@/lib/academies/fee-periods";
 import { getEnrollmentFeeSchedule } from "@/lib/academies/fee-periods";
 import { listAcademyTimetable } from "@/lib/academies/timetables";
 import { DAYS_OF_WEEK, DAY_LABELS, formatTimetableTime } from "@/lib/academies/timetable-constants";
-import { formatDate } from "@/lib/ui/date";
 import { formatMoney } from "@/lib/ui/money";
 import { describePaymentPlan } from "@/lib/ui/payment-plan";
-import { BackLink, Badge, PAGE_WRAP, PageHeader, PageMessage, humanizeStatus, trHover } from "@/app/academy/_shell/ui";
+import { BackLink, Badge, PAGE_WRAP, PageHeader, PageMessage, trHover } from "@/app/academy/_shell/ui";
+import { Icon } from "@/app/academy/_shell/icons";
 import { BlockTitle, DataTable, KvCard, NoteBlock, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import {
   BatchHeaderActions,
@@ -29,19 +33,18 @@ import {
   TrainersTable,
   type EnrollmentRow,
 } from "./batch-detail";
-
-const STATUS_TONE: Record<BatchRecord["status"], "blue" | "green" | "slate" | "gray"> = {
-  planned: "blue",
-  active: "green",
-  completed: "slate",
-  archived: "gray",
-};
+import { CourseDateCells, CourseDatesAction } from "./course-date-cells";
+import { BATCH_ENROLLMENT_MESSAGE, BATCH_STATUS_LABEL, BATCH_STATUS_TONE, acceptsEnrollment } from "../batch-status";
 
 /**
- * Batch detail (design A08 detail): back link; "CODE, Course + Course"
- * with branch, status and course count; Enroll a student / Assign trainer /
- * Edit batch; the Batch key-value card; the courses in this batch (with
- * how many students take each); classes by course; trainers; and enrolled
+ * Batch detail (design A08 detail): "All batches" back link; the
+ * status badge in the header and an enrollment availability notice (only
+ * Planned and Active take new students — the server's own rule, shown here); the batch's own name (never
+ * derived from its courses) with branch, status and course count; Enroll a student / Assign trainer /
+ * Edit batch; the Batch key-value card (name, code, type, program, branch,
+ * status — a batch has no overall dates); the
+ * courses in this batch, each with its own start and end date (set in Edit
+ * batch; "Not set" when missing) and how many students take it; classes by course; trainers; and enrolled
  * students per course with their fee plan. Every read is the scoped read
  * the rest of the console uses, and fee details appear only for roles that
  * may see fees. Reads here never create records (fee plans are read with
@@ -77,6 +80,8 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
     branchesResult,
     timetableResult,
     overviewResult,
+    programBatchesResult,
+    access,
   ] = await Promise.all([
     listBatchTrainerAssignments(context, batchId),
     listBatchEnrollments(context, batchId),
@@ -88,6 +93,8 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
     listBranches(context),
     listAcademyTimetable(context),
     getStudentsOverview(context, { branchId: batch.branchId }),
+    batch.programId ? listProgramBatchOptions(context) : Promise.resolve({ ok: true as const, batches: [] }),
+    checkAcademyAccessForContext(context),
   ]);
 
   const courses = coursesResult.ok ? coursesResult.courses : [];
@@ -98,7 +105,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
     .map((id) => courses.find((c) => c.id === id))
     .filter((c): c is (typeof courses)[number] => Boolean(c));
   const courseNameById = new Map(courses.map((c) => [c.id, c.name]));
-  const courseTitle = batchCourses.map((c) => c.name).join(" + ") || "Courses unavailable";
+  const courseDates = batch.courseDates ?? {};
   const branchName = branches.find((b) => b.id === batch.branchId)?.name ?? "Branch unavailable";
 
   const assignments = assignmentsResult.ok ? assignmentsResult.assignments : [];
@@ -135,8 +142,13 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
   }
   const studentRows = studentsResult.ok ? studentsResult.data.rows : [];
   const studentOptions = studentRows.map((s) => ({ id: s.id, fullName: s.fullName, studentNumber: s.studentNumber }));
+  // A program batch takes complete-program enrollments only (one program
+  // fee); a course-based batch takes individual course enrollments.
+  const programBatch = batch.programId && programBatchesResult.ok ? (programBatchesResult.batches.find((b) => b.batchId === batch.id) ?? null) : null;
+  const canRecordPayments =
+    access.level !== "blocked" && canManageFeePeriodPayments(getAcademyPermissionLevel(access.membershipRole, ACADEMY_FEE_PERIODS_ACTION));
   const enrollBatch: EnrollBatchOption | null =
-    (batch.status === "planned" || batch.status === "active") && batchCourses.length > 0
+    !batch.programId && (batch.status === "planned" || batch.status === "active") && batchCourses.length > 0
       ? {
           id: batch.id,
           code: batch.code,
@@ -144,7 +156,6 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
           branchId: batch.branchId,
           branchName,
           status: batch.status,
-          startDate: batch.startDate,
           courses: batchCourses.map((c) => ({ id: c.id, name: c.name })),
         }
       : null;
@@ -172,6 +183,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
     id: c.id,
     name: c.name,
     code: c.code,
+    programId: c.programId,
     programName: programName.get(c.programId) ?? null,
     durationWeeks: c.durationWeeks,
     status: c.status,
@@ -181,16 +193,19 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
     <div className={PAGE_WRAP}>
       <BackLink href="/academy/batches" label="All batches" />
       <PageHeader
-        title={`${batch.code}, ${courseTitle}`}
-        description={[
-          branchName,
-          humanizeStatus(batch.status),
-          `${batchCourses.length} course${batchCourses.length === 1 ? "" : "s"}`,
-        ].join(" · ")}
+        title={batch.name}
+        description={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Badge label={BATCH_STATUS_LABEL[batch.status]} tone={BATCH_STATUS_TONE[batch.status]} />
+            <span>{[batch.code, branchName, `${batchCourses.length} course${batchCourses.length === 1 ? "" : "s"}`].join(" · ")}</span>
+          </span>
+        }
         actions={
           <BatchHeaderActions
             batch={batch}
             enrollBatch={enrollBatch}
+            programBatch={programBatch}
+            canRecordPayments={canRecordPayments}
             enrolledPairs={enrolledPairs}
             students={studentOptions}
             studentsTruncated={studentsTruncated}
@@ -204,16 +219,35 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
         }
       />
 
+      <div
+        role="status"
+        className={`mb-6 flex items-start gap-3 rounded-card border px-4 py-3 text-sm ${
+          acceptsEnrollment(batch.status) ? "border-[#BBE5C8] bg-success-bg text-ink" : "border-border bg-app text-[#374151]"
+        }`}
+      >
+        <span className={`mt-0.5 shrink-0 ${acceptsEnrollment(batch.status) ? "text-success" : "text-muted"}`}>
+          <Icon name={acceptsEnrollment(batch.status) ? "check_circle" : batch.status === "archived" ? "archive" : "lock"} width={18} height={18} />
+        </span>
+        <span>
+          <b className="font-semibold">{acceptsEnrollment(batch.status) ? "Open for enrollment." : "Closed to new enrollments."}</b>{" "}
+          {BATCH_ENROLLMENT_MESSAGE[batch.status]}
+        </span>
+      </div>
+
       <KvCard
         title="Batch"
         rows={[
           ["Name", batch.name],
           ["Branch", branchName],
-          ["Dates", `${formatDate(batch.startDate)} to ${formatDate(batch.endDate, "no end date")}`],
+          ["Code", batch.code],
+          ["Type", batch.programId ? "Program-based batch" : "Course-based batch"],
+          ...(batch.programId
+            ? ([["Program", programName.get(batch.programId) ?? "Program unavailable"]] as [string, string][])
+            : []),
           [
             "Status",
             <span key="s" className="inline-flex flex-wrap items-center gap-2">
-              <Badge label={batch.status} tone={STATUS_TONE[batch.status]} />
+              <Badge label={BATCH_STATUS_LABEL[batch.status]} tone={BATCH_STATUS_TONE[batch.status]} />
               {isAssignedToMe && <Badge label="You teach this batch" tone="blue" />}
             </span>,
           ],
@@ -222,14 +256,21 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
 
       <BlockTitle>Courses in this batch</BlockTitle>
       {batchCourses.length > 0 ? (
-        <DataTable stackBelow={760}>
+        <DataTable stackBelow={900}>
           <thead>
             <tr>
               <th className={rtTh}>Course</th>
+              <th className={rtTh}>Start date</th>
+              <th className={rtTh}>End date</th>
               <th className={rtTh}>Program</th>
               <th className={rtTh}>Instructor</th>
               <th className={rtTh}>Length</th>
               <th className={rtTh}>Students</th>
+              {batchesResult.canManage && (
+                <th className={rtTh}>
+                  <span className="sr-only">Dates</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -244,6 +285,7 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
                     {course.code ? ` (${course.code})` : ""}
                   </Link>
                 </td>
+                <CourseDateCells startDate={courseDates[course.id]?.startDate ?? null} endDate={courseDates[course.id]?.endDate ?? null} />
                 <td className={rtTd} data-label="Program">
                   {programName.get(course.programId) ?? <span className="text-muted">Unknown</span>}
                 </td>
@@ -256,6 +298,19 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
                 <td className={`${rtTd} tabular-nums`} data-label="Students">
                   {activeCountByCourse.get(course.id) ?? 0}
                 </td>
+                {batchesResult.canManage && (
+                  <CourseDatesAction
+                    key={`${course.id}:${courseDates[course.id]?.startDate ?? ""}:${courseDates[course.id]?.endDate ?? ""}`}
+                    batchId={batch.id}
+                    batchCode={batch.code}
+                    courseId={course.id}
+                    courseName={course.name}
+                    durationWeeks={course.durationWeeks}
+                    otherCourses={Math.max(0, batch.courseIds.length - 1)}
+                    startDate={courseDates[course.id]?.startDate ?? null}
+                    endDate={courseDates[course.id]?.endDate ?? null}
+                  />
+                )}
               </tr>
             ))}
           </tbody>
@@ -265,8 +320,8 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
       )}
 
       <NoteBlock>
-        Each course in a batch has its own classes, students, exams and fee plans. A student enrolls in the courses they
-        take, not the whole batch.
+        Each course in a batch has its own dates, classes, students, exams and fee plans. A student enrolls in the
+        courses they take, not the whole batch. Change a course&apos;s dates with Edit dates in its row.
       </NoteBlock>
 
       {timetableResult.ok && (
@@ -329,6 +384,13 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
         canManage={canManageRoster}
         canDelete={canDeleteEnrollment}
         showFees={showFees}
+        emptyHint={
+          !acceptsEnrollment(batch.status)
+            ? BATCH_ENROLLMENT_MESSAGE[batch.status]
+            : canManageRoster
+              ? "Use Enroll a student to add the first student."
+              : "Students appear here once they are enrolled."
+        }
       />
     </div>
   );

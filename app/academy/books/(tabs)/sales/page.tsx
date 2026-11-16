@@ -95,14 +95,14 @@ export default async function BookSalesPage({
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-warning-bg text-[#78350F]">
               <Icon name="autorenew" width={22} height={22} />
             </span>
-            <h3 className="text-lg font-bold">Pre-Order Book</h3>
+            <h3 className="text-lg font-bold">Out of stock?</h3>
           </div>
           <p className="leading-normal text-[#4B5563]">
-            <b className="text-ink">The book has not arrived yet.</b> Take an order for an existing student or another person. Stock does not change until
-            you receive the books, and books are given once the order is paid in full and verified.
+            <b className="text-ink">Create an order for the buyer.</b> Stock goes up when you mark the order received, and you can then give the
+            books to the buyer from the order.
           </p>
-          <GatedAction need="canManage" dialog={{ kind: "order" }} variant="secondary" className="self-start px-5">
-            Create Order
+          <GatedAction need="canManageOrders" dialog={{ kind: "order" }} variant="secondary" className="self-start px-5">
+            New Order
           </GatedAction>
         </div>
       </div>

@@ -463,7 +463,10 @@ describe("exportData — finance_report", () => {
     expect(result.content).not.toContain("studentPayments");
   });
 
-  it("a role with partial visibility (trainer: payments+expenses, not income) never exports the income section", async () => {
+  // Trainer rule: a Trainer has no finance access at all (no student
+  // payments, income or expenses), so the export carries none of them —
+  // the same sections getFinanceReports hides.
+  it("a role without finance access (trainer) exports none of the finance sections", async () => {
     const { academyId, branchId, studentId, creatorUserId, context } = await setupAcademy("trainer");
     // Multi-branch: a trainer sees its own branches' payments only, so it
     // works in the student's branch here.
@@ -480,13 +483,15 @@ describe("exportData — finance_report", () => {
     expect(direct.ok).toBe(true);
     if (!direct.ok) return;
     expect(direct.report.income.visible).toBe(false);
+    expect(direct.report.studentPayments.visible).toBe(false);
+    expect(direct.report.expenses.visible).toBe(false);
 
     const result = await exportData(context, "finance_report", {}, "csv");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.content).not.toContain("\nIncome,");
-    expect(result.content).toContain("Student Payments");
-    expect(result.content).toContain("Expenses");
+    expect(result.content).not.toContain("Student Payments");
+    expect(result.content).not.toContain("\nExpenses,");
   });
 
   it("a caller who isn't a member gets the same 'blocked' error getFinanceReports would", async () => {

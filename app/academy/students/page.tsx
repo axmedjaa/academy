@@ -15,6 +15,7 @@ import { listBranches } from "@/lib/academies/branches";
 import { ACADEMY_FEE_PERIODS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { formatMoney } from "@/lib/ui/money";
 import { getEnrollBatchOptions } from "@/lib/academies/enroll-options";
+import { listProgramBatchOptions } from "@/lib/academies/program-enrollments";
 import { StudentsList } from "./students-list";
 import { StudentsExportButton } from "./students-export-button";
 import { RegisterStudentButton } from "./register-student-form";
@@ -89,7 +90,7 @@ export default async function AcademyStudentsPage({
   const canManageByRole =
     access.level !== "blocked" && canManageStudents(getAcademyPermissionLevel(access.membershipRole, STUDENTS_PERMISSION_ACTION));
   const overviewPromise = getStudentsOverview(context, { branchId: branchId || undefined });
-  const [overviewResult, result, branchesResult, enrollOptions] = await Promise.all([
+  const [overviewResult, result, branchesResult, enrollOptions, programBatchResult] = await Promise.all([
     overviewPromise,
     pay
       ? overviewPromise.then((overviewForPay) =>
@@ -102,6 +103,7 @@ export default async function AcademyStudentsPage({
       : searchStudents(context, filters, { page }),
     listBranches(context),
     canManageByRole ? getEnrollBatchOptions(context) : Promise.resolve({ canEnroll: false, batches: [] }),
+    canManageByRole ? listProgramBatchOptions(context) : Promise.resolve({ ok: true as const, batches: [] }),
   ]);
   const overview = overviewResult.ok ? overviewResult.overview : null;
 
@@ -173,6 +175,8 @@ export default async function AcademyStudentsPage({
                 openedByUrl={get("register") === "1"}
                 branches={branchOptions.map((branch) => ({ id: branch.id, name: branch.name }))}
                 enrollBatches={enrollOptions.batches}
+                programBatches={programBatchResult.ok ? programBatchResult.batches : []}
+                canRecordPayments={canManagePayments}
               />
             )}
             <StudentsExportButton
@@ -290,6 +294,7 @@ export default async function AcademyStudentsPage({
         paymentSummaries={paymentSummaries}
         overdueByStudent={overview?.finance?.overdueByStudent ?? {}}
         enrollBatches={enrollOptions.batches}
+        programBatches={programBatchResult.ok ? programBatchResult.batches : []}
         canEnroll={enrollOptions.canEnroll}
         hasActiveFilters={hasActiveFilters}
         canRegister={canManage && branchOptions.length > 0}

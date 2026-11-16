@@ -17,7 +17,6 @@ export interface EnrollBatchOption {
   branchId: string;
   branchName: string;
   status: "planned" | "active";
-  startDate: string;
   courses: { id: string; name: string }[];
 }
 
@@ -36,7 +35,8 @@ export async function getEnrollBatchOptions(
 
   const batches = batchesResult.batches
     .filter((batch): batch is typeof batch & { status: "planned" | "active" } =>
-      batch.status === "planned" || batch.status === "active",
+      // Program-based batches take a program enrollment, never a course one.
+      (batch.status === "planned" || batch.status === "active") && !batch.programId,
     )
     .map((batch) => ({
       id: batch.id,
@@ -45,7 +45,6 @@ export async function getEnrollBatchOptions(
       branchId: batch.branchId,
       branchName: branchName.get(batch.branchId) ?? "Unknown branch",
       status: batch.status,
-      startDate: batch.startDate,
       courses: batch.courseIds
         .filter((id) => courseName.has(id))
         .map((id) => ({ id, name: courseName.get(id) as string })),

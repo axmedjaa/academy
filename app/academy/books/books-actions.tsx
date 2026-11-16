@@ -1,27 +1,18 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { BookRecord } from "@/lib/academies/books";
-import type { CampaignView, PreorderBranchOption, PreorderStudentOption } from "@/lib/academies/book-preorders";
+import type { BookBranchOption, BookStudentOption } from "@/lib/academies/book-orders";
 import {
-  CAMPAIGN_STATUSES,
-  CAMPAIGN_STATUS_LABEL,
-  PREORDER_PAYMENT_METHODS,
-  PREORDER_PAYMENT_METHOD_LABEL,
-  RECEIVABLE_STATUSES,
-  computePreorderPricing,
-  type CampaignStatus,
-  type PreorderPaymentMethod,
-} from "@/lib/academies/book-preorder-math";
-import {
-  createPreorderAction,
-  recordPreorderPaymentAction,
-  recordPreorderReceiptAction,
-  saveCampaignAction,
-} from "@/lib/academies/book-preorders-actions";
+  BOOK_ORDER_PAYMENT_METHODS,
+  BOOK_ORDER_PAYMENT_METHOD_LABEL,
+  type BookOrderPaymentMethod,
+  type BookOrderStatus,
+} from "@/lib/academies/book-order-math";
+import { createBookOrderAction, issueBooksAction, recordBookOrderPaymentAction, updateBookOrderDiscountAction } from "@/lib/academies/book-orders-actions";
 import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
-import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
+import { dollarsToCents, formatMoney } from "@/lib/ui/money";
 import { showSuccessToast } from "@/lib/ui/toast";
 import { Badge } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
@@ -36,52 +27,56 @@ import {
   controlClass,
   invalidProps,
 } from "@/app/academy/_shell/design-form";
+import { StudentPicker } from "@/app/academy/_shell/student-picker";
 import { AddBookForm, EditBookForm, SellForm, type BookSuggestions } from "./books-client";
-import { buyerOf, buyerSearchText, campaignBadge, formatIsoDate, initials, plural, tileOf, todayIso } from "./books-view";
-import { formatPreorderReference, referenceSequence } from "@/lib/academies/book-preorder-math";
+import { formatIsoDate, initials, plural, tileOf, todayIso } from "./books-view";
 
 /**
- * Book Management actions (design B01-B08 dialogs). One provider in the
- * Books layout owns every dialog, so the hero, the step bar's action
- * button and each section's buttons all open the same forms. Each form
+ * Book Management actions. One provider in the Books layout owns every
+ * dialog, so the hero, the section action button and each section's
+ * buttons all open the same forms: Add / Edit Book, Sell Book, and the
+ * order workflow — Create Order for a Student or an Other Buyer (with an
+ * optional first payment), record the buyer's Payment against an order, and
+ * Give Books. Each form
  * only collects input: the server action re-validates and recomputes
- * everything (permission, branch, totals, limits, availability) and is the
- * only authority. Writes carry a fresh idempotency key per attempt, so a
- * double click or a retried request cannot save twice.
+ * everything (permission, branch, totals, stock) and is the only authority.
+ * Writes carry a fresh idempotency key per form, so a double click or a
+ * retried request cannot save twice.
  */
 
+/** An order, as the payment and issue forms need it. */
 export interface OrderPick {
   id: string;
-  reference: string;
-  campaignId: string;
-  buyerType: "student" | "other_person";
-  studentId: string | null;
+  orderNumber: number;
   buyerName: string;
+  studentId: string | null;
   studentNumber: string | null;
-  buyerPhone: string | null;
-  branchName: string;
+  orderDate: string;
+  status: BookOrderStatus;
   currency: string;
+  subtotalCents: number;
+  discountCents: number;
   totalCents: number;
   paidCents: number;
-  balanceCents: number;
+  outstandingCents: number;
+  items: { id: string; bookId: string; bookName: string; quantity: number; quantityReceived: number; issuedQuantity: number }[];
 }
 
 export interface BooksClientData {
-  /** Pre-orders: create orders, record/verify payments, give books. */
-  canManage: boolean;
-  /** Campaigns and receiving (all-branch access). */
-  canManageCampaigns: boolean;
+  /** Student / other-person book orders and their payments (Books "manage"). */
+  canManageOrders: boolean;
+  /** Issue books to students of the caller's branches. */
+  canIssue: boolean;
   /** Catalogue edits (books.ts's own canManage). */
   canManageBooks: boolean;
   /** Ordinary sales (book-sales.ts's own canManage). */
   canSell: boolean;
   books: BookRecord[];
   coverUrls: Record<string, string>;
-  campaigns: CampaignView[];
   orders: OrderPick[];
-  students: PreorderStudentOption[];
-  /** Branches an other-person order can be recorded for (caller's scope). */
-  branches: PreorderBranchOption[];
+  students: BookStudentOption[];
+  /** Branches an other-person order can belong to (caller's scope). */
+  branches: BookBranchOption[];
   suggestions: BookSuggestions;
 }
 
@@ -90,10 +85,10 @@ type Dialog =
   | { kind: "editBook"; bookId: string }
   | { kind: "viewBook"; bookId: string }
   | { kind: "sell"; bookId?: string }
-  | { kind: "campaign"; campaignId?: string }
-  | { kind: "order"; campaignId?: string }
+  | { kind: "order"; studentId?: string }
   | { kind: "pay"; orderId?: string }
-  | { kind: "receive"; campaignId?: string; bookId?: string };
+  | { kind: "issue"; orderId: string }
+  | { kind: "discount"; orderId: string };
 
 export interface ConfirmRequest {
   title: string;
@@ -132,10 +127,10 @@ const DIALOG_TITLE: Record<Dialog["kind"], string> = {
   editBook: "Book details",
   viewBook: "Book details",
   sell: "Sell Book",
-  campaign: "Campaign details",
   order: "Create Order",
-  pay: "Record Payment",
-  receive: "Receive Books",
+  pay: "Record payment",
+  issue: "Give books",
+  discount: "Change discount",
 };
 
 export function BooksActionsProvider({ data, children }: { data: BooksClientData; children: ReactNode }) {
@@ -154,17 +149,19 @@ export function BooksActionsProvider({ data, children }: { data: BooksClientData
 
   const description =
     kind === "addBook"
-      ? "A cover image is required."
+      ? "The cover image is optional."
       : kind === "sell"
         ? "The book is in stock now. Stock goes down when the sale is saved."
-        : kind === "campaign"
-          ? "Tick the books students can order. The optional limit caps copies per book."
-          : kind === "order"
-            ? "Choose who is ordering, add books, then save the order."
-            : kind === "receive"
-              ? "Record a delivery from the supplier. Damaged copies are not added to usable stock."
-              : undefined;
-  const width = kind === "order" ? 1040 : kind === "sell" || kind === "campaign" ? 640 : 560;
+        : kind === "order"
+          ? "Books bought by a student or another buyer, at the book prices. Books are given once the order is fully paid and in stock."
+          : kind === "pay"
+            ? "Money the buyer paid the academy for this order (income). Partial payments are fine."
+            : kind === "issue"
+              ? "Only a fully paid order can be given, from books in stock."
+              : kind === "discount"
+                ? "The total can't go below what the buyer has already paid."
+                : undefined;
+  const width = kind === "order" ? 720 : kind === "sell" ? 640 : 560;
 
   return (
     <Ctx.Provider value={value}>
@@ -175,17 +172,20 @@ export function BooksActionsProvider({ data, children }: { data: BooksClientData
         {kind === "editBook" && book && <EditBookForm book={book} coverUrl={data.coverUrls[book.id] ?? null} suggestions={data.suggestions} onCancel={close} onSaved={done} />}
         {kind === "viewBook" && book && <BookView book={book} onClose={close} onEdit={() => setDialog({ kind: "editBook", bookId: book.id })} />}
         {kind === "sell" && <SellBookForm initialBookId={dialog?.kind === "sell" ? dialog.bookId : undefined} onCancel={close} onDone={done} />}
-        {kind === "campaign" && <CampaignForm campaignId={dialog?.kind === "campaign" ? dialog.campaignId : undefined} onCancel={close} onSaved={done} />}
-        {kind === "order" && <OrderForm initialCampaignId={dialog?.kind === "order" ? dialog.campaignId : undefined} onCancel={close} onSaved={done} />}
-        {kind === "pay" && <PaymentForm initialOrderId={dialog?.kind === "pay" ? dialog.orderId : undefined} onCancel={close} onSaved={done} />}
-        {kind === "receive" && (
-          <ReceiveForm
-            initialCampaignId={dialog?.kind === "receive" ? dialog.campaignId : undefined}
-            initialBookId={dialog?.kind === "receive" ? dialog.bookId : undefined}
+        {kind === "order" && (
+          <BookOrderForm
+            initialStudentId={dialog?.kind === "order" ? dialog.studentId : undefined}
             onCancel={close}
-            onSaved={done}
+            onSaved={(orderId) => {
+              setDialog(null);
+              if (orderId) router.push(`/academy/books/orders/${orderId}`);
+              else router.refresh();
+            }}
           />
         )}
+        {kind === "pay" && <BookOrderPaymentForm initialOrderId={dialog?.kind === "pay" ? dialog.orderId : undefined} onCancel={close} onSaved={done} />}
+        {kind === "discount" && dialog?.kind === "discount" && <OrderDiscountForm orderId={dialog.orderId} onCancel={close} onSaved={done} />}
+        {kind === "issue" && dialog?.kind === "issue" && <IssueBooksForm orderId={dialog.orderId} onCancel={close} onSaved={done} />}
         </div>
       </DesignDialog>
       <ConfirmDialog request={confirmReq} onClose={() => setConfirmReq(null)} onDone={() => router.refresh()} />
@@ -254,7 +254,7 @@ function ConfirmDialog({ request, onClose, onDone }: { request: ConfirmRequest |
 }
 
 /** Runs a confirm-then-save step inside a form dialog (Record Payment,
- * Receive Books): the form validates, then the summary is confirmed. */
+ * Issue Books): the form validates, then the summary is confirmed. */
 function useConfirmStep() {
   const [step, setStep] = useState<{ title: string; body: ReactNode; label: string } | null>(null);
   return { step, ask: setStep, back: () => setStep(null) };
@@ -314,7 +314,7 @@ export function SubjectTile({ book, url, size = "md" }: { book: BookRecord; url?
 
 function BookView({ book, onClose, onEdit }: { book: BookRecord; onClose: () => void; onEdit: () => void }) {
   const { data } = useBooksActions();
-  const campaigns = data.campaigns.filter((c) => c.books.some((b) => b.bookId === book.id));
+  const onOrder = data.orders.filter((o) => o.status === "ordered" && o.items.some((i) => i.bookId === book.id)).length;
   const meta = [book.subject, book.classLevel].filter(Boolean).join(" · ") || "No subject or class";
   return (
     <>
@@ -328,29 +328,10 @@ function BookView({ book, onClose, onEdit }: { book: BookRecord; onClose: () => 
               <b className="tabular-nums">{formatMoney(book.priceCents, book.currency)}</b>
               <Badge label={book.status === "active" ? "Active" : "Archived"} tone={book.status === "active" ? "green" : "gray"} />
             </div>
-            <p className="mt-1 text-sm text-[#374151]">{book.stockQuantity} in stock for sale</p>
+            <p className="mt-1 text-sm text-[#374151]">{plural(book.stockQuantity, "copy", "copies")} in stock</p>
+            {onOrder > 0 && <p className="mt-0.5 text-xs text-muted">{plural(onOrder, "order is", "orders are")} waiting to be received.</p>}
           </div>
         </div>
-        <p className="mb-2 mt-5 text-[13px] font-semibold text-ink">Campaigns</p>
-        {campaigns.length === 0 ? (
-          <p className="text-sm text-muted">This book is not in any campaign yet.</p>
-        ) : (
-          <ul className="divide-y divide-border rounded-xl border border-border">
-            {campaigns.map((c) => {
-              const entry = c.books.find((b) => b.bookId === book.id)!;
-              const badge = campaignBadge(c.status);
-              return (
-                <li key={c.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-                  <span className="min-w-0">
-                    <span className="block font-semibold">{c.name}</span>
-                    <span className="block text-xs text-muted">{plural(entry.ordered, "copy", "copies")} ordered</span>
-                  </span>
-                  <Badge label={badge.label} tone={badge.tone} />
-                </li>
-              );
-            })}
-          </ul>
-        )}
       </DialogBody>
       <div className="flex flex-wrap justify-end gap-3 border-t border-border bg-[#FAFBFC] px-6 py-4">
         <button type="button" onClick={onClose} className="h-11 rounded-lg border border-border-strong bg-surface px-[18px] font-medium text-ink hover:bg-app">
@@ -395,7 +376,7 @@ function SellBookForm({ initialBookId, onCancel, onDone }: { initialBookId?: str
             ))}
           </select>
         </DField>
-        {sellable.length === 0 && <p className="mt-2 text-sm text-muted">No active book has copies in stock. Take a pre-order instead.</p>}
+        {sellable.length === 0 && <p className="mt-2 text-sm text-muted">No active book has copies in stock. Create an order instead.</p>}
         {book && (
           <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl bg-app px-3.5 py-3 text-sm">
             <div>
@@ -423,341 +404,282 @@ function SellBookForm({ initialBookId, onCancel, onDone }: { initialBookId?: str
 }
 
 /* ------------------------------------------------------------------ */
-/* Campaign                                                            */
+/* Create Order: a Student or an Other Buyer                           */
 /* ------------------------------------------------------------------ */
 
-function CampaignForm({ campaignId, onCancel, onSaved }: { campaignId?: string; onCancel: () => void; onSaved: () => void }) {
-  const { data } = useBooksActions();
-  const existing = campaignId ? data.campaigns.find((c) => c.id === campaignId) : undefined;
-  const [name, setName] = useState(existing?.name ?? "");
-  const [opensOn, setOpensOn] = useState(existing?.opensOn ?? "");
-  const [closesOn, setClosesOn] = useState(existing?.closesOn ?? "");
-  const [arrival, setArrival] = useState(existing?.expectedArrivalOn ?? "");
-  const [status, setStatus] = useState<CampaignStatus>(existing?.status ?? "draft");
-  const [selected, setSelected] = useState<Record<string, string>>(() =>
-    Object.fromEntries((existing?.books ?? []).map((b) => [b.bookId, b.quantityLimit ? String(b.quantityLimit) : ""])),
+interface OrderLine {
+  key: string;
+  bookId: string;
+  quantity: string;
+}
+
+type BuyerType = "student" | "other_person";
+
+/** Step 1 of Create Order: who is buying. Two large, plain choices. */
+function BuyerTypeChoice({ onChoose }: { onChoose: (type: BuyerType) => void }) {
+  const choices: { type: BuyerType; icon: string; title: string; sub: string }[] = [
+    { type: "student", icon: "group", title: "Student", sub: "Already registered as a student in this academy." },
+    { type: "other_person", icon: "user_plus", title: "Other buyer", sub: "Not a registered student: a parent, teacher, visitor or anyone else." },
+  ];
+  return (
+    <fieldset>
+      <legend className="mb-3 text-base font-bold text-ink">Who is buying these books?</legend>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {choices.map((c) => (
+          <button
+            key={c.type}
+            type="button"
+            onClick={() => onChoose(c.type)}
+            className="flex min-h-[88px] items-start gap-3 rounded-xl border border-border-strong bg-surface p-4 text-left transition-colors duration-150 hover:border-brand hover:bg-brand-tint focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+          >
+            <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-tint text-brand">
+              <Icon name={c.icon} width={20} height={20} />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-base font-bold text-ink">{c.title}</span>
+              <span className="mt-0.5 block text-sm leading-snug text-muted">{c.sub}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </fieldset>
   );
-  const [search, setSearch] = useState("");
+}
+
+/**
+ * Create Order: first "Who is buying these books?" (Student or Other buyer),
+ * then only that buyer's fields, the books and quantities, an optional
+ * discount and an optional payment received now. "Review order" shows the
+ * summary; "Save order" sends it. Every figure shown is a preview: the server
+ * re-checks the buyer, prices every line from the book's current price and
+ * recomputes the totals and the balance. One idempotency key per form, so a
+ * double click can't save twice.
+ */
+function BookOrderForm({ initialStudentId, onCancel, onSaved }: { initialStudentId?: string; onCancel: () => void; onSaved: (orderId?: string) => void }) {
+  const { data } = useBooksActions();
+  const [buyerType, setBuyerType] = useState<BuyerType | null>(initialStudentId ? "student" : null);
+  const [studentId, setStudentId] = useState(initialStudentId ?? "");
+  const [buyerName, setBuyerName] = useState("");
+  const [buyerPhone, setBuyerPhone] = useState("");
+  const [buyerEmail, setBuyerEmail] = useState("");
+  const [branchId, setBranchId] = useState(data.branches.length === 1 ? data.branches[0].id : "");
+  const [orderDate, setOrderDate] = useState(todayIso);
+  const [notes, setNotes] = useState("");
+  const [discountType, setDiscountType] = useState<"none" | "fixed" | "percentage">("none");
+  const [discountValue, setDiscountValue] = useState("");
+  const [lines, setLines] = useState<OrderLine[]>([{ key: newKey(), bookId: "", quantity: "1" }]);
+  const [payNow, setPayNow] = useState(false);
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState<BookOrderPaymentMethod>("cash");
+  const [payReference, setPayReference] = useState("");
+  const [paidOn, setPaidOn] = useState(todayIso);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState<string | null>(null);
+  const [key] = useState(newKey);
   const [pending, startTransition] = useTransition();
-  const formRef = useRef<HTMLFormElement>(null);
-
-  const q = search.trim().toLowerCase();
-  const choices = data.books.filter(
-    (b) => (b.status === "active" || b.id in selected) && (!q || `${b.name} ${b.subject ?? ""} ${b.classLevel ?? ""}`.toLowerCase().includes(q)),
+  const confirm = useConfirmStep();
+  const studentOptions = useMemo(
+    () => data.students.map((s) => ({ id: s.id, fullName: s.fullName, studentNumber: s.studentNumber, phone: s.phone })),
+    [data.students],
   );
 
-  function validate(): Record<string, string> {
+  const student = data.students.find((s) => s.id === studentId);
+  const orderable = data.books.filter((b) => b.status === "active");
+  const bookOf = (id: string) => orderable.find((b) => b.id === id);
+  const parsed = lines.map((line) => {
+    const quantity = /^\d+$/.test(line.quantity.trim()) ? Number(line.quantity.trim()) : null;
+    const book = bookOf(line.bookId);
+    return { ...line, quantityN: quantity, book, lineCents: book && quantity !== null ? quantity * book.priceCents : null };
+  });
+  const currency = parsed.find((line) => line.book)?.book?.currency ?? orderable[0]?.currency ?? "USD";
+  const subtotal = parsed.reduce((sum, line) => sum + (line.lineCents ?? 0), 0);
+  const discount =
+    discountType === "fixed"
+      ? Math.min(dollarsToCents(discountValue) ?? 0, subtotal)
+      : discountType === "percentage"
+        ? Math.round((subtotal * Math.min(100, Number(discountValue) || 0)) / 100)
+        : 0;
+  const total = Math.max(0, subtotal - discount);
+  const payCents = payNow ? dollarsToCents(payAmount) : 0;
+  const paidNow = payNow && payCents !== null && payCents > 0 ? payCents : 0;
+  const balance = Math.max(0, total - paidNow);
+  const copies = parsed.reduce((sum, line) => sum + (line.quantityN ?? 0), 0);
+  const m = (cents: number) => formatMoney(cents, currency);
+  const setLine = (k: string, patch: Partial<OrderLine>) => setLines((current) => current.map((line) => (line.key === k ? { ...line, ...patch } : line)));
+  const buyerLabel = buyerType === "student" ? (student?.fullName ?? "") : buyerName.trim();
+
+  function check(): boolean {
     const e: Record<string, string> = {};
-    if (!name.trim()) e.name = "Enter a campaign name.";
-    if (!opensOn) e.opensOn = "Choose an opening date.";
-    if (!closesOn) e.closesOn = "Choose a closing date.";
-    else if (opensOn && closesOn < opensOn) e.closesOn = "Closing date must be on or after opening.";
-    if (!arrival) e.arrival = "Choose an expected arrival.";
-    else if (closesOn && arrival < closesOn) e.arrival = "Arrival must be on or after closing.";
-    const ids = Object.keys(selected);
-    if (!ids.length) e.books = "Select at least one book.";
-    else if (ids.some((id) => selected[id] !== "" && !/^[1-9]\d*$/.test(selected[id].trim()))) e.books = "Limits must be whole numbers above 0, or left blank.";
-    return e;
+    if (buyerType === "student" && !studentId) e.studentId = "Choose a student.";
+    if (buyerType === "other_person") {
+      if (!buyerName.trim()) e.buyerName = "Enter the buyer's full name.";
+      if (buyerEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(buyerEmail.trim())) e.buyerEmail = "Enter a valid email address, or leave it empty.";
+      if (data.branches.length > 1 && !branchId) e.branchId = "Choose the branch.";
+    }
+    if (!orderDate) e.orderDate = "Choose the order date.";
+    else if (orderDate > todayIso()) e.orderDate = "The order date can't be in the future.";
+    const chosen = new Set<string>();
+    parsed.forEach((line, i) => {
+      if (!line.book) e[`book-${i}`] = "Choose a book.";
+      else if (chosen.has(line.bookId)) e[`book-${i}`] = "This book is already on the order.";
+      chosen.add(line.bookId);
+      if (line.quantityN === null || line.quantityN < 1) e[`qty-${i}`] = "Enter 1 or more.";
+    });
+    if (discountType === "fixed" && (dollarsToCents(discountValue) === null || (dollarsToCents(discountValue) ?? 0) < 0)) e.discountValue = "Enter the discount, for example 2.00.";
+    if (discountType === "percentage") {
+      const pct = Number(discountValue);
+      if (!/^\d+$/.test(discountValue.trim()) || pct > 100) e.discountValue = "Enter a whole percentage from 0 to 100.";
+    }
+    if (payNow) {
+      if (payCents === null || payCents <= 0) e.payAmount = "Enter the amount received, above 0.";
+      else if (payCents > total) e.payAmount = `That is more than the order total of ${m(total)}.`;
+      if (!paidOn) e.paidOn = "Choose the payment date.";
+      else if (paidOn > todayIso()) e.paidOn = "The payment date can't be in the future.";
+    }
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  if (!buyerType) {
+    return (
+      <>
+        <DialogBody>
+          <BuyerTypeChoice onChoose={setBuyerType} />
+        </DialogBody>
+        <div className="flex flex-wrap justify-end gap-3 border-t border-border bg-[#FAFBFC] px-6 py-4">
+          <button type="button" onClick={onCancel} className="h-11 rounded-lg border border-border-strong bg-surface px-[18px] font-medium text-ink hover:bg-app">
+            Cancel
+          </button>
+        </div>
+      </>
+    );
   }
 
   return (
     <form
-      ref={formRef}
       noValidate
       className="flex min-h-0 flex-1 flex-col"
       onSubmit={(event) => {
         event.preventDefault();
-        const e = validate();
-        setErrors(e);
-        setBanner(Object.keys(e).length > 1 ? `${Object.keys(e).length} fields need attention. They are marked below.` : null);
-        if (Object.keys(e).length) {
-          window.setTimeout(() => formRef.current?.querySelector<HTMLElement>("[aria-invalid=true]")?.focus(), 40);
+        if (!confirm.step) {
+          if (!check()) return;
+          confirm.ask({ title: "Save this order?", body: null, label: "Save order" });
           return;
         }
         startTransition(async () => {
           try {
-            const result = await saveCampaignAction(campaignId ?? null, {
-              name: name.trim(),
-              opensOn,
-              closesOn,
-              expectedArrivalOn: arrival,
-              status,
-              books: Object.entries(selected).map(([bookId, limit]) => ({ bookId, quantityLimit: limit.trim() ? Number(limit) : null })),
+            const result = await createBookOrderAction({
+              idempotencyKey: key,
+              buyerType,
+              studentId: buyerType === "student" ? studentId : undefined,
+              buyerName: buyerType === "other_person" ? buyerName : undefined,
+              buyerPhone: buyerType === "other_person" ? buyerPhone : undefined,
+              buyerEmail: buyerType === "other_person" ? buyerEmail : undefined,
+              branchId: buyerType === "other_person" ? branchId : undefined,
+              orderDate,
+              notes,
+              items: parsed.map((line) => ({ bookId: line.bookId, quantity: line.quantityN ?? 0 })),
+              discountType,
+              discountValue: discountType === "none" ? 0 : discountType === "percentage" ? Number(discountValue) || 0 : (dollarsToCents(discountValue) ?? 0),
+              payment: paidNow > 0 ? { amountCents: paidNow, method: payMethod, reference: payReference, paidOn } : undefined,
             });
             if (!result.ok) {
-              setBanner(result.error?.message ?? "The campaign couldn't be saved.");
+              confirm.back();
+              setBanner(result.error?.message ?? "The order couldn't be saved.");
               return;
             }
-            showSuccessToast(`Campaign saved: ${name.trim()}`);
-            onSaved();
+            showSuccessToast(`Order saved for ${buyerLabel}: ${m(total)}${paidNow > 0 ? `, ${m(paidNow)} paid` : ""}.`);
+            onSaved(result.id);
           } catch {
+            confirm.back();
             setBanner(NETWORK_ERROR_MESSAGE);
           }
         });
       }}
     >
       <DialogBody>
-        <FieldGrid>
-          <DField label="Campaign name" name="name" required error={errors.name} full>
-            <input type="text" value={name} maxLength={200} onChange={(e) => setName(e.target.value)} placeholder="Term 1 2027 books" className={controlClass(Boolean(errors.name))} {...invalidProps("name", errors.name)} />
-          </DField>
-          <DField label="Opens" name="opensOn" required error={errors.opensOn}>
-            <input type="date" value={opensOn} onChange={(e) => setOpensOn(e.target.value)} className={controlClass(Boolean(errors.opensOn))} {...invalidProps("opensOn", errors.opensOn)} />
-          </DField>
-          <DField label="Closes" name="closesOn" required error={errors.closesOn}>
-            <input type="date" value={closesOn} onChange={(e) => setClosesOn(e.target.value)} className={controlClass(Boolean(errors.closesOn))} {...invalidProps("closesOn", errors.closesOn)} />
-          </DField>
-          <DField label="Expected arrival" name="arrival" required error={errors.arrival}>
-            <input type="date" value={arrival} onChange={(e) => setArrival(e.target.value)} className={controlClass(Boolean(errors.arrival))} {...invalidProps("arrival", errors.arrival)} />
-          </DField>
-          <DField label="Status" name="status" hint="Students' orders can be taken only while the campaign is Open.">
-            <select value={status} onChange={(e) => setStatus(e.target.value as CampaignStatus)} className={controlClass(false)}>
-              {CAMPAIGN_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {CAMPAIGN_STATUS_LABEL[s]}
-                </option>
-              ))}
-            </select>
-          </DField>
-          <DField label="Books in this campaign" name="books" required error={errors.books} group full>
-            <span className="relative block">
-              <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-muted">
-                <Icon name="search" width={18} height={18} />
-              </span>
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                aria-label="Search books"
-                placeholder="Search books by title, subject or class"
-                className={`${controlClass(false)} pl-10`}
-              />
-            </span>
-            <span className="mt-2 block max-h-64 overflow-y-auto rounded-xl border border-border font-normal">
-              {choices.length === 0 && <span className="block px-3.5 py-3 text-sm text-muted">No book matches your search.</span>}
-              {choices.map((b, i) => {
-                const on = b.id in selected;
-                const entry = existing?.books.find((x) => x.bookId === b.id);
-                return (
-                  <span key={b.id} className={`flex flex-wrap items-center gap-3 px-3.5 py-2.5 ${i ? "border-t border-border" : ""}`}>
-                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        onChange={() =>
-                          setSelected((cur) => {
-                            const next = { ...cur };
-                            if (on) delete next[b.id];
-                            else next[b.id] = "";
-                            return next;
-                          })
-                        }
-                        className="h-4 w-4 accent-brand"
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-sm font-semibold text-ink [overflow-wrap:anywhere]">{b.name}</span>
-                        <span className="block text-xs text-muted">
-                          {[b.subject, b.classLevel, formatMoney(b.priceCents, b.currency), b.status !== "active" ? "Archived" : null].filter(Boolean).join(" · ")}
-                        </span>
-                      </span>
-                    </label>
-                    {entry && <span className="text-xs text-muted">{plural(entry.ordered, "copy", "copies")} ordered</span>}
-                    {on && (
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="No limit"
-                        aria-label={`Order limit for ${b.name}`}
-                        value={selected[b.id]}
-                        onChange={(e) => setSelected((cur) => ({ ...cur, [b.id]: e.target.value }))}
-                        className={`${controlClass(false)} !h-10 w-28`}
-                      />
-                    )}
+        {confirm.step ? (
+          <div className="flex flex-col gap-4">
+            <ConfirmPanel title="Check the order, then save" body="Creating the order doesn't change stock. Books are given from Give Books once the order is fully paid." />
+            <FormSummary
+              items={[
+                { label: buyerType === "student" ? "Student" : "Other buyer", value: buyerLabel + (buyerType === "student" && student ? ` (${student.studentNumber})` : "") },
+                { label: "Books", value: plural(copies, "copy", "copies") },
+                { label: "Order total", value: m(total) },
+                { label: "Paid now", value: m(paidNow) },
+                { label: "Balance", value: m(balance) },
+              ]}
+            />
+            <div className="overflow-hidden rounded-xl border border-border">
+              {parsed.map((line) => (
+                <div key={line.key} className="flex items-center justify-between gap-3 border-b border-border px-3.5 py-2.5 last:border-b-0">
+                  <span className="min-w-0 [overflow-wrap:anywhere]">
+                    {line.quantityN} × {line.book?.name}
                   </span>
-                );
-              })}
-            </span>
-          </DField>
-        </FieldGrid>
-        <FormErrorBanner message={banner} />
-      </DialogBody>
-      <DialogFooter onCancel={onCancel} submitLabel="Save campaign" pendingLabel="Saving…" pending={pending} />
-    </form>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Student order                                                       */
-/* ------------------------------------------------------------------ */
-
-function OrderForm({ initialCampaignId, onCancel, onSaved }: { initialCampaignId?: string; onCancel: () => void; onSaved: () => void }) {
-  const { data } = useBooksActions();
-  const router = useRouter();
-  const open = data.campaigns.filter((c) => c.status === "open");
-  const [campaignId, setCampaignId] = useState(open.find((c) => c.id === initialCampaignId)?.id ?? open[0]?.id ?? "");
-  const [buyerType, setBuyerType] = useState<"student" | "other_person">("student");
-  const [studentId, setStudentId] = useState("");
-  const [otherName, setOtherName] = useState("");
-  const [otherPhone, setOtherPhone] = useState("");
-  const [otherBranch, setOtherBranch] = useState(data.branches.length === 1 ? data.branches[0].id : "");
-  const [query, setQuery] = useState("");
-  const [hl, setHl] = useState(0);
-  const [bookQuery, setBookQuery] = useState("");
-  const [lines, setLines] = useState<{ bookId: string; quantity: number }[]>([]);
-  const [discount, setDiscount] = useState("0");
-  const [banner, setBanner] = useState<string | null>(null);
-  const [key, setKey] = useState(newKey);
-  const [pending, startTransition] = useTransition();
-
-  const campaign = data.campaigns.find((c) => c.id === campaignId);
-  const isOther = buyerType === "other_person";
-  const student = isOther ? undefined : data.students.find((s) => s.id === studentId);
-  const branch = data.branches.find((b) => b.id === otherBranch);
-  const bookById = new Map(data.books.map((b) => [b.id, b]));
-  const q = query.trim().toLowerCase();
-  const pool = data.students.filter((s) => !q || `${s.fullName} ${s.studentNumber} ${s.branchName}`.toLowerCase().includes(q));
-  const results = pool.slice(0, 8);
-  const hasOrder = new Set(data.orders.filter((o) => o.campaignId === campaignId).map((o) => o.studentId));
-  const dup = student ? data.orders.find((o) => o.studentId === student.id && o.campaignId === campaignId) : undefined;
-
-  const orderCurrency = lines.length ? bookById.get(lines[0].bookId)?.currency : undefined;
-  const bq = bookQuery.trim().toLowerCase();
-  const campaignBooks = (campaign?.books ?? [])
-    .map((entry) => ({ entry, book: bookById.get(entry.bookId) }))
-    .filter((x): x is { entry: CampaignView["books"][number]; book: BookRecord } => Boolean(x.book && x.book.status === "active"))
-    .filter((x) => !bq || `${x.book.name} ${x.book.subject ?? ""}`.toLowerCase().includes(bq));
-
-  const discountPct = Number(discount);
-  const discountErr = discount.trim() !== "" && (!/^\d+$/.test(discount.trim()) || discountPct > 100) ? "Enter a whole percentage between 0 and 100." : null;
-  const priced = lines.map((l) => ({ ...l, unitPriceCents: bookById.get(l.bookId)?.priceCents ?? 0 }));
-  const pricing = computePreorderPricing(priced, discountErr ? 0 : discountPct || 0);
-  const currency = orderCurrency ?? "USD";
-  const copies = lines.reduce((sum, l) => sum + l.quantity, 0);
-
-  const leftFor = (entry: CampaignView["books"][number]) => (entry.quantityLimit === null ? Infinity : entry.quantityLimit - entry.ordered);
-  const setQty = (bookId: string, quantity: number) =>
-    setLines((cur) => (quantity <= 0 ? cur.filter((l) => l.bookId !== bookId) : cur.map((l) => (l.bookId === bookId ? { ...l, quantity } : l))));
-
-  const buyerOk = isOther ? Boolean(otherName.trim() && branch) : Boolean(student);
-  const buyerLabel = isOther ? otherName.trim() : (student?.fullName ?? "");
-  const missing = [
-    !buyerOk && (isOther ? "Enter the buyer name and choose a branch." : "Select a student."),
-    !lines.length && "Add at least one book.",
-    !campaign && "Choose an open campaign.",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const canSave = !missing && !discountErr;
-
-  function save(next: boolean) {
-    if (!canSave || !campaign) return;
-    setBanner(null);
-    startTransition(async () => {
-      try {
-        const result = await createPreorderAction({
-          idempotencyKey: key,
-          campaignId: campaign.id,
-          buyerType,
-          ...(isOther ? { buyerName: otherName.trim(), buyerPhone: otherPhone.trim(), branchId: otherBranch } : { studentId: student!.id }),
-          discountPercent: discountPct || 0,
-          lines: lines.map((l) => ({ bookId: l.bookId, quantity: l.quantity })),
-        });
-        if (!result.ok) {
-          setBanner(result.error?.message ?? "The order couldn't be saved.");
-          return;
-        }
-        showSuccessToast(`Saved ${result.reference} for ${buyerLabel}`);
-        setKey(newKey());
-        if (next) {
-          setStudentId("");
-          setOtherName("");
-          setOtherPhone("");
-          setQuery("");
-          setLines([]);
-          setDiscount("0");
-          router.refresh();
-        } else {
-          onSaved();
-          router.push(`/academy/books/orders/${result.id}`);
-        }
-      } catch {
-        setBanner(NETWORK_ERROR_MESSAGE);
-      }
-    });
-  }
-
-  if (open.length === 0) {
-    return (
-      <>
-        <DialogBody>
-          <div className="rounded-xl border border-border bg-app p-5 text-center">
-            <p className="font-semibold">No campaign is open for orders</p>
-            <p className="mx-auto mt-1 max-w-sm text-sm text-[#4B5563]">Orders can be added to campaigns with the status Open. Create or open a campaign first.</p>
-            <a href="/academy/books/pre-orders" className="mt-3 inline-flex h-11 items-center rounded-lg border border-border-strong bg-surface px-4 font-semibold !text-ink no-underline hover:bg-app">
-              Go to campaigns
-            </a>
+                  <span className="font-semibold tabular-nums">{line.lineCents !== null ? m(line.lineCents) : "—"}</span>
+                </div>
+              ))}
+              {discount > 0 && (
+                <div className="flex items-center justify-between gap-3 border-t border-border px-3.5 py-2.5">
+                  <span>Discount</span>
+                  <span className="font-semibold tabular-nums">−{m(discount)}</span>
+                </div>
+              )}
+            </div>
           </div>
-        </DialogBody>
-        <DialogFooter onCancel={onCancel} submitLabel="Save Order" disabled />
-      </>
-    );
-  }
-
-  const year = new Date().getFullYear();
-  const nextReference = formatPreorderReference(year, data.orders.reduce((m, o) => Math.max(m, referenceSequence(o.reference, year)), 0) + 1);
-
-  const qtyBtn = "flex h-9 w-9 items-center justify-center rounded-lg border border-border-strong bg-surface text-lg font-semibold text-ink hover:bg-app disabled:opacity-40";
-
-  return (
-    <>
-      <DialogBody>
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_300px] lg:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="flex min-w-0 flex-col gap-4">
-            <section className="rounded-xl border border-border p-4">
-              <p className="mb-3 font-bold">1. Who is ordering?</p>
-              <div role="radiogroup" aria-label="Buyer type" className="mb-3 inline-flex rounded-[10px] bg-[#EEF0F3] p-1">
-                {(
-                  [
-                    ["student", "Student"],
-                    ["other_person", "Other Person"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={buyerType === value}
-                    onClick={() => setBuyerType(value)}
-                    className={`h-10 rounded-lg px-[18px] font-semibold transition-colors duration-150 ${
-                      buyerType === value ? "bg-surface text-brand shadow-[0_1px_2px_rgba(17,24,39,0.15)]" : "text-[#374151] hover:text-ink"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {isOther ? (
-                <div className="flex flex-col gap-3">
-                  <label htmlFor="nwOn" className="flex flex-col gap-1.5 text-[13px] font-semibold">
-                    <span>
-                      Full name <span className="text-[#B91C1C]">*</span>
-                    </span>
-                    <input id="nwOn" type="text" autoComplete="off" maxLength={200} value={otherName} onChange={(e) => setOtherName(e.target.value)} placeholder="Hodan Ali" className={controlClass(false)} />
-                  </label>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label htmlFor="nwOp" className="flex flex-col gap-1.5 text-[13px] font-semibold">
-                      <span>
-                        Phone number <span className="font-normal text-muted">(optional)</span>
-                      </span>
-                      <input id="nwOp" type="tel" maxLength={50} value={otherPhone} onChange={(e) => setOtherPhone(e.target.value)} placeholder="+252 63 400 0000" className={controlClass(false)} />
-                    </label>
-                    <label htmlFor="nwOb" className="flex flex-col gap-1.5 text-[13px] font-semibold">
-                      <span>
-                        Branch <span className="text-[#B91C1C]">*</span>
-                      </span>
-                      <select id="nwOb" value={otherBranch} onChange={(e) => setOtherBranch(e.target.value)} className={controlClass(false)}>
+        ) : (
+          <>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-app px-3.5 py-2.5">
+              <span className="text-sm">
+                Buyer: <b>{buyerType === "student" ? "Student" : "Other buyer"}</b>
+              </span>
+              {!initialStudentId && (
+                <button type="button" onClick={() => setBuyerType(null)} className="min-h-11 rounded-lg px-2 text-sm font-semibold text-brand hover:bg-brand-tint">
+                  Change
+                </button>
+              )}
+            </div>
+            <FieldGrid>
+              {buyerType === "student" ? (
+                <>
+                  <DField label="Student" name="studentId" required error={errors.studentId} full hint="Search by name, student number or phone.">
+                    <StudentPicker name="studentId" options={studentOptions} value={studentId} onChange={setStudentId} required />
+                  </DField>
+                  {student && (
+                    <div className="col-span-full grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl border border-border px-3.5 py-3 text-sm sm:grid-cols-4">
+                      <div className="min-w-0">
+                        <div className="text-xs text-muted">Name</div>
+                        <div className="font-semibold [overflow-wrap:anywhere]">{student.fullName}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted">Student ID</div>
+                        <div className="font-semibold tabular-nums">{student.studentNumber}</div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs text-muted">Branch</div>
+                        <div className="font-semibold [overflow-wrap:anywhere]">{student.branchName}</div>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs text-muted">Phone</div>
+                        <div className="font-semibold [overflow-wrap:anywhere]">{student.phone ?? "—"}</div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <DField label="Full name" name="buyerName" required error={errors.buyerName} full>
+                    <input value={buyerName} onChange={(e) => setBuyerName(e.target.value)} maxLength={200} autoComplete="off" className={controlClass(Boolean(errors.buyerName))} {...invalidProps("buyerName", errors.buyerName)} />
+                  </DField>
+                  <DField label="Phone (optional)" name="buyerPhone">
+                    <input type="tel" value={buyerPhone} onChange={(e) => setBuyerPhone(e.target.value)} maxLength={40} placeholder="+252 63 400 0000" className={controlClass(false)} />
+                  </DField>
+                  <DField label="Email (optional)" name="buyerEmail" error={errors.buyerEmail}>
+                    <input type="email" value={buyerEmail} onChange={(e) => setBuyerEmail(e.target.value)} maxLength={200} className={controlClass(Boolean(errors.buyerEmail))} {...invalidProps("buyerEmail", errors.buyerEmail)} />
+                  </DField>
+                  {data.branches.length > 1 && (
+                    <DField label="Branch" name="branchId" required error={errors.branchId} full>
+                      <select value={branchId} onChange={(e) => setBranchId(e.target.value)} className={controlClass(Boolean(errors.branchId))} {...invalidProps("branchId", errors.branchId)}>
                         <option value="">Choose a branch</option>
                         {data.branches.map((b) => (
                           <option key={b.id} value={b.id}>
@@ -765,302 +687,147 @@ function OrderForm({ initialCampaignId, onCancel, onSaved }: { initialCampaignId
                           </option>
                         ))}
                       </select>
-                    </label>
-                  </div>
-                  <p className="text-xs text-muted">Other Person orders are for buyers who are not enrolled students, for example a parent.</p>
-                </div>
-              ) : student ? (
-                <div className="flex items-center gap-3 rounded-xl bg-app px-3 py-2.5">
-                  <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-tint to-[#E9C3CC] font-bold text-brand">
-                    {initials(student.fullName)}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-semibold">{student.fullName}</span>
-                    <span className="block text-xs text-muted">
-                      {student.studentNumber} · {student.branchName}
-                    </span>
-                  </span>
-                  <button type="button" onClick={() => setStudentId("")} className="h-10 rounded-lg border border-border-strong bg-surface px-3 text-sm font-semibold hover:bg-app">
-                    Change
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <label htmlFor="nwStu" className="mb-1.5 block text-[13px] font-semibold">
-                    Student name or ID
-                  </label>
-                  <span className="relative block">
-                    <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-muted">
-                      <Icon name="search" width={18} height={18} />
-                    </span>
-                    <input
-                      id="nwStu"
-                      type="search"
-                      autoComplete="off"
-                      value={query}
-                      onChange={(e) => {
-                        setQuery(e.target.value);
-                        setHl(0);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && results[hl]) {
-                          e.preventDefault();
-                          setStudentId(results[hl].id);
-                        } else if (e.key === "ArrowDown") {
-                          e.preventDefault();
-                          setHl((h) => Math.min(results.length - 1, h + 1));
-                        } else if (e.key === "ArrowUp") {
-                          e.preventDefault();
-                          setHl((h) => Math.max(0, h - 1));
-                        }
-                      }}
-                      placeholder="Search by name or student ID"
-                      className={`${controlClass(false)} pl-10`}
-                    />
-                  </span>
-                  <div role="listbox" aria-label="Students" className="mt-2 max-h-56 overflow-y-auto rounded-xl border border-border">
-                    {results.map((s, i) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        role="option"
-                        aria-selected={i === hl}
-                        onMouseEnter={() => setHl(i)}
-                        onClick={() => setStudentId(s.id)}
-                        className={`flex w-full items-center gap-3 px-3 py-2 text-left ${i ? "border-t border-border" : ""} ${i === hl ? "bg-brand-tint" : "bg-surface"}`}
-                      >
-                        <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-app text-xs font-bold text-brand">
-                          {initials(s.fullName)}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-semibold">{s.fullName}</span>
-                          <span className="block text-xs text-muted">
-                            {s.studentNumber} · {s.branchName}
-                          </span>
-                        </span>
-                        {hasOrder.has(s.id) && <span className="text-xs font-semibold text-warning">Has an order</span>}
-                      </button>
-                    ))}
-                    {results.length === 0 && <p className="px-3 py-3 text-sm text-muted">No student matches “{query}”. Only existing students can be selected.</p>}
-                  </div>
-                  <p className="mt-1.5 text-xs text-muted">
-                    {pool.length > 8 ? `Showing 8 of ${pool.length} students. Keep typing to narrow the list.` : `${plural(pool.length, "student", "students")}. Use the arrow keys and Enter to pick quickly.`}
-                  </p>
+                    </DField>
+                  )}
                 </>
               )}
-              <div className="mt-4">
-                <label htmlFor="nwCamp" className="mb-1.5 block text-[13px] font-semibold">
-                  Campaign
-                </label>
-                <select
-                  id="nwCamp"
-                  value={campaignId}
-                  onChange={(e) => {
-                    setCampaignId(e.target.value);
-                    setLines([]);
-                  }}
-                  className={controlClass(false)}
-                >
-                  {open.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                {campaign && (
-                  <p className="mt-1.5 text-xs text-muted">
-                    Orders close {formatIsoDate(campaign.closesOn)}. Books arrive about {formatIsoDate(campaign.expectedArrivalOn)}.
-                  </p>
-                )}
-              </div>
-              {!isOther && dup && (
-                <div role="status" className="mt-3 rounded-lg bg-warning-bg px-3 py-2.5 text-sm text-warning">
-                  {student?.fullName} already has {dup.reference} in this campaign. You can still create another order.{" "}
-                  <a href={`/academy/books/orders/${dup.id}`} className="font-semibold">
-                    View order
-                  </a>
-                </div>
-              )}
-            </section>
+              <DField label="Order date" name="orderDate" required error={errors.orderDate}>
+                <input type="date" value={orderDate} max={todayIso()} onChange={(e) => setOrderDate(e.target.value)} className={controlClass(Boolean(errors.orderDate))} {...invalidProps("orderDate", errors.orderDate)} />
+              </DField>
+            </FieldGrid>
 
-            <section className="rounded-xl border border-border p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <p className="font-bold">2. Add Books</p>
-                <span className="relative block w-full max-w-[220px]">
-                  <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-muted">
-                    <Icon name="search" width={16} height={16} />
-                  </span>
-                  <input type="search" value={bookQuery} onChange={(e) => setBookQuery(e.target.value)} aria-label="Filter books" placeholder="Filter books" className={`${controlClass(false)} !h-10 pl-9`} />
-                </span>
-              </div>
-              {campaignBooks.length === 0 && <p className="py-4 text-sm text-[#4B5563]">No books match this filter.</p>}
-              {campaignBooks.map(({ entry, book }, i) => {
-                const line = lines.find((l) => l.bookId === book.id);
-                const left = leftFor(entry);
-                const blocked = !line && orderCurrency !== undefined && book.currency !== orderCurrency;
-                const canAdd = !line && !blocked && left > 0;
-                return (
-                  <div key={book.id} className={`flex items-center gap-3 py-2.5 ${i ? "border-t border-border" : ""} ${blocked || (left <= 0 && !line) ? "opacity-55" : ""}`}>
-                    <SubjectTile book={book} url={data.coverUrls[book.id]} size="sm" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold [overflow-wrap:anywhere]">{book.name}</p>
-                      <p className="text-xs text-muted">{[book.subject, book.classLevel].filter(Boolean).join(" · ") || "—"}</p>
-                      {blocked && <p className="text-xs font-semibold text-warning">Different currency from this order</p>}
-                      {entry.quantityLimit !== null && (
-                        <p className="text-xs text-muted">
-                          {left <= 0
-                            ? `Limit reached: ${entry.quantityLimit} of ${entry.quantityLimit} copies ordered`
-                            : `${Math.max(left - (line?.quantity ?? 0), 0)} of ${entry.quantityLimit} copies left`}
-                        </p>
-                      )}
-                    </div>
-                    <span className="text-sm font-semibold tabular-nums">{formatMoney(book.priceCents, book.currency)}</span>
-                    {line ? (
-                      <span className="flex items-center gap-2">
-                        <button type="button" className={qtyBtn} onClick={() => setQty(book.id, line.quantity - 1)} aria-label={`Decrease ${book.name}`}>
-                          −
-                        </button>
-                        <span className="w-6 text-center font-semibold tabular-nums">{line.quantity}</span>
-                        <button type="button" className={qtyBtn} disabled={line.quantity >= left} onClick={() => setQty(book.id, line.quantity + 1)} aria-label={`Increase ${book.name}`}>
-                          +
-                        </button>
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={!canAdd}
-                        onClick={() => setLines((cur) => [...cur, { bookId: book.id, quantity: 1 }])}
-                        className="h-10 min-w-[58px] rounded-lg border border-border-strong bg-surface px-3 text-sm font-semibold text-ink hover:bg-app disabled:cursor-not-allowed disabled:text-muted"
-                      >
-                        Add
+            <p className="mb-2 mt-5 text-[13px] font-semibold text-ink">Books</p>
+            {orderable.length === 0 && <p className="mb-2 text-sm text-muted">Add a book to the catalogue first.</p>}
+            <div className="flex flex-col gap-3">
+              {parsed.map((line, i) => (
+                <div key={line.key} className="grid grid-cols-2 gap-3 rounded-xl border border-border p-3 sm:grid-cols-[minmax(0,2fr)_90px_auto]">
+                  <div className="col-span-2 sm:col-span-1">
+                    <DField label="Book" name={`book-${i}`} required error={errors[`book-${i}`]}>
+                      <select value={line.bookId} onChange={(e) => setLine(line.key, { bookId: e.target.value })} className={controlClass(Boolean(errors[`book-${i}`]))} {...invalidProps(`book-${i}`, errors[`book-${i}`])}>
+                        <option value="">Choose a book</option>
+                        {orderable.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}, {formatMoney(b.priceCents, b.currency)}, {b.stockQuantity} in stock
+                          </option>
+                        ))}
+                      </select>
+                    </DField>
+                  </div>
+                  <DField label="Quantity" name={`qty-${i}`} required error={errors[`qty-${i}`]}>
+                    <input inputMode="numeric" value={line.quantity} onChange={(e) => setLine(line.key, { quantity: e.target.value })} className={controlClass(Boolean(errors[`qty-${i}`]))} {...invalidProps(`qty-${i}`, errors[`qty-${i}`])} />
+                  </DField>
+                  <div className="flex items-end justify-between gap-3 sm:flex-col sm:items-end">
+                    <span className="text-sm font-semibold tabular-nums">{line.lineCents !== null ? m(line.lineCents) : "—"}</span>
+                    {lines.length > 1 && (
+                      <button type="button" onClick={() => setLines((current) => current.filter((l) => l.key !== line.key))} className="min-h-11 text-xs font-semibold text-[#B91C1C] hover:underline">
+                        Remove
                       </button>
                     )}
                   </div>
-                );
-              })}
-            </section>
-          </div>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setLines((current) => [...current, { key: newKey(), bookId: "", quantity: "1" }])}
+              className="mt-3 inline-flex min-h-11 items-center rounded-lg border border-border-strong bg-surface px-4 font-semibold text-ink hover:bg-app"
+            >
+              Add another book
+            </button>
 
-          <aside className="self-start rounded-xl border border-border bg-surface p-4 shadow-card md:sticky md:top-0">
-            <div className="flex items-baseline justify-between gap-2">
-              <p className="font-bold">Order summary</p>
-              <span className="font-mono text-[13px] text-[#374151]">{nextReference}</span>
-            </div>
-            <p className="mt-0.5 text-xs text-muted">Reference is fixed once the order is saved.</p>
-            <div className="mt-3 rounded-lg bg-app px-3 py-2.5 text-sm">
-              {buyerOk || (isOther && otherName.trim()) ? (
-                <>
-                  <span className="block font-semibold">{buyerLabel}</span>
-                  <span className="block text-xs text-muted">
-                    {isOther
-                      ? ["Other person", otherPhone.trim() || null, branch?.name ?? null].filter(Boolean).join(" · ")
-                      : `${student!.studentNumber} · ${student!.branchName}`}
-                  </span>
-                </>
-              ) : (
-                <span className="text-muted">{isOther ? "Enter the buyer name" : "No student selected"}</span>
+            <FieldGrid>
+              <DField label="Discount" name="discountType">
+                <select value={discountType} onChange={(e) => setDiscountType(e.target.value as typeof discountType)} className={controlClass(false)}>
+                  <option value="none">No discount</option>
+                  <option value="fixed">Fixed amount ({currency})</option>
+                  <option value="percentage">Percentage</option>
+                </select>
+              </DField>
+              {discountType !== "none" && (
+                <DField label={discountType === "fixed" ? `Discount (${currency})` : "Discount (%)"} name="discountValue" required error={errors.discountValue}>
+                  <input
+                    inputMode="decimal"
+                    value={discountValue}
+                    onChange={(e) => setDiscountValue(e.target.value)}
+                    placeholder={discountType === "fixed" ? "0.00" : "10"}
+                    className={controlClass(Boolean(errors.discountValue))}
+                    {...invalidProps("discountValue", errors.discountValue)}
+                  />
+                </DField>
               )}
-            </div>
-            <div className="mt-2">
-              {lines.length === 0 && <p className="py-5 text-center text-sm text-muted">No books added yet. Use Add on the book list.</p>}
-              {lines.map((l) => {
-                const book = bookById.get(l.bookId)!;
-                return (
-                  <div key={l.bookId} className="border-b border-border py-2.5 last:border-b-0">
-                    <div className="flex justify-between gap-2 text-sm">
-                      <span className="min-w-0">
-                        <span className="block font-semibold [overflow-wrap:anywhere]">{book.name}</span>
-                        <span className="block text-xs text-muted">{formatMoney(book.priceCents, book.currency)} each</span>
-                      </span>
-                      <span className="font-semibold tabular-nums">{formatMoney(book.priceCents * l.quantity, book.currency)}</span>
-                    </div>
-                    <div className="mt-1.5 flex items-center justify-between">
-                      <span className="flex items-center gap-2">
-                        <button type="button" className={qtyBtn} onClick={() => setQty(l.bookId, l.quantity - 1)} aria-label={`Decrease ${book.name}`}>
-                          −
-                        </button>
-                        <span className="w-6 text-center font-semibold tabular-nums">{l.quantity}</span>
-                        <button
-                          type="button"
-                          className={qtyBtn}
-                          disabled={l.quantity >= leftFor(campaign!.books.find((b) => b.bookId === l.bookId)!)}
-                          onClick={() => setQty(l.bookId, l.quantity + 1)}
-                          aria-label={`Increase ${book.name}`}
-                        >
-                          +
-                        </button>
-                      </span>
-                      <button type="button" onClick={() => setQty(l.bookId, 0)} className="text-sm font-semibold text-brand hover:underline">
-                        Remove
+              <DField label="Notes (optional)" name="notes" full>
+                <input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={1000} className={controlClass(false)} />
+              </DField>
+            </FieldGrid>
+
+            <p className="mb-2 mt-5 text-[13px] font-semibold text-ink">Payment</p>
+            <MethodChips<"later" | "now">
+              label="Payment"
+              value={payNow ? "now" : "later"}
+              onChange={(v) => setPayNow(v === "now")}
+              options={[
+                { value: "later", label: "No payment yet" },
+                { value: "now", label: "Payment received now" },
+              ]}
+            />
+            {payNow && (
+              <FieldGrid>
+                <DField label={`Amount received (${currency})`} name="payAmount" required error={errors.payAmount} hint={total > 0 ? `Order total ${m(total)}. Part payments are fine.` : undefined}>
+                  <div className="flex gap-2">
+                    <input inputMode="decimal" placeholder="0.00" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} className={controlClass(Boolean(errors.payAmount))} {...invalidProps("payAmount", errors.payAmount)} />
+                    {total > 0 && (
+                      <button type="button" onClick={() => setPayAmount((total / 100).toFixed(2))} className="min-h-11 shrink-0 rounded-lg border border-border-strong bg-surface px-3 text-sm font-semibold text-ink hover:bg-app">
+                        Full amount
                       </button>
-                    </div>
+                    )}
                   </div>
-                );
-              })}
+                </DField>
+                <DField label="Payment date" name="paidOn" required error={errors.paidOn}>
+                  <input type="date" value={paidOn} max={todayIso()} onChange={(e) => setPaidOn(e.target.value)} className={controlClass(Boolean(errors.paidOn))} {...invalidProps("paidOn", errors.paidOn)} />
+                </DField>
+                <DField label="Payment method" name="payMethod" required group full>
+                  <MethodChips value={payMethod} onChange={setPayMethod} options={BOOK_ORDER_PAYMENT_METHODS.map((pm) => ({ value: pm, label: BOOK_ORDER_PAYMENT_METHOD_LABEL[pm] }))} />
+                </DField>
+                <DField label="Payment reference (optional)" name="payReference" full>
+                  <input value={payReference} onChange={(e) => setPayReference(e.target.value)} maxLength={200} placeholder="Receipt number or transaction ID" className={controlClass(false)} />
+                </DField>
+              </FieldGrid>
+            )}
+
+            <div className="mt-4">
+              <FormSummary
+                items={[
+                  { label: "Subtotal", value: m(subtotal) },
+                  { label: "Discount", value: m(discount) },
+                  { label: "Order total", value: m(total) },
+                  { label: "Paid now", value: m(paidNow) },
+                  { label: "Balance", value: m(balance) },
+                ]}
+              />
             </div>
-            <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3 text-sm">
-              <div className="flex justify-between">
-                <span>Subtotal ({plural(copies, "copy", "copies")})</span>
-                <span className="tabular-nums">{formatMoney(pricing.subtotalCents, currency)}</span>
-              </div>
-              <label htmlFor="nwDisc" className="flex items-center justify-between gap-2">
-                <span className="whitespace-nowrap">Discount (%)</span>
-                <input
-                  id="nwDisc"
-                  type="text"
-                  inputMode="numeric"
-                  value={discount}
-                  onChange={(e) => setDiscount(e.target.value)}
-                  className={`${controlClass(Boolean(discountErr))} !h-10 !w-24 text-right`}
-                  {...invalidProps("nwDisc", discountErr ?? undefined)}
-                />
-              </label>
-              {pricing.discountAmountCents > 0 && <p className="text-right text-xs text-muted">Discount: − {formatMoney(pricing.discountAmountCents, currency)}</p>}
-              {discountErr && (
-                <p id="fe-nwDisc" role="alert" className="text-xs font-medium text-[#B91C1C]">
-                  {discountErr}
-                </p>
-              )}
-            </div>
-            <div className="mt-3 flex items-end justify-between border-t border-border pt-3">
-              <span>
-                <span className="block font-bold">Order Total</span>
-                <span className="block text-xs text-muted">after discount</span>
-              </span>
-              <span className="text-[22px] font-bold tabular-nums text-ink">{formatMoney(pricing.totalCents, currency)}</span>
-            </div>
-          </aside>
-        </div>
+          </>
+        )}
         <FormErrorBanner message={banner} />
       </DialogBody>
-      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border bg-[#FAFBFC] px-6 py-4">
-        {missing && <span className="mr-auto text-xs text-muted">{missing}</span>}
-        <button type="button" onClick={onCancel} className="h-11 rounded-lg border border-border-strong bg-surface px-[18px] font-medium text-ink hover:bg-app">
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={!canSave || pending}
-          onClick={() => save(true)}
-          className="h-11 rounded-lg border border-border-strong bg-surface px-4 font-semibold text-ink hover:bg-app disabled:opacity-50"
-        >
-          Save and Create Next Order
-        </button>
-        <button type="button" disabled={!canSave || pending} onClick={() => save(false)} className="h-11 min-w-[120px] rounded-lg bg-brand px-5 font-semibold text-white hover:bg-brand-hover disabled:opacity-50">
-          {pending ? "Saving…" : "Save Order"}
-        </button>
-      </div>
-    </>
+      <DialogFooter
+        onCancel={confirm.step ? confirm.back : onCancel}
+        cancelLabel={confirm.step ? "Go back" : "Cancel"}
+        submitLabel={confirm.step ? "Save order" : "Review order"}
+        pendingLabel="Saving…"
+        pending={pending}
+        disabled={orderable.length === 0}
+      />
+    </form>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* Payment                                                             */
+/* Book Payments (from the buyer)                                      */
 /* ------------------------------------------------------------------ */
 
-function MethodChips<T extends string>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[] }) {
+function MethodChips<T extends string>({ value, onChange, options, label = "Payment method" }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[]; label?: string }) {
   return (
-    <span role="radiogroup" aria-label="Payment method" className="flex flex-wrap gap-2">
+    <span role="radiogroup" aria-label={label} className="flex flex-wrap gap-2">
       {options.map((o) => (
         <button
           key={o.value}
@@ -1077,20 +844,14 @@ function MethodChips<T extends string>({ value, onChange, options }: { value: T;
   );
 }
 
-const REF_PLACEHOLDER: Record<PreorderPaymentMethod, string> = {
-  cash: "Receipt number or note",
-  mobile_money: "Transaction ID",
-  bank_transfer: "Transfer reference",
-  other: "Reference or note",
-};
-
-function PaymentForm({ initialOrderId, onCancel, onSaved }: { initialOrderId?: string; onCancel: () => void; onSaved: () => void }) {
+function BookOrderPaymentForm({ initialOrderId, onCancel, onSaved }: { initialOrderId?: string; onCancel: () => void; onSaved: () => void }) {
   const { data } = useBooksActions();
-  const [orderId, setOrderId] = useState(initialOrderId ?? "");
+  const payable = data.orders.filter((o) => o.status !== "cancelled" && o.outstandingCents > 0);
+  const [orderId, setOrderId] = useState(initialOrderId && payable.some((o) => o.id === initialOrderId) ? initialOrderId : "");
   const [search, setSearch] = useState("");
   const [amount, setAmount] = useState("");
   const [paidOn, setPaidOn] = useState(todayIso);
-  const [method, setMethod] = useState<PreorderPaymentMethod>("cash");
+  const [method, setMethod] = useState<BookOrderPaymentMethod>("cash");
   const [reference, setReference] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState<string | null>(null);
@@ -1098,25 +859,21 @@ function PaymentForm({ initialOrderId, onCancel, onSaved }: { initialOrderId?: s
   const [pending, startTransition] = useTransition();
   const confirm = useConfirmStep();
 
-  const order = data.orders.find((o) => o.id === orderId);
+  const order = payable.find((o) => o.id === orderId);
   const q = search.trim().toLowerCase();
-  const results = data.orders
-    .filter((o) => o.balanceCents > 0 && (!q || buyerSearchText(o).includes(q)))
-    .slice(0, 5);
+  const options = payable.filter((o) => !q || `#${o.orderNumber} ${o.buyerName} ${o.studentNumber ?? ""}`.toLowerCase().includes(q) || o.id === orderId);
   const cents = dollarsToCents(amount);
 
   function check(): boolean {
     const e: Record<string, string> = {};
-    if (!order) e.order = "Choose an order first.";
+    if (!order) e.order = "Choose an order.";
     else if (cents === null || cents <= 0) e.amount = "Enter an amount above 0.";
-    else if (cents > order.balanceCents) e.amount = `Amount is more than the Remaining Balance of ${formatMoney(order.balanceCents, order.currency)}.`;
+    else if (cents > order.outstandingCents) e.amount = `That is more than the outstanding balance of ${formatMoney(order.outstandingCents, order.currency)}.`;
     if (!paidOn) e.paidOn = "Choose the payment date.";
-    else if (paidOn > todayIso()) e.paidOn = "Payment date can't be in the future.";
+    else if (paidOn > todayIso()) e.paidOn = "The payment date can't be in the future.";
     setErrors(e);
     return Object.keys(e).length === 0;
   }
-
-  const after = order && cents && cents > 0 && cents <= order.balanceCents ? order.balanceCents - cents : null;
 
   return (
     <form
@@ -1128,219 +885,22 @@ function PaymentForm({ initialOrderId, onCancel, onSaved }: { initialOrderId?: s
           if (!check() || !order || cents === null) return;
           confirm.ask({
             title: "Record this payment?",
-            body: `${formatMoney(cents, order.currency)} by ${PREORDER_PAYMENT_METHOD_LABEL[method].toLowerCase()} from ${order.buyerName} for ${order.reference}. Remaining Balance after this payment: ${formatMoney(order.balanceCents - cents, order.currency)}.`,
-            label: "Record Payment",
+            body: `${formatMoney(cents, order.currency)} from ${order.buyerName} by ${BOOK_ORDER_PAYMENT_METHOD_LABEL[method].toLowerCase()}. Outstanding after this payment: ${formatMoney(order.outstandingCents - cents, order.currency)}.`,
+            label: "Record payment",
           });
           return;
         }
         if (!order || cents === null) return;
         startTransition(async () => {
           try {
-            const result = await recordPreorderPaymentAction({ idempotencyKey: key, orderId: order.id, amountCents: cents, method, reference, paidOn });
+            const result = await recordBookOrderPaymentAction({ idempotencyKey: key, orderId: order.id, amountCents: cents, method, reference, paidOn });
             if (!result.ok) {
               confirm.back();
               setBanner(result.error?.message ?? "The payment couldn't be recorded.");
               return;
             }
-            const left = result.balanceCents ?? 0;
-            showSuccessToast(`${formatMoney(cents, order.currency)} recorded for ${order.reference}${left > 0 ? `. Remaining Balance ${formatMoney(left, order.currency)}` : ". Paid in full"}`);
-            onSaved();
-          } catch {
-            confirm.back();
-            setBanner(NETWORK_ERROR_MESSAGE);
-          }
-        });
-      }}
-    >
-      <DialogBody>
-        {confirm.step ? (
-          <ConfirmPanel title={confirm.step.title} body={confirm.step.body} />
-        ) : (
-          <>
-            {!order ? (
-              <DField label="Select Order" name="order" required error={errors.order} group full>
-                <input
-                  type="search"
-                  autoComplete="off"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name, student ID, phone or order number"
-                  aria-label="Search orders"
-                  className={controlClass(Boolean(errors.order))}
-                  {...invalidProps("order", errors.order)}
-                />
-                <span className="mt-2 block overflow-hidden rounded-xl border border-border font-normal">
-                  {results.map((o, i) => (
-                    <button
-                      key={o.id}
-                      type="button"
-                      onClick={() => {
-                        setOrderId(o.id);
-                        setErrors({});
-                      }}
-                      className={`flex w-full items-center justify-between gap-3 px-3.5 py-2.5 text-left hover:bg-app ${i ? "border-t border-border" : ""}`}
-                    >
-                      <span className="min-w-0">
-                        <span className="block text-sm font-semibold">{o.reference}</span>
-                        <span className="block text-xs text-muted">
-                          {o.buyerName} · {buyerOf(o).id}
-                        </span>
-                      </span>
-                      <span className="text-right text-sm font-semibold tabular-nums">
-                        {formatMoney(o.balanceCents, o.currency)}
-                        <span className="block text-xs font-normal text-muted">remaining</span>
-                      </span>
-                    </button>
-                  ))}
-                  {results.length === 0 && <span className="block px-3.5 py-3 text-sm text-muted">No order with an outstanding balance matches.</span>}
-                </span>
-              </DField>
-            ) : (
-              <>
-                <div className="mb-4 rounded-xl bg-app px-3.5 py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="min-w-0">
-                      <span className="block font-bold">{order.reference}</span>
-                      <span className="block text-sm text-muted">
-                        {order.buyerName} · {buyerOf(order).sub}
-                      </span>
-                    </span>
-                    {!initialOrderId && (
-                      <button type="button" onClick={() => setOrderId("")} className="h-10 rounded-lg border border-border-strong bg-surface px-3 text-sm font-semibold hover:bg-surface">
-                        Change
-                      </button>
-                    )}
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
-                    <div>
-                      <div className="text-xs text-muted">Order Total</div>
-                      <b className="tabular-nums">{formatMoney(order.totalCents, order.currency)}</b>
-                    </div>
-                    <div>
-                      <div className="text-xs text-muted">Amount Paid so far</div>
-                      <b className="tabular-nums">{formatMoney(order.paidCents, order.currency)}</b>
-                    </div>
-                    <div>
-                      <div className="text-xs text-muted">Remaining Balance</div>
-                      <b className="tabular-nums text-danger">{formatMoney(order.balanceCents, order.currency)}</b>
-                    </div>
-                  </div>
-                </div>
-                <FieldGrid>
-                  <DField label={`Amount Paid (${order.currency})`} name="amount" required error={errors.amount}>
-                    <input type="text" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className={controlClass(Boolean(errors.amount))} {...invalidProps("amount", errors.amount)} />
-                  </DField>
-                  <DField label="Payment date" name="paidOn" required error={errors.paidOn}>
-                    <input type="date" value={paidOn} max={todayIso()} onChange={(e) => setPaidOn(e.target.value)} className={controlClass(Boolean(errors.paidOn))} {...invalidProps("paidOn", errors.paidOn)} />
-                  </DField>
-                  <div className="col-span-full flex flex-wrap items-center gap-3">
-                    <button type="button" onClick={() => setAmount(centsToDollars(order.balanceCents))} className="h-10 rounded-lg border border-border-strong bg-surface px-3 text-sm font-semibold hover:bg-app">
-                      Pay full balance ({formatMoney(order.balanceCents, order.currency)})
-                    </button>
-                    {after !== null && <span className="text-sm text-[#374151]">{after === 0 ? "Order will be fully paid" : `Remaining Balance after payment: ${formatMoney(after, order.currency)}`}</span>}
-                  </div>
-                  <DField label="Payment Method" name="method" group full>
-                    <MethodChips value={method} onChange={setMethod} options={PREORDER_PAYMENT_METHODS.map((m) => ({ value: m, label: PREORDER_PAYMENT_METHOD_LABEL[m] }))} />
-                  </DField>
-                  <DField label="Reference or note" name="reference" hint="Optional." full>
-                    <input type="text" maxLength={200} value={reference} onChange={(e) => setReference(e.target.value)} placeholder={REF_PLACEHOLDER[method]} className={controlClass(false)} />
-                  </DField>
-                </FieldGrid>
-                <p className="mt-3 text-xs text-muted">
-                  Payments are recorded as unverified until staff verify them. Books are given only after the order is paid in full and every payment is
-                  verified. No online payment is taken.
-                </p>
-              </>
-            )}
-          </>
-        )}
-        <FormErrorBanner message={banner} />
-      </DialogBody>
-      <DialogFooter
-        onCancel={confirm.step ? confirm.back : onCancel}
-        cancelLabel={confirm.step ? "Go back" : "Cancel"}
-        submitLabel="Record Payment"
-        pendingLabel="Recording…"
-        pending={pending}
-        disabled={!order}
-      />
-    </form>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Receive books                                                       */
-/* ------------------------------------------------------------------ */
-
-function ReceiveForm({ initialCampaignId, initialBookId, onCancel, onSaved }: { initialCampaignId?: string; initialBookId?: string; onCancel: () => void; onSaved: () => void }) {
-  const { data } = useBooksActions();
-  const campaigns = data.campaigns.filter((c) => RECEIVABLE_STATUSES.includes(c.status) && c.books.length > 0);
-  const [campaignId, setCampaignId] = useState(campaigns.find((c) => c.id === initialCampaignId)?.id ?? campaigns[0]?.id ?? "");
-  const campaign = campaigns.find((c) => c.id === campaignId);
-  const [bookId, setBookId] = useState(initialBookId && campaign?.books.some((b) => b.bookId === initialBookId) ? initialBookId : (campaign?.books[0]?.bookId ?? ""));
-  const [received, setReceived] = useState("");
-  const [damaged, setDamaged] = useState("0");
-  const [receivedOn, setReceivedOn] = useState(todayIso);
-  const [note, setNote] = useState("");
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [banner, setBanner] = useState<string | null>(null);
-  const [key] = useState(newKey);
-  const [pending, startTransition] = useTransition();
-  const confirm = useConfirmStep();
-
-  const entry = campaign?.books.find((b) => b.bookId === bookId);
-  const book = data.books.find((b) => b.id === bookId);
-  const r = /^\d+$/.test(received.trim()) ? Number(received) : NaN;
-  const d = /^\d+$/.test(damaged.trim()) ? Number(damaged) : NaN;
-
-  function check(): boolean {
-    const e: Record<string, string> = {};
-    if (!campaign || !entry) e.book = "Choose a book.";
-    if (!(r > 0)) e.received = "Enter the quantity received.";
-    if (Number.isNaN(d) || d < 0) e.damaged = "Enter 0 or more.";
-    else if (r > 0 && d > r) e.damaged = "Cannot be more than the quantity received.";
-    if (!receivedOn) e.receivedOn = "Choose the date.";
-    else if (receivedOn > todayIso()) e.receivedOn = "Date received can't be in the future.";
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  }
-
-  if (campaigns.length === 0) {
-    return (
-      <>
-        <DialogBody>
-          <p className="text-sm text-[#4B5563]">There is no campaign to receive books for. Receiving is recorded against a campaign with books; create or schedule one first.</p>
-        </DialogBody>
-        <DialogFooter onCancel={onCancel} submitLabel="Receive Books" disabled />
-      </>
-    );
-  }
-
-  return (
-    <form
-      noValidate
-      className="flex min-h-0 flex-1 flex-col"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!confirm.step) {
-          if (!check() || !book) return;
-          const usable = r - d;
-          confirm.ask({
-            title: "Add these books to the campaign stock?",
-            body: `Receive ${plural(r, "copy", "copies")} of ${book.name}${d ? `, including ${d} damaged` : ""}. ${plural(usable, "usable copy", "usable copies")} will be available to give to students. Stock for ordinary sales does not change.`,
-            label: "Receive Books",
-          });
-          return;
-        }
-        startTransition(async () => {
-          try {
-            const result = await recordPreorderReceiptAction({ idempotencyKey: key, campaignId, bookId, quantityReceived: r, damagedQuantity: d, receivedOn, note });
-            if (!result.ok) {
-              confirm.back();
-              setBanner(result.error?.message ?? "The delivery couldn't be recorded.");
-              return;
-            }
-            showSuccessToast(`Received ${plural(r, "copy", "copies")}, ${d} damaged`);
+            const left = order.outstandingCents - cents;
+            showSuccessToast(`${formatMoney(cents, order.currency)} recorded from ${order.buyerName}${left > 0 ? `. Outstanding ${formatMoney(left, order.currency)}` : ". Fully paid"}.`);
             onSaved();
           } catch {
             confirm.back();
@@ -1354,52 +914,50 @@ function ReceiveForm({ initialCampaignId, initialBookId, onCancel, onSaved }: { 
           <ConfirmPanel title={confirm.step.title} body={confirm.step.body} />
         ) : (
           <FieldGrid>
-            <DField label="Campaign" name="campaign" full>
-              <select
-                value={campaignId}
-                onChange={(e) => {
-                  setCampaignId(e.target.value);
-                  setBookId(campaigns.find((c) => c.id === e.target.value)?.books[0]?.bookId ?? "");
-                }}
-                className={controlClass(false)}
-              >
-                {campaigns.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </DField>
-            <DField label="Book" name="book" required error={errors.book} full>
-              <select value={bookId} onChange={(e) => setBookId(e.target.value)} className={controlClass(Boolean(errors.book))} {...invalidProps("book", errors.book)}>
-                {campaign?.books.map((b) => (
-                  <option key={b.bookId} value={b.bookId}>
-                    {data.books.find((x) => x.id === b.bookId)?.name ?? "Book"}
-                  </option>
-                ))}
-              </select>
-              {entry && (
-                <span className="text-xs font-normal text-muted">
-                  {campaign?.name}. Ordered {entry.ordered}, usable received so far {entry.usable}
-                  {entry.damaged ? ` (${entry.damaged} damaged)` : ""}.
-                </span>
+            <DField label="Order" name="order" required error={errors.order} full>
+              {payable.length > 8 && (
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search order number, buyer or student number"
+                  aria-label="Search orders"
+                  className={`${controlClass(false)} mb-2`}
+                />
               )}
+              <select value={orderId} onChange={(e) => setOrderId(e.target.value)} className={controlClass(Boolean(errors.order))} {...invalidProps("order", errors.order)}>
+                <option value="">{payable.length ? "Choose an order with a balance" : "No order has a balance to pay"}</option>
+                {options.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    #{o.orderNumber} · {o.buyerName}
+                    {o.studentNumber ? ` (${o.studentNumber})` : ""} · {formatIsoDate(o.orderDate)} · {formatMoney(o.outstandingCents, o.currency)} outstanding
+                  </option>
+                ))}
+              </select>
             </DField>
-            <DField label="Quantity Received" name="received" required error={errors.received}>
-              <input type="text" inputMode="numeric" value={received} onChange={(e) => setReceived(e.target.value)} className={controlClass(Boolean(errors.received))} {...invalidProps("received", errors.received)} />
+            {order && (
+              <div className="col-span-full">
+                <FormSummary
+                  items={[
+                    { label: "Order total", value: formatMoney(order.totalCents, order.currency) },
+                    { label: "Paid so far", value: formatMoney(order.paidCents, order.currency) },
+                    { label: "Outstanding", value: formatMoney(order.outstandingCents, order.currency) },
+                  ]}
+                />
+              </div>
+            )}
+            <DField label={`Amount paid (${order?.currency ?? "USD"})`} name="amount" required error={errors.amount}>
+              <input inputMode="decimal" placeholder="0.00" value={amount} onChange={(e) => setAmount(e.target.value)} className={controlClass(Boolean(errors.amount))} {...invalidProps("amount", errors.amount)} />
             </DField>
-            <DField label="Damaged Copies" name="damaged" error={errors.damaged}>
-              <input type="text" inputMode="numeric" value={damaged} onChange={(e) => setDamaged(e.target.value)} className={controlClass(Boolean(errors.damaged))} {...invalidProps("damaged", errors.damaged)} />
+            <DField label="Payment date" name="paidOn" required error={errors.paidOn}>
+              <input type="date" value={paidOn} max={todayIso()} onChange={(e) => setPaidOn(e.target.value)} className={controlClass(Boolean(errors.paidOn))} {...invalidProps("paidOn", errors.paidOn)} />
             </DField>
-            <DField label="Date Received" name="receivedOn" required error={errors.receivedOn}>
-              <input type="date" value={receivedOn} max={todayIso()} onChange={(e) => setReceivedOn(e.target.value)} className={controlClass(Boolean(errors.receivedOn))} {...invalidProps("receivedOn", errors.receivedOn)} />
+            <DField label="Payment method" name="method" required group full>
+              <MethodChips value={method} onChange={setMethod} options={BOOK_ORDER_PAYMENT_METHODS.map((m) => ({ value: m, label: BOOK_ORDER_PAYMENT_METHOD_LABEL[m] }))} />
             </DField>
-            <DField label="Note" name="note" hint="Optional." full>
-              <input type="text" maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} className={controlClass(false)} />
+            <DField label="Payment reference (optional)" name="reference" full>
+              <input value={reference} onChange={(e) => setReference(e.target.value)} maxLength={200} placeholder="Receipt number or transaction ID" className={controlClass(false)} />
             </DField>
-            <p className="col-span-full text-xs text-muted">
-              Damaged copies are included in Quantity Received but are not added to usable stock. Remaining equals Quantity Ordered minus usable copies.
-            </p>
           </FieldGrid>
         )}
         <FormErrorBanner message={banner} />
@@ -1407,13 +965,215 @@ function ReceiveForm({ initialCampaignId, initialBookId, onCancel, onSaved }: { 
       <DialogFooter
         onCancel={confirm.step ? confirm.back : onCancel}
         cancelLabel={confirm.step ? "Go back" : "Cancel"}
-        submitLabel="Receive Books"
+        submitLabel={confirm.step ? confirm.step.label : "Continue"}
         pendingLabel="Saving…"
         pending={pending}
+        disabled={payable.length === 0}
       />
     </form>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* Give books for a fully paid request                                 */
+/* ------------------------------------------------------------------ */
+
+function IssueBooksForm({ orderId, onCancel, onSaved }: { orderId: string; onCancel: () => void; onSaved: () => void }) {
+  const { data } = useBooksActions();
+  const order = data.orders.find((o) => o.id === orderId);
+  const open = order ? order.items.filter((i) => i.quantity > i.issuedQuantity) : [];
+  const [bookId, setBookId] = useState(open.length === 1 ? open[0].bookId : "");
+  const [quantity, setQuantity] = useState(open.length === 1 ? String(open[0].quantity - open[0].issuedQuantity) : "1");
+  const [issuedOn, setIssuedOn] = useState(todayIso);
+  const [notes, setNotes] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [banner, setBanner] = useState<string | null>(null);
+  const [key] = useState(newKey);
+  const [pending, startTransition] = useTransition();
+  if (!order) return null;
+
+  const fullyPaid = order.outstandingCents === 0;
+  const choices = open.map((i) => {
+    const stock = data.books.find((b) => b.id === i.bookId)?.stockQuantity ?? 0;
+    const left = i.quantity - i.issuedQuantity;
+    return { id: i.bookId, name: i.bookName, left, stock, max: Math.min(left, stock) };
+  });
+  const choice = choices.find((c) => c.id === bookId);
+  const qty = /^\d+$/.test(quantity.trim()) ? Number(quantity.trim()) : null;
+
+  function check(): boolean {
+    const e: Record<string, string> = {};
+    if (!choice) e.book = "Choose a book.";
+    if (qty === null || qty < 1) e.quantity = "Enter 1 or more.";
+    else if (choice && qty > choice.left) e.quantity = `Only ${choice.left} left to give on this order.`;
+    else if (choice && qty > choice.stock) e.quantity = `Only ${plural(choice.stock, "copy", "copies")} in stock.`;
+    if (!issuedOn) e.issuedOn = "Choose the date.";
+    else if (issuedOn > todayIso()) e.issuedOn = "The date can't be in the future.";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  return (
+    <form
+      noValidate
+      className="flex min-h-0 flex-1 flex-col"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!fullyPaid || !check() || !choice || qty === null) return;
+        startTransition(async () => {
+          try {
+            const result = await issueBooksAction({ idempotencyKey: key, orderId: order.id, bookId: choice.id, quantity: qty, issuedOn, notes });
+            if (!result.ok) {
+              setBanner(result.error?.message ?? "The books couldn't be given.");
+              return;
+            }
+            showSuccessToast(`${plural(qty, "copy", "copies")} of ${choice.name} given to ${order.buyerName}.`);
+            onSaved();
+          } catch {
+            setBanner(NETWORK_ERROR_MESSAGE);
+          }
+        });
+      }}
+    >
+      <DialogBody>
+        <FormSummary
+          items={[
+            { label: "Buyer", value: order.buyerName },
+            { label: "Paid", value: `${formatMoney(order.paidCents, order.currency)} of ${formatMoney(order.totalCents, order.currency)}` },
+            { label: "Payment", value: fullyPaid ? "Fully paid" : `${formatMoney(order.outstandingCents, order.currency)} outstanding` },
+          ]}
+        />
+        {!fullyPaid ? (
+          <p role="alert" className="mt-4 rounded-xl border border-[#F0CDD5] bg-brand-tint px-4 py-3 text-sm text-ink">
+            Books can be given only when the order is fully paid. Record the remaining payment first.
+          </p>
+        ) : (
+          <FieldGrid>
+            <DField label="Book" name="book" required error={errors.book} full>
+              <select value={bookId} onChange={(e) => setBookId(e.target.value)} className={controlClass(Boolean(errors.book))} {...invalidProps("book", errors.book)}>
+                <option value="">{choices.length ? "Choose a book" : "Every book on this order was given"}</option>
+                {choices.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.left} to give, {c.stock} in stock)
+                  </option>
+                ))}
+              </select>
+            </DField>
+            <DField label="Quantity" name="quantity" required error={errors.quantity} hint={choice ? `Up to ${choice.max}.` : undefined}>
+              <input inputMode="numeric" value={quantity} onChange={(e) => setQuantity(e.target.value)} className={controlClass(Boolean(errors.quantity))} {...invalidProps("quantity", errors.quantity)} />
+            </DField>
+            <DField label="Date given" name="issuedOn" required error={errors.issuedOn}>
+              <input type="date" value={issuedOn} max={todayIso()} onChange={(e) => setIssuedOn(e.target.value)} className={controlClass(Boolean(errors.issuedOn))} {...invalidProps("issuedOn", errors.issuedOn)} />
+            </DField>
+            <DField label="Notes (optional)" name="notes" full hint="You are recorded as the staff member who gave the books.">
+              <input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500} className={controlClass(false)} />
+            </DField>
+          </FieldGrid>
+        )}
+        <FormErrorBanner message={banner} />
+      </DialogBody>
+      <DialogFooter onCancel={onCancel} submitLabel="Give books" pendingLabel="Saving…" pending={pending} disabled={!fullyPaid || choices.length === 0 || choices.every((c) => c.max === 0)} />
+    </form>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Change an order's discount                                          */
+/* ------------------------------------------------------------------ */
+
+function OrderDiscountForm({ orderId, onCancel, onSaved }: { orderId: string; onCancel: () => void; onSaved: () => void }) {
+  const { data } = useBooksActions();
+  const order = data.orders.find((o) => o.id === orderId);
+  const [discountType, setDiscountType] = useState<"none" | "fixed" | "percentage">(order && order.discountCents > 0 ? "fixed" : "none");
+  const [discountValue, setDiscountValue] = useState(order && order.discountCents > 0 ? (order.discountCents / 100).toFixed(2) : "");
+  const [error, setError] = useState<string | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  if (!order) return null;
+
+  const subtotal = order.subtotalCents;
+  const fixedCents = dollarsToCents(discountValue);
+  const pct = /^\d+$/.test(discountValue.trim()) ? Number(discountValue.trim()) : null;
+  const discount =
+    discountType === "fixed" ? Math.min(fixedCents ?? 0, subtotal) : discountType === "percentage" ? Math.round((subtotal * Math.min(100, pct ?? 0)) / 100) : 0;
+  const total = Math.max(0, subtotal - discount);
+  const m = (cents: number) => formatMoney(cents, order.currency);
+
+  function check(): boolean {
+    let e: string | null = null;
+    if (discountType === "fixed" && (fixedCents === null || fixedCents < 0)) e = "Enter the discount, for example 2.00.";
+    else if (discountType === "percentage" && (pct === null || pct > 100)) e = "Enter a whole percentage from 0 to 100.";
+    else if (total < order!.paidCents) e = `The buyer has already paid ${m(order!.paidCents)}, so the total can't go below that.`;
+    setError(e);
+    return e === null;
+  }
+
+  return (
+    <form
+      noValidate
+      className="flex min-h-0 flex-1 flex-col"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!check()) return;
+        startTransition(async () => {
+          try {
+            const result = await updateBookOrderDiscountAction({
+              orderId: order.id,
+              discountType,
+              discountValue: discountType === "none" ? 0 : discountType === "percentage" ? (pct ?? 0) : (fixedCents ?? 0),
+            });
+            if (!result.ok) {
+              setBanner(result.error?.message ?? "The discount couldn't be saved.");
+              return;
+            }
+            showSuccessToast(`Discount saved. Order total is now ${m(total)}.`);
+            onSaved();
+          } catch {
+            setBanner(NETWORK_ERROR_MESSAGE);
+          }
+        });
+      }}
+    >
+      <DialogBody>
+        <FieldGrid>
+          <DField label="Discount" name="discountType">
+            <select value={discountType} onChange={(e) => setDiscountType(e.target.value as typeof discountType)} className={controlClass(false)}>
+              <option value="none">No discount</option>
+              <option value="fixed">Fixed amount ({order.currency})</option>
+              <option value="percentage">Percentage</option>
+            </select>
+          </DField>
+          {discountType !== "none" && (
+            <DField label={discountType === "fixed" ? `Discount (${order.currency})` : "Discount (%)"} name="discountValue" required error={error ?? undefined}>
+              <input
+                inputMode="decimal"
+                value={discountValue}
+                onChange={(e) => setDiscountValue(e.target.value)}
+                placeholder={discountType === "fixed" ? "0.00" : "10"}
+                className={controlClass(Boolean(error))}
+                {...invalidProps("discountValue", error ?? undefined)}
+              />
+            </DField>
+          )}
+        </FieldGrid>
+        {discountType === "none" && error && <p role="alert" className="mt-2 text-xs font-medium text-[#B91C1C]">{error}</p>}
+        <div className="mt-4">
+          <FormSummary
+            items={[
+              { label: "Subtotal", value: m(subtotal) },
+              { label: "Discount", value: m(discount) },
+              { label: "New total", value: m(total) },
+              { label: "Already paid", value: m(order.paidCents) },
+            ]}
+          />
+        </div>
+        <FormErrorBanner message={banner} />
+      </DialogBody>
+      <DialogFooter onCancel={onCancel} submitLabel="Save discount" pendingLabel="Saving…" pending={pending} />
+    </form>
+  );
+}
+
 
 /** Exposed for section buttons that only need to open a dialog. */
 export function ActionButton({

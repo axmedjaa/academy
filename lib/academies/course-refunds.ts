@@ -38,7 +38,7 @@ import {
  * - Cap: net paid for that enrollment (approved allocations to its fee
  *   periods) minus refunds already recorded for it — recomputed inside the
  *   transaction from locked rows (course-refund-rules.ts).
- * - Who: the Academy Owner or a Manager (student-payments level "full"),
+ * - Who: the Academy Owner, Academy Administrator or a Manager (student-payments level "full"),
  *   one operator, no second approver. Branch-limited roles never qualify.
  * - What it records: money the academy already returned manually. It is not
  *   a payment (never counted as received) and not a reversal; original
@@ -58,7 +58,7 @@ export interface CourseRefundError {
 
 const FORBIDDEN: CourseRefundError = {
   code: "forbidden",
-  message: "Only the Academy Owner or a Manager can record a refund.",
+  message: "Only the Academy Owner, Academy Administrator or a Manager can record a refund.",
 };
 const NOT_FOUND: CourseRefundError = { code: "not_found", message: "Enrollment not found." };
 
@@ -208,7 +208,11 @@ export type WithdrawWithRefundInput = z.input<typeof withdrawWithRefundSchema>;
 
 export interface CourseRefundRecord {
   id: string;
-  enrollmentId: string;
+  /** The withdrawn course enrollment — null for a program refund (migration
+   * 0049), which has `programEnrollmentId` instead. Course-refund code only
+   * ever reads rows it found by its own course enrollment id. */
+  enrollmentId: string | null;
+  programEnrollmentId: string | null;
   studentId: string;
   amountCents: number;
   currency: string;
@@ -250,6 +254,7 @@ function toRecord(row: typeof studentCourseRefunds.$inferSelect): Omit<CourseRef
   return {
     id: row.id,
     enrollmentId: row.enrollmentId,
+    programEnrollmentId: row.programEnrollmentId,
     studentId: row.studentId,
     amountCents: row.amountCents,
     currency: row.currency,

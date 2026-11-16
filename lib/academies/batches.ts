@@ -1,8 +1,9 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getAssignedBranchIds } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
+  auditLogs,
   batchCourses,
   batchEnrollments,
   batchTrainerAssignments,
@@ -12,6 +13,7 @@ import {
   courses,
   examResults,
   exams,
+  programs,
   timetables,
 } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
@@ -86,6 +88,17 @@ const BRANCH_NOT_FOUND: BatchActionError = {
   message: "Branch not found.",
 };
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** One course's own dates inside a batch: optional "YYYY-MM-DD" or empty. */
+const courseDateField = z
+  .string()
+  .trim()
+  .max(20)
+  .optional()
+  .transform((value) => (value && value.length > 0 ? value : null))
+  .refine((value) => value === null || ISO_DATE.test(value), { message: "Enter a valid course date." });
+
 export const createBatchSchema = z.object({
   branchId: z.string().uuid("Select a branch"),
   // One or more courses (Review Summary "Batches hold several courses").
@@ -97,20 +110,56 @@ export const createBatchSchema = z.object({
     .refine((ids) => ids.length <= 20, { message: "A batch can hold at most 20 courses." }),
   name: z.string().trim().min(1, "Batch name is required").max(200),
   code: z.string().trim().min(1, "Batch code is required").max(50),
-  // Plain "YYYY-MM-DD" strings, same convention as register-student.ts's
-  // dateOfBirth for a `date` (not `timestamp`) column.
-  startDate: z.string().trim().min(1, "Start date is required").max(20),
-  endDate: z
+  // Program-based batch (migration 0049): the program whose active courses
+  // this batch runs — the server takes the courses from the program, so
+  // `courseIds` is ignored for them. Omitted/empty = course-based batch.
+  // Only used on create; a batch's program never changes afterwards.
+  programId: z
     .string()
     .trim()
-    .max(20)
     .optional()
-    .or(z.literal(""))
-    .transform((value) => (value && value.length > 0 ? value : undefined)),
+    .transform((value) => (value && value.length > 0 ? value : undefined))
+    .refine((value) => value === undefined || z.string().uuid().safeParse(value).success, { message: "Select a program" }),
+  // A batch has NO overall start or end date (migration 0050) — only its
+  // courses do, below. The legacy batches.start_date/end_date columns are
+  // never written by create or edit.
+  // Each course's own start/end inside this batch (batch_courses.start_date
+  // / end_date, migration 0048) — optional and independent per course
+  // above. Optional: omitted means "leave every course's dates as they
+  // are"; an entry with empty dates clears that course's dates.
+  courseDates: z
+    .array(z.object({ courseId: z.string().uuid("Select a course"), startDate: courseDateField, endDate: courseDateField }))
+    .max(20)
+    .optional(),
+}).superRefine((data, ctx) => {
+  for (const entry of data.courseDates ?? []) {
+    if (!data.courseIds.includes(entry.courseId)) {
+      ctx.addIssue({ code: "custom", path: ["courseDates"], message: "Course dates were given for a course that isn't in this batch." });
+    } else if (entry.startDate && entry.endDate && entry.endDate < entry.startDate) {
+      ctx.addIssue({ code: "custom", path: ["courseDates"], message: "A course's end date can't be before its start date." });
+    }
+  }
 });
 
 export type CreateBatchInput = z.input<typeof createBatchSchema>;
-export type UpdateBatchInput = CreateBatchInput;
+
+/** One course's own schedule inside a batch. `null` = not set yet. */
+export interface BatchCourseDates {
+  startDate: string | null;
+  endDate: string | null;
+}
+/** Statuses staff may set by hand on Edit batch. "archived" is never one of
+ * them: Archive and Restore own it. */
+export const EDITABLE_BATCH_STATUSES = ["planned", "active", "completed"] as const;
+export type EditableBatchStatus = (typeof EDITABLE_BATCH_STATUSES)[number];
+
+/** Edit batch: the create fields plus an optional status. Omitted = keep the
+ * current status. New batches always start "planned" (the column default);
+ * createBatch never takes a status. */
+export const updateBatchSchema = createBatchSchema.extend({
+  status: z.enum(EDITABLE_BATCH_STATUSES, { message: "Choose Planned, Active or Completed. Use Archive to archive a batch." }).optional(),
+});
+export type UpdateBatchInput = z.input<typeof updateBatchSchema>;
 
 export interface BatchRecord {
   id: string;
@@ -120,12 +169,15 @@ export interface BatchRecord {
   courseId: string;
   /** Every course the batch runs, primary first. */
   courseIds: string[];
+  /** Set for a program-based batch (its courses come from this program);
+   * null for a course-based batch. */
+  programId: string | null;
   name: string;
   code: string;
-  startDate: string;
-  endDate: string | null;
   status: "planned" | "active" | "completed" | "archived";
   createdAt: Date;
+  /** Each course's own dates, keyed by course id (listBatches only). */
+  courseDates?: Record<string, BatchCourseDates>;
 }
 
 function toRecord(row: typeof batches.$inferSelect, courseIds?: string[]): BatchRecord {
@@ -136,10 +188,9 @@ function toRecord(row: typeof batches.$inferSelect, courseIds?: string[]): Batch
     branchId: row.branchId,
     courseId: row.courseId,
     courseIds: [row.courseId, ...ids.filter((id) => id !== row.courseId)],
+    programId: row.programId,
     name: row.name,
     code: row.code,
-    startDate: row.startDate,
-    endDate: row.endDate,
     status: row.status,
     createdAt: row.createdAt,
   };
@@ -169,6 +220,38 @@ export async function loadBatchCourseIds(executor: DbClient, batchIds: string[])
     .orderBy(batchCourses.createdAt);
   for (const row of rows) map.set(row.batchId, [...(map.get(row.batchId) ?? []), row.courseId]);
   return map;
+}
+
+/** Each course's own dates per batch, from batch_courses (migration 0048). */
+export async function loadBatchCourseDates(
+  executor: DbClient,
+  batchIds: string[],
+): Promise<Map<string, Record<string, BatchCourseDates>>> {
+  const map = new Map<string, Record<string, BatchCourseDates>>();
+  if (batchIds.length === 0) return map;
+  const rows = await executor
+    .select({
+      batchId: batchCourses.batchId,
+      courseId: batchCourses.courseId,
+      startDate: batchCourses.startDate,
+      endDate: batchCourses.endDate,
+    })
+    .from(batchCourses)
+    .where(inArray(batchCourses.batchId, batchIds));
+  for (const row of rows) {
+    const forBatch = map.get(row.batchId) ?? {};
+    forBatch[row.courseId] = { startDate: row.startDate, endDate: row.endDate };
+    map.set(row.batchId, forBatch);
+  }
+  return map;
+}
+
+/** courseId -> dates from validated input; courses absent from it aren't touched. */
+function courseDatesFromInput(
+  courseDates: { courseId: string; startDate: string | null; endDate: string | null }[] | undefined,
+): Map<string, BatchCourseDates> | null {
+  if (!courseDates) return null;
+  return new Map(courseDates.map((entry) => [entry.courseId, { startDate: entry.startDate, endDate: entry.endDate }]));
 }
 
 /** Whether a course is in use within one batch (enrollments of any status,
@@ -220,13 +303,19 @@ async function resolveBatchAccess(actorContext: AuthContext): Promise<ResolveBat
     return { ok: false, error: FORBIDDEN };
   }
 
+  // Trainer rule (lib/auth/academy-permissions.ts): a Trainer only sees their
+  // assigned students, timetable, exams and results — they never create,
+  // edit, archive or delete batches (or their course dates). Their
+  // courses/batches "manage" level exists for their assigned batches'
+  // teaching work, so for batch management itself it counts as "view",
+  // which every canManage/canDeleteBatch gate in this file refuses.
   return {
     ok: true,
     access: {
       academyId: access.academyId,
       membershipRole: access.membershipRole,
       academyWide: access.academyWide,
-      permissionLevel,
+      permissionLevel: access.membershipRole === "trainer" ? "view" : permissionLevel,
     },
   };
 }
@@ -304,6 +393,7 @@ export async function listBatches(actorContext: AuthContext): Promise<ListBatche
 
   const countsByBatchId = await countBatchDependentsBulk(rows.map((row) => row.id));
   const courseIdsByBatch = await loadBatchCourseIds(db, rows.map((row) => row.id));
+  const courseDatesByBatch = await loadBatchCourseDates(db, rows.map((row) => row.id));
 
   return {
     ok: true,
@@ -318,6 +408,7 @@ export async function listBatches(actorContext: AuthContext): Promise<ListBatche
       const reasons = buildBatchDeletionReasons(counts);
       return {
         ...toRecord(row, courseIdsByBatch.get(row.id)),
+        courseDates: courseDatesByBatch.get(row.id) ?? {},
         deletionEligibility: { eligible: reasons.length === 0, reasons },
       };
     }),
@@ -368,12 +459,38 @@ export async function getBatch(
 }
 
 class CourseNotFoundSignal extends Error {}
+class ProgramNotFoundSignal extends Error {}
+class ProgramHasNoCoursesSignal extends Error {}
+
+/** The active courses of an active program in this academy, or null when
+ * the program isn't one (another academy's, archived, or unknown). */
+async function activeProgramCourseIds(executor: DbClient, academyId: string, programId: string): Promise<string[] | null> {
+  const [program] = await executor
+    .select({ id: programs.id })
+    .from(programs)
+    .where(and(eq(programs.id, programId), eq(programs.academyId, academyId), eq(programs.status, "active")))
+    .limit(1);
+  if (!program) return null;
+  const rows = await executor
+    .select({ id: courses.id })
+    .from(courses)
+    .where(and(eq(courses.programId, programId), eq(courses.academyId, academyId), eq(courses.status, "active")))
+    .orderBy(courses.createdAt);
+  return rows.map((row) => row.id);
+}
+
+const PROGRAM_NOT_FOUND: BatchActionError = { code: "not_found", message: "Program not found." };
+const PROGRAM_HAS_NO_COURSES: BatchActionError = {
+  code: "validation",
+  message: "This program has no active courses yet. Add courses to the program first.",
+};
 class CourseInUseSignal extends Error {
   constructor(public readonly courseName: string) {
     super("Course in use.");
   }
 }
 class BranchNotFoundSignal extends Error {}
+class ArchivedStatusSignal extends Error {}
 
 export type CreateBatchResult =
   | { ok: true; batch: BatchRecord }
@@ -423,6 +540,14 @@ export async function createBatch(
         }
       }
 
+      // Program-based batch: its courses are the program's active courses.
+      if (data.programId) {
+        const programCourses = await activeProgramCourseIds(tx, academyId, data.programId);
+        if (programCourses === null) throw new ProgramNotFoundSignal();
+        if (programCourses.length === 0) throw new ProgramHasNoCoursesSignal();
+        data.courseIds = programCourses;
+      }
+
       for (const courseId of data.courseIds) {
         if (!(await courseExistsInAcademy(tx, academyId, courseId))) {
           throw new CourseNotFoundSignal();
@@ -435,16 +560,22 @@ export async function createBatch(
           academyId,
           branchId: data.branchId,
           courseId: data.courseIds[0],
+          programId: data.programId ?? null,
           name: data.name,
           code: data.code,
-          startDate: data.startDate,
-          endDate: data.endDate,
         })
         .returning();
 
-      await tx
-        .insert(batchCourses)
-        .values(data.courseIds.map((courseId) => ({ academyId, batchId: row.id, courseId })));
+      const createDates = courseDatesFromInput(data.courseDates);
+      await tx.insert(batchCourses).values(
+        data.courseIds.map((courseId) => ({
+          academyId,
+          batchId: row.id,
+          courseId,
+          startDate: createDates?.get(courseId)?.startDate ?? null,
+          endDate: createDates?.get(courseId)?.endDate ?? null,
+        })),
+      );
 
       await recordAudit(
         {
@@ -455,7 +586,7 @@ export async function createBatch(
           entityType: "batch",
           entityId: row.id,
           branchId: row.branchId,
-          after: toRecord(row, data.courseIds),
+          after: { ...toRecord(row, data.courseIds), courseDates: Object.fromEntries(createDates ?? []) },
         },
         tx,
       );
@@ -470,6 +601,12 @@ export async function createBatch(
     }
     if (err instanceof CourseNotFoundSignal) {
       return { ok: false, error: COURSE_NOT_FOUND };
+    }
+    if (err instanceof ProgramNotFoundSignal) {
+      return { ok: false, error: PROGRAM_NOT_FOUND };
+    }
+    if (err instanceof ProgramHasNoCoursesSignal) {
+      return { ok: false, error: PROGRAM_HAS_NO_COURSES };
     }
     if (err instanceof CourseInUseSignal) {
       return {
@@ -514,7 +651,7 @@ export async function updateBatch(
     return { ok: false, error: NOT_FOUND };
   }
 
-  const parsed = createBatchSchema.safeParse(input);
+  const parsed = updateBatchSchema.safeParse(input);
   if (!parsed.success) {
     return {
       ok: false,
@@ -540,6 +677,11 @@ export async function updateBatch(
         }
       }
 
+      // An archived batch leaves "archived" only through Restore.
+      if (data.status && existing.status === "archived") {
+        throw new ArchivedStatusSignal();
+      }
+
       const branchOk = await branchExistsInAcademy(tx, academyId, data.branchId);
       if (!branchOk) {
         throw new BranchNotFoundSignal();
@@ -549,6 +691,15 @@ export async function updateBatch(
         if (!assignedIds.includes(data.branchId)) {
           throw new BranchNotFoundSignal();
         }
+      }
+
+      // A program-based batch keeps its program: its courses are what it
+      // already runs plus any course since added to the program. Nothing is
+      // removed, so a program student's course records are never orphaned.
+      if (existing.programId) {
+        const programCourses = (await activeProgramCourseIds(tx, academyId, existing.programId)) ?? [];
+        const current = (await loadBatchCourseIds(tx, [batchId])).get(batchId) ?? [existing.courseId];
+        data.courseIds = [...new Set([...current, ...programCourses])];
       }
 
       for (const courseId of data.courseIds) {
@@ -568,8 +719,31 @@ export async function updateBatch(
           throw new CourseInUseSignal(course?.name ?? "This course");
         }
       }
+      // Each course's own dates (migration 0048): new courses get theirs on
+      // insert below; courses already in the batch are updated only when the
+      // caller sent dates for them, so an edit without dates leaves them as-is.
+      const updateDates = courseDatesFromInput(data.courseDates);
+      const datesBefore = (await loadBatchCourseDates(tx, [batchId])).get(batchId) ?? {};
+      if (updateDates) {
+        for (const courseId of data.courseIds.filter((id) => currentIds.includes(id))) {
+          const dates = updateDates.get(courseId);
+          if (!dates) continue;
+          await tx
+            .update(batchCourses)
+            .set({ startDate: dates.startDate, endDate: dates.endDate })
+            .where(and(eq(batchCourses.batchId, batchId), eq(batchCourses.courseId, courseId)));
+        }
+      }
       if (added.length > 0) {
-        await tx.insert(batchCourses).values(added.map((courseId) => ({ academyId, batchId, courseId })));
+        await tx.insert(batchCourses).values(
+          added.map((courseId) => ({
+            academyId,
+            batchId,
+            courseId,
+            startDate: updateDates?.get(courseId)?.startDate ?? null,
+            endDate: updateDates?.get(courseId)?.endDate ?? null,
+          })),
+        );
       }
       // Keep the primary course pointing at a course the batch still has.
       const primary = data.courseIds.includes(existing.courseId) ? existing.courseId : data.courseIds[0];
@@ -581,8 +755,7 @@ export async function updateBatch(
           courseId: primary,
           name: data.name,
           code: data.code,
-          startDate: data.startDate,
-          endDate: data.endDate,
+          ...(data.status ? { status: data.status } : {}),
           updatedAt: new Date(),
         })
         .where(eq(batches.id, batchId))
@@ -597,8 +770,8 @@ export async function updateBatch(
           entityType: "batch",
           entityId: batchId,
           branchId: updated.branchId,
-          before: toRecord(existing, currentIds),
-          after: toRecord(updated, data.courseIds),
+          before: { ...toRecord(existing, currentIds), courseDates: datesBefore },
+          after: { ...toRecord(updated, data.courseIds), courseDates: (await loadBatchCourseDates(tx, [batchId])).get(batchId) ?? {} },
         },
         tx,
       );
@@ -617,11 +790,23 @@ export async function updateBatch(
     }
     return { ok: true, batch: toRecord(result, data.courseIds) };
   } catch (err) {
+    if (err instanceof ArchivedStatusSignal) {
+      return {
+        ok: false,
+        error: { code: "validation", message: "This batch is archived. Use Restore to bring it back before changing its status." },
+      };
+    }
     if (err instanceof BranchNotFoundSignal) {
       return { ok: false, error: BRANCH_NOT_FOUND };
     }
     if (err instanceof CourseNotFoundSignal) {
       return { ok: false, error: COURSE_NOT_FOUND };
+    }
+    if (err instanceof ProgramNotFoundSignal) {
+      return { ok: false, error: PROGRAM_NOT_FOUND };
+    }
+    if (err instanceof ProgramHasNoCoursesSignal) {
+      return { ok: false, error: PROGRAM_HAS_NO_COURSES };
     }
     if (err instanceof CourseInUseSignal) {
       return {
@@ -711,10 +896,39 @@ export async function archiveBatch(
   return { ok: true, batch: toRecord(result) };
 }
 
-/** Mirror of archiveBatch, flipped — restores to "active" regardless of
- * whatever status the batch had before archiving (this table doesn't track
- * that), since "active" is the normal usable state. Idempotent, same
- * branch-scoping rule as archiveBatch. */
+/**
+ * The status a batch had just before it was archived, from the most recent
+ * "archiveBatch" audit entry whose `before.status` was a working status
+ * (planned / active / completed). The batches table keeps no copy of it, but
+ * every archive writes that audit entry in the same transaction. Null when
+ * there is no such entry (a batch archived before audit logging, or by a
+ * direct database change).
+ */
+async function statusBeforeArchive(executor: DbClient, academyId: string, batchId: string): Promise<EditableBatchStatus | null> {
+  const [row] = await executor
+    .select({ status: sql<string>`${auditLogs.before} ->> 'status'` })
+    .from(auditLogs)
+    .where(
+      and(
+        eq(auditLogs.academyId, academyId),
+        eq(auditLogs.entityType, "batch"),
+        eq(auditLogs.entityId, batchId),
+        eq(auditLogs.action, "archiveBatch"),
+        inArray(sql`${auditLogs.before} ->> 'status'`, [...EDITABLE_BATCH_STATUSES]),
+      ),
+    )
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(1);
+  const status = row?.status;
+  return EDITABLE_BATCH_STATUSES.find((s) => s === status) ?? null;
+}
+
+/** Mirror of archiveBatch, flipped — an archived batch goes back to the
+ * status it had before it was archived (Planned, Active or Completed; see
+ * `statusBeforeArchive`), or to "active" when that can't be known (the old
+ * behaviour). A batch that isn't archived is returned unchanged, so Restore
+ * never moves a Planned or Completed batch to Active. Same branch-scoping
+ * rule as archiveBatch. */
 export async function restoreBatch(
   actorContext: AuthContext,
   batchId: string,
@@ -747,9 +961,13 @@ export async function restoreBatch(
       }
     }
 
+    // Not archived: nothing to restore, and its status stays as it is.
+    if (existing.status !== "archived") return existing;
+
+    const previous = await statusBeforeArchive(tx, academyId, batchId);
     const [updated] = await tx
       .update(batches)
-      .set({ status: "active", updatedAt: new Date() })
+      .set({ status: previous ?? "active", updatedAt: new Date() })
       .where(eq(batches.id, batchId))
       .returning();
 
@@ -1062,4 +1280,91 @@ export async function deleteBatch(
 
     return { ok: true, batchId };
   });
+}
+
+export const updateBatchCourseDatesSchema = z
+  .object({
+    batchId: z.string().uuid("Batch not found"),
+    courseId: z.string().uuid("Select a course"),
+    startDate: courseDateField,
+    endDate: courseDateField,
+  })
+  .refine((data) => !data.startDate || !data.endDate || data.endDate >= data.startDate, {
+    message: "A course's end date can't be before its start date.",
+    path: ["endDate"],
+  });
+
+export type UpdateBatchCourseDatesInput = z.input<typeof updateBatchCourseDatesSchema>;
+
+export type UpdateBatchCourseDatesResult =
+  | { ok: true; dates: BatchCourseDates }
+  | { ok: false; error: BatchActionError };
+
+/**
+ * Sets (or clears) ONE course's own start/end date inside a batch, straight
+ * from the batch page — without opening Edit batch. Same authority as
+ * updateBatch (courses/batches "full"/"manage"; never a Trainer — see
+ * resolveBatchAccess), same academy and branch scoping (an out-of-scope or
+ * foreign batch is "not found"), and the course must be in this batch. Only
+ * batch_courses.start_date/end_date change; nothing else about the batch.
+ */
+export async function updateBatchCourseDates(
+  actorContext: AuthContext,
+  input: UpdateBatchCourseDatesInput,
+): Promise<UpdateBatchCourseDatesResult> {
+  const resolved = await resolveBatchAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel, academyWide } = resolved.access;
+  if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
+
+  const parsed = updateBatchCourseDatesSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid input." } };
+  }
+  const data = parsed.data;
+
+  const result = await db.transaction(async (tx) => {
+    const [batch] = await tx
+      .select({ id: batches.id, branchId: batches.branchId })
+      .from(batches)
+      .where(and(eq(batches.id, data.batchId), eq(batches.academyId, academyId)))
+      .limit(1);
+    if (!batch) return null;
+    if (!academyWide) {
+      const assignedIds = await getAssignedBranchIds(tx, academyId, actorContext.userId);
+      if (!assignedIds.includes(batch.branchId)) return null;
+    }
+    const [existing] = await tx
+      .select()
+      .from(batchCourses)
+      .where(and(eq(batchCourses.batchId, batch.id), eq(batchCourses.courseId, data.courseId), eq(batchCourses.academyId, academyId)))
+      .for("update");
+    if (!existing) return { kind: "course_not_in_batch" as const };
+
+    await tx
+      .update(batchCourses)
+      .set({ startDate: data.startDate, endDate: data.endDate })
+      .where(eq(batchCourses.id, existing.id));
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "updateBatchCourseDates",
+        entityType: "batch",
+        entityId: batch.id,
+        branchId: batch.branchId,
+        before: { courseId: data.courseId, startDate: existing.startDate, endDate: existing.endDate },
+        after: { courseId: data.courseId, startDate: data.startDate, endDate: data.endDate },
+      },
+      tx,
+    );
+    return { kind: "ok" as const };
+  });
+
+  if (!result) return { ok: false, error: NOT_FOUND };
+  if (result.kind === "course_not_in_batch") {
+    return { ok: false, error: { code: "validation", message: "That course isn't part of this batch." } };
+  }
+  return { ok: true, dates: { startDate: data.startDate, endDate: data.endDate } };
 }

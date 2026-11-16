@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useActionState, useEffect, useState } from "react";
+import { startTransition, useActionState, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { StudentRecord } from "@/lib/academies/students";
@@ -17,6 +17,7 @@ import { outstandingCents } from "@/lib/ui/fee-allocation";
 import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
 import { deleteStudent, updateStudent, updateStudentStatus, type StudentFormState } from "@/lib/academies/students-actions";
 import { withdrawStudentFromBatch } from "@/lib/academies/batch-assignments-actions";
+import { courseRowAction } from "./course-row-action";
 import { formatDate } from "@/lib/ui/date";
 import { formatMoney } from "@/lib/ui/money";
 import { showSuccessToast } from "@/lib/ui/toast";
@@ -24,7 +25,8 @@ import { Badge, trHover } from "@/app/academy/_shell/ui";
 import { BlockTitle, DataTable, FeeProgress, KvCard, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { ChatActions } from "@/app/academy/_shell/chat-actions";
 import { Icon } from "@/app/academy/_shell/icons";
-import { EnrollCoursesDialog } from "@/app/academy/_shell/enroll-courses-dialog";
+import type { ProgramBatchOption } from "@/lib/academies/program-enrollments";
+import { EnrollStudentDialog } from "../enroll-dialog";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import {
   ActionDialog,
@@ -105,6 +107,9 @@ export function StudentHeaderActions({
   student,
   enrollments,
   enrollBatches,
+  programBatches,
+  canRecordPayments,
+  takenProgramIds,
   canEnroll,
   canEdit,
   enrollOpen,
@@ -113,6 +118,11 @@ export function StudentHeaderActions({
   student: StudentRecord;
   enrollments: StudentEnrollmentOption[];
   enrollBatches: EnrollBatchOption[];
+  programBatches: ProgramBatchOption[];
+  /** May record a payment while enrolling (student payments full/manage). */
+  canRecordPayments: boolean;
+  /** Programs the student is actively enrolled in (not offered again). */
+  takenProgramIds: string[];
   canEnroll: boolean;
   canEdit: boolean;
   /** Owned by the page so the Overview's "Enroll now" opens the same dialog. */
@@ -122,8 +132,7 @@ export function StudentHeaderActions({
   const router = useRouter();
   const [editOpen, setEditOpen] = useState(false);
   const active = enrollments.filter((e) => e.status === "active");
-  const enrolledPairs = { [student.id]: active.map((e) => `${e.batchId}:${e.courseId}`) };
-  const canEnrollNow = canEnroll && student.status === "active" && enrollBatches.length > 0;
+  const canEnrollNow = canEnroll && student.status === "active" && (enrollBatches.length > 0 || programBatches.length > 0);
 
   return (
     <>
@@ -139,12 +148,15 @@ export function StudentHeaderActions({
       )}
 
       {canEnrollNow && (
-        <EnrollCoursesDialog
+        <EnrollStudentDialog
           open={enrollOpen}
           onOpenChange={onEnrollOpenChange}
           student={{ id: student.id, fullName: student.fullName, studentNumber: student.studentNumber }}
-          batches={enrollBatches}
-          enrolledPairs={enrolledPairs}
+          enrollBatches={enrollBatches}
+          programBatches={programBatches}
+          canRecordPayments={canRecordPayments}
+          enrolledPairs={{ [student.id]: active.map((e) => `${e.batchId}:${e.courseId}`) }}
+          takenProgramIds={takenProgramIds}
           onEnrolled={() => router.refresh()}
         />
       )}
@@ -368,10 +380,13 @@ export function StudentOverview({
   canWithdraw,
   canEnroll,
   onEnroll,
+  afterProfile,
 }: {
   student: StudentRecord;
   photoUrl: string | null;
   branchName: string;
+  /** Shown right after the photo and Student details (the program cards). */
+  afterProfile?: ReactNode;
   enrollments: StudentEnrollmentOption[];
   enrollmentSummaries: EnrollmentSummaryEntry[];
   enrollmentDetails: Record<string, EnrollmentDetail>;
@@ -386,7 +401,8 @@ export function StudentOverview({
   const active = enrollments.filter((e) => e.status === "active");
   const past = enrollments.filter((e) => e.status !== "active");
   const byEnrollment = new Map(enrollmentSummaries.map((entry) => [entry.enrollment.id, entry]));
-  const withdrawRow = enrollments.find((e) => e.id === withdrawId) ?? null;
+  // Never a program course: those are withdrawn only with the whole program.
+  const withdrawRow = enrollments.find((e) => e.id === withdrawId && courseRowAction(e, canWithdraw) === "withdraw") ?? null;
 
   // Totals across active enrollments (shown only when every plan uses one currency).
   const plans = enrollmentSummaries.filter((entry) => entry.schedule && entry.summary);
@@ -447,6 +463,9 @@ export function StudentOverview({
           ],
         ]}
       />
+
+      {/* The student's own details come first; their program(s) follow. */}
+      {afterProfile}
 
       {plans.length > 0 && currency && (
         <StatCards
@@ -558,10 +577,17 @@ export function StudentOverview({
                   </td>
                   {canWithdraw && (
                     <td className={rtTd} data-actions="">
-                      <button type="button" onClick={() => setWithdrawId(enrollment.id)} className={ROW_BTN}>
-                        <Icon name="autorenew" width={16} height={16} />
-                        Withdraw
-                      </button>
+                      {courseRowAction(enrollment, canWithdraw) === "managed_by_program" ? (
+                        // A program course leaves only with its program
+                        // (Withdraw from program, on the program card); the
+                        // server refuses a per-course withdrawal too.
+                        <span className="inline-flex min-h-10 items-center whitespace-nowrap text-[13px] font-semibold text-muted">Managed by program</span>
+                      ) : (
+                        <button type="button" onClick={() => setWithdrawId(enrollment.id)} className={ROW_BTN}>
+                          <Icon name="autorenew" width={16} height={16} />
+                          Withdraw
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -740,7 +766,7 @@ function WithdrawDialog({
       ? "Checking what can be refunded…"
       : "The refund position isn't available to your role."
     : !refundInfo.canRecord
-      ? "Only the Academy Owner or a Manager can record a refund."
+      ? "Only the Academy Owner, Academy Administrator or a Manager can record a refund."
       : refundInfo.blockedReason
         ? refundInfo.blockedReason
         : maxRefundable <= 0

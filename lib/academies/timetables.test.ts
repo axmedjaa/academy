@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import {
   batchCourses,
+  batchTrainerAssignments,
   academies,
   academyMemberships,
   academySubscriptions,
@@ -151,6 +152,11 @@ async function assignUserToBranches(
   return profileId;
 }
 
+/** Assigns a staff profile to teach a batch (an active batch_trainer_assignments row). */
+async function assignTrainerToBatch(academyId: string, staffProfileId: string, batchId: string): Promise<void> {
+  await db.insert(batchTrainerAssignments).values({ academyId, batchId, staffProfileId });
+}
+
 async function setupAcademy(role: AcademyRole): Promise<{
   academyId: string;
   userId: string;
@@ -199,6 +205,7 @@ afterAll(async () => {
     );
   for (const academyId of createdAcademyIds) {
     await db.delete(timetables).where(eq(timetables.academyId, academyId));
+    await db.delete(batchTrainerAssignments).where(eq(batchTrainerAssignments.academyId, academyId));
     await db.delete(batchCourses).where(eq(batchCourses.academyId, academyId));
     await db.delete(batches).where(eq(batches.academyId, academyId));
     await db.delete(courses).where(eq(courses.academyId, academyId));
@@ -247,9 +254,10 @@ describe("createTimetableEntry — permission matrix", () => {
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
-  it("trainer ('manage assigned') succeeds within their own assigned branch", async () => {
+  it("Trainer rule: a trainer can't add classes, even for a batch they teach in their own branch", async () => {
     const { academyId, userId, context, branchId, batchId } = await setupAcademy("trainer");
-    await assignUserToBranches(academyId, userId, [branchId]);
+    const profileId = await assignUserToBranches(academyId, userId, [branchId]);
+    await assignTrainerToBatch(academyId, profileId, batchId);
 
     const result = await createTimetableEntry(context, {
       branchId,
@@ -258,7 +266,8 @@ describe("createTimetableEntry — permission matrix", () => {
       startTime: "11:00",
       endTime: "12:00",
     });
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("trainer is refused outside their assigned branch (IDOR)", async () => {
@@ -391,7 +400,8 @@ describe("listTimetableEntries", () => {
   it("hides entries outside a branch-limited caller's assigned branch(es)", async () => {
     const { academyId, userId, context, branchId, courseId, batchId } =
       await setupAcademy("trainer");
-    await assignUserToBranches(academyId, userId, [branchId]);
+    const profileId = await assignUserToBranches(academyId, userId, [branchId]);
+    await assignTrainerToBatch(academyId, profileId, batchId);
 
     const otherBranchId = await insertBranchDirect(academyId);
     const otherBatchId = await insertBatchDirect(academyId, otherBranchId, courseId);
@@ -418,9 +428,57 @@ describe("listTimetableEntries", () => {
     expect(resultOwnBranch.ok).toBe(true);
     if (resultOwnBranch.ok) expect(resultOwnBranch.entries).toHaveLength(1);
 
+    // Trainer rule: a batch the trainer doesn't teach is invisible to them.
     const resultOtherBranch = await listTimetableEntries(context, otherBatchId);
-    expect(resultOtherBranch.ok).toBe(true);
-    if (resultOtherBranch.ok) expect(resultOtherBranch.entries).toHaveLength(0);
+    expect(resultOtherBranch.ok).toBe(false);
+    if (!resultOtherBranch.ok) expect(resultOtherBranch.error.code).toBe("not_found");
+  });
+
+  it("Trainer rule: a trainer sees only the classes of batches they teach, not the rest of their branch", async () => {
+    const { academyId, userId, context, branchId, courseId, batchId } = await setupAcademy("trainer");
+    const profileId = await assignUserToBranches(academyId, userId, [branchId]);
+    await assignTrainerToBatch(academyId, profileId, batchId);
+    const sameBranchOtherBatchId = await insertBatchDirect(academyId, branchId, courseId);
+    for (const id of [batchId, sameBranchOtherBatchId]) {
+      await db.insert(timetables).values({
+        academyId,
+        branchId,
+        batchId: id,
+        courseId: await courseOfBatch(id),
+        dayOfWeek: "sun",
+        startTime: id === batchId ? "09:00" : "11:00",
+        endTime: id === batchId ? "10:00" : "12:00",
+      });
+    }
+
+    const all = await listAcademyTimetable(context);
+    expect(all.ok).toBe(true);
+    if (all.ok) {
+      expect(all.entries.map((entry) => entry.batchId)).toEqual([batchId]);
+      expect(all.canManage).toBe(false);
+    }
+
+    const other = await listTimetableEntries(context, sameBranchOtherBatchId);
+    expect(other.ok).toBe(false);
+    if (!other.ok) expect(other.error.code).toBe("not_found");
+  });
+
+  it("Trainer rule: a trainer with no assigned batches sees no classes", async () => {
+    const { academyId, userId, context, branchId, batchId } = await setupAcademy("trainer");
+    await assignUserToBranches(academyId, userId, [branchId]);
+    await db.insert(timetables).values({
+      academyId,
+      branchId,
+      batchId,
+      courseId: await courseOfBatch(batchId),
+      dayOfWeek: "sun",
+      startTime: "09:00",
+      endTime: "10:00",
+    });
+
+    const all = await listAcademyTimetable(context);
+    expect(all.ok).toBe(true);
+    if (all.ok) expect(all.entries).toHaveLength(0);
   });
 
   it("returns not_found for a batch in a different academy", async () => {
@@ -476,7 +534,9 @@ describe("updateTimetableEntry", () => {
 
     const result = await updateTimetableEntry(trainerContext, created.entry.id, { room: "Hacked" });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("not_found");
+    // Trainer rule: trainers can't edit any class, so this is refused before
+    // the entry is even looked up.
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 });
 

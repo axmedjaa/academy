@@ -1,7 +1,7 @@
 import { and, asc, count, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
 import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 import { db } from "@/lib/db";
-import { batchEnrollments, batches, courses, enrollmentFeeSchedules, feePeriods, students } from "@/lib/db/schema";
+import { batchEnrollments, batches, courses, enrollmentFeeSchedules, feePeriods, programEnrollments, programs, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { resolveScope } from "@/lib/academies/students";
 import {
@@ -129,6 +129,8 @@ export async function listFeePeriodOverview(
   const scheduleByEnrollment = new Map(schedules.map((row) => [row.enrollmentId, row]));
   const periodsByEnrollment = new Map<string, typeof periods>();
   for (const period of periods) {
+    // Selected by course enrollment id above; the guard only narrows the type.
+    if (!period.enrollmentId) continue;
     const list = periodsByEnrollment.get(period.enrollmentId) ?? [];
     list.push(period);
     periodsByEnrollment.set(period.enrollmentId, list);
@@ -222,4 +224,107 @@ export async function getFeeCollectionSummary(actorContext: AuthContext): Promis
     byCurrency.set(period.currency, totals);
   }
   return { ok: true, totals: [...byCurrency.values()] };
+}
+
+export interface ProgramFeeCollectionRow extends FeeCollectionTotals {
+  programId: string;
+  programName: string;
+  /** Active complete-program enrollments of this program in scope. */
+  enrollments: number;
+  /** Sum of their final program fees (after discount). */
+  finalFeeCents: number;
+}
+
+export type GetProgramFeeCollectionResult =
+  | { ok: true; totals: (FeeCollectionTotals & { enrollments: number; finalFeeCents: number })[]; byProgram: ProgramFeeCollectionRow[] }
+  | { ok: false; error: { code: "blocked" | "forbidden"; message: string } };
+
+/**
+ * Program fee collection (Stage 6): the same collected / overdue / not yet
+ * due figures as `getFeeCollectionSummary`, but over the installments of
+ * ACTIVE complete-program enrollments only (migration 0049) — the ONE
+ * program fee, never split per course. Kept apart from the course figures:
+ * `getFeeCollectionSummary` inner-joins `fee_periods.enrollment_id`, so it
+ * never sees a program installment, and this function reads only
+ * `fee_periods.program_enrollment_id` — every installment is counted in
+ * exactly one of the two (the table's one-owner check guarantees it).
+ * Same permission row, student scope and period-status rule. Read only.
+ */
+export async function getProgramFeeCollectionSummary(actorContext: AuthContext): Promise<GetProgramFeeCollectionResult> {
+  const access = await checkAcademyAccessForContext(actorContext);
+  if (access.level === "blocked") return { ok: false, error: { code: "blocked", message: access.message } };
+  const { academyId, membershipRole } = access;
+  if (getAcademyPermissionLevel(membershipRole, ACADEMY_FEE_PERIODS_ACTION) === "none") {
+    return { ok: false, error: { code: "forbidden", message: "You don't have permission to view fee periods." } };
+  }
+  const scope = await resolveScope(access, actorContext.userId, undefined);
+  if (scope.unreachable) return { ok: true, totals: [], byProgram: [] };
+
+  const periods = await db
+    .select({
+      id: feePeriods.id,
+      programEnrollmentId: programEnrollments.id,
+      programId: programs.id,
+      programName: programs.name,
+      expectedAmountCents: feePeriods.expectedAmountCents,
+      dueDate: feePeriods.dueDate,
+      currency: feePeriods.currency,
+    })
+    .from(feePeriods)
+    .innerJoin(programEnrollments, eq(programEnrollments.id, feePeriods.programEnrollmentId))
+    .innerJoin(programs, and(eq(programs.id, programEnrollments.programId), eq(programs.academyId, academyId)))
+    .innerJoin(students, eq(students.id, programEnrollments.studentId))
+    .where(and(...scope.conditions, eq(feePeriods.academyId, academyId), eq(programEnrollments.academyId, academyId), eq(programEnrollments.status, "active")));
+  const paidByPeriod = await getApprovedPaidCentsByPeriod(db, periods.map((row) => row.id));
+  const today = todayDateOnly();
+
+  const byCurrency = new Map<string, FeeCollectionTotals & { enrollments: number; finalFeeCents: number; ids: Set<string> }>();
+  const byProgram = new Map<string, ProgramFeeCollectionRow & { ids: Set<string> }>();
+  for (const period of periods) {
+    const paid = paidByPeriod.get(period.id) ?? 0;
+    const remaining = Math.max(0, period.expectedAmountCents - paid);
+    const overdue = computeFeePeriodStatus(period.expectedAmountCents, paid, period.dueDate, today) === "overdue";
+    const currencyTotals = byCurrency.get(period.currency) ?? {
+      currency: period.currency, collectedCents: 0, overdueCents: 0, notYetDueCents: 0, enrollments: 0, finalFeeCents: 0, ids: new Set<string>(),
+    };
+    const programKey = `${period.programId}:${period.currency}`;
+    const programTotals = byProgram.get(programKey) ?? {
+      programId: period.programId, programName: period.programName, currency: period.currency,
+      collectedCents: 0, overdueCents: 0, notYetDueCents: 0, enrollments: 0, finalFeeCents: 0, ids: new Set<string>(),
+    };
+    for (const totals of [currencyTotals, programTotals]) {
+      // The installments of one enrollment add up exactly to its final fee.
+      totals.finalFeeCents += period.expectedAmountCents;
+      totals.collectedCents += Math.min(paid, period.expectedAmountCents);
+      if (overdue) totals.overdueCents += remaining;
+      else totals.notYetDueCents += remaining;
+      totals.ids.add(period.programEnrollmentId);
+      totals.enrollments = totals.ids.size;
+    }
+    byCurrency.set(period.currency, currencyTotals);
+    byProgram.set(programKey, programTotals);
+  }
+  return {
+    ok: true,
+    totals: [...byCurrency.values()].map((row) => ({
+      currency: row.currency,
+      collectedCents: row.collectedCents,
+      overdueCents: row.overdueCents,
+      notYetDueCents: row.notYetDueCents,
+      enrollments: row.enrollments,
+      finalFeeCents: row.finalFeeCents,
+    })),
+    byProgram: [...byProgram.values()]
+      .map((row) => ({
+        programId: row.programId,
+        programName: row.programName,
+        currency: row.currency,
+        collectedCents: row.collectedCents,
+        overdueCents: row.overdueCents,
+        notYetDueCents: row.notYetDueCents,
+        enrollments: row.enrollments,
+        finalFeeCents: row.finalFeeCents,
+      }))
+      .sort((a, b) => a.programName.localeCompare(b.programName)),
+  };
 }

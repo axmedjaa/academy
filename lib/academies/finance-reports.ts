@@ -3,7 +3,7 @@ import { requireFeature } from "@/lib/subscriptions/entitlements";
 import { getBranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { expenseRecords, incomeRecords, studentCharges, studentCourseRefunds, studentPayments, students } from "@/lib/db/schema";
+import { expenseRecords, feePeriods, incomeRecords, paymentAllocations, studentCharges, studentCourseRefunds, studentPayments, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_EXPENSES_ACTION,
@@ -209,7 +209,17 @@ export interface PaymentsReceivedSection {
   /** The same payments grouped by the UTC month of `receivedAt`
    * ("YYYY-MM", per currency), oldest first. */
   byMonth: (AmountByCurrency & { month: string })[];
+  /** Stage 6: the same payments split by what they paid for (per currency).
+   * Each payment lands in exactly ONE source, so the rows always add up to
+   * `totalsByCurrency` — never double counted:
+   * - "program": allocated to installments of a complete-program enrollment
+   *   (fee_periods.program_enrollment_id) — the one program fee;
+   * - "course": allocated to an individual course's fee periods;
+   * - "other": anything else (one-off student charges). */
+  bySource: (AmountByCurrency & { source: PaymentSource })[];
 }
+
+export type PaymentSource = "program" | "course" | "other";
 
 export type StudentPaymentsReportSection =
   | { visible: false }
@@ -220,7 +230,12 @@ export type StudentPaymentsReportSection =
       /** Course refunds recorded on withdrawal (student_course_refunds):
        * money returned, reported on its own — never subtracted from or
        * added to `paymentsReceived`. */
-      refundsRecorded: { count: number; totalsByCurrency: AmountByCurrency[] };
+      refundsRecorded: {
+        count: number;
+        totalsByCurrency: AmountByCurrency[];
+        /** Program refunds vs individual-course refunds; adds up to the totals. */
+        bySource: (AmountByCurrency & { source: Exclude<PaymentSource, "other"> })[];
+      };
     };
 
 export type IncomeReportSection =
@@ -311,23 +326,33 @@ async function computeOutstandingCharges(
 async function computeRefundsRecorded(
   academyId: string,
   filters: ParsedFinanceReportFilters,
-): Promise<{ count: number; totalsByCurrency: AmountByCurrency[] }> {
+): Promise<Extract<StudentPaymentsReportSection, { visible: true }>["refundsRecorded"]> {
   const conditions: SQL[] = [eq(studentCourseRefunds.academyId, academyId)];
   if (filters.method) conditions.push(eq(studentCourseRefunds.method, filters.method));
   if (filters.dateFrom) conditions.push(gte(studentCourseRefunds.refundedAt, filters.dateFrom));
   if (filters.dateTo) conditions.push(lte(studentCourseRefunds.refundedAt, filters.dateTo));
   if (filters.branchId) conditions.push(eq(studentCourseRefunds.branchId, filters.branchId));
   if (filters.scopeBranchIds) conditions.push(filters.scopeBranchIds.length ? inArray(studentCourseRefunds.branchId, filters.scopeBranchIds) : sql`false`);
-  const rows = await db
-    .select({
-      currency: studentCourseRefunds.currency,
-      amountCents: sql<number>`coalesce(sum(${studentCourseRefunds.amountCents}), 0)::int`,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(studentCourseRefunds)
-    .where(and(...conditions))
-    .groupBy(studentCourseRefunds.currency);
-  return { count: totalCount(rows), totalsByCurrency: toAmountsByCurrency(rows) };
+  const amount = sql<number>`coalesce(sum(${studentCourseRefunds.amountCents}), 0)::int`;
+  const count = sql<number>`count(*)::int`;
+  const source = sql<"program" | "course">`case when ${studentCourseRefunds.programEnrollmentId} is not null then 'program' else 'course' end`;
+  const [rows, sourceRows] = await Promise.all([
+    db
+      .select({ currency: studentCourseRefunds.currency, amountCents: amount, count })
+      .from(studentCourseRefunds)
+      .where(and(...conditions))
+      .groupBy(studentCourseRefunds.currency),
+    db
+      .select({ source, currency: studentCourseRefunds.currency, amountCents: amount, count })
+      .from(studentCourseRefunds)
+      .where(and(...conditions))
+      .groupBy(source, studentCourseRefunds.currency),
+  ]);
+  return {
+    count: totalCount(rows),
+    totalsByCurrency: toAmountsByCurrency(rows),
+    bySource: sourceRows.map((row) => ({ source: row.source, currency: row.currency, amountCents: row.amountCents, count: row.count })),
+  };
 }
 
 /** Payments received this period: defaults to `status = "approved"` unless
@@ -350,9 +375,22 @@ async function computePaymentsReceived(
   const amount = sql<number>`coalesce(sum(${studentPayments.amountCents}), 0)::int`;
   const count = sql<number>`count(*)::int`;
   const month = sql<string>`to_char(${studentPayments.receivedAt} at time zone 'UTC', 'YYYY-MM')`;
-  // One set of conditions for all three reads, so the breakdowns always add
+  // One source per payment (see PaymentsReceivedSection.bySource): program
+  // installments win, then course fee periods, else a one-off charge.
+  const source = sql<PaymentSource>`case
+    when exists (
+      select 1 from ${paymentAllocations}
+      inner join ${feePeriods} on ${feePeriods.id} = ${paymentAllocations.feePeriodId}
+      where ${paymentAllocations.studentPaymentId} = ${studentPayments.id}
+        and ${feePeriods.programEnrollmentId} is not null
+    ) then 'program'
+    when exists (
+      select 1 from ${paymentAllocations} where ${paymentAllocations.studentPaymentId} = ${studentPayments.id}
+    ) then 'course'
+    else 'other' end`;
+  // One set of conditions for all four reads, so the breakdowns always add
   // up to the totals.
-  const [rows, methodRows, monthRows] = await Promise.all([
+  const [rows, methodRows, monthRows, sourceRows] = await Promise.all([
     db
       .select({ currency: studentPayments.currency, amountCents: amount, count })
       .from(studentPayments)
@@ -372,6 +410,12 @@ async function computePaymentsReceived(
       .where(and(...conditions))
       .groupBy(month, studentPayments.currency)
       .orderBy(month),
+    db
+      .select({ source, currency: studentPayments.currency, amountCents: amount, count })
+      .from(studentPayments)
+      .innerJoin(students, eq(studentPayments.studentId, students.id))
+      .where(and(...conditions))
+      .groupBy(source, studentPayments.currency),
   ]);
 
   return {
@@ -379,6 +423,7 @@ async function computePaymentsReceived(
     totalsByCurrency: toAmountsByCurrency(rows),
     byMethod: methodRows.map((row) => ({ method: row.method, currency: row.currency, amountCents: row.amountCents, count: row.count })),
     byMonth: monthRows.map((row) => ({ month: row.month, currency: row.currency, amountCents: row.amountCents, count: row.count })),
+    bySource: sourceRows.map((row) => ({ source: row.source, currency: row.currency, amountCents: row.amountCents, count: row.count })),
   };
 }
 

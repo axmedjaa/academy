@@ -431,7 +431,7 @@ export function BooksHeroSkeleton() {
   return (
     <div className={`${card} mb-7 rounded-[20px] p-[22px] sm:px-8 sm:pb-8 sm:pt-9`}>
       <div className="text-[28px] font-bold leading-[1.1] tracking-[-0.02em] text-ink sm:text-[36px]">Book Management</div>
-      <p className="mt-3 max-w-[60ch] leading-normal text-muted">Manage academy books, pre-orders, payments and distribution.</p>
+      <p className="mt-3 max-w-[60ch] leading-normal text-muted">Manage academy books, orders, payments and books issued to students.</p>
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5">
         {[0, 1, 2].map((i) => (
           <div key={i} className="flex min-h-[74px] items-center gap-3.5 rounded-[14px] border border-border px-4 py-3.5">
@@ -452,7 +452,7 @@ export function BooksCompactTitle() {
   return (
     <div className="mb-5">
       <div className="text-[28px] font-bold leading-tight tracking-[-0.015em]">Book Management</div>
-      <p className="mt-1.5 text-muted">Manage academy books, pre-orders, payments and distribution.</p>
+      <p className="mt-1.5 text-muted">Manage academy books, orders, payments and books issued to students.</p>
     </div>
   );
 }

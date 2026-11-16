@@ -25,15 +25,27 @@ describe("getVisibleAcademyNavItems", () => {
     ]);
   });
 
+  it("Trainer rule: shows a trainer only Dashboard, Students, Timetable, Exams and Results", () => {
+    expect(getVisibleAcademyNavItems("trainer").map((item) => item.label)).toEqual([
+      "Dashboard",
+      "Students",
+      "Timetable",
+      "Exams",
+      "Results",
+    ]);
+  });
+
   it("drops a whole group when a role can see none of its items", () => {
     const titles = groupNavItems(getVisibleAcademyNavItems("trainer")).map((group) => group.title);
     expect(titles).not.toContain("Account");
   });
 
   it("navigation-audit Phase 1: shows Branches to every role with academy.branches access, and hides it from finance_officer (no grant at all)", () => {
-    for (const role of ["academy_owner", "academy_admin", "manager", "admissions_officer", "trainer"] as const) {
+    for (const role of ["academy_owner", "academy_admin", "manager", "admissions_officer"] as const) {
       expect(getVisibleAcademyNavItems(role).some((item) => item.key === "branches")).toBe(true);
     }
+    // Trainer rule: no Branches entry even though trainer holds branch "view".
+    expect(getVisibleAcademyNavItems("trainer").some((item) => item.key === "branches")).toBe(false);
     expect(getVisibleAcademyNavItems("finance_officer").some((item) => item.key === "branches")).toBe(false);
   });
 
@@ -50,8 +62,8 @@ describe("getVisibleAcademyNavItems", () => {
     expect(getVisibleAcademyNavItems("academy_admin").some((item) => item.key === "audit-log")).toBe(true);
   });
 
-  it("always shows Dashboard and Reports regardless of role (Notifications lives in the header bell)", () => {
-    for (const role of ["academy_owner", "academy_admin", "manager", "admissions_officer", "finance_officer", "trainer"] as const) {
+  it("always shows Dashboard and Reports to every non-trainer role (Notifications lives in the header bell; trainers get Dashboard only, see Trainer rule)", () => {
+    for (const role of ["academy_owner", "academy_admin", "manager", "admissions_officer", "finance_officer"] as const) {
       const keys = getVisibleAcademyNavItems(role).map((item) => item.key);
       expect(keys).toEqual(expect.arrayContaining(["dashboard", "reports"]));
       expect(keys).not.toContain("notifications");

@@ -32,8 +32,10 @@ import {
   type DesignFormRule,
 } from "@/app/academy/_shell/design-form";
 import { BatchFormDialog, type BatchBranchOption, type BatchCourseOption } from "../batch-form";
-import { EnrollCoursesDialog } from "@/app/academy/_shell/enroll-courses-dialog";
+import { EnrollStudentDialog } from "@/app/academy/students/enroll-dialog";
+import type { ProgramBatchOption } from "@/lib/academies/program-enrollments";
 import { guardAction } from "@/lib/ui/guard-action";
+import { Icon } from "@/app/academy/_shell/icons";
 
 // Failed requests come back as form errors (see lib/ui/guard-action.ts).
 const guardedAssignTrainer = guardAction(assignTrainerToBatch);
@@ -75,6 +77,8 @@ export interface StaffOption {
 export function BatchHeaderActions({
   batch,
   enrollBatch,
+  programBatch = null,
+  canRecordPayments = false,
   enrolledPairs,
   students,
   studentsTruncated,
@@ -88,6 +92,10 @@ export function BatchHeaderActions({
   batch: BatchRecord;
   /** This batch as an enroll option (its courses), or null when not open for enrollment. */
   enrollBatch: EnrollBatchOption | null;
+  /** This batch as a complete-program option, when it is a program batch open for enrollment. */
+  programBatch?: ProgramBatchOption | null;
+  /** May record a payment while enrolling. */
+  canRecordPayments?: boolean;
   enrolledPairs: Record<string, string[]>;
   students: StudentOption[];
   studentsTruncated: boolean;
@@ -109,7 +117,7 @@ export function BatchHeaderActions({
 
   return (
     <>
-      {canManage && !archived && enrollBatch && (
+      {canManage && !archived && (enrollBatch || programBatch) && (
         <button type="button" className={HEADER_PRIMARY} onClick={() => setDialog("enroll")}>
           Enroll a student
         </button>
@@ -125,13 +133,15 @@ export function BatchHeaderActions({
         </button>
       )}
 
-      {enrollBatch && (
-        <EnrollCoursesDialog
+      {(enrollBatch || programBatch) && (
+        <EnrollStudentDialog
           open={dialog === "enroll"}
           onOpenChange={(open) => !open && close()}
           title={`Enroll a student in ${batch.code}`}
           students={students}
-          batches={[enrollBatch]}
+          enrollBatches={enrollBatch ? [enrollBatch] : []}
+          programBatches={programBatch ? [programBatch] : []}
+          canRecordPayments={canRecordPayments}
           lockedBatchId={batch.id}
           enrolledPairs={enrolledPairs}
           studentsNote={studentsTruncated ? "Showing the first 100 active students. Search to narrow the list." : undefined}
@@ -315,12 +325,15 @@ export function EnrolledStudentsTable({
   canManage,
   canDelete,
   showFees,
+  emptyHint,
 }: {
   batchId: string;
   enrollments: EnrollmentRow[];
   canManage: boolean;
   canDelete: boolean;
   showFees: boolean;
+  /** One line under "No students enrolled yet." (what to do next for this batch's status). */
+  emptyHint?: string;
 }) {
   const router = useRouter();
   const [withdrawState, withdrawAction, withdrawing] = useActionState(guardedWithdraw, initialState);
@@ -347,7 +360,7 @@ export function EnrolledStudentsTable({
         </span>
       </BlockTitle>
       {enrollments.length === 0 ? (
-        <EmptyCard message="No students enrolled yet." />
+        <EmptyCard message="No students enrolled yet." hint={emptyHint} icon="group" />
       ) : (
         <DataTable stackBelow={760}>
           <thead>
@@ -378,7 +391,10 @@ export function EnrolledStudentsTable({
                   </Link>
                 </td>
                 <td className={rtTd} data-label="Course">
-                  {enrollment.courseName}
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {enrollment.courseName}
+                    {enrollment.programEnrollmentId && <Badge label="Program" tone="blue" />}
+                  </span>
                 </td>
                 {showFees && (
                   <td className={rtTd} data-label="Fee plan">
@@ -402,6 +418,17 @@ export function EnrolledStudentsTable({
                 </td>
                 {canManage && (
                   <td className={rtTd} data-actions="">
+                    {enrollment.programEnrollmentId ? (
+                      // Program courses leave only with the whole program.
+                      enrollment.status === "active" && (
+                        <Link
+                          href={`/academy/students/${enrollment.studentId}`}
+                          className="inline-flex min-h-11 items-center whitespace-nowrap text-[13px] font-semibold !text-brand hover:underline"
+                        >
+                          Manage on student page
+                        </Link>
+                      )
+                    ) : (
                     <span className="inline-flex items-center gap-2 whitespace-nowrap">
                       {enrollment.status === "active" && (
                         <button type="button" disabled={withdrawing} onClick={() => setWithdrawId(enrollment.id)} className={ROW_BTN}>
@@ -424,6 +451,7 @@ export function EnrolledStudentsTable({
                         </button>
                       )}
                     </span>
+                    )}
                   </td>
                 )}
               </tr>
@@ -468,10 +496,16 @@ export function EnrolledStudentsTable({
   );
 }
 
-export function EmptyCard({ message }: { message: string }) {
+export function EmptyCard({ message, hint, icon }: { message: string; hint?: string; icon?: string }) {
   return (
-    <div className="mb-8 rounded-card border border-border bg-surface px-4 py-8 text-center text-sm text-muted shadow-card">
-      {message}
+    <div className="mb-8 flex flex-col items-center gap-2 rounded-card border border-border bg-surface px-4 py-8 text-center text-sm text-muted shadow-card">
+      {icon && (
+        <span aria-hidden="true" className="flex h-10 w-10 items-center justify-center rounded-full bg-app text-muted">
+          <Icon name={icon} width={20} height={20} />
+        </span>
+      )}
+      <span className={hint ? "font-semibold text-ink" : undefined}>{message}</span>
+      {hint && <span className="max-w-[52ch]">{hint}</span>}
     </div>
   );
 }
