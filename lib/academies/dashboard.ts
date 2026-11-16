@@ -11,7 +11,7 @@ import {
   listPendingApprovalRequests,
   type ApprovalRequestEntityType,
 } from "@/lib/academies/approval-requests";
-import { getStudentPaymentTotals, type AmountByCurrency } from "@/lib/academies/finance-reports";
+import { getStudentPaymentTotals, subtractByCurrency, type AmountByCurrency } from "@/lib/academies/finance-reports";
 import { getOverdueFeeSummary, type OverdueFeeSummary } from "@/lib/academies/fee-periods";
 import { getOwnAcademyUsage, type OwnAcademyUsageLimits, type OwnAcademyUsageMetrics } from "@/lib/academies/settings";
 import { listStudentPayments, type StudentPaymentRecord } from "@/lib/academies/student-payments";
@@ -87,7 +87,10 @@ export interface AcademyDashboardData {
   nextExam: NextExamSummary | null;
   pendingApprovals: PendingApprovalsSummary | null;
   outstandingCharges: MoneySummary | null;
+  /** Posted student payments minus course/program refunds (net kept). */
   paymentsCollected: MoneySummary | null;
+  /** The refunds subtracted from `paymentsCollected`. */
+  paymentsRefunded: MoneySummary | null;
   overdueFees: OverdueFeeSummary | null;
   recentPayments: RecentPaymentRow[] | null;
   usage: { metrics: OwnAcademyUsageMetrics | null; limits: OwnAcademyUsageLimits | null } | null;
@@ -273,7 +276,16 @@ export async function getAcademyDashboardData(
         ? summarizeApprovals(pendingApprovalRequests.map((request) => request.entityType))
         : null,
       outstandingCharges: finance ? finance.outstandingCharges : null,
-      paymentsCollected: finance ? finance.paymentsReceived : null,
+      paymentsCollected: finance
+        ? {
+            count: finance.paymentsReceived.count,
+            totalsByCurrency: subtractByCurrency(
+              finance.paymentsReceived.totalsByCurrency,
+              finance.refundsRecorded.totalsByCurrency,
+            ),
+          }
+        : null,
+      paymentsRefunded: finance ? finance.refundsRecorded : null,
       overdueFees,
       recentPayments,
       usage: usageResult.ok ? { metrics: usageResult.usage, limits: usageResult.limits } : null,

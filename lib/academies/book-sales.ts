@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { branchScopeCondition, getBranchScope, inBranchScope, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
@@ -570,10 +570,20 @@ export async function refundBookSale(actorContext: AuthContext, input: RefundBoo
     const [sale] = await tx.select().from(bookSales).where(eq(bookSales.id, data.bookSaleId)).for("update");
     if (!sale || sale.academyId !== academyId || !inBranchScope(scope, sale.branchId)) return { kind: "not_found" as const };
 
+    // A payment whose income record was already reversed in Finance (before
+    // book-sale income reversals were blocked) has had its money taken back
+    // out of income once already. Refunding it again would subtract it
+    // twice, so it doesn't count as refundable.
     const [paidRow] = await tx
       .select({ total: sql<string>`coalesce(sum(${bookSalePayments.amountCents}), 0)` })
       .from(bookSalePayments)
-      .where(eq(bookSalePayments.bookSaleId, sale.id));
+      .leftJoin(incomeRecords, eq(incomeRecords.id, bookSalePayments.incomeRecordId))
+      .where(
+        and(
+          eq(bookSalePayments.bookSaleId, sale.id),
+          or(isNull(bookSalePayments.incomeRecordId), ne(incomeRecords.status, "reversed")),
+        ),
+      );
     const totalPaid = Number(paidRow?.total ?? 0);
 
     const [refundedRow] = await tx

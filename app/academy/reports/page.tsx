@@ -4,7 +4,7 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getStudentReports } from "@/lib/academies/student-reports";
 import { getAcademicReports } from "@/lib/academies/academic-reports";
-import { getFinanceReports, type AmountByCurrency, type PaymentSource } from "@/lib/academies/finance-reports";
+import { getFinanceReports, subtractByCurrency, type AmountByCurrency, type PaymentSource } from "@/lib/academies/finance-reports";
 import { getFeeCollectionSummary, getProgramFeeCollectionSummary } from "@/lib/academies/fee-period-overview";
 import { listBranches } from "@/lib/academies/branches";
 import { listBatches } from "@/lib/academies/batches";
@@ -411,9 +411,15 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
           ...(studentPayments.visible
             ? [
                 {
+                  // Net: money received minus course/program refunds given back.
                   label: "Student payments",
-                  value: moneyLine(studentPayments.paymentsReceived.totalsByCurrency),
-                  hint: `${studentPayments.paymentsReceived.count} posted`,
+                  value: moneyLine(
+                    subtractByCurrency(studentPayments.paymentsReceived.totalsByCurrency, studentPayments.refundsRecorded.totalsByCurrency),
+                  ),
+                  hint:
+                    studentPayments.refundsRecorded.count > 0
+                      ? `${moneyLine(studentPayments.paymentsReceived.totalsByCurrency)} received, ${moneyLine(studentPayments.refundsRecorded.totalsByCurrency)} refunded · ${studentPayments.paymentsReceived.count} posted`
+                      : `${studentPayments.paymentsReceived.count} posted`,
                   icon: "payments",
                 },
                 ...(programPayments.amountCents > 0 || programFee
@@ -443,7 +449,17 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
               ]
             : []),
           ...(income.visible
-            ? [{ label: "Income", value: moneyLine(income.totalsByCurrency), hint: "posted, including book sales", icon: "bank" }]
+            ? [
+                {
+                  label: "Income",
+                  value: moneyLine(income.totalsByCurrency),
+                  hint:
+                    income.bookRefunds.count > 0
+                      ? `${moneyLine(income.grossByCurrency)} posted, ${moneyLine(income.bookRefunds.totalsByCurrency)} book refunds`
+                      : "posted, including book sales",
+                  icon: "bank",
+                },
+              ]
             : []),
           ...(expenses.visible
             ? [
@@ -527,7 +543,7 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
         {(income.visible || expenses.visible) && (
           <BarList
             title="Income and expenses"
-            sub={`Posted income and approved expenses${inMain}`}
+            sub={`Posted income after book refunds, and approved expenses${inMain}`}
             rows={[
               ...(income.visible ? [{ label: "Income", value: centsOf(income.totalsByCurrency, main), text: formatMoney(centsOf(income.totalsByCurrency, main), main) }] : []),
               ...(expenses.visible

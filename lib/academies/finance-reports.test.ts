@@ -436,6 +436,8 @@ describe("getFinanceReports — outstanding charges / pending approvals aggregat
       visible: true,
       count: 1,
       totalsByCurrency: [{ currency: "USD", amountCents: 5_000, count: 1 }],
+      grossByCurrency: [{ currency: "USD", amountCents: 5_000, count: 1 }],
+      bookRefunds: { count: 0, totalsByCurrency: [] },
     });
   });
 
@@ -509,6 +511,8 @@ describe("getFinanceReports — filter correctness", () => {
       visible: true,
       count: 1,
       totalsByCurrency: [{ currency: "USD", amountCents: 1_000, count: 1 }],
+      grossByCurrency: [{ currency: "USD", amountCents: 1_000, count: 1 }],
+      bookRefunds: { count: 0, totalsByCurrency: [] },
     });
   });
 
@@ -578,7 +582,13 @@ describe("getFinanceReports — cross-academy tenant isolation", () => {
       paymentsReceived: { count: 0, totalsByCurrency: [], byMethod: [], byMonth: [], bySource: [] },
       refundsRecorded: { count: 0, totalsByCurrency: [], bySource: [] },
     });
-    expect(result.report.income).toEqual({ visible: true, count: 0, totalsByCurrency: [] });
+    expect(result.report.income).toEqual({
+      visible: true,
+      count: 0,
+      totalsByCurrency: [],
+      grossByCurrency: [],
+      bookRefunds: { count: 0, totalsByCurrency: [] },
+    });
     expect(result.report.expenses).toEqual({
       visible: true,
       count: 0,
@@ -636,6 +646,11 @@ describe("getFinanceReports — module surface", () => {
     const exported = Object.keys(financeReportsModule).sort();
     // getStudentPaymentTotals: the academy dashboard's two-figure read
     // (performance plan P5), same gate and computations as getFinanceReports.
-    expect(exported).toEqual(["financeReportFiltersSchema", "getFinanceReports", "getStudentPaymentTotals"].sort());
+    // subtractByCurrency: the pure per-currency net helper (income after
+    // book refunds, payments after course refunds) the dashboard and
+    // Reports page share.
+    expect(exported).toEqual(
+      ["financeReportFiltersSchema", "getFinanceReports", "getStudentPaymentTotals", "subtractByCurrency"].sort(),
+    );
   });
 });

@@ -36,9 +36,10 @@ import {
   setEnrollmentFeeSchedule,
   todayDateOnlyInAcademyTimezone,
 } from "./fee-periods";
-import { adjustStudentPayment, reverseStudentPayment } from "./finance-reversals";
+import { partiallyReverseStudentPayment, reverseStudentPayment } from "./finance-reversals";
 import { issueReceipt } from "./student-payments";
-import { getFinanceReports } from "./finance-reports";
+import { getFinanceReports, getStudentPaymentTotals } from "./finance-reports";
+import { getAcademyDashboardData } from "./dashboard";
 import {
   getCourseRefundPosition,
   getRefundedAmountsForPayments,
@@ -351,18 +352,19 @@ describe("withdraw and record a refund — the approved policy", () => {
     expect(exact.ok).toBe(true);
   });
 
-  it("reversed and adjusted payments are not refundable; the cap is what remains approved", async () => {
+  it("reversed payments are not refundable; a partly reversed payment's remainder is; the cap is what remains approved", async () => {
     const f = await setup();
     const reverser = await addActingUser(f.academyId, "manager");
     await pay(f, 1_000);
     const wrong = await pay(f, 500);
     const toAdjust = await pay(f, 700);
     expect((await reverseStudentPayment(reverser.context, wrong.id, "Duplicate")).ok).toBe(true);
-    expect((await adjustStudentPayment(reverser.context, toAdjust.id, "Was 600", 600)).ok).toBe(true);
+    // 100 of the 700 reversed: the 600 remainder keeps its allocation.
+    expect((await partiallyReverseStudentPayment(reverser.context, toAdjust.id, "Was 600", 100)).ok).toBe(true);
 
     const position = await getCourseRefundPosition(f.manager.context, f.enrollmentId);
-    expect(position.ok && position.position.refundableCents).toBe(1_000);
-    const over = await withdrawStudentWithRefund(f.manager.context, refundInput(f.enrollmentId, 1_001));
+    expect(position.ok && position.position.refundableCents).toBe(1_600);
+    const over = await withdrawStudentWithRefund(f.manager.context, refundInput(f.enrollmentId, 1_601));
     expect(over.ok).toBe(false);
   });
 
@@ -444,7 +446,7 @@ describe("after a refund", () => {
     const reverse = await reverseStudentPayment(reverser.context, refunded.id, "Trying");
     expect(reverse.ok).toBe(false);
     if (!reverse.ok) expect(reverse.error.code).toBe("invalid_state");
-    const adjust = await adjustStudentPayment(reverser.context, refunded.id, "Trying", 10);
+    const adjust = await partiallyReverseStudentPayment(reverser.context, refunded.id, "Trying", 10);
     expect(adjust.ok).toBe(false);
     const [still] = await db.select().from(studentPayments).where(eq(studentPayments.id, refunded.id));
     expect(still.status).toBe("approved");
@@ -484,6 +486,22 @@ describe("after a refund", () => {
       // Stage 6: a course refund is labelled "course" (program refunds are "program").
       bySource: [{ source: "course", currency: "USD", amountCents: 800, count: 1 }],
     });
+  });
+
+  it("dashboard 'payments collected' is net of course refunds and reports the refund", async () => {
+    const f = await setup();
+    await pay(f, 2_000);
+    const result = await withdrawStudentWithRefund(f.manager.context, refundInput(f.enrollmentId, 800));
+    expect(result.ok).toBe(true);
+    const totals = await getStudentPaymentTotals(f.manager.context);
+    expect(totals.ok).toBe(true);
+    if (!totals.ok || !totals.totals.visible) throw new Error("expected visible totals");
+    expect(totals.totals.refundsRecorded).toEqual({ count: 1, totalsByCurrency: [{ currency: "USD", amountCents: 800, count: 1 }] });
+    const dashboard = await getAcademyDashboardData(f.manager.context);
+    expect(dashboard.ok).toBe(true);
+    if (!dashboard.ok) return;
+    expect(dashboard.data.paymentsCollected?.totalsByCurrency).toEqual([{ currency: "USD", amountCents: 1_200, count: 1 }]);
+    expect(dashboard.data.paymentsRefunded?.count).toBe(1);
   });
 
   it("the student's refund list shows it with its course, and the position reflects it", async () => {

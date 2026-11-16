@@ -1,8 +1,17 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { getBranchScope, inBranchScope, isStudentInScope, type BranchScope } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { expenseRecords, incomeRecords, studentCharges, studentCourseRefundPayments, studentPayments } from "@/lib/db/schema";
+import {
+  bookSalePayments,
+  expenseRecords,
+  feePeriods,
+  incomeRecords,
+  paymentAllocations,
+  studentCharges,
+  studentCourseRefundPayments,
+  studentPayments,
+} from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_EXPENSES_ACTION,
@@ -75,43 +84,27 @@ import { recalculateStudentChargeStatus } from "@/lib/academies/student-payments
  *     "no new column" — no schema.ts edit was made or needed.
  *
  * =========================================================================
- * reverseTransaction vs. adjustTransaction — judgment call
+ * Full reversal vs. partial reversal (and the expense-only adjust)
  * =========================================================================
- * PLAN.md never gives these separate schemas, separate statuses, or
- * separate described behaviors anywhere (no "adjusted" state exists in any
- * of the three status enums — only "reversed"), and DESIGN.md's
- * `/academy/finance` route table entry treats "Reversal/Adjustment" as one
- * combined UI affordance. Given that, and given the schema has exactly one
- * mechanism available (insert a linked row, flip the original to
- * "reversed"), this file treats them as the SAME underlying mechanism with
- * a different amount semantic:
+ * Every correction uses the one mechanism the schema has: flip the original
+ * to "reversed" and insert a linked row (born "reversed", so it never
+ * counts). A record never changes amount.
  *
- *   - `reverseX(actor, id, reason)`      — the new row's amount is always
- *     an exact copy of the original's amount: a full, unconditional
- *     reversal ("this transaction should not have counted at all").
- *   - `adjustX(actor, id, reason, correctedAmountCents)` — the new row's
- *     amount is the caller-supplied corrected figure instead of a copy of
- *     the original ("this transaction should have been recorded as this
- *     other, correct amount"). The original is still flipped to
- *     `"reversed"` exactly as in a full reversal (no third status exists
- *     to express "partially corrected"), so from a reporting standpoint an
- *     adjustment is "reverse the wrong figure, then separately re-enter
- *     the corrected one as its own new linked-and-already-reversed record
- *     for audit purposes" — NOT a live re-approved replacement row, since
- *     minting a fresh `approved`/`posted` row here would silently bypass
- *     the same approval authority this item's own permission gate exists
- *     to enforce. A caller wanting a corrected figure to actually count
- *     again must separately record and re-approve a brand new transaction
- *     through the normal create/approve flow (Items 51/52/53) — this
- *     item's `adjustX` only fixes the audit trail's *record* of what the
- *     right amount should have been, it does not re-inject money into any
- *     report. This is a genuine judgment call: PLAN.md doesn't spell out
- *     the distinction, and a reasonable alternative reading would drop
- *     `adjustX` entirely as a no-op alias of `reverseX`. Kept separate
- *     (with `adjustX` internally delegating to the same helper as
- *     `reverseX`, just with a different amount argument) since the item's
- *     own brief explicitly asks for "adjustX variants if you determine
- *     they're meaningfully different."
+ *   - `reverseX(actor, id, reason)`: the linked row copies the original's
+ *     amount. Nothing of the original counts any more.
+ *   - `partiallyReverseStudentPayment` / `partiallyReverseIncomeRecord`
+ *     (actor, id, reason, reverseAmountCents): the linked row carries only
+ *     the reversed part, and a NEW approved payment / posted income record
+ *     for the remainder is written in the same transaction (same student,
+ *     charge, method, reference, date and recorder; a payment also keeps
+ *     its fee-period allocations up to the remainder). Totals fall by
+ *     exactly the reversed part, and the remainder can be partly reversed
+ *     again. This replaced the old "adjust to a corrected amount", whose
+ *     corrected row was itself born reversed — it silently removed the
+ *     whole payment from every total (production: a $4 payment "adjusted"
+ *     with $1 dropped all $4).
+ *   - `adjustExpenseRecord` keeps the old adjust model for now: the
+ *     corrected expense row is recorded for the audit trail only.
  *
  * =========================================================================
  * Permission gating — reuses the exact "approve"-equivalent authority
@@ -253,6 +246,8 @@ export interface StudentPaymentReversalResult {
   ok: true;
   original: typeof studentPayments.$inferSelect;
   reversal: typeof studentPayments.$inferSelect;
+  /** Partial reversal only: the new approved payment for what remains. */
+  remainder: typeof studentPayments.$inferSelect | null;
 }
 export type ReverseStudentPaymentResult =
   | StudentPaymentReversalResult
@@ -284,11 +279,66 @@ function canCorrectOwnPayment(level: AcademyPermissionLevel): boolean {
   return level === "full" || level === "manage";
 }
 
+/** Partial-reversal amount check shared by payments and income: a whole,
+ * positive number of cents. "Less than the original" is checked on the
+ * locked row inside each transaction. */
+function parsePartialAmount(amountCents: number | undefined): { ok: true } | { ok: false; error: FinanceReversalError } {
+  if (amountCents === undefined) return { ok: true };
+  const parsed = z.number().int().positive().safeParse(amountCents);
+  if (!parsed.success) {
+    return { ok: false, error: { code: "validation", message: "Enter the amount to reverse, more than zero." } };
+  }
+  return { ok: true };
+}
+
+function partialTooLarge(originalCents: number): FinanceReversalError {
+  return {
+    code: "validation",
+    message: `The amount to reverse must be less than the original ${(originalCents / 100).toFixed(2)}. To reverse all of it, use Reverse in full.`,
+  };
+}
+
+/**
+ * Splits `remainingCents` over a reversed payment's fee-period allocations,
+ * oldest period first, each up to what the original put on it. The
+ * remainder therefore keeps paying the same installments it paid before,
+ * minus the reversed part taken from the latest ones.
+ */
+function remainderAllocations(
+  originals: { feePeriodId: string; amountCents: number }[],
+  remainingCents: number,
+): { feePeriodId: string; amountCents: number }[] {
+  const result: { feePeriodId: string; amountCents: number }[] = [];
+  let left = remainingCents;
+  for (const allocation of originals) {
+    if (left <= 0) break;
+    const amountCents = Math.min(left, allocation.amountCents);
+    result.push({ feePeriodId: allocation.feePeriodId, amountCents });
+    left -= amountCents;
+  }
+  return result;
+}
+
+/**
+ * Full or partial reversal of a student payment.
+ *
+ * Full (`partialCents` undefined): the original flips to "reversed" and a
+ * linked reversal row of the same amount is added. Nothing of it counts.
+ *
+ * Partial (`partialCents` = the part to reverse, 0 < part < amount): the
+ * original still flips to "reversed" (one record never changes amount), the
+ * linked reversal row carries the reversed part, and a NEW approved payment
+ * for the remainder is posted in the same transaction — same student,
+ * charge, method, reference, received date and recorder, with the
+ * original's fee-period allocations carried over up to the remainder. So
+ * every total (which counts approved payments only) falls by exactly the
+ * reversed part, and the remainder can itself be partly reversed later.
+ */
 async function reverseOrAdjustStudentPaymentInternal(
   actorContext: AuthContext,
   studentPaymentId: string,
   reason: string,
-  overrideAmountCents: number | undefined,
+  partialCents: number | undefined,
 ): Promise<ReverseStudentPaymentResult> {
   const membership = await resolveMembership(actorContext);
   if (!membership.ok) return membership;
@@ -305,15 +355,8 @@ async function reverseOrAdjustStudentPaymentInternal(
   const parsedReason = parseReason(reason);
   if (!parsedReason.ok) return { ok: false, error: REASON_REQUIRED };
 
-  if (overrideAmountCents !== undefined) {
-    const parsedAmount = z.number().int().nonnegative().safeParse(overrideAmountCents);
-    if (!parsedAmount.success) {
-      return {
-        ok: false,
-        error: { code: "validation", message: "Adjusted amount must be a nonnegative whole number of cents." },
-      };
-    }
-  }
+  const amountCheck = parsePartialAmount(partialCents);
+  if (!amountCheck.ok) return amountCheck;
 
   const result = await db.transaction(async (tx) => {
     const [original] = await tx
@@ -338,6 +381,9 @@ async function reverseOrAdjustStudentPaymentInternal(
       .where(eq(studentCourseRefundPayments.studentPaymentId, original.id))
       .limit(1);
     if (refundLink) return { kind: "refunded" as const };
+    if (partialCents !== undefined && partialCents >= original.amountCents) {
+      return { kind: "too_large" as const, originalCents: original.amountCents };
+    }
     // Lock the linked charge before inserting the reversal row (whose FK
     // takes a key-share lock on it) — same deadlock-avoidance order as
     // recordStudentPayment: two corrections on one charge queue on this
@@ -358,7 +404,7 @@ async function reverseOrAdjustStudentPaymentInternal(
         academyId,
         studentId: original.studentId,
         chargeId: original.chargeId,
-        amountCents: overrideAmountCents ?? original.amountCents,
+        amountCents: partialCents ?? original.amountCents,
         currency: original.currency,
         method: original.method,
         reference: original.reference
@@ -374,16 +420,59 @@ async function reverseOrAdjustStudentPaymentInternal(
       })
       .returning();
 
+    let remainder: typeof studentPayments.$inferSelect | null = null;
+    if (partialCents !== undefined) {
+      const remainingCents = original.amountCents - partialCents;
+      [remainder] = await tx
+        .insert(studentPayments)
+        .values({
+          academyId,
+          studentId: original.studentId,
+          chargeId: original.chargeId,
+          amountCents: remainingCents,
+          currency: original.currency,
+          method: original.method,
+          reference: original.reference,
+          notes: original.notes,
+          // Kept on the original's date and recorder: the remainder is the
+          // same money received that day, not a new receipt of cash.
+          receivedAt: original.receivedAt,
+          recordedBy: original.recordedBy,
+          status: "approved",
+          approvedBy: actorContext.userId,
+          approvedAt: new Date(),
+        })
+        .returning();
+
+      const originalAllocations = await tx
+        .select({ feePeriodId: paymentAllocations.feePeriodId, amountCents: paymentAllocations.amountCents })
+        .from(paymentAllocations)
+        .innerJoin(feePeriods, eq(feePeriods.id, paymentAllocations.feePeriodId))
+        .where(eq(paymentAllocations.studentPaymentId, original.id))
+        .orderBy(asc(feePeriods.periodStart), asc(feePeriods.dueDate));
+      const carried = remainderAllocations(originalAllocations, remainingCents);
+      if (carried.length > 0) {
+        await tx.insert(paymentAllocations).values(
+          carried.map((allocation) => ({ academyId, studentPaymentId: remainder!.id, ...allocation })),
+        );
+      }
+    }
+
     await recordAudit(
       {
         actorUserId: actorContext.userId,
         actorRole: membershipRole,
         academyId,
-        action: overrideAmountCents !== undefined ? "adjustStudentPayment" : "reverseStudentPayment",
+        action: partialCents !== undefined ? "partiallyReverseStudentPayment" : "reverseStudentPayment",
         entityType: "student_payment",
         entityId: original.id,
         before: { status: original.status, amountCents: original.amountCents },
-        after: { status: updatedOriginal.status, reversalRowId: reversal.id, amountCents: reversal.amountCents },
+        after: {
+          status: updatedOriginal.status,
+          reversalRowId: reversal.id,
+          reversedAmountCents: reversal.amountCents,
+          ...(remainder ? { remainderPaymentId: remainder.id, remainderAmountCents: remainder.amountCents } : {}),
+        },
         reason: parsedReason.value,
       },
       tx,
@@ -398,12 +487,13 @@ async function reverseOrAdjustStudentPaymentInternal(
       await recalculateStudentChargeStatus(tx, original.chargeId, actorContext.userId, membershipRole);
     }
 
-    return { kind: "ok" as const, original: updatedOriginal, reversal };
+    return { kind: "ok" as const, original: updatedOriginal, reversal, remainder };
   });
 
   if (result.kind === "not_found") return { ok: false, error: PAYMENT_NOT_FOUND };
   if (result.kind === "invalid_state") return { ok: false, error: PAYMENT_INVALID_STATE };
   if (result.kind === "forbidden") return { ok: false, error: PAYMENT_FORBIDDEN };
+  if (result.kind === "too_large") return { ok: false, error: partialTooLarge(result.originalCents) };
   if (result.kind === "refunded") {
     return {
       ok: false,
@@ -413,7 +503,7 @@ async function reverseOrAdjustStudentPaymentInternal(
       },
     };
   }
-  return { ok: true, original: result.original, reversal: result.reversal };
+  return { ok: true, original: result.original, reversal: result.reversal, remainder: result.remainder };
 }
 
 /** Full reversal: the new linked row copies the original's amount exactly. */
@@ -425,16 +515,16 @@ export async function reverseStudentPayment(
   return reverseOrAdjustStudentPaymentInternal(actorContext, studentPaymentId, reason, undefined);
 }
 
-/** Adjustment: the new linked row records a corrected amount instead of a
- * copy of the original's — see this file's module comment for why the
- * original is still flipped to "reversed" either way. */
-export async function adjustStudentPayment(
+/** Partial reversal: reverses `reverseAmountCents` of the payment (more
+ * than zero, less than the payment) and posts the rest as a new approved
+ * payment — see `reverseOrAdjustStudentPaymentInternal`. */
+export async function partiallyReverseStudentPayment(
   actorContext: AuthContext,
   studentPaymentId: string,
   reason: string,
-  correctedAmountCents: number,
+  reverseAmountCents: number,
 ): Promise<ReverseStudentPaymentResult> {
-  return reverseOrAdjustStudentPaymentInternal(actorContext, studentPaymentId, reason, correctedAmountCents);
+  return reverseOrAdjustStudentPaymentInternal(actorContext, studentPaymentId, reason, reverseAmountCents);
 }
 
 // ===========================================================================
@@ -445,6 +535,8 @@ export interface IncomeRecordReversalResult {
   ok: true;
   original: typeof incomeRecords.$inferSelect;
   reversal: typeof incomeRecords.$inferSelect;
+  /** Partial reversal only: the new posted record for what remains. */
+  remainder: typeof incomeRecords.$inferSelect | null;
 }
 export type ReverseIncomeRecordResult =
   | IncomeRecordReversalResult
@@ -459,6 +551,11 @@ const INCOME_INVALID_STATE: FinanceReversalError = {
   code: "invalid_state",
   message: "Only a posted income record can be reversed.",
 };
+const INCOME_FROM_BOOK_SALE: FinanceReversalError = {
+  code: "invalid_state",
+  message:
+    "This income came from a book sale. Record a refund on the sale in Books instead, so the receipt, stock and income stay in step.",
+};
 
 /** No approve step exists for income at all — this item's brief: reuse the
  * same "manage" level that creates it (Manager or Finance Officer). */
@@ -466,11 +563,15 @@ function canReverseIncome(level: AcademyPermissionLevel): boolean {
   return level === "manage";
 }
 
+/** Full or partial reversal of an income record — the same model as
+ * `reverseOrAdjustStudentPaymentInternal`: a partial reversal reverses the
+ * original, records the reversed part on the linked reversal row, and posts
+ * the remainder as a new record dated like the original. */
 async function reverseOrAdjustIncomeRecordInternal(
   actorContext: AuthContext,
   incomeRecordId: string,
   reason: string,
-  overrideAmountCents: number | undefined,
+  partialCents: number | undefined,
 ): Promise<ReverseIncomeRecordResult> {
   const membership = await resolveMembership(actorContext);
   if (!membership.ok) return membership;
@@ -487,15 +588,8 @@ async function reverseOrAdjustIncomeRecordInternal(
   const parsedReason = parseReason(reason);
   if (!parsedReason.ok) return { ok: false, error: REASON_REQUIRED };
 
-  if (overrideAmountCents !== undefined) {
-    const parsedAmount = z.number().int().nonnegative().safeParse(overrideAmountCents);
-    if (!parsedAmount.success) {
-      return {
-        ok: false,
-        error: { code: "validation", message: "Adjusted amount must be a nonnegative whole number of cents." },
-      };
-    }
-  }
+  const amountCheck = parsePartialAmount(partialCents);
+  if (!amountCheck.ok) return amountCheck;
 
   const result = await db.transaction(async (tx) => {
     const [original] = await tx
@@ -505,6 +599,20 @@ async function reverseOrAdjustIncomeRecordInternal(
       .for("update");
     if (!original || !inBranchScope(scope, original.branchId)) return { kind: "not_found" as const };
     if (original.status !== "posted") return { kind: "invalid_state" as const };
+
+    // Book-sale income is corrected through refundBookSale (lib/academies/
+    // book-sales.ts), which also updates the sale's paid/refunded amounts,
+    // its receipt and stock. Reversing it here would leave the sale saying
+    // "paid" while Finance said otherwise.
+    const [bookSaleLink] = await tx
+      .select({ id: bookSalePayments.id })
+      .from(bookSalePayments)
+      .where(eq(bookSalePayments.incomeRecordId, original.id))
+      .limit(1);
+    if (bookSaleLink) return { kind: "book_sale" as const };
+    if (partialCents !== undefined && partialCents >= original.amountCents) {
+      return { kind: "too_large" as const, originalCents: original.amountCents };
+    }
 
     const [updatedOriginal] = await tx
       .update(incomeRecords)
@@ -527,7 +635,7 @@ async function reverseOrAdjustIncomeRecordInternal(
         branchId: original.branchId,
         category: original.category,
         description: reversalDescription,
-        amountCents: overrideAmountCents ?? original.amountCents,
+        amountCents: partialCents ?? original.amountCents,
         currency: original.currency,
         recordedBy: actorContext.userId,
         status: "reversed",
@@ -535,27 +643,54 @@ async function reverseOrAdjustIncomeRecordInternal(
       })
       .returning();
 
+    let remainder: typeof incomeRecords.$inferSelect | null = null;
+    if (partialCents !== undefined) {
+      [remainder] = await tx
+        .insert(incomeRecords)
+        .values({
+          academyId,
+          branchId: original.branchId,
+          category: original.category,
+          description: original.description,
+          amountCents: original.amountCents - partialCents,
+          currency: original.currency,
+          recordedBy: original.recordedBy,
+          status: "posted",
+          // Reports count income by created_at: the remainder stays in the
+          // original's period instead of moving to today.
+          createdAt: original.createdAt,
+        })
+        .returning();
+    }
+
     await recordAudit(
       {
         actorUserId: actorContext.userId,
         actorRole: membershipRole,
         academyId,
-        action: overrideAmountCents !== undefined ? "adjustIncomeRecord" : "reverseIncomeRecord",
+        action: partialCents !== undefined ? "partiallyReverseIncomeRecord" : "reverseIncomeRecord",
         entityType: "income_record",
         entityId: original.id,
         before: { status: original.status, amountCents: original.amountCents },
-        after: { status: updatedOriginal.status, reversalRowId: reversal.id, amountCents: reversal.amountCents },
+        after: {
+          status: updatedOriginal.status,
+          reversalRowId: reversal.id,
+          reversedAmountCents: reversal.amountCents,
+          ...(remainder ? { remainderRecordId: remainder.id, remainderAmountCents: remainder.amountCents } : {}),
+        },
         reason: parsedReason.value,
       },
       tx,
     );
 
-    return { kind: "ok" as const, original: updatedOriginal, reversal };
+    return { kind: "ok" as const, original: updatedOriginal, reversal, remainder };
   });
 
   if (result.kind === "not_found") return { ok: false, error: INCOME_NOT_FOUND };
   if (result.kind === "invalid_state") return { ok: false, error: INCOME_INVALID_STATE };
-  return { ok: true, original: result.original, reversal: result.reversal };
+  if (result.kind === "book_sale") return { ok: false, error: INCOME_FROM_BOOK_SALE };
+  if (result.kind === "too_large") return { ok: false, error: partialTooLarge(result.originalCents) };
+  return { ok: true, original: result.original, reversal: result.reversal, remainder: result.remainder };
 }
 
 export async function reverseIncomeRecord(
@@ -566,13 +701,15 @@ export async function reverseIncomeRecord(
   return reverseOrAdjustIncomeRecordInternal(actorContext, incomeRecordId, reason, undefined);
 }
 
-export async function adjustIncomeRecord(
+/** Partial reversal: reverses `reverseAmountCents` of the record (more
+ * than zero, less than the record) and posts the rest as a new record. */
+export async function partiallyReverseIncomeRecord(
   actorContext: AuthContext,
   incomeRecordId: string,
   reason: string,
-  correctedAmountCents: number,
+  reverseAmountCents: number,
 ): Promise<ReverseIncomeRecordResult> {
-  return reverseOrAdjustIncomeRecordInternal(actorContext, incomeRecordId, reason, correctedAmountCents);
+  return reverseOrAdjustIncomeRecordInternal(actorContext, incomeRecordId, reason, reverseAmountCents);
 }
 
 // ===========================================================================

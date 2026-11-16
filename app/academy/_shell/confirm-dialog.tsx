@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, type ReactNode } from "react";
+import { unstable_rethrow } from "next/navigation";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -156,7 +157,19 @@ export function ConfirmButton({
   function handleConfirm() {
     setError(null);
     startTransition(async () => {
-      const result = await onConfirm();
+      let result: ConfirmActionResult;
+      try {
+        result = await onConfirm();
+      } catch (err) {
+        // A thrown action error inside a transition would otherwise reach
+        // app/academy/error.tsx and replace the whole page. Keep it in the
+        // dialog instead — but let Next's own redirect/notFound signals
+        // through untouched.
+        unstable_rethrow(err);
+        console.error("Confirm action failed:", err);
+        setError("Something went wrong. Please try again.");
+        return;
+      }
       if (!result.ok) {
         setError(result.error?.message ?? "Something went wrong. Please try again.");
         return;

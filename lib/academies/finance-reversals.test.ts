@@ -23,8 +23,8 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
   adjustExpenseRecord,
-  adjustIncomeRecord,
-  adjustStudentPayment,
+  partiallyReverseIncomeRecord,
+  partiallyReverseStudentPayment,
   reverseExpenseRecord,
   reverseIncomeRecord,
   reverseStudentPayment,
@@ -595,7 +595,7 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     expect(charge.status).toBe("open");
   });
 
-  it("3. adjusting a payment down to a smaller corrected amount recalculates the charge from 'paid' to 'partially_paid'", async () => {
+  it("3. partly reversing a payment recalculates the charge from 'paid' to 'partially_paid' (the remainder still counts)", async () => {
     const recorder = await setupAcademy("manager");
     const chargeId = await insertChargeDirect(recorder.academyId, recorder.studentId, recorder.recorderUserId, 10_000);
 
@@ -612,19 +612,18 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
     let [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
     expect(charge.status).toBe("paid");
 
-    // adjustStudentPayment flips the ORIGINAL to "reversed" (per this
-    // file's own module comment: an adjustment never leaves a live
-    // "approved" row) — the corrected 4,000 lands on a new row that is
-    // itself born "reversed", so it never counts toward the charge either.
-    // The charge's paid total after this adjustment is therefore 0, not
-    // 4,000 — matching the module comment's "adjustX only fixes the audit
-    // trail's record, it does not re-inject money into any report" rule.
+    // Reverse 6,000 of the 10,000: the original flips to "reversed" and a
+    // new approved 4,000 payment on the same charge keeps counting.
     const reverser = await addActingUser(recorder.academyId, "manager");
-    const adjusted = await adjustStudentPayment(reverser.context, payment.payment.id, "Recorded wrong amount.", 4_000);
-    expect(adjusted.ok).toBe(true);
+    const partial = await partiallyReverseStudentPayment(reverser.context, payment.payment.id, "Recorded wrong amount.", 6_000);
+    expect(partial.ok).toBe(true);
+    if (partial.ok) {
+      expect(partial.remainder?.amountCents).toBe(4_000);
+      expect(partial.remainder?.chargeId).toBe(chargeId);
+    }
 
     [charge] = await db.select().from(studentCharges).where(eq(studentCharges.id, chargeId));
-    expect(charge.status).toBe("open");
+    expect(charge.status).toBe("partially_paid");
   });
 
   it("4. reversing one of several payments on the same charge leaves the charge reflecting the correct remaining aggregate", async () => {
@@ -711,29 +710,97 @@ describe("reversal/adjustment recalculates the linked student_charges.status (Ph
   });
 });
 
-describe("adjustStudentPayment", () => {
-  it("inserts the new linked row with the corrected amount instead of a copy of the original's, while the original still flips to 'reversed' with its own amount untouched", async () => {
+describe("partiallyReverseStudentPayment", () => {
+  async function approvedTotal(studentId: string): Promise<number> {
+    const rows = await db
+      .select({ amountCents: studentPayments.amountCents })
+      .from(studentPayments)
+      .where(and(eq(studentPayments.studentId, studentId), eq(studentPayments.status, "approved")));
+    return rows.reduce((n, row) => n + row.amountCents, 0);
+  }
+
+  it("reverses only the entered part: the reversal row carries it and a new approved payment keeps the rest (the production $4 / $1 case)", async () => {
     const { academyId, studentId, recorderUserId } = await setupAcademy("manager");
     const manager = await addActingUser(academyId, "manager");
-    const paymentId = await insertPaymentDirect(academyId, studentId, recorderUserId, "approved", 10_000);
+    const paymentId = await insertPaymentDirect(academyId, studentId, recorderUserId, "approved", 400);
+    expect(await approvedTotal(studentId)).toBe(400);
 
-    const result = await adjustStudentPayment(manager.context, paymentId, "Amount was recorded wrong.", 6_000);
+    const result = await partiallyReverseStudentPayment(manager.context, paymentId, "Took 1 back.", 100);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.original.amountCents).toBe(10_000);
+    expect(result.original.amountCents).toBe(400);
     expect(result.original.status).toBe("reversed");
-    expect(result.reversal.amountCents).toBe(6_000);
+    expect(result.reversal.amountCents).toBe(100);
+    expect(result.reversal.status).toBe("reversed");
     expect(result.reversal.reversedPaymentId).toBe(paymentId);
+    expect(result.remainder).toMatchObject({
+      amountCents: 300,
+      status: "approved",
+      studentId,
+      recordedBy: recorderUserId,
+      method: result.original.method,
+      reference: result.original.reference,
+      receivedAt: result.original.receivedAt,
+    });
+    // Totals fall by exactly the reversed part.
+    expect(await approvedTotal(studentId)).toBe(300);
+
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, paymentId), eq(auditLogs.action, "partiallyReverseStudentPayment")));
+    expect(audit?.after).toMatchObject({ reversedAmountCents: 100, remainderAmountCents: 300 });
   });
 
-  it("an Academy Administrator can adjust a payment they recorded themselves", async () => {
+  it("the remainder can be partly reversed again", async () => {
+    const { academyId, studentId, recorderUserId } = await setupAcademy("manager");
+    const manager = await addActingUser(academyId, "manager");
+    const paymentId = await insertPaymentDirect(academyId, studentId, recorderUserId, "approved", 1_000);
+
+    const first = await partiallyReverseStudentPayment(manager.context, paymentId, "First correction.", 200);
+    expect(first.ok).toBe(true);
+    if (!first.ok || !first.remainder) return;
+    const second = await partiallyReverseStudentPayment(manager.context, first.remainder.id, "Second correction.", 300);
+    expect(second.ok).toBe(true);
+    if (second.ok) expect(second.remainder?.amountCents).toBe(500);
+    expect(await approvedTotal(studentId)).toBe(500);
+  });
+
+  it.each([
+    ["the whole amount", 1_000],
+    ["more than the payment", 1_500],
+  ])("refuses to partly reverse %s, and changes nothing", async (_label, amount) => {
+    const { academyId, studentId, recorderUserId } = await setupAcademy("manager");
+    const manager = await addActingUser(academyId, "manager");
+    const paymentId = await insertPaymentDirect(academyId, studentId, recorderUserId, "approved", 1_000);
+
+    const result = await partiallyReverseStudentPayment(manager.context, paymentId, "Too much.", amount);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
+    const [row] = await db.select().from(studentPayments).where(eq(studentPayments.id, paymentId));
+    expect(row.status).toBe("approved");
+    expect(await approvedTotal(studentId)).toBe(1_000);
+  });
+
+  it("refuses zero, negative and fractional amounts", async () => {
+    const { academyId, studentId, recorderUserId } = await setupAcademy("manager");
+    const manager = await addActingUser(academyId, "manager");
+    const paymentId = await insertPaymentDirect(academyId, studentId, recorderUserId, "approved", 1_000);
+    for (const amount of [0, -100, 10.5]) {
+      const result = await partiallyReverseStudentPayment(manager.context, paymentId, "Bad amount.", amount);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("validation");
+    }
+  });
+
+  it("an Academy Administrator can partly reverse a payment they recorded themselves", async () => {
     const { academyId, studentId } = await setupAcademy("manager");
     const selfRecorder = await addActingUser(academyId, "academy_admin");
     const paymentId = await insertPaymentDirect(academyId, studentId, selfRecorder.userId, "approved");
 
-    const result = await adjustStudentPayment(selfRecorder.context, paymentId, "Typed 50 instead of 40.", 4_000);
+    const result = await partiallyReverseStudentPayment(selfRecorder.context, paymentId, "Typed 50 instead of 40.", 1_000);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.reversal.amountCents).toBe(4_000);
+    if (result.ok) expect(result.reversal.amountCents).toBe(1_000);
   });
 
   // Removed: this case needs the retired Finance Officer role, which migration 0044 forbids in the
@@ -830,13 +897,13 @@ describe("reverseIncomeRecord — mechanics, state, reason, self-reversal, audit
     expect(audit.actorUserId).toBe(selfRecorder.userId);
   });
 
-  it("the recorder can also adjust their own income record", async () => {
+  it("the recorder can also partly reverse their own income record", async () => {
     const { academyId } = await setupAcademy("manager");
     const manager = await addActingUser(academyId, "manager");
     const incomeId = await insertIncomeDirect(academyId, manager.userId, "posted");
-    const result = await adjustIncomeRecord(manager.context, incomeId, "Was 70, not 80.", 7_000);
+    const result = await partiallyReverseIncomeRecord(manager.context, incomeId, "Was 70, not 80.", 1_000);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.reversal.amountCents).toBe(7_000);
+    if (result.ok) expect(result.reversal.amountCents).toBe(1_000);
   });
 
   it("writes an audit row with the reason", async () => {
@@ -865,17 +932,40 @@ describe("reverseIncomeRecord — mechanics, state, reason, self-reversal, audit
   });
 });
 
-describe("adjustIncomeRecord", () => {
-  it("inserts the new linked row with the corrected amount, original untouched besides status", async () => {
+describe("partiallyReverseIncomeRecord", () => {
+  it("reverses only the entered part and posts the rest as a new record in the original's period", async () => {
     const { academyId, recorderUserId } = await setupAcademy("manager");
     const selfRecorder = await addActingUser(academyId, "manager");
     const incomeId = await insertIncomeDirect(academyId, recorderUserId, "posted", 5_000);
 
-    const result = await adjustIncomeRecord(selfRecorder.context, incomeId, "Wrong amount entered.", 4_200);
+    const result = await partiallyReverseIncomeRecord(selfRecorder.context, incomeId, "Part was wrong.", 800);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.original.amountCents).toBe(5_000);
-    expect(result.reversal.amountCents).toBe(4_200);
+    expect(result.original.status).toBe("reversed");
+    expect(result.reversal.amountCents).toBe(800);
+    expect(result.remainder).toMatchObject({
+      amountCents: 4_200,
+      status: "posted",
+      category: result.original.category,
+      recordedBy: recorderUserId,
+      createdAt: result.original.createdAt,
+    });
+
+    const posted = await db
+      .select({ amountCents: incomeRecords.amountCents })
+      .from(incomeRecords)
+      .where(and(eq(incomeRecords.academyId, academyId), eq(incomeRecords.status, "posted")));
+    expect(posted.reduce((n, row) => n + row.amountCents, 0)).toBe(4_200);
+  });
+
+  it("refuses the whole amount or more", async () => {
+    const { academyId, recorderUserId } = await setupAcademy("manager");
+    const manager = await addActingUser(academyId, "manager");
+    const incomeId = await insertIncomeDirect(academyId, recorderUserId, "posted", 5_000);
+    const result = await partiallyReverseIncomeRecord(manager.context, incomeId, "Too much.", 5_000);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("validation");
   });
 });
 
