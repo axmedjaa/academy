@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
   confirmBookCoverUpload as confirmBookCoverUploadForActor,
+  removeBookCover as removeBookCoverForActor,
   createBook as createBookForActor,
   requestBookCoverUploadUrl as requestBookCoverUploadUrlForActor,
   requestNewBookCoverUploadUrl as requestNewBookCoverUploadUrlForActor,
@@ -87,6 +88,17 @@ export async function confirmBookCoverUploadAction(bookId: string, key: string):
   if (!context) return { ok: false, error: UNAUTHENTICATED };
 
   const result = await confirmBookCoverUploadForActor(context, bookId, { key });
+  if (!result.ok) return { ok: false, error: result.error };
+
+  revalidatePath("/academy/books");
+  return { ok: true };
+}
+
+export async function removeBookCoverAction(bookId: string): Promise<ConfirmBookCoverUploadState> {
+  const context = await getAuthContext();
+  if (!context) return { ok: false, error: UNAUTHENTICATED };
+
+  const result = await removeBookCoverForActor(context, bookId);
   if (!result.ok) return { ok: false, error: result.error };
 
   revalidatePath("/academy/books");

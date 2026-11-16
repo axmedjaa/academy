@@ -278,9 +278,9 @@ describe("setEnrollmentFeeSchedule permission matrix", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("Owner/Trainer (view-only) cannot set a schedule", async () => {
+  it("Trainer (view-only) cannot set a schedule", async () => {
     const fixture = await setupFixture();
-    for (const role of ["academy_owner", "trainer"] as const) {
+    for (const role of ["trainer"] as const) {
       const { context } = await addActingUser(fixture.academyId, role);
       const result = await setEnrollmentFeeSchedule(context, {
         enrollmentId: fixture.enrollmentId,

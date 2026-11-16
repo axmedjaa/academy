@@ -1,11 +1,10 @@
 import { SkeletonRegion } from "@/app/academy/_shell/skeletons";
 import { OrderDetailSkeleton } from "../../../books-skeleton";
 
-/** While this Book Management section loads (design B11): its own layout
- * in outline. The hero, tabs and pills stay on screen from the layout. */
+/** While an order's page loads: its layout in outline. */
 export default function Loading() {
   return (
-    <SkeletonRegion label="order details">
+    <SkeletonRegion label="order">
       <OrderDetailSkeleton />
     </SkeletonRegion>
   );

@@ -4,8 +4,8 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getStudentReports } from "@/lib/academies/student-reports";
 import { getAcademicReports } from "@/lib/academies/academic-reports";
-import { getFinanceReports, type AmountByCurrency } from "@/lib/academies/finance-reports";
-import { getFeeCollectionSummary } from "@/lib/academies/fee-period-overview";
+import { getFinanceReports, type AmountByCurrency, type PaymentSource } from "@/lib/academies/finance-reports";
+import { getFeeCollectionSummary, getProgramFeeCollectionSummary } from "@/lib/academies/fee-period-overview";
 import { listBranches } from "@/lib/academies/branches";
 import { listBatches } from "@/lib/academies/batches";
 import { listCourses } from "@/lib/academies/courses";
@@ -47,6 +47,12 @@ const METHOD_LABEL: Record<(typeof STUDENT_PAYMENT_METHOD_ORDER)[number], string
   bank_transfer: "Bank transfer",
 };
 const centsOf = (totals: AmountByCurrency[], currency: string) => totals.find((t) => t.currency === currency)?.amountCents ?? 0;
+const SOURCE_LABEL: Record<PaymentSource, string> = {
+  program: "Program fees",
+  course: "Course fees",
+  other: "Charges and other",
+};
+const SOURCE_ORDER: PaymentSource[] = ["program", "course", "other"];
 
 /**
  * Reports (design A15): Student, Academic and Finance summaries as pill
@@ -337,9 +343,10 @@ async function AcademicReport({
 
 async function FinanceReport({ context, filters }: { context: AuthContext; filters: { dateFrom?: string; dateTo?: string; method?: string } }) {
   const method = STUDENT_PAYMENT_METHOD_ORDER.find((m) => m === filters.method);
-  const [result, feeCollection] = await Promise.all([
+  const [result, feeCollection, programCollection] = await Promise.all([
     getFinanceReports(context, { dateFrom: filters.dateFrom, dateTo: filters.dateTo, method }),
     getFeeCollectionSummary(context),
+    getProgramFeeCollectionSummary(context),
   ]);
   if (!result.ok) return <PageMessage title="Report unavailable" message={result.error.message} />;
   const { studentPayments, income, expenses } = result.report;
@@ -357,6 +364,20 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
     ? (feeCollection.totals.find((t) => t.currency === main) ??
       feeCollection.totals[0] ?? { currency: main, collectedCents: 0, overdueCents: 0, notYetDueCents: 0 })
     : null;
+  // Complete-program installments (the one program fee) are reported apart
+  // from course fee periods, which `fee` above covers; no installment is in both.
+  const programFee =
+    programCollection.ok && programCollection.totals.length > 0
+      ? (programCollection.totals.find((t) => t.currency === main) ?? programCollection.totals[0])
+      : null;
+  const programRows = programCollection.ok ? programCollection.byProgram : [];
+  const bySource = studentPayments.visible
+    ? SOURCE_ORDER.map((source) => {
+        const row = studentPayments.paymentsReceived.bySource.find((r) => r.source === source && r.currency === main);
+        return { source, amountCents: row?.amountCents ?? 0, count: row?.count ?? 0 };
+      })
+    : [];
+  const programPayments = bySource.find((row) => row.source === "program") ?? { amountCents: 0, count: 0 };
   const byMonth = studentPayments.visible ? studentPayments.paymentsReceived.byMonth.filter((row) => row.currency === main) : [];
   const byMethod = studentPayments.visible
     ? STUDENT_PAYMENT_METHOD_ORDER.map((m) => ({
@@ -395,12 +416,26 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
                   hint: `${studentPayments.paymentsReceived.count} posted`,
                   icon: "payments",
                 },
+                ...(programPayments.amountCents > 0 || programFee
+                  ? [
+                      {
+                        label: "Program fee payments",
+                        value: formatMoney(programPayments.amountCents, main),
+                        hint: `${programPayments.count} of the student payments`,
+                        icon: "school",
+                      },
+                    ]
+                  : []),
                 ...(studentPayments.refundsRecorded.count > 0
                   ? [
                       {
-                        label: "Course refunds",
+                        label: "Refunds",
                         value: moneyLine(studentPayments.refundsRecorded.totalsByCurrency),
-                        hint: `${studentPayments.refundsRecorded.count} recorded on withdrawal`,
+                        hint: (() => {
+                          const program = studentPayments.refundsRecorded.bySource.filter((r) => r.source === "program").reduce((n, r) => n + r.count, 0);
+                          const total = studentPayments.refundsRecorded.count;
+                          return program > 0 ? `${total} on withdrawal, ${program} from programs` : `${total} recorded on withdrawal`;
+                        })(),
                         icon: "autorenew",
                       },
                     ]
@@ -421,8 +456,8 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
       <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
         {fee ? (
           <StackBar
-            title="Fee collection"
-            sub={`Collected, overdue and not yet due on active enrollments, as of today${inMain}`}
+            title="Course fee collection"
+            sub={`Collected, overdue and not yet due on active individual course enrollments, as of today${inMain}`}
             segments={[
               { label: "Collected", value: fee.collectedCents, text: formatMoney(fee.collectedCents, fee.currency) },
               { label: "Overdue", value: fee.overdueCents, text: formatMoney(fee.overdueCents, fee.currency) },
@@ -449,6 +484,30 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
             empty="No payments or open charges in this period."
           />
         ) : null}
+        {programFee ? (
+          <StackBar
+            title="Program fee collection"
+            sub={`Installments of active complete-program enrollments, as of today, in ${programFee.currency}`}
+            segments={[
+              { label: "Collected", value: programFee.collectedCents, text: formatMoney(programFee.collectedCents, programFee.currency) },
+              { label: "Overdue", value: programFee.overdueCents, text: formatMoney(programFee.overdueCents, programFee.currency) },
+              { label: "Not yet due", value: programFee.notYetDueCents, text: formatMoney(programFee.notYetDueCents, programFee.currency) },
+            ]}
+            empty="No program installments yet."
+          />
+        ) : null}
+        {studentPayments.visible && (
+          <BarList
+            title="Student payments by source"
+            sub={`What each posted payment paid for, each payment counted once${inMain}`}
+            rows={
+              bySource.every((row) => row.amountCents === 0)
+                ? []
+                : bySource.map((row) => ({ label: SOURCE_LABEL[row.source], value: row.amountCents, text: formatMoney(row.amountCents, main) }))
+            }
+            empty="No payments received in this period."
+          />
+        )}
         {studentPayments.visible && (
           <BarList
             title="Collections by month"
@@ -478,8 +537,52 @@ async function FinanceReport({ context, filters }: { context: AuthContext; filte
           />
         )}
       </div>
+      {programRows.length > 0 && (
+        <>
+          <BlockTitle>Program fees</BlockTitle>
+          <DataTable stackBelow={760}>
+            <thead>
+              <tr>
+                <th className={rtTh}>Program</th>
+                <th className={`${rtTh} text-right`}>Enrollments</th>
+                <th className={`${rtTh} text-right`}>Program fees</th>
+                <th className={`${rtTh} text-right`}>Collected</th>
+                <th className={`${rtTh} text-right`}>Overdue</th>
+                <th className={`${rtTh} text-right`}>Not yet due</th>
+              </tr>
+            </thead>
+            <tbody>
+              {programRows.map((row) => (
+                <tr key={`${row.programId}:${row.currency}`} className={trHover}>
+                  <td className={`${rtTd} font-semibold`} data-label="Program">
+                    {row.programName}
+                  </td>
+                  <td className={`${rtTd} text-right tabular-nums`} data-label="Enrollments">
+                    {row.enrollments}
+                  </td>
+                  <td className={`${rtTd} text-right tabular-nums`} data-label="Program fees">
+                    {formatMoney(row.finalFeeCents, row.currency)}
+                  </td>
+                  <td className={`${rtTd} text-right tabular-nums`} data-label="Collected">
+                    {formatMoney(row.collectedCents, row.currency)}
+                  </td>
+                  <td className={`${rtTd} text-right tabular-nums`} data-label="Overdue">
+                    {formatMoney(row.overdueCents, row.currency)}
+                  </td>
+                  <td className={`${rtTd} text-right tabular-nums`} data-label="Not yet due">
+                    {formatMoney(row.notYetDueCents, row.currency)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        </>
+      )}
       <NoteBlock>
-        {fee ? "Fee collection covers every fee period of active enrollments as of today and ignores the dates above. " : ""}Collections by month use the date each payment was received (UTC). Totals are kept per currency and never added
+        {fee || programFee ? "Course and program fee collection cover the installments of active enrollments as of today and ignore the dates above. " : ""}
+        {programRows.length > 0 || programPayments.amountCents > 0
+          ? "A complete program has one program fee paid in monthly installments; its courses carry no course fee, so nothing is counted twice. "
+          : ""}Collections by month use the date each payment was received (UTC). Totals are kept per currency and never added
         across currencies. Platform subscription billing is not included.
       </NoteBlock>
     </>

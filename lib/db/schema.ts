@@ -1491,9 +1491,16 @@ export const batches = pgTable(
     courseId: uuid("course_id")
       .notNull()
       .references(() => courses.id),
+    // Migration 0049: set for a PROGRAM-BASED batch (its courses were taken
+    // from this program); null for a course-based batch (courses picked one
+    // by one). Program students enroll against a program-based batch.
+    programId: uuid("program_id").references(() => programs.id),
     name: text("name").notNull(),
     code: text("code").notNull(),
-    startDate: date("start_date").notNull(),
+    // LEGACY (migration 0050): a batch no longer has an overall start or end
+    // date — only its courses do (batch_courses.start_date/end_date). Kept
+    // nullable so existing rows keep their old values; never written or shown.
+    startDate: date("start_date"),
     endDate: date("end_date"),
     status: batchStatusEnum("status").notNull().default("planned"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -1557,11 +1564,21 @@ export const batchCourses = pgTable(
     courseId: uuid("course_id")
       .notNull()
       .references(() => courses.id),
+    // Migration 0048: this course's own schedule inside the batch,
+    // independent of the batch's overall start_date/end_date. Nullable:
+    // rows created before 0048 (and courses whose dates aren't set yet)
+    // have none, and the app shows "Not set" rather than inventing one.
+    startDate: date("start_date"),
+    endDate: date("end_date"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
+    check(
+      "batch_courses_end_date_not_before_start_date",
+      sql`${table.endDate} IS NULL OR ${table.startDate} IS NULL OR ${table.endDate} >= ${table.startDate}`,
+    ),
     uniqueIndex("batch_courses_batch_id_course_id_unique").on(table.batchId, table.courseId),
     index("batch_courses_academy_id_idx").on(table.academyId),
     index("batch_courses_course_id_idx").on(table.courseId),
@@ -1649,6 +1666,11 @@ export const batchEnrollments = pgTable(
       .notNull()
       .defaultNow(),
     status: batchEnrollmentStatusEnum("status").notNull().default("active"),
+    // Migration 0049: set when this course enrollment is an ACADEMIC part of
+    // a complete program enrollment. Such a row never has its own fee
+    // schedule or fee periods (the program enrollment carries the one
+    // program fee); it exists for course dates, exams, results, certificates.
+    programEnrollmentId: uuid("program_enrollment_id").references((): AnyPgColumn => programEnrollments.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -1667,6 +1689,49 @@ export const batchEnrollments = pgTable(
       table.academyId,
       table.studentId,
     ),
+  ],
+);
+
+// Migration 0049 — a student's enrollment in a COMPLETE PROGRAM (e.g. Full
+// Stack Development), through one program-based batch. The program fee is
+// billed once, against THIS row (enrollment_fee_schedules / fee_periods
+// .program_enrollment_id), never per included course. The included courses
+// are batch_enrollments rows pointing back here (program_enrollment_id),
+// purely academic.
+export const programEnrollments = pgTable(
+  "program_enrollments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    studentId: uuid("student_id")
+      .notNull()
+      .references(() => students.id),
+    programId: uuid("program_id")
+      .notNull()
+      .references(() => programs.id),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batches.id),
+    status: batchEnrollmentStatusEnum("status").notNull().default("active"),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // One active enrollment per student per program.
+    uniqueIndex("program_enrollments_student_program_active_unique")
+      .on(table.studentId, table.programId)
+      .where(sql`${table.status} = 'active'`),
+    index("program_enrollments_academy_id_student_id_idx").on(table.academyId, table.studentId),
+    index("program_enrollments_batch_id_idx").on(table.batchId),
   ],
 );
 
@@ -2810,11 +2875,16 @@ export const enrollmentFeeSchedules = pgTable(
     academyId: uuid("academy_id")
       .notNull()
       .references(() => academies.id),
-    enrollmentId: uuid("enrollment_id")
-      .notNull()
-      .references(() => batchEnrollments.id),
+    // Exactly one owner (migration 0049): a course enrollment (every row
+    // before 0049) or a program enrollment.
+    enrollmentId: uuid("enrollment_id").references(() => batchEnrollments.id),
+    programEnrollmentId: uuid("program_enrollment_id").references(() => programEnrollments.id),
     intervalMonths: integer("interval_months").notNull(),
+    // The TOTAL to be paid (after any discount) — see fee-periods.ts.
     amountCents: integer("amount_cents").notNull(),
+    // Migration 0049: the discount already taken off `amount_cents`
+    // (original fee = amount_cents + discount_cents). 0 for every older row.
+    discountCents: integer("discount_cents").notNull().default(0),
     currency: text("currency").notNull(),
     // The first period's start date — every later period is derived from
     // this anchor by stepping forward whole `interval_months` units, so
@@ -2834,8 +2904,14 @@ export const enrollmentFeeSchedules = pgTable(
     // At most one fee schedule per enrollment — setEnrollmentFeeSchedule
     // upserts this row rather than inserting a second one.
     uniqueIndex("enrollment_fee_schedules_enrollment_id_unique").on(table.enrollmentId),
+    uniqueIndex("enrollment_fee_schedules_program_enrollment_id_unique").on(table.programEnrollmentId),
     index("enrollment_fee_schedules_academy_id_idx").on(table.academyId),
     check("enrollment_fee_schedules_amount_cents_positive", sql`${table.amountCents} > 0`),
+    check("enrollment_fee_schedules_discount_cents_nonnegative", sql`${table.discountCents} >= 0`),
+    check(
+      "enrollment_fee_schedules_one_owner",
+      sql`(${table.enrollmentId} IS NULL) <> (${table.programEnrollmentId} IS NULL)`,
+    ),
     check(
       "enrollment_fee_schedules_interval_months_valid",
       sql`${table.intervalMonths} IN (1, 2, 3, 4, 6, 12)`,
@@ -2876,9 +2952,9 @@ export const feePeriods = pgTable(
     academyId: uuid("academy_id")
       .notNull()
       .references(() => academies.id),
-    enrollmentId: uuid("enrollment_id")
-      .notNull()
-      .references(() => batchEnrollments.id),
+    // Exactly one owner (migration 0049), same as its fee schedule.
+    enrollmentId: uuid("enrollment_id").references(() => batchEnrollments.id),
+    programEnrollmentId: uuid("program_enrollment_id").references(() => programEnrollments.id),
     // Copied from the schedule at generation time (not re-read live) so a
     // period's own history stays accurate even if the schedule's interval
     // is later changed — a later schedule change only affects periods
@@ -2903,7 +2979,13 @@ export const feePeriods = pgTable(
       table.periodStart,
       table.periodEnd,
     ),
+    uniqueIndex("fee_periods_program_enrollment_period_unique").on(
+      table.programEnrollmentId,
+      table.periodStart,
+      table.periodEnd,
+    ),
     index("fee_periods_academy_id_idx").on(table.academyId),
+    check("fee_periods_one_owner", sql`(${table.enrollmentId} IS NULL) <> (${table.programEnrollmentId} IS NULL)`),
     check("fee_periods_expected_amount_cents_nonnegative", sql`${table.expectedAmountCents} >= 0`),
     check("fee_periods_interval_months_valid", sql`${table.intervalMonths} IN (1, 2, 3, 4, 6, 12)`),
   ],
@@ -3382,6 +3464,334 @@ export const bookPreorderHandovers = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// Book Management, simplified (migrations 0051 + 0052): book ORDERS placed
+// for a buyer — a student or another person, like a sale — PAYMENTS the
+// buyer makes against an order (each posts an income record), and books
+// ISSUED to a student or another person. An order is not a payment:
+// payments always belong to an order and its payment status is derived from
+// them (never stored). Receiving an order adds its quantities to
+// `books.stock_quantity` once; issuing takes from that stock and can never
+// take it below zero. The supplier columns are from 0051 and stay for
+// history (nullable). The pre-order tables above keep their records.
+// ---------------------------------------------------------------------------
+
+export const bookOrderStatusEnum = pgEnum("book_order_status", ["ordered", "received", "cancelled"]);
+export const bookOrderPaymentMethodEnum = pgEnum("book_order_payment_method", ["cash", "mobile_money", "bank_transfer"]);
+
+export const bookOrders = pgTable(
+  "book_orders",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    // 0052: the buyer. Null only on an order recorded before 0052.
+    buyerType: bookBuyerTypeEnum("buyer_type"),
+    studentId: uuid("student_id").references(() => students.id),
+    buyerName: text("buyer_name"),
+    buyerPhone: text("buyer_phone"),
+    // 0056: optional contact for an Other Buyer.
+    buyerEmail: text("buyer_email"),
+    // 0056: 1, 2, 3 ... per academy (unique), assigned by the server.
+    orderNumber: integer("order_number").notNull(),
+    branchId: uuid("branch_id").references(() => branches.id),
+    // Lines at the book's price, then an optional discount: total = subtotal - discount.
+    subtotalCents: integer("subtotal_cents").notNull().default(0),
+    discountCents: integer("discount_cents").notNull().default(0),
+    supplierName: text("supplier_name"),
+    supplierPhone: text("supplier_phone"),
+    supplierReference: text("supplier_reference"),
+    orderDate: date("order_date").notNull(),
+    status: bookOrderStatusEnum("status").notNull().default("ordered"),
+    currency: text("currency").notNull(),
+    // Sum of the lines (quantity x unit cost), computed by the server.
+    totalCents: integer("total_cents").notNull(),
+    notes: text("notes"),
+    receivedAt: timestamp("received_at", { withTimezone: true }),
+    receivedBy: uuid("received_by").references(() => users.id),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_orders_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    uniqueIndex("book_orders_academy_order_number_unique").on(table.academyId, table.orderNumber),
+    check("book_orders_order_number_positive", sql`${table.orderNumber} > 0`),
+    index("book_orders_academy_id_idx").on(table.academyId),
+    index("book_orders_student_id_idx").on(table.studentId),
+    check("book_orders_total_cents_nonnegative", sql`${table.totalCents} >= 0`),
+    check("book_orders_discount_cents_valid", sql`${table.discountCents} >= 0 AND ${table.discountCents} <= ${table.subtotalCents}`),
+    check(
+      "book_orders_buyer_shape",
+      sql`${table.buyerType} IS NULL OR (${table.buyerType} = 'student' AND ${table.studentId} IS NOT NULL) OR (${table.buyerType} = 'other_person' AND ${table.studentId} IS NULL AND ${table.buyerName} IS NOT NULL)`,
+    ),
+  ],
+);
+
+export const bookOrderItems = pgTable(
+  "book_order_items",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => bookOrders.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    quantity: integer("quantity").notNull(),
+    // 0054: copies of this line that physically arrived (Receive Stock).
+    quantityReceived: integer("quantity_received").notNull().default(0),
+    unitCostCents: integer("unit_cost_cents").notNull(),
+    lineTotalCents: integer("line_total_cents").notNull(),
+  },
+  (table) => [
+    uniqueIndex("book_order_items_order_book_unique").on(table.orderId, table.bookId),
+    check("book_order_items_received_range", sql`${table.quantityReceived} >= 0 AND ${table.quantityReceived} <= ${table.quantity}`),
+    index("book_order_items_book_id_idx").on(table.bookId),
+    check("book_order_items_quantity_positive", sql`${table.quantity} > 0`),
+    check("book_order_items_unit_cost_nonnegative", sql`${table.unitCostCents} >= 0`),
+    check("book_order_items_line_total", sql`${table.lineTotalCents} = ${table.quantity} * ${table.unitCostCents}`),
+  ],
+);
+
+export const bookOrderPayments = pgTable(
+  "book_order_payments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => bookOrders.id),
+    amountCents: integer("amount_cents").notNull(),
+    method: bookOrderPaymentMethodEnum("method").notNull(),
+    reference: text("reference"),
+    paidOn: date("paid_on").notNull(),
+    // 0052: the income record this payment posted (money received).
+    incomeRecordId: uuid("income_record_id").references(() => incomeRecords.id),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_order_payments_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    index("book_order_payments_order_id_idx").on(table.orderId),
+    check("book_order_payments_amount_cents_positive", sql`${table.amountCents} > 0`),
+  ],
+);
+
+export const bookIssues = pgTable(
+  "book_issues",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    // A student, or (0052) another person by name — never neither.
+    studentId: uuid("student_id").references(() => students.id),
+    recipientName: text("recipient_name"),
+    // 0052: the order the books were given for, when there is one.
+    orderId: uuid("order_id").references(() => bookOrders.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    quantity: integer("quantity").notNull(),
+    issuedOn: date("issued_on").notNull(),
+    // The responsible staff member.
+    issuedBy: uuid("issued_by")
+      .notNull()
+      .references(() => users.id),
+    notes: text("notes"),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_issues_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    index("book_issues_student_id_idx").on(table.studentId),
+    index("book_issues_book_id_idx").on(table.bookId),
+    index("book_issues_academy_id_idx").on(table.academyId),
+    index("book_issues_order_id_idx").on(table.orderId),
+    check("book_issues_quantity_positive", sql`${table.quantity} > 0`),
+    check("book_issues_recipient", sql`${table.studentId} IS NOT NULL OR ${table.recipientName} IS NOT NULL`),
+  ],
+);
+
+// Receiving history for an order (migration 0054): each delivery, per line.
+// Only these quantities are added to stock.
+export const bookOrderReceipts = pgTable(
+  "book_order_receipts",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    orderId: uuid("order_id")
+      .notNull()
+      .references(() => bookOrders.id),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => bookOrderItems.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    quantity: integer("quantity").notNull(),
+    receivedOn: date("received_on").notNull(),
+    note: text("note"),
+    // One Receive Stock submission may cover several lines; they share this key.
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    receivedBy: uuid("received_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_order_receipts_key_item_unique").on(table.academyId, table.idempotencyKey, table.itemId),
+    index("book_order_receipts_order_id_idx").on(table.orderId),
+    check("book_order_receipts_quantity_positive", sql`${table.quantity} > 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Supplier purchasing (migration 0053), kept apart from student book
+// requests (book_orders above): a PURCHASE ORDER to a supplier (books,
+// quantities, purchase prices), RECEIPTS of what physically arrived (partial
+// deliveries allowed; only received quantities add stock) and PAYMENTS to the
+// supplier against the order. Ordered quantities are never stock.
+// ---------------------------------------------------------------------------
+
+export const bookPurchaseOrderStatusEnum = pgEnum("book_purchase_order_status", ["ordered", "partially_received", "received", "cancelled"]);
+
+export const bookPurchaseOrders = pgTable(
+  "book_purchase_orders",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    supplierName: text("supplier_name").notNull(),
+    supplierPhone: text("supplier_phone"),
+    supplierReference: text("supplier_reference"),
+    orderDate: date("order_date").notNull(),
+    status: bookPurchaseOrderStatusEnum("status").notNull().default("ordered"),
+    currency: text("currency").notNull(),
+    totalCents: integer("total_cents").notNull(),
+    notes: text("notes"),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_purchase_orders_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    index("book_purchase_orders_academy_id_idx").on(table.academyId),
+    check("book_purchase_orders_total_cents_nonnegative", sql`${table.totalCents} >= 0`),
+  ],
+);
+
+export const bookPurchaseOrderItems = pgTable(
+  "book_purchase_order_items",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    purchaseOrderId: uuid("purchase_order_id")
+      .notNull()
+      .references(() => bookPurchaseOrders.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    quantityOrdered: integer("quantity_ordered").notNull(),
+    quantityReceived: integer("quantity_received").notNull().default(0),
+    unitCostCents: integer("unit_cost_cents").notNull(),
+    lineTotalCents: integer("line_total_cents").notNull(),
+  },
+  (table) => [
+    uniqueIndex("book_purchase_order_items_order_book_unique").on(table.purchaseOrderId, table.bookId),
+    index("book_purchase_order_items_book_id_idx").on(table.bookId),
+    check("book_purchase_order_items_quantity_positive", sql`${table.quantityOrdered} > 0`),
+    check("book_purchase_order_items_received_range", sql`${table.quantityReceived} >= 0 AND ${table.quantityReceived} <= ${table.quantityOrdered}`),
+    check("book_purchase_order_items_unit_cost_nonnegative", sql`${table.unitCostCents} >= 0`),
+    check("book_purchase_order_items_line_total", sql`${table.lineTotalCents} = ${table.quantityOrdered} * ${table.unitCostCents}`),
+  ],
+);
+
+export const bookPurchaseReceipts = pgTable(
+  "book_purchase_receipts",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    purchaseOrderId: uuid("purchase_order_id")
+      .notNull()
+      .references(() => bookPurchaseOrders.id),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => bookPurchaseOrderItems.id),
+    bookId: uuid("book_id")
+      .notNull()
+      .references(() => books.id),
+    quantity: integer("quantity").notNull(),
+    receivedOn: date("received_on").notNull(),
+    note: text("note"),
+    // One "Receive Stock" submission may cover several lines; they share this key.
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    receivedBy: uuid("received_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_purchase_receipts_key_item_unique").on(table.academyId, table.idempotencyKey, table.itemId),
+    index("book_purchase_receipts_order_id_idx").on(table.purchaseOrderId),
+    check("book_purchase_receipts_quantity_positive", sql`${table.quantity} > 0`),
+  ],
+);
+
+export const bookPurchasePayments = pgTable(
+  "book_purchase_payments",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    academyId: uuid("academy_id")
+      .notNull()
+      .references(() => academies.id),
+    purchaseOrderId: uuid("purchase_order_id")
+      .notNull()
+      .references(() => bookPurchaseOrders.id),
+    amountCents: integer("amount_cents").notNull(),
+    method: bookOrderPaymentMethodEnum("method").notNull(),
+    reference: text("reference"),
+    paidOn: date("paid_on").notNull(),
+    // 0055: the expense this outgoing payment created (pending approval
+    // through the normal expense workflow). One payment, one expense.
+    expenseRecordId: uuid("expense_record_id").references(() => expenseRecords.id),
+    idempotencyKey: uuid("idempotency_key").notNull(),
+    recordedBy: uuid("recorded_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("book_purchase_payments_academy_idempotency_unique").on(table.academyId, table.idempotencyKey),
+    uniqueIndex("book_purchase_payments_expense_record_unique").on(table.expenseRecordId).where(sql`${table.expenseRecordId} IS NOT NULL`),
+    index("book_purchase_payments_order_id_idx").on(table.purchaseOrderId),
+    check("book_purchase_payments_amount_cents_positive", sql`${table.amountCents} > 0`),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Course-withdrawal refunds (migration 0036). A refund is money the academy
 // returned (manually, outside the system) when a student withdrew from a
 // course — recorded as its own row, never as a student payment (it is not
@@ -3402,9 +3812,10 @@ export const studentCourseRefunds = pgTable(
     branchId: uuid("branch_id")
       .notNull()
       .references(() => branches.id),
-    enrollmentId: uuid("enrollment_id")
-      .notNull()
-      .references(() => batchEnrollments.id),
+    // Exactly one owner (migration 0049): the withdrawn course enrollment
+    // (every row before 0049) or the withdrawn program enrollment.
+    enrollmentId: uuid("enrollment_id").references(() => batchEnrollments.id),
+    programEnrollmentId: uuid("program_enrollment_id").references(() => programEnrollments.id),
     studentId: uuid("student_id")
       .notNull()
       .references(() => students.id),
@@ -3427,6 +3838,11 @@ export const studentCourseRefunds = pgTable(
   (table) => [
     unique("student_course_refunds_idempotency").on(table.academyId, table.idempotencyKey),
     index("student_course_refunds_enrollment_idx").on(table.enrollmentId),
+    index("student_course_refunds_program_enrollment_idx").on(table.programEnrollmentId),
+    check(
+      "student_course_refunds_one_owner",
+      sql`(${table.enrollmentId} IS NULL) <> (${table.programEnrollmentId} IS NULL)`,
+    ),
     index("student_course_refunds_student_idx").on(table.studentId),
     index("student_course_refunds_academy_date_idx").on(table.academyId, table.refundedAt),
     check("student_course_refunds_amount_cents_positive", sql`${table.amountCents} > 0`),

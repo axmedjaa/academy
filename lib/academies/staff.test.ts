@@ -329,13 +329,14 @@ afterAll(async () => {
 }, 300_000);
 
 describe("academy.staff permission levels (Master Permission Matrix 'Staff' row)", () => {
-  it("matches Full/Full/Manage/none/none/View exactly", () => {
+  // Trainer rule: a Trainer has no Staff access (the Staff page refuses them).
+  it("matches Full/Full/Manage/none/none/none exactly", () => {
     expect(getAcademyPermissionLevel("academy_owner", ACADEMY_STAFF_ACTION)).toBe("full");
     expect(getAcademyPermissionLevel("academy_admin", ACADEMY_STAFF_ACTION)).toBe("full");
     expect(getAcademyPermissionLevel("manager", ACADEMY_STAFF_ACTION)).toBe("manage");
     expect(getAcademyPermissionLevel("admissions_officer", ACADEMY_STAFF_ACTION)).toBe("none");
     expect(getAcademyPermissionLevel("finance_officer", ACADEMY_STAFF_ACTION)).toBe("none");
-    expect(getAcademyPermissionLevel("trainer", ACADEMY_STAFF_ACTION)).toBe("view");
+    expect(getAcademyPermissionLevel("trainer", ACADEMY_STAFF_ACTION)).toBe("none");
   });
 
   it("covers every ACADEMY_ROLES member (no role silently unhandled)", () => {
@@ -345,7 +346,7 @@ describe("academy.staff permission levels (Master Permission Matrix 'Staff' row)
       manager: "manage",
       admissions_officer: "none",
       finance_officer: "none",
-      trainer: "view",
+      trainer: "none",
     };
     for (const role of ACADEMY_ROLES) {
       expect(getAcademyPermissionLevel(role, ACADEMY_STAFF_ACTION)).toBe(expected[role]);
@@ -993,20 +994,16 @@ describe("listStaff — permission matrix (Full/Manage/View may list)", () => {
   // nothing is shared" and "trainer never sees an unshared staff member"
   // cases are covered in lib/academies/staff-branch-assignments.test.ts,
   // alongside the rest of Item 36's branch-scoping/IDOR coverage.
-  it("allows trainer to view the staff list, scoped to their own record plus shared-branch staff", async () => {
+  it("Trainer rule: a trainer can't view the staff list, even staff sharing their branch", async () => {
     const { academyId, userId: trainerUserId, context } = await setupAcademy("trainer");
     const branchId = await insertBranchDirect(academyId);
-    const trainerProfileId = await assignUserToBranches(academyId, trainerUserId, [branchId]);
+    await assignUserToBranches(academyId, trainerUserId, [branchId]);
     const sharedTarget = await createTargetStaff(academyId);
     await assignBranchesToProfile(academyId, sharedTarget.staffProfileId, [branchId]);
 
     const result = await listStaff(context);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.permissionLevel).toBe("view");
-    const ids = result.staff.map((s) => s.id);
-    expect(ids).toContain(trainerProfileId);
-    expect(ids.length).toBeGreaterThanOrEqual(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("never returns another academy's staff (tenant isolation)", async () => {

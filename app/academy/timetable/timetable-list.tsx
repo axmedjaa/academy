@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   createWeeklyTimetableEntry,
   deleteTimetableEntry,
+  updateTimetableEntry,
   type TimetableFormState,
 } from "@/lib/academies/timetables-actions";
 import { showSuccessToast } from "@/lib/ui/toast";
@@ -13,7 +14,7 @@ import { buildTimetableGrid, filterTimetableEntries } from "@/lib/academies/time
 import type { BranchRecord } from "@/lib/academies/branches";
 import type { BatchRecord } from "@/lib/academies/batches";
 import type { CourseRecord } from "@/lib/academies/courses";
-import { EmptyState, PageHeader, Section, trHover } from "@/app/academy/_shell/ui";
+import { Button, EmptyState, PageHeader, Section, trHover } from "@/app/academy/_shell/ui";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
 import { DataTable, NoteBlock, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
@@ -86,6 +87,8 @@ const compactSelect =
 export function TimetableList({ academyName, entries, branches, batches, courses, staffOptions, canManage }: Props) {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [addOpen, setAddOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editing = editingId ? (entries.find((entry) => entry.id === editingId) ?? null) : null;
 
   const batchCodeById = useMemo(() => new Map(batches.map((batch) => [batch.id, batch.code])), [batches]);
   const branchOrder = useMemo(() => branches.map((branch) => branch.id), [branches]);
@@ -334,6 +337,10 @@ export function TimetableList({ academyName, entries, branches, batches, courses
                 </td>
                 {canManage && (
                   <td className={`${rtTd} text-right`} data-actions="">
+                    <div className="inline-flex flex-wrap justify-end gap-2">
+                    <Button type="button" variant="secondary" onClick={() => setEditingId(entry.id)}>
+                      Edit
+                    </Button>
                     <ConfirmButton
                       label="Delete"
                       variant="danger"
@@ -347,6 +354,7 @@ export function TimetableList({ academyName, entries, branches, batches, courses
                       confirmLabel="Delete class"
                       onConfirm={() => deleteTimetableEntry(entry.id, entry.batchId)}
                     />
+                    </div>
                   </td>
                 )}
               </tr>
@@ -355,7 +363,7 @@ export function TimetableList({ academyName, entries, branches, batches, courses
         </DataTable>
       )}
 
-      <NoteBlock>Conflicts for the batch, trainer and room are checked per day when a class is added.</NoteBlock>
+      <NoteBlock>Conflicts for the batch, trainer and room are checked per day when a class is added or edited.</NoteBlock>
 
       {canManage && (
         <DesignDialog
@@ -372,6 +380,31 @@ export function TimetableList({ academyName, entries, branches, batches, courses
               staffOptions={staffOptions}
               onCancel={() => setAddOpen(false)}
               onCreated={() => setAddOpen(false)}
+            />
+          )}
+        </DesignDialog>
+      )}
+
+      {canManage && (
+        <DesignDialog
+          open={editing !== null}
+          onOpenChange={(open) => {
+            if (!open) setEditingId(null);
+          }}
+          title="Edit class"
+          description={
+            editing
+              ? `${batchCodeById.get(editing.batchId) ?? editing.batchName} · ${editing.courseName}. Change the day, time, trainer or room. To change the batch or course, delete this class and add a new one.`
+              : undefined
+          }
+        >
+          {editing && (
+            <EditClassForm
+              key={editing.id}
+              entry={editing}
+              staffOptions={staffOptions}
+              onCancel={() => setEditingId(null)}
+              onSaved={() => setEditingId(null)}
             />
           )}
         </DesignDialog>
@@ -686,6 +719,139 @@ function AddClassForm({
         <FormErrorBanner message={banner} />
       </DialogBody>
       <DialogFooter onCancel={onCancel} submitLabel="Add class" pendingLabel="Adding…" pending={pending} />
+    </form>
+  );
+}
+
+const EDIT_RULES: DesignFormRule[] = [
+  { name: "dayOfWeek", label: "Day", required: true, kind: "select" },
+  {
+    name: "endTime",
+    label: "End time",
+    check: (_value, data) => {
+      const start = String(data.get("startTime") ?? "");
+      const end = String(data.get("endTime") ?? "");
+      if (!start || !end) return "Set the start and end time.";
+      return end <= start ? "The end time must be after the start time." : null;
+    },
+  },
+];
+
+const EDIT_SERVER_PATTERNS: [RegExp, string][] = [
+  [/end time|start time|HH:MM|time/i, "endTime"],
+  [/day/i, "dayOfWeek"],
+  [/instructor|trainer/i, "trainerStaffProfileId"],
+];
+
+/** "HH:MM:SS" (DB) -> "HH:MM" (time input). */
+function toTimeInput(value: string): string {
+  return value.slice(0, 5);
+}
+
+/**
+ * Edit class: one existing timetable entry's day, time, trainer and room,
+ * through `updateTimetableEntry`. The server re-checks permission, branch
+ * scope, end > start and batch/trainer/room conflicts (excluding this
+ * entry). Batch and course are fixed: the update action doesn't change them.
+ */
+function EditClassForm({
+  entry,
+  staffOptions,
+  onCancel,
+  onSaved,
+}: {
+  entry: TimetableEntryWithBatch;
+  staffOptions: StaffOption[];
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const { formRef, errors, banner, validate, blur, showServerError } = useDesignForm(EDIT_RULES);
+  const [pending, setPending] = useState(false);
+  // Keep a trainer who is no longer in the staff list selectable, so saving
+  // other fields never silently clears them.
+  const trainerMissing =
+    entry.trainerStaffProfileId !== null && !staffOptions.some((staff) => staff.id === entry.trainerStaffProfileId);
+
+  async function submit(data: FormData) {
+    setPending(true);
+    const result = await updateTimetableEntry(entry.id, {
+      dayOfWeek: String(data.get("dayOfWeek") ?? "") as TimetableDay,
+      startTime: String(data.get("startTime") ?? ""),
+      endTime: String(data.get("endTime") ?? ""),
+      trainerStaffProfileId: String(data.get("trainerStaffProfileId") ?? "") || null,
+      room: String(data.get("room") ?? ""),
+    });
+    setPending(false);
+    if (!result.ok) {
+      showServerError(result.error.message, EDIT_SERVER_PATTERNS);
+      return;
+    }
+    showSuccessToast("Class updated.");
+    onSaved();
+  }
+
+  return (
+    <form
+      ref={formRef}
+      noValidate
+      className="flex min-h-0 flex-1 flex-col"
+      onSubmit={onDesignSubmit(validate, (data) => void submit(data))}
+    >
+      <DialogBody>
+        <FieldGrid fill>
+          <DField label="Day" name="dayOfWeek" required error={errors.dayOfWeek}>
+            <select
+              name="dayOfWeek"
+              defaultValue={entry.dayOfWeek}
+              onBlur={blur("dayOfWeek")}
+              className={controlClass(Boolean(errors.dayOfWeek))}
+              {...invalidProps("dayOfWeek", errors.dayOfWeek)}
+            >
+              {DAYS_OF_WEEK.map((day) => (
+                <option key={day} value={day}>
+                  {DAY_LABELS[day]}
+                </option>
+              ))}
+            </select>
+          </DField>
+          <DField label="Room (optional)" name="room">
+            <input type="text" name="room" defaultValue={entry.room ?? ""} placeholder="Lab 1" maxLength={100} className={controlClass(false)} />
+          </DField>
+          <DField label="Start time" name="startTime" required>
+            <input type="time" name="startTime" defaultValue={toTimeInput(entry.startTime)} className={controlClass(false)} />
+          </DField>
+          <DField label="End time" name="endTime" required error={errors.endTime}>
+            <input
+              type="time"
+              name="endTime"
+              defaultValue={toTimeInput(entry.endTime)}
+              onBlur={blur("endTime")}
+              className={controlClass(Boolean(errors.endTime))}
+              {...invalidProps("endTime", errors.endTime)}
+            />
+          </DField>
+          <DField label="Trainer (optional)" name="trainerStaffProfileId" error={errors.trainerStaffProfileId}>
+            <select
+              name="trainerStaffProfileId"
+              defaultValue={entry.trainerStaffProfileId ?? ""}
+              className={controlClass(Boolean(errors.trainerStaffProfileId))}
+              {...invalidProps("trainerStaffProfileId", errors.trainerStaffProfileId)}
+            >
+              <option value="">No trainer assigned</option>
+              {trainerMissing && entry.trainerStaffProfileId && (
+                <option value={entry.trainerStaffProfileId}>{entry.trainerName ?? "Current trainer"}</option>
+              )}
+              {staffOptions.map((staff) => (
+                <option key={staff.id} value={staff.id}>
+                  {staff.fullName}
+                </option>
+              ))}
+            </select>
+          </DField>
+        </FieldGrid>
+        <FormErrorBanner message={banner} />
+      </DialogBody>
+      <DialogFooter onCancel={onCancel} submitLabel="Save changes" pendingLabel="Saving…" pending={pending} />
     </form>
   );
 }

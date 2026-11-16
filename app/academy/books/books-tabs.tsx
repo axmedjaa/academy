@@ -1,79 +1,76 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ActionButton, useBooksActions } from "./books-actions";
 
 /**
- * Book Management navigation (design B01-B13, revised 2026-11-07): two main
- * tabs, Books (catalogue, stock and direct sales) and Orders (pre-order
- * campaigns, student orders, payments, receiving and giving books), each
- * with its sections as pills, plus the Reports link and the open section's
- * main action. Every section is its own route under /academy/books, so
- * links, refresh and the back button keep working; the shared layout stays
- * mounted and this reads the open section from the URL.
+ * Book Management navigation: two main tabs, each with its pages as pills.
+ * - Books: Books (catalogue, Add Book, search), Stock and Sell.
+ * - Orders: Orders (Create Order for a Student or an Other Buyer, the list
+ *   and each order's page), Payments (money received from those buyers) and
+ *   Give Books (giving paid books from stock).
+ * - Reports: its own tab (orders and Sell totals), also opened from the hero.
+ * Every page is its own route, so links, refresh and the back button keep
+ * working; the shared layout stays mounted and this reads the URL.
  */
 
-export type BooksSection = "books" | "stock" | "sell" | "campaigns" | "orders" | "payments" | "receive" | "give" | "reports";
+export type BooksSection = "books" | "stock" | "sell" | "orders" | "payments" | "give" | "reports";
+type Group = "books" | "orders" | "reports";
 
 export function sectionOf(pathname: string): BooksSection {
   const rest = pathname.replace(/^\/academy\/books/, "");
   if (rest.startsWith("/stock")) return "stock";
   if (rest.startsWith("/sales")) return "sell";
-  if (rest.startsWith("/pre-orders")) return "campaigns";
   if (rest.startsWith("/orders")) return "orders";
   if (rest.startsWith("/payments")) return "payments";
-  if (rest.startsWith("/receiving")) return "receive";
-  if (rest.startsWith("/distribution")) return "give";
   if (rest.startsWith("/reports")) return "reports";
+  if (rest.startsWith("/distribution") || rest.startsWith("/pre-orders")) return "give";
   return "books";
 }
 
-/** Which main tab a section belongs to. Reports covers the pre-order flow. */
-const GROUP_OF: Record<BooksSection, "books" | "orders"> = {
+const GROUP_OF: Record<BooksSection, Group> = {
   books: "books",
   stock: "books",
   sell: "books",
-  campaigns: "orders",
   orders: "orders",
   payments: "orders",
-  receive: "orders",
   give: "orders",
-  reports: "orders",
+  reports: "reports",
 };
 
-/** The sections of each main tab, in order (labels and routes). */
-export const NAV_PILLS: Record<"books" | "orders", { key: BooksSection; label: string; href: string }[]> = {
+/** The pages of each main tab, in order. */
+export const NAV_PILLS: Record<Group, { key: BooksSection; label: string; href: string }[]> = {
   books: [
     { key: "books", label: "Books", href: "/academy/books" },
     { key: "stock", label: "Stock", href: "/academy/books/stock" },
     { key: "sell", label: "Sell", href: "/academy/books/sales" },
   ],
   orders: [
-    { key: "campaigns", label: "Pre-Orders", href: "/academy/books/pre-orders" },
     { key: "orders", label: "Orders", href: "/academy/books/orders" },
     { key: "payments", label: "Payments", href: "/academy/books/payments" },
-    { key: "receive", label: "Receive", href: "/academy/books/receiving" },
-    { key: "give", label: "Give", href: "/academy/books/distribution" },
+    { key: "give", label: "Give Books", href: "/academy/books/distribution" },
   ],
+  // Reports is its own main tab with a single page (no pills).
+  reports: [],
 };
 
 const MAIN_TABS = [
   { key: "books" as const, label: "Books", href: "/academy/books" },
   { key: "orders" as const, label: "Orders", href: "/academy/books/orders" },
+  { key: "reports" as const, label: "Reports", href: "/academy/books/reports" },
 ];
 
-export function groupOf(section: BooksSection): "books" | "orders" {
+export function groupOf(section: BooksSection): Group {
   return GROUP_OF[section];
 }
 
 /**
- * The Books / Orders tabs and the open tab's section pills: the real labels
- * and active state. Rendered by the page and by its loading skeleton, so
- * the two always match. `right` is Reports and the section action (or their
- * placeholders while loading).
+ * The Books / Orders tabs and the open tab's pages as pills. Rendered by the
+ * page and by its loading skeleton, so the two always match. `right` is the
+ * page's main action (or its placeholder while loading).
  */
 export function BooksNavFrame({ section, right }: { section: BooksSection; right: ReactNode }) {
   const group = GROUP_OF[section];
@@ -83,15 +80,18 @@ export function BooksNavFrame({ section, right }: { section: BooksSection; right
         <div className="-mb-px flex gap-2">
           {MAIN_TABS.map((t) => {
             const on = t.key === group;
+            // Reports sits on its own at the end of the tab bar.
+            const end = t.key === "reports";
             return (
               <Link
                 key={t.key}
                 href={t.href}
                 aria-current={on ? "page" : undefined}
-                className={`flex h-[52px] items-center border-b-[3px] px-[18px] text-base font-semibold !no-underline transition-colors duration-150 hover:!no-underline ${
-                  on ? "border-brand !text-brand" : "border-transparent !text-[#4B5563] hover:!text-ink"
-                }`}
+                className={`flex h-[52px] items-center gap-2 border-b-[3px] px-[18px] text-base font-semibold !no-underline transition-colors duration-150 hover:!no-underline ${
+                  end ? "ml-auto" : ""
+                } ${on ? "border-brand !text-brand" : "border-transparent !text-[#4B5563] hover:!text-ink"}`}
               >
+                {end && <Icon name="bar_chart" width={18} height={18} />}
                 {t.label}
               </Link>
             );
@@ -100,7 +100,8 @@ export function BooksNavFrame({ section, right }: { section: BooksSection; right
       </nav>
 
       <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <div aria-label={group === "books" ? "Books sections" : "Orders sections"} role="navigation" className="flex min-w-0 max-w-full gap-2 overflow-x-auto [scrollbar-width:none]">
+        {NAV_PILLS[group].length > 0 && (
+        <div aria-label={group === "books" ? "Books pages" : "Orders pages"} role="navigation" className="flex min-w-0 max-w-full gap-2 overflow-x-auto [scrollbar-width:none]">
           {NAV_PILLS[group].map((p) => {
             const on = p.key === section;
             return (
@@ -117,6 +118,7 @@ export function BooksNavFrame({ section, right }: { section: BooksSection; right
             );
           })}
         </div>
+        )}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{right}</div>
       </div>
     </>
@@ -126,30 +128,32 @@ export function BooksNavFrame({ section, right }: { section: BooksSection; right
 export interface NavPermissions {
   canManageBooks: boolean;
   canSell: boolean;
-  canManage: boolean;
-  canManageCampaigns: boolean;
+  canManageOrders: boolean;
+  canIssue: boolean;
 }
 
 /** The hero banner shows on every section except an order's own page,
  * which gets the compact title instead (design B05). */
 export function HeroGate({ hero, compact }: { hero: ReactNode; compact: ReactNode }) {
   const pathname = usePathname();
-  const isDetail = /^\/academy\/books\/orders\/[^/]+/.test(pathname);
+  const isDetail = /^\/academy\/books\/orders\/(?!new)[^/]+/.test(pathname);
   return <>{isDetail ? compact : hero}</>;
 }
 
-/** The hero's three main actions (design: Add Book in gold, Sell Book and
- * Pre-Order). An action the member can't use is omitted, not disabled. */
+/** The hero's main actions (Add Book, Create Order, Give Books). An action
+ * the member can't use is omitted, not disabled. */
 export function HeroActions({ can }: { can: NavPermissions }) {
   const { open } = useBooksActions();
+  const router = useRouter();
   const actions = [
     can.canManageBooks && { key: "add", icon: "book", title: "Add Book", sub: "Add a title and set its price", gold: true, run: () => open({ kind: "addBook" }) },
-    can.canSell && { key: "sell", icon: "payments", title: "Sell Book", sub: "Sell a copy that is in stock", gold: false, run: () => open({ kind: "sell" }) },
-    can.canManageCampaigns && { key: "pre", icon: "autorenew", title: "Pre-Order", sub: "Open books for ordering", gold: false, run: () => open({ kind: "campaign" }) },
+    can.canManageOrders && { key: "order", icon: "receipt_long", title: "Create Order", sub: "Books for a student or another buyer", gold: false, run: () => open({ kind: "order" }) },
+    can.canIssue && { key: "give", icon: "group", title: "Give Books", sub: "Give books that are paid and in stock", gold: false, run: () => router.push("/academy/books/distribution") },
+    { key: "reports", icon: "bar_chart", title: "Reports", sub: "Orders and sales totals", gold: false, run: () => router.push("/academy/books/reports") },
   ].filter((a): a is { key: string; icon: string; title: string; sub: string; gold: boolean; run: () => void } => Boolean(a));
   if (!actions.length) return null;
   return (
-    <div className="relative mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-3.5">
+    <div className={`relative mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-3.5 ${actions.length >= 4 ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
       {actions.map((a) => (
         <button
           key={a.key}
@@ -184,10 +188,8 @@ export function BooksSectionNav({ can }: { can: NavPermissions }) {
   const actions: Partial<Record<BooksSection, ReactNode>> = {
     books: can.canManageBooks ? <ActionButton dialog={{ kind: "addBook" }}>Add Book</ActionButton> : null,
     sell: can.canSell ? <ActionButton dialog={{ kind: "sell" }}>Sell Book</ActionButton> : null,
-    campaigns: can.canManageCampaigns ? <ActionButton dialog={{ kind: "campaign" }}>Create Pre-Order Campaign</ActionButton> : null,
-    orders: can.canManage ? <ActionButton dialog={{ kind: "order" }}>Create Order</ActionButton> : null,
-    payments: can.canManage ? <ActionButton dialog={{ kind: "pay" }}>Record Payment</ActionButton> : null,
-    receive: can.canManageCampaigns ? <ActionButton dialog={{ kind: "receive" }}>Receive Books</ActionButton> : null,
+    orders: can.canManageOrders ? <ActionButton dialog={{ kind: "order" }}>Create Order</ActionButton> : null,
+    payments: can.canManageOrders ? <ActionButton dialog={{ kind: "pay" }}>Record payment</ActionButton> : null,
   };
 
   return (
@@ -195,14 +197,6 @@ export function BooksSectionNav({ can }: { can: NavPermissions }) {
       section={section}
       right={
         <>
-          <Link
-            href="/academy/books/reports"
-            aria-current={section === "reports" ? "page" : undefined}
-            className={`flex min-h-11 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 font-semibold !text-brand !no-underline hover:bg-brand-tint hover:!no-underline ${section === "reports" ? "bg-brand-tint" : ""}`}
-          >
-            <Icon name="bar_chart" width={18} height={18} />
-            Reports
-          </Link>
           {actions[section]}
         </>
       }

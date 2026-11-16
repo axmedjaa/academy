@@ -337,6 +337,69 @@
       "when": 1794000000000,
       "tag": "0047_users_must_change_password",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1794100000000,
+      "tag": "0048_batch_course_dates",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1794200000000,
+      "tag": "0049_program_enrollments",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1794300000000,
+      "tag": "0050_batch_dates_optional",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1794400000000,
+      "tag": "0051_book_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1794500000000,
+      "tag": "0052_book_order_buyers",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1794600000000,
+      "tag": "0053_book_purchase_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1794700000000,
+      "tag": "0054_book_order_receiving",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1794800000000,
+      "tag": "0055_supplier_payment_expenses",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1794900000000,
+      "tag": "0056_book_order_numbers",
+      "breakpoints": true
     }
   ]
 }

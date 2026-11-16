@@ -62,7 +62,7 @@ export default async function AcademyAuditLogsPage({
     <div className={PAGE_WRAP}>
       <PageHeader
         title="Audit log"
-        description="Actions taken in this academy. Only the owner and administrator can see this page."
+        description="Actions taken in this academy. Only the Academy Owner and Academy Administrator can see this page."
         actions={
           <AuditLogExportButton
             filters={{

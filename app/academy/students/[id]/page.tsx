@@ -17,6 +17,8 @@ import { resolveStaffLabels } from "@/lib/academies/staff-labels";
 import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 import { listBranches } from "@/lib/academies/branches";
 import { getEnrollBatchOptions } from "@/lib/academies/enroll-options";
+import { listProgramBatchOptions, listStudentProgramEnrollments } from "@/lib/academies/program-enrollments";
+import { listStudentBookIssues } from "@/lib/academies/book-orders";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { ACADEMY_STUDENTS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { listEnrollmentWithdrawals } from "@/lib/academies/batch-assignments";
@@ -88,6 +90,9 @@ export default async function StudentDetailPage({
     refundsResult,
     deletionResult,
     resolvedSearchParams,
+    programResult,
+    programBatchesResult,
+    bookIssuesResult,
   ] = await Promise.all([
     getStudentPhotoUrl(student.profileImageRef),
     listEnrollmentsForStudent(context, studentId),
@@ -100,10 +105,19 @@ export default async function StudentDetailPage({
     listStudentRefunds(context, studentId),
     getStudentDeletionEligibility(context, studentId),
     searchParams,
+    listStudentProgramEnrollments(context, studentId),
+    listProgramBatchOptions(context),
+    listStudentBookIssues(context, studentId),
   ]);
 
   const enrollments = enrollmentsResult.ok ? enrollmentsResult.enrollments : [];
   const activeEnrollments = enrollments.filter((enrollment) => enrollment.status === "active");
+  // Complete-program enrollments (migration 0049). Their included courses are
+  // academic only: they never get a course fee plan, so they stay out of the
+  // per-course Fees sub-tabs — the program card carries the one program fee.
+  const programEnrollments = programResult.ok ? programResult.enrollments : [];
+  const programCourseEnrollmentIds = new Set(programEnrollments.flatMap((program) => program.courses.map((course) => course.enrollmentId)));
+  const feeEnrollments = activeEnrollments.filter((enrollment) => !programCourseEnrollmentIds.has(enrollment.id));
   const pastEnrollments = enrollments.filter((enrollment) => enrollment.status !== "active");
   const payments = paymentsResult.ok ? paymentsResult.payments : [];
   // Refunds recorded on withdrawal (their own records, never payments).
@@ -127,7 +141,7 @@ export default async function StudentDetailPage({
     withdrawals,
   ] = await Promise.all([
     Promise.all(
-      activeEnrollments.map(async (enrollment) => {
+      feeEnrollments.map(async (enrollment) => {
         const [scheduleResult, summaryResult] = await Promise.all([
           getEnrollmentFeeSchedule(context, enrollment.id),
           getEnrollmentPaymentSummary(context, enrollment.id),
@@ -283,6 +297,8 @@ export default async function StudentDetailPage({
         canEditStudent={canEditStudent}
         canEnroll={enrollOptions.canEnroll}
         enrollBatches={enrollOptions.batches}
+        programBatches={programBatchesResult.ok ? programBatchesResult.batches : []}
+        bookIssues={bookIssuesResult.ok ? bookIssuesResult.issues : null}
         enrollments={enrollments}
         enrollmentSummaries={enrollmentSummaries}
         enrollmentDetails={enrollmentDetails}
@@ -295,6 +311,12 @@ export default async function StudentDetailPage({
         canReversePayments={canReversePayments}
         currentUserId={context.userId}
         today={todayDateOnlyInAcademyTimezone()}
+        programEnrollments={programEnrollments}
+        programPermissions={{
+          canRecordPayment: programResult.ok && programResult.canRecordPayment,
+          canWithdraw: programResult.ok && programResult.canWithdraw,
+          canRefund: programResult.ok && programResult.canRefund,
+        }}
       />
     </div>
   );

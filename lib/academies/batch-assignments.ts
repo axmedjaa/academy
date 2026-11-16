@@ -614,7 +614,10 @@ const enrollmentIntervalMonthsSchema = z.union(
  */
 const paymentPlanSchema = z.object({
   intervalMonths: enrollmentIntervalMonthsSchema,
+  /** The total to pay for the course, AFTER any discount. */
   amountCents: z.number().int("Amount must be a whole number of cents").positive("Amount must be greater than zero"),
+  /** Discount already taken off `amountCents` (recorded, never re-applied). */
+  discountCents: z.number().int("Discount must be a whole number of cents").nonnegative("Discount can't be negative").optional(),
   currency: z
     .string()
     .trim()
@@ -654,6 +657,9 @@ export interface BatchEnrollmentRecord {
   enrolledAt: Date;
   status: "active" | "withdrawn" | "completed";
   createdAt: Date;
+  /** Set when this course row belongs to a complete-program enrollment
+   * (migration 0049): it is managed with the program, never on its own. */
+  programEnrollmentId: string | null;
 }
 
 function toEnrollmentRecord(row: typeof batchEnrollments.$inferSelect): BatchEnrollmentRecord {
@@ -666,6 +672,7 @@ function toEnrollmentRecord(row: typeof batchEnrollments.$inferSelect): BatchEnr
     enrolledAt: row.enrolledAt,
     status: row.status,
     createdAt: row.createdAt,
+    programEnrollmentId: row.programEnrollmentId ?? null,
   };
 }
 
@@ -712,6 +719,21 @@ export async function enrollStudentInBatch(
       );
       if (!batch) {
         return { outcome: "batch_not_found" as const };
+      }
+      // Program-based batch (migration 0049): students join it through a
+      // program enrollment (lib/academies/program-enrollments.ts), which
+      // carries the one program fee — never per-course fees here.
+      if (batch.programId) {
+        return { outcome: "program_batch" as const };
+      }
+
+      // Only a Planned or Active batch takes new course enrollments (the
+      // same rule as program enrollment). Re-read under a share lock so an
+      // Edit batch / Archive running at the same moment can't slip a
+      // Completed or Archived status past this check.
+      const [current] = await tx.select({ status: batches.status }).from(batches).where(eq(batches.id, batch.id)).for("share");
+      if (current?.status !== "planned" && current?.status !== "active") {
+        return { outcome: "batch_closed" as const, status: current?.status ?? batch.status };
       }
 
       // Cross-academy integrity check: fetch the student by id alone, then
@@ -796,6 +818,7 @@ export async function enrollStudentInBatch(
           enrollmentId: row.id,
           intervalMonths: data.paymentPlan.intervalMonths,
           amountCents: data.paymentPlan.amountCents,
+          discountCents: data.paymentPlan.discountCents ?? 0,
           currency,
           // Defaults to today — Somalia-local calendar date, not the
           // server's own (likely UTC) timezone — see
@@ -830,6 +853,24 @@ export async function enrollStudentInBatch(
     });
 
     if (result.outcome === "batch_not_found") return { ok: false, error: BATCH_NOT_FOUND };
+    if (result.outcome === "program_batch") {
+      return {
+        ok: false,
+        error: { code: "validation", message: "This is a program batch. Enroll the student in the complete program instead." },
+      };
+    }
+    if (result.outcome === "batch_closed") {
+      return {
+        ok: false,
+        error: {
+          code: "validation",
+          message:
+            result.status === "archived"
+              ? "This batch is archived, so it can't take new enrollments. Restore it or choose a Planned or Active batch."
+              : "This batch is completed, so it can't take new enrollments. Choose a Planned or Active batch.",
+        },
+      };
+    }
     if (result.outcome === "student_not_found") return { ok: false, error: STUDENT_NOT_FOUND };
     if (result.outcome === "course_required") {
       return { ok: false, error: { code: "validation", message: "Pick at least one course from this batch." } };
@@ -942,6 +983,13 @@ export async function withdrawStudentFromBatch(
       return { outcome: "invalid_transition" as const, status: existing.enrollment.status };
     }
 
+    // A course of a complete-program enrollment leaves only with its program
+    // (withdrawFromProgram), so the program and its fee plan never stay
+    // active with no active courses.
+    if (existing.enrollment.programEnrollmentId) {
+      return { outcome: "program_course" as const };
+    }
+
     if (options.withinTransaction) {
       const refused = await options.withinTransaction(tx, {
         academyId,
@@ -983,6 +1031,15 @@ export async function withdrawStudentFromBatch(
 
   if (result.outcome === "refused") return { ok: false, error: result.error };
   if (result.outcome === "not_found") return { ok: false, error: ENROLLMENT_NOT_FOUND };
+  if (result.outcome === "program_course") {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: "This course is part of a complete program. Withdraw the student from the program on the student's page instead.",
+      },
+    };
+  }
   if (result.outcome === "invalid_transition") {
     return {
       ok: false,

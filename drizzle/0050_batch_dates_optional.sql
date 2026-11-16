@@ -1,0 +1,26 @@
+-- =========================================================================
+-- 0050 — A batch has no overall start or end date
+-- =========================================================================
+--
+-- Registered in drizzle/meta/_journal.json after 0049. Apply through
+-- `npm run migrate` (or `npm run migrate:prod`), one environment at a time.
+--
+-- What it does
+--   Drops NOT NULL from `batches.start_date`. Batches no longer have an
+--   overall start/end date — only each course in a batch has its own
+--   optional dates (`batch_courses.start_date` / `end_date`, migration 0048).
+--   New batches leave both batch-level columns NULL; the app never writes or
+--   shows them again.
+--
+-- Existing data
+--   Nothing is deleted. Existing batches keep whatever start/end dates they
+--   had (unused from now on), so no history is lost and the columns can be
+--   dropped later in a separate, deliberate migration once confirmed unused
+--   everywhere. Course dates are never derived from these values.
+--
+-- Rollback (manual)
+--   Only if every batch still has a start_date:
+--   ALTER TABLE "batches" ALTER COLUMN "start_date" SET NOT NULL;
+-- =========================================================================
+
+ALTER TABLE "batches" ALTER COLUMN "start_date" DROP NOT NULL;

@@ -393,7 +393,7 @@ describe("refund permissions and isolation", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", true],
     ["manager", true],
-    ["academy_admin", false],
+    ["academy_admin", true],
     ["trainer", false],
   ])("role %s may record a refund: %s", async (role, allowed) => {
     const f = await setup();
@@ -478,7 +478,12 @@ describe("after a refund", () => {
     expect(after.ok).toBe(true);
     if (!before.ok || !after.ok || !before.report.studentPayments.visible || !after.report.studentPayments.visible) return;
     expect(after.report.studentPayments.paymentsReceived).toEqual(before.report.studentPayments.paymentsReceived);
-    expect(after.report.studentPayments.refundsRecorded).toEqual({ count: 1, totalsByCurrency: [{ currency: "USD", amountCents: 800, count: 1 }] });
+    expect(after.report.studentPayments.refundsRecorded).toEqual({
+      count: 1,
+      totalsByCurrency: [{ currency: "USD", amountCents: 800, count: 1 }],
+      // Stage 6: a course refund is labelled "course" (program refunds are "program").
+      bySource: [{ source: "course", currency: "USD", amountCents: 800, count: 1 }],
+    });
   });
 
   it("the student's refund list shows it with its course, and the position reflects it", async () => {

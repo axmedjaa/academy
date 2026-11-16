@@ -252,6 +252,15 @@ export function flattenFinanceReport(report: FinanceReportsData): Record<string,
     for (const t of report.studentPayments.paymentsReceived.totalsByCurrency) {
       rows.push(financeRow("Student Payments", "Payments Received", t.currency, t.amountCents, t.count));
     }
+    // Breakdown of the rows above (each payment in exactly one source), so a
+    // program fee payment is traceable apart from course fee payments.
+    const SOURCE_METRIC = { program: "of which Program Fees", course: "of which Course Fees", other: "of which Charges and Other" } as const;
+    for (const t of report.studentPayments.paymentsReceived.bySource) {
+      rows.push(financeRow("Student Payments", SOURCE_METRIC[t.source], t.currency, t.amountCents, t.count));
+    }
+    for (const t of report.studentPayments.refundsRecorded.totalsByCurrency) {
+      rows.push(financeRow("Student Payments", "Refunds Recorded", t.currency, t.amountCents, t.count));
+    }
     // No pendingApprovalsCount row anymore — student payments have no
     // approval workflow (unlike expenses, below), so this metric no longer
     // exists on this section at all.

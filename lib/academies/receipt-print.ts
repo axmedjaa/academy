@@ -1,6 +1,16 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { academies, studentCharges, studentPayments, students } from "@/lib/db/schema";
+import {
+  academies,
+  batches,
+  feePeriods,
+  paymentAllocations,
+  programEnrollments,
+  programs,
+  studentCharges,
+  studentPayments,
+  students,
+} from "@/lib/db/schema";
 import { getReceipt, type StudentPaymentsActionError } from "@/lib/academies/student-payments";
 import { listFeePeriodPaymentHistory } from "@/lib/academies/fee-periods";
 import { resolveStaffLabels } from "@/lib/academies/staff-labels";
@@ -128,6 +138,29 @@ export async function getReceiptPrintData(
       if (entry) {
         description = `${entry.courseName} — ${entry.batchName}: ${entry.periods
           .map((period) => `${period.periodStart} – ${period.periodEnd}`)
+          .join(", ")}`;
+      }
+    }
+    if (description === "—") {
+      // A program fee installment payment (migration 0049): the receipt names
+      // the program and batch, never a course. Scoped to the receipt academy.
+      const programRows = await db
+        .select({
+          programName: programs.name,
+          batchName: batches.name,
+          periodStart: feePeriods.periodStart,
+          periodEnd: feePeriods.periodEnd,
+        })
+        .from(paymentAllocations)
+        .innerJoin(feePeriods, eq(feePeriods.id, paymentAllocations.feePeriodId))
+        .innerJoin(programEnrollments, eq(programEnrollments.id, feePeriods.programEnrollmentId))
+        .innerJoin(programs, eq(programs.id, programEnrollments.programId))
+        .innerJoin(batches, eq(batches.id, programEnrollments.batchId))
+        .where(and(eq(paymentAllocations.studentPaymentId, paymentRow.id), eq(feePeriods.academyId, receipt.academyId)))
+        .orderBy(asc(feePeriods.periodStart));
+      if (programRows.length > 0) {
+        description = `Program: ${programRows[0].programName} — ${programRows[0].batchName}: ${programRows
+          .map((row) => `${row.periodStart} – ${row.periodEnd}`)
           .join(", ")}`;
       }
     }

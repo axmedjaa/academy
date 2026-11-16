@@ -50,7 +50,7 @@ const initialFormState: PlatformStaffFormState = { ok: false };
 const GRANTABLE_COPY: Record<GrantableCapability, { label: string; hint: string }> = {
   recordSubscriptionPayment: {
     label: "Record subscription payments",
-    hint: "Add payments for any academy. Verify, reject and reverse stay owner only.",
+    hint: "Add payments for any academy. Verify, reject and reverse stay Platform Owner only.",
   },
   queryAuditLogs: { label: "Query platform audit logs", hint: "View the platform audit log." },
   getPlatformReports: { label: "View platform reports and usage", hint: "Usage and the Reports page, without revenue." },
@@ -436,7 +436,7 @@ function StaffDetail({
                 })}
               </ul>
 
-              <h3 className="mt-5 text-sm font-semibold text-ink">Owner only</h3>
+              <h3 className="mt-5 text-sm font-semibold text-ink">Platform Owner only</h3>
               <ul role="list" className="mt-2 border-t border-border">
                 {ungrantableCapabilities.map((capability) => (
                   <li key={capability} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-b border-border py-2">
@@ -444,7 +444,7 @@ function StaffDetail({
                       <input type="checkbox" checked={false} disabled readOnly className="h-[18px] w-[18px] shrink-0" />
                       {OWNER_ONLY_LABELS[capability] ?? capability}
                     </label>
-                    <span className="text-xs text-[#4B5563]">Owner only. Cannot be granted.</span>
+                    <span className="text-xs text-[#4B5563]">Platform Owner only. Cannot be granted.</span>
                   </li>
                 ))}
               </ul>

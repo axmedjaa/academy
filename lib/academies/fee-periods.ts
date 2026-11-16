@@ -297,7 +297,12 @@ export type SetEnrollmentFeeScheduleInput = z.input<typeof setEnrollmentFeeSched
 export interface EnrollmentFeeScheduleRecord {
   id: string;
   academyId: string;
-  enrollmentId: string;
+  /** The owning course enrollment; null for a program enrollment's schedule
+   * (migration 0049), which has `programEnrollmentId` instead. */
+  enrollmentId: string | null;
+  programEnrollmentId: string | null;
+  /** Discount already taken off `amountCents` (0 when none). */
+  discountCents: number;
   /** Number of equal monthly installments — see this file's module
    * comment ("Payment schedule model"). NOT a period length. */
   intervalMonths: number;
@@ -319,6 +324,8 @@ function toScheduleRecord(row: typeof enrollmentFeeSchedules.$inferSelect): Enro
     id: row.id,
     academyId: row.academyId,
     enrollmentId: row.enrollmentId,
+    programEnrollmentId: row.programEnrollmentId,
+    discountCents: row.discountCents,
     intervalMonths: row.intervalMonths,
     amountCents: row.amountCents,
     currency: row.currency,
@@ -345,6 +352,7 @@ async function getScopedEnrollment(
       studentId: batchEnrollments.studentId,
       batchId: batchEnrollments.batchId,
       status: batchEnrollments.status,
+      programEnrollmentId: batchEnrollments.programEnrollmentId,
       batchName: batches.name,
       courseName: courses.name,
       branchId: batches.branchId,
@@ -452,6 +460,9 @@ export async function setEnrollmentFeeSchedule(
   const result = await db.transaction(async (tx) => {
     const enrollment = await getScopedEnrollment(tx, data.enrollmentId, academyId, scope);
     if (!enrollment) return { kind: "not_found" as const };
+    // A course taken as part of a complete program is academic only: the
+    // program enrollment carries the one program fee (migration 0049).
+    if (enrollment.programEnrollmentId) return { kind: "program_course" as const };
 
     const currency = await resolveCurrency(tx, academyId, data.currency);
 
@@ -613,6 +624,15 @@ export async function setEnrollmentFeeSchedule(
   });
 
   if (result.kind === "not_found") return { ok: false, error: ENROLLMENT_NOT_FOUND };
+  if (result.kind === "program_course") {
+    return {
+      ok: false,
+      error: {
+        code: "validation",
+        message: "This course is part of a program enrollment. Its fee is billed on the program, not per course.",
+      },
+    };
+  }
   if (result.kind === "nothing_to_reschedule") {
     return {
       ok: false,
@@ -675,6 +695,36 @@ export function splitIntoMonthlyInstallments(totalCents: number, count: number):
   const installments = new Array<number>(count).fill(base);
   installments[count - 1] = totalCents - base * (count - 1);
   return installments;
+}
+
+/**
+ * The complete monthly installment plan for a bounded total, as the rows
+ * `generateFeePeriodsForEnrollment` would create from a fresh anchor: one
+ * calendar month each, due on its first day, amounts from
+ * `splitIntoMonthlyInstallments` (so they always sum to `totalCents`
+ * exactly). Pure. Used by program enrollment (lib/academies/
+ * program-enrollments.ts) so a program fee is split by exactly the same rules
+ * as a course fee.
+ */
+export function buildMonthlyInstallmentPeriods(
+  anchorDate: string,
+  count: number,
+  totalCents: number,
+): { periodStart: string; periodEnd: string; dueDate: string; expectedAmountCents: number }[] {
+  const amounts = splitIntoMonthlyInstallments(totalCents, count);
+  const rows: { periodStart: string; periodEnd: string; dueDate: string; expectedAmountCents: number }[] = [];
+  let cursor = parseDateOnly(anchorDate);
+  for (let index = 0; index < count; index += 1) {
+    const periodStart = formatDateOnly(cursor);
+    rows.push({
+      periodStart,
+      periodEnd: formatDateOnly(addDays(addMonths(cursor, 1), -1)),
+      dueDate: periodStart,
+      expectedAmountCents: amounts[index],
+    });
+    cursor = addMonths(cursor, 1);
+  }
+  return rows;
 }
 
 /**
@@ -823,6 +873,8 @@ export interface CreateInitialEnrollmentFeeScheduleInput {
   enrollmentId: string;
   intervalMonths: number;
   amountCents: number;
+  /** Discount already taken off `amountCents` (default 0). */
+  discountCents?: number;
   currency: string;
   anchorDate: string;
   createdBy: string;
@@ -839,6 +891,7 @@ export async function createInitialEnrollmentFeeSchedule(
       enrollmentId: input.enrollmentId,
       intervalMonths: input.intervalMonths,
       amountCents: input.amountCents,
+      discountCents: input.discountCents ?? 0,
       currency: input.currency,
       anchorDate: input.anchorDate,
       createdBy: input.createdBy,
@@ -853,6 +906,9 @@ export async function createInitialEnrollmentFeeSchedule(
 
 export type FeePeriodStatus = "unpaid" | "partially_paid" | "paid" | "overdue";
 
+/** A COURSE enrollment's installment. Program installments (migration
+ * 0049) are never read through this type: every course query selects fee
+ * periods by course enrollment id, which program rows don't have. */
 export interface FeePeriodRecord {
   id: string;
   enrollmentId: string;
@@ -904,10 +960,12 @@ function toFeePeriodRecord(
   row: typeof feePeriods.$inferSelect,
   paidCents: number,
   today: string,
+  /** The course enrollment the row was selected by. */
+  enrollmentId: string,
 ): FeePeriodRecord {
   return {
     id: row.id,
-    enrollmentId: row.enrollmentId,
+    enrollmentId,
     intervalMonths: row.intervalMonths,
     periodStart: row.periodStart,
     periodEnd: row.periodEnd,
@@ -950,7 +1008,7 @@ export async function listFeePeriodsForEnrollment(
   const today = todayDateOnly();
   const paidByPeriod = await getApprovedPaidCentsByPeriod(db, rows.map((row) => row.id));
   const periods = rows
-    .map((row) => toFeePeriodRecord(row, paidByPeriod.get(row.id) ?? 0, today))
+    .map((row) => toFeePeriodRecord(row, paidByPeriod.get(row.id) ?? 0, today, enrollmentId))
     .sort((a, b) => compareDateOnly(a.periodStart, b.periodStart));
 
   return {
@@ -978,6 +1036,9 @@ export interface StudentEnrollmentOption {
   /** The batch's own lifecycle status (planned, active, completed, archived). */
   batchStatus: "planned" | "active" | "completed" | "archived";
   branchName: string;
+  /** Set when this course belongs to a complete-program enrollment: it is
+   * managed (and withdrawn) with the program, never on its own. */
+  programEnrollmentId: string | null;
 }
 
 export type ListEnrollmentsForStudentResult =
@@ -1018,6 +1079,7 @@ export async function listEnrollmentsForStudent(
       enrolledAt: batchEnrollments.enrolledAt,
       batchStatus: batches.status,
       branchName: branches.name,
+      programEnrollmentId: batchEnrollments.programEnrollmentId,
     })
     .from(batchEnrollments)
     .innerJoin(batches, eq(batchEnrollments.batchId, batches.id))
@@ -1538,7 +1600,9 @@ export async function listFeePeriodPaymentHistory(
       recordedBy: studentPayments.recordedBy,
       allocationAmountCents: paymentAllocations.amountCents,
       feePeriodId: feePeriods.id,
-      enrollmentId: feePeriods.enrollmentId,
+      // Read from the joined course enrollment (inner join): this history is
+      // course installments only; program installments have no enrollment.
+      enrollmentId: batchEnrollments.id,
       periodStart: feePeriods.periodStart,
       periodEnd: feePeriods.periodEnd,
       intervalMonths: feePeriods.intervalMonths,
@@ -1813,6 +1877,9 @@ export async function getStudentPaymentSummaries(
 
   const periodsByEnrollment = new Map<string, typeof periods>();
   for (const period of periods) {
+    // Selected by course enrollment id above, so always set; the guard only
+    // narrows the type (program installments have no enrollmentId).
+    if (!period.enrollmentId) continue;
     const list = periodsByEnrollment.get(period.enrollmentId) ?? [];
     list.push(period);
     periodsByEnrollment.set(period.enrollmentId, list);
@@ -1840,7 +1907,7 @@ export async function getStudentPaymentSummaries(
     // allForEnrollment, which was sorted above).
     const nextOutstandingPeriod =
       relevantPeriods
-        .map((period) => toFeePeriodRecord(period, paidByPeriod.get(period.id) ?? 0, today))
+        .map((period) => toFeePeriodRecord(period, paidByPeriod.get(period.id) ?? 0, today, enrollmentId))
         .find((period) => period.remainingCents > 0) ?? null;
 
     result.set(studentId, {

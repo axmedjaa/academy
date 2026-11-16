@@ -42,6 +42,7 @@ export default async function AcademyBatchesPage() {
     id: course.id,
     name: course.name,
     code: course.code,
+    programId: course.programId,
     programName: programName.get(course.programId) ?? null,
     durationWeeks: course.durationWeeks,
     status: course.status,

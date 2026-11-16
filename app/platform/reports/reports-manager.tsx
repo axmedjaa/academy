@@ -413,7 +413,7 @@ function Overview({ data, span }: { data: PlatformReportsResult; span: string })
     { label: "Active students", value: data.population.activeStudents.toLocaleString("en-US"), sub: "Across open academies", fg: "#111827" },
     { label: "Active staff", value: data.population.activeStaff.toLocaleString("en-US"), sub: "Across open academies", fg: "#111827" },
     collected === null
-      ? { label: "Collected", value: "Owner only", sub: "Revenue is restricted", fg: "#6B7280" }
+      ? { label: "Collected", value: "Platform Owner only", sub: "Revenue is restricted", fg: "#6B7280" }
       : { label: "Collected", value: money(collected), sub: `Verified payments, ${span}`, fg: "#850019" },
   ];
 

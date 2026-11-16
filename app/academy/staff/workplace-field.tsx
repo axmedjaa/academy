@@ -35,7 +35,7 @@ export function WorkplaceField({
   if (role === "academy_owner") {
     return (
       <DField label="Where they work" name="branchIds" full>
-        <span className="text-sm font-normal text-muted">An owner always works across all branches.</span>
+        <span className="text-sm font-normal text-muted">The Academy Owner always works across all branches.</span>
       </DField>
     );
   }

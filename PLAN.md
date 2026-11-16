@@ -123,16 +123,16 @@ Consolidated, action-level reference — every cell below is already implied by 
 | Branches | Full | Full | Manage | View | — | View | assigned |
 | Staff | Full | Full | Manage | — | — | View self/assigned | assigned |
 | Students / admissions | Full | Full | Manage | Manage | View | View assigned | assigned |
-| Student ID cards | Full | Manage | Manage | Manage | — | — | assigned |
+| Student ID cards | Full | Full | Manage | Manage | — | — | assigned |
 | Courses / batches | Full | Full | Manage | View | — | Manage assigned | assigned |
-| Grade-band configuration | Full | Manage | Manage/Approve | — | — | — | n/a |
+| Grade-band configuration | Full | Full | Manage/Approve | — | — | — | n/a |
 | Exam mark entry | Full | Full | Manage | — | — | Enter marks (assigned batches only) | assigned |
 | Result approve / reject / publish | Approve | Approve | Approve | — | — | Submit only | n/a |
 | Result correction request | Same authority as submit/approve above — no separate role | | | | | | |
-| Student payments (record) | View | View | Approve/Manage | — | Manage (not own) | View | n/a |
-| Expenses (create/approve) | View | Approve | Approve | — | Create/Submit | View | n/a |
+| Student payments (record) | Full | Full | Approve/Manage | — | Manage (not own) | View | n/a |
+| Expenses (create/approve) | Approve | Approve | Approve | — | Create/Submit | View | n/a |
 | Reversal / adjustment | Same approval authority as the underlying transaction type; the recorder can never approve their own | | | | | | |
-| Certificates (issue/cancel) | Full | Manage | Manage | — | — | View | n/a |
+| Certificates (issue/cancel) | Full | Full | Manage | — | — | View | n/a |
 | Academy audit log (view) | Full | Full | — | — | — | — | n/a (Owner/Admin only, Decision #15) |
 | Export (Reports/Students/Finance/Audit) | Per own view rights above — export never exceeds what the role can already see on-screen | | | | | | |
 

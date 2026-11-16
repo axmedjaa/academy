@@ -32,10 +32,13 @@ import {
   getBatch,
   getBatchDeletionEligibility,
   listBatches,
+  restoreBatch,
   updateBatch,
+  updateBatchCourseDates,
   type CreateBatchInput,
 } from "./batches";
 import { courseOfBatch } from "@/lib/academies/test-batch-course";
+import { getEnrollBatchOptions } from "@/lib/academies/enroll-options";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -163,7 +166,6 @@ function validInput(
     courseIds: [courseId],
     name: `Test Batch ${randomUUID()}`,
     code: `B-${randomUUID().slice(0, 8)}`,
-    startDate: "2026-01-15",
     ...overrides,
   };
 }
@@ -293,12 +295,13 @@ describe("createBatch — permission matrix (academy-wide roles, own branch)", (
     if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
-  it("trainer ('manage assigned') can create a batch in their own assigned branch", async () => {
+  it("Trainer rule: a trainer can't create a batch, even in their own assigned branch", async () => {
     const { academyId, userId, context, branchId, courseId } = await setupAcademy("trainer");
     await assignUserToBranches(academyId, userId, [branchId]);
 
     const result = await createBatch(context, validInput(branchId, courseId));
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("trainer cannot create a batch in a branch they are not assigned to (IDOR)", async () => {
@@ -309,7 +312,8 @@ describe("createBatch — permission matrix (academy-wide roles, own branch)", (
 
     const result = await createBatch(context, validInput(otherBranch, courseId));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("not_found");
+    // Trainer rule: refused before the branch is even looked at.
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
   it("writes an audit row on successful creation", async () => {
@@ -446,34 +450,35 @@ describe("updateBatch / archiveBatch — branch scoping", () => {
       })
       .returning({ id: batches.id });
 
+    // Trainer rule: refused outright (forbidden) before the batch is looked up.
     const updateResult = await updateBatch(context, otherBatch.id, validInput(otherBranch, courseId));
     expect(updateResult.ok).toBe(false);
-    if (!updateResult.ok) expect(updateResult.error.code).toBe("not_found");
+    if (!updateResult.ok) expect(updateResult.error.code).toBe("forbidden");
 
     const archiveResult = await archiveBatch(context, otherBatch.id);
     expect(archiveResult.ok).toBe(false);
-    if (!archiveResult.ok) expect(archiveResult.error.code).toBe("not_found");
+    if (!archiveResult.ok) expect(archiveResult.error.code).toBe("forbidden");
   });
 
-  it("trainer can update/archive a batch inside their assigned branch", async () => {
+  it("Trainer rule: a trainer can't update or archive a batch, even inside their assigned branch", async () => {
     const { academyId, userId, context, branchId, courseId } = await setupAcademy("trainer");
     await assignUserToBranches(academyId, userId, [branchId]);
+    const [batch] = await db
+      .insert(batches)
+      .values({ academyId, branchId, courseId, name: "Own Branch Batch", code: `OWN-${randomUUID().slice(0, 6)}`, startDate: "2026-01-01" })
+      .returning({ id: batches.id });
 
-    const created = await createBatch(context, validInput(branchId, courseId));
-    expect(created.ok).toBe(true);
-    if (!created.ok) return;
+    const updated = await updateBatch(context, batch.id, validInput(branchId, courseId, { name: "Updated Name" }));
+    expect(updated.ok).toBe(false);
+    if (!updated.ok) expect(updated.error.code).toBe("forbidden");
 
-    const updated = await updateBatch(
-      context,
-      created.batch.id,
-      validInput(branchId, courseId, { name: "Updated Name" }),
-    );
-    expect(updated.ok).toBe(true);
-    if (updated.ok) expect(updated.batch.name).toBe("Updated Name");
+    const archived = await archiveBatch(context, batch.id);
+    expect(archived.ok).toBe(false);
+    if (!archived.ok) expect(archived.error.code).toBe("forbidden");
 
-    const archived = await archiveBatch(context, created.batch.id);
-    expect(archived.ok).toBe(true);
-    if (archived.ok) expect(archived.batch.status).toBe("archived");
+    const [row] = await db.select().from(batches).where(eq(batches.id, batch.id));
+    expect(row.name).toBe("Own Branch Batch");
+    expect(row.status).toBe("planned");
   });
 });
 
@@ -709,7 +714,7 @@ describe("getBatchDeletionEligibility / deleteBatch", () => {
     ["academy_admin", true],
     ["manager", true],
     ["trainer", false],
-  ])("role %s: delete allowed = %s (Trainer's own-branch archive access does not extend to delete)", async (role, allowed) => {
+  ])("role %s: delete allowed = %s (a Trainer never manages batches)", async (role, allowed) => {
     const owner = await setupAcademy("academy_owner");
     const created = await createBatch(owner.context, validInput(owner.branchId, owner.courseId));
     expect(created.ok).toBe(true);
@@ -785,5 +790,313 @@ describe("getBatchDeletionEligibility / deleteBatch", () => {
 
     const stillThere = await getBatch(context, created.batch.id);
     expect(stillThere.ok).toBe(true);
+  });
+});
+
+describe("course dates in a batch (batch_courses.start_date / end_date)", () => {
+  it("stores each course's own dates on create; the batch itself has no overall dates", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const htmlId = await insertProgramAndCourse(academyId);
+    const created = await createBatch(context, {
+      ...validInput(branchId, courseId),
+      courseIds: [courseId, htmlId],
+      courseDates: [
+        { courseId, startDate: "2026-10-09", endDate: "2026-11-20" },
+        { courseId: htmlId, startDate: "2026-11-21", endDate: "2027-01-20" },
+      ],
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const listed = await listBatches(context);
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    const batch = listed.batches.find((row) => row.id === created.batch.id);
+    const [stored] = await db.select().from(batches).where(eq(batches.id, created.batch.id));
+    expect(stored.startDate).toBeNull();
+    expect(stored.endDate).toBeNull();
+    expect(batch?.courseDates).toEqual({
+      [courseId]: { startDate: "2026-10-09", endDate: "2026-11-20" },
+      [htmlId]: { startDate: "2026-11-21", endDate: "2027-01-20" },
+    });
+  });
+
+  it("leaves course dates unset (never invented) when none are given", async () => {
+    const { branchId, courseId, context } = await setupAcademy("academy_owner");
+    const created = await createBatch(context, validInput(branchId, courseId));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const [row] = await db.select().from(batchCourses).where(eq(batchCourses.batchId, created.batch.id));
+    expect(row.startDate).toBeNull();
+    expect(row.endDate).toBeNull();
+  });
+
+  it("refuses a course whose end date is before its start date, and dates for a course not in the batch", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const backwards = await createBatch(context, {
+      ...validInput(branchId, courseId),
+      courseDates: [{ courseId, startDate: "2026-05-10", endDate: "2026-05-01" }],
+    });
+    expect(backwards.ok).toBe(false);
+    if (!backwards.ok) expect(backwards.error.code).toBe("validation");
+
+    const strayCourseId = await insertProgramAndCourse(academyId);
+    const stray = await createBatch(context, {
+      ...validInput(branchId, courseId),
+      courseDates: [{ courseId: strayCourseId, startDate: "2026-05-01", endDate: "2026-05-10" }],
+    });
+    expect(stray.ok).toBe(false);
+    if (!stray.ok) expect(stray.error.code).toBe("validation");
+  });
+
+  it("updates one course's dates on edit, sets a newly added course's dates, and keeps dates when an edit sends none", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const secondId = await insertProgramAndCourse(academyId);
+    const input = validInput(branchId, courseId);
+    const created = await createBatch(context, {
+      ...input,
+      courseDates: [{ courseId, startDate: "2026-02-01", endDate: "2026-03-01" }],
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const edited = await updateBatch(context, created.batch.id, {
+      ...input,
+      courseIds: [courseId, secondId],
+      courseDates: [
+        { courseId, startDate: "2026-02-05", endDate: "2026-03-10" },
+        { courseId: secondId, startDate: "2026-03-11", endDate: "2026-04-30" },
+      ],
+    });
+    expect(edited.ok).toBe(true);
+
+    // An edit that sends no course dates leaves every course's dates as they are.
+    const renamed = await updateBatch(context, created.batch.id, { ...input, courseIds: [courseId, secondId], name: "Renamed" });
+    expect(renamed.ok).toBe(true);
+
+    const rows = await db.select().from(batchCourses).where(eq(batchCourses.batchId, created.batch.id));
+    const byCourse = Object.fromEntries(rows.map((row) => [row.courseId, [row.startDate, row.endDate]]));
+    expect(byCourse).toEqual({
+      [courseId]: ["2026-02-05", "2026-03-10"],
+      [secondId]: ["2026-03-11", "2026-04-30"],
+    });
+  });
+
+  it("refuses course-date edits from a role that can't manage batches, and another academy's batch", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const input = validInput(branchId, courseId);
+    const created = await createBatch(context, input);
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const dated = { ...input, courseDates: [{ courseId, startDate: "2026-01-01", endDate: "2026-01-31" }] };
+
+    const trainerUserId = await createUser();
+    await addMembership(trainerUserId, academyId, "trainer");
+    await assignUserToBranches(academyId, trainerUserId, [branchId]);
+    const asTrainer = await updateBatch({ userId: trainerUserId, branchIds: [], academyWide: false }, created.batch.id, dated);
+    expect(asTrainer.ok).toBe(false);
+    if (!asTrainer.ok) expect(asTrainer.error.code).toBe("forbidden");
+
+    const other = await setupAcademy("academy_owner");
+    const crossTenant = await updateBatch(other.context, created.batch.id, dated);
+    expect(crossTenant.ok).toBe(false);
+
+    const [row] = await db.select().from(batchCourses).where(eq(batchCourses.batchId, created.batch.id));
+    expect(row.startDate).toBeNull();
+  });
+});
+
+describe("a batch has no overall start or end date (migration 0050)", () => {
+  it("editing an older batch never changes or clears its legacy dates, and never derives course dates from them", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const [legacy] = await db
+      .insert(batches)
+      .values({ academyId, branchId, courseId, name: "Legacy", code: `LG-${randomUUID().slice(0, 6)}`, startDate: "2025-01-01", endDate: "2025-06-30" })
+      .returning({ id: batches.id });
+    await db.insert(batchCourses).values({ academyId, batchId: legacy.id, courseId });
+
+    const edited = await updateBatch(context, legacy.id, validInput(branchId, courseId, { name: "Legacy renamed" }));
+    expect(edited.ok).toBe(true);
+    const [row] = await db.select().from(batches).where(eq(batches.id, legacy.id));
+    expect(row.name).toBe("Legacy renamed");
+    expect(row.startDate).toBe("2025-01-01");
+    expect(row.endDate).toBe("2025-06-30");
+    const [course] = await db.select().from(batchCourses).where(eq(batchCourses.batchId, legacy.id));
+    expect(course.startDate).toBeNull();
+    expect(course.endDate).toBeNull();
+  });
+});
+
+describe("updateBatchCourseDates — one course's dates, edited in place on the batch page", () => {
+  it("sets, changes and clears one course's dates without touching the batch's other courses", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const otherId = await insertProgramAndCourse(academyId);
+    const created = await createBatch(context, {
+      ...validInput(branchId, courseId),
+      courseIds: [courseId, otherId],
+      courseDates: [{ courseId: otherId, startDate: "2026-03-01", endDate: "2026-04-01" }],
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const batchId = created.batch.id;
+
+    const set = await updateBatchCourseDates(context, { batchId, courseId, startDate: "2026-01-10", endDate: "2026-02-20" });
+    expect(set.ok).toBe(true);
+    const cleared = await updateBatchCourseDates(context, { batchId, courseId: otherId, startDate: "", endDate: "" });
+    expect(cleared.ok).toBe(true);
+
+    const rows = await db.select().from(batchCourses).where(eq(batchCourses.batchId, batchId));
+    const byCourse = Object.fromEntries(rows.map((row) => [row.courseId, [row.startDate, row.endDate]]));
+    expect(byCourse).toEqual({ [courseId]: ["2026-01-10", "2026-02-20"], [otherId]: [null, null] });
+    const audit = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, batchId), eq(auditLogs.action, "updateBatchCourseDates")));
+    expect(audit).toHaveLength(2);
+  });
+
+  it("refuses an end date before the start date, and a course that isn't in the batch", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const created = await createBatch(context, validInput(branchId, courseId));
+    if (!created.ok) throw new Error(created.error.message);
+    const backwards = await updateBatchCourseDates(context, { batchId: created.batch.id, courseId, startDate: "2026-05-10", endDate: "2026-05-01" });
+    expect(backwards.ok).toBe(false);
+    if (!backwards.ok) expect(backwards.error.code).toBe("validation");
+
+    const strayId = await insertProgramAndCourse(academyId);
+    const stray = await updateBatchCourseDates(context, { batchId: created.batch.id, courseId: strayId, startDate: "2026-05-01", endDate: "" });
+    expect(stray.ok).toBe(false);
+    if (!stray.ok) expect(stray.error.code).toBe("validation");
+  });
+
+  it("refuses a trainer, and another academy's batch (not found)", async () => {
+    const { academyId, branchId, courseId, context } = await setupAcademy("academy_owner");
+    const created = await createBatch(context, validInput(branchId, courseId));
+    if (!created.ok) throw new Error(created.error.message);
+    const input = { batchId: created.batch.id, courseId, startDate: "2026-01-01", endDate: "2026-01-31" };
+
+    const trainerUserId = await createUser();
+    await addMembership(trainerUserId, academyId, "trainer");
+    await assignUserToBranches(academyId, trainerUserId, [branchId]);
+    const asTrainer = await updateBatchCourseDates({ userId: trainerUserId, branchIds: [], academyWide: false }, input);
+    expect(asTrainer.ok).toBe(false);
+    if (!asTrainer.ok) expect(asTrainer.error.code).toBe("forbidden");
+
+    const other = await setupAcademy("academy_owner");
+    const crossTenant = await updateBatchCourseDates(other.context, input);
+    expect(crossTenant.ok).toBe(false);
+    if (!crossTenant.ok) expect(crossTenant.error.code).toBe("not_found");
+
+    const [row] = await db.select().from(batchCourses).where(eq(batchCourses.batchId, created.batch.id));
+    expect(row.startDate).toBeNull();
+  });
+});
+
+describe("batch status — Edit batch, Archive and Restore", () => {
+  async function newBatch(role: AcademyRole = "manager") {
+    const s = await setupAcademy(role);
+    const created = await createBatch(s.context, validInput(s.branchId, s.courseId));
+    if (!created.ok) throw new Error(created.error.message);
+    return { ...s, batch: created.batch };
+  }
+  const edit = (s: Awaited<ReturnType<typeof newBatch>>, status?: string, context = s.context) =>
+    updateBatch(context, s.batch.id, { ...validInput(s.branchId, s.courseId, { name: s.batch.name, code: s.batch.code }), ...(status ? { status: status as "planned" } : {}) });
+
+  it("a new batch starts Planned; staff move it Planned -> Active -> Completed -> Planned; leaving status out keeps it", async () => {
+    const s = await newBatch();
+    expect(s.batch.status).toBe("planned");
+    expect(await edit(s, "active")).toMatchObject({ ok: true, batch: { status: "active" } });
+    expect(await edit(s, "completed")).toMatchObject({ ok: true, batch: { status: "completed" } });
+    expect(await edit(s)).toMatchObject({ ok: true, batch: { status: "completed" } });
+    expect(await edit(s, "planned")).toMatchObject({ ok: true, batch: { status: "planned" } });
+
+    const audits = await db
+      .select({ before: auditLogs.before, after: auditLogs.after })
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, s.batch.id), eq(auditLogs.action, "updateBatch")));
+    expect(audits.some((a) => (a.before as { status?: string })?.status === "active" && (a.after as { status?: string })?.status === "completed")).toBe(true);
+  });
+
+  it("status can't be set to Archived (or anything unknown) by editing", async () => {
+    const s = await newBatch();
+    for (const bad of ["archived", "finished"]) {
+      const result = await edit(s, bad);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("validation");
+    }
+    const [row] = await db.select().from(batches).where(eq(batches.id, s.batch.id));
+    expect(row.status).toBe("planned");
+  });
+
+  it("an archived batch's status can't be edited; only Restore brings it back", async () => {
+    const s = await newBatch();
+    await archiveBatch(s.context, s.batch.id);
+    const result = await edit(s, "active");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toMatch(/Restore/);
+    const [row] = await db.select().from(batches).where(eq(batches.id, s.batch.id));
+    expect(row.status).toBe("archived");
+  });
+
+  // Trainer rule: a Trainer can't edit a batch, even in their own branch.
+  // (Admissions Officer was retired in migration 0044 and can't be created.)
+  it("only roles that manage batches can change status (a trainer can't)", async () => {
+    const s = await newBatch();
+    for (const role of ["trainer"] as const) {
+      const userId = await createUser();
+      await addMembership(userId, s.academyId, role);
+      await assignUserToBranches(s.academyId, userId, [s.branchId]);
+      const result = await edit(s, "active", { userId, branchIds: [], academyWide: false });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("forbidden");
+    }
+    const [row] = await db.select().from(batches).where(eq(batches.id, s.batch.id));
+    expect(row.status).toBe("planned");
+  });
+
+  it("Restore brings back the status the batch had before it was archived", async () => {
+    for (const status of ["planned", "active", "completed"] as const) {
+      const s = await newBatch();
+      if (status !== "planned") await edit(s, status);
+      expect(await archiveBatch(s.context, s.batch.id)).toMatchObject({ ok: true, batch: { status: "archived" } });
+      // Archiving twice doesn't lose the earlier status.
+      await archiveBatch(s.context, s.batch.id);
+      expect(await restoreBatch(s.context, s.batch.id)).toMatchObject({ ok: true, batch: { status } });
+    }
+  });
+
+  it("Restore on a batch that isn't archived changes nothing; with no archive record it falls back to Active", async () => {
+    const s = await newBatch();
+    await edit(s, "completed");
+    expect(await restoreBatch(s.context, s.batch.id)).toMatchObject({ ok: true, batch: { status: "completed" } });
+
+    // Archived directly in the database (no archive audit entry to read).
+    const legacy = await newBatch();
+    await db.update(batches).set({ status: "archived" }).where(eq(batches.id, legacy.batch.id));
+    expect(await restoreBatch(legacy.context, legacy.batch.id)).toMatchObject({ ok: true, batch: { status: "active" } });
+  });
+
+  it("the enroll dialog offers Planned and Active batches, never Completed or Archived", async () => {
+    const s = await setupAcademy("manager");
+    const make = async () => {
+      const created = await createBatch(s.context, validInput(s.branchId, s.courseId));
+      if (!created.ok) throw new Error(created.error.message);
+      return created.batch;
+    };
+    const planned = await make();
+    const active = await make();
+    const completed = await make();
+    const archived = await make();
+    const set = (b: typeof planned, status: "active" | "completed") =>
+      updateBatch(s.context, b.id, { ...validInput(s.branchId, s.courseId, { name: b.name, code: b.code }), status });
+    await set(active, "active");
+    await set(completed, "completed");
+    await archiveBatch(s.context, archived.id);
+
+    const options = await getEnrollBatchOptions(s.context);
+    const ids = options.batches.map((b) => b.id);
+    expect(ids).toEqual(expect.arrayContaining([planned.id, active.id]));
+    expect(ids).not.toContain(completed.id);
+    expect(ids).not.toContain(archived.id);
   });
 });

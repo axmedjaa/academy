@@ -9,9 +9,11 @@ import {
   getBatchDeletionEligibility as getBatchDeletionEligibilityForActor,
   restoreBatch as restoreBatchForActor,
   updateBatch as updateBatchForActor,
+  updateBatchCourseDates as updateBatchCourseDatesForActor,
   type BatchActionError,
   type CreateBatchInput,
   type GetBatchDeletionEligibilityResult,
+  type UpdateBatchCourseDatesInput,
   type UpdateBatchInput,
 } from "@/lib/academies/batches";
 
@@ -34,9 +36,28 @@ function parseBatchFormData(formData: FormData): CreateBatchInput | UpdateBatchI
       .filter((value) => value.length > 0),
     name: String(formData.get("name") ?? ""),
     code: String(formData.get("code") ?? ""),
-    startDate: String(formData.get("startDate") ?? ""),
-    endDate: String(formData.get("endDate") ?? ""),
+    programId: String(formData.get("programId") ?? ""),
+    courseDates: parseCourseDates(formData),
+    // Edit batch only; omitted (create, or an archived batch) keeps the status.
+    ...(formData.has("status") ? { status: String(formData.get("status")) as UpdateBatchInput["status"] } : {}),
   };
+}
+
+/** Each course's own dates, sent as `courseStart_<courseId>` /
+ * `courseEnd_<courseId>`. Only courses whose fields were sent are
+ * included, so a form without them leaves existing course dates alone. */
+function parseCourseDates(formData: FormData): { courseId: string; startDate: string; endDate: string }[] | undefined {
+  const entries: { courseId: string; startDate: string; endDate: string }[] = [];
+  for (const value of formData.getAll("courseIds")) {
+    const courseId = String(value);
+    if (!formData.has(`courseStart_${courseId}`) && !formData.has(`courseEnd_${courseId}`)) continue;
+    entries.push({
+      courseId,
+      startDate: String(formData.get(`courseStart_${courseId}`) ?? ""),
+      endDate: String(formData.get(`courseEnd_${courseId}`) ?? ""),
+    });
+  }
+  return entries.length > 0 ? entries : undefined;
 }
 
 export async function createBatch(
@@ -146,6 +167,17 @@ export async function deleteBatch(
     return result;
   }
 
+  revalidatePath("/academy/batches");
+  return { ok: true };
+}
+
+/** Plain-callable: one course's own dates, edited in place on the batch page. */
+export async function updateBatchCourseDatesAction(input: UpdateBatchCourseDatesInput): Promise<BatchFormState> {
+  const context = await getAuthContext();
+  if (!context) return { ok: false, error: UNAUTHENTICATED };
+  const result = await updateBatchCourseDatesForActor(context, input);
+  if (!result.ok) return { ok: false, error: result.error };
+  revalidatePath(`/academy/batches/${input.batchId}`);
   revalidatePath("/academy/batches");
   return { ok: true };
 }

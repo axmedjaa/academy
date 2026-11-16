@@ -314,7 +314,7 @@ describe("getReceiptPrintData — charge-linked payment", () => {
     if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 
-  it("Owner/Admin/Trainer (view-only on student_payments) CAN view the receipt", async () => {
+  it("Owner/Admin CAN view the receipt; a Trainer (no finance access) is refused", async () => {
     const recorder = await setupAcademy("manager");
     const chargeResult = await createStudentCharge(recorder.context, { studentId: recorder.studentId, description: "Fee", amountCents: 500 });
     if (!chargeResult.ok) return;
@@ -329,17 +329,20 @@ describe("getReceiptPrintData — charge-linked payment", () => {
     const receiptResult = await issueReceipt(recorder.context, paymentResult.payment.id);
     if (!receiptResult.ok) return;
 
-    for (const role of ["academy_owner", "academy_admin", "trainer"] as const) {
+    for (const role of ["academy_owner", "academy_admin"] as const) {
       const viewer = await addActingUser(recorder.academyId, role);
-      // A Trainer is branch-limited (academy_wide = false): assigned to the
-      // student's own branch, so this checks visibility inside that branch.
-      if (role === "trainer") await assignUserToBranch(recorder.academyId, viewer.userId, recorder.branchId);
       const result = await getReceiptPrintData(viewer.context, receiptResult.receipt.id);
       expect(result.ok).toBe(true);
     }
+    // Trainer rule: no finance access, even inside the student's own branch.
+    const trainer = await addActingUser(recorder.academyId, "trainer");
+    await assignUserToBranch(recorder.academyId, trainer.userId, recorder.branchId);
+    const refused = await getReceiptPrintData(trainer.context, receiptResult.receipt.id);
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error.code).toBe("forbidden");
   });
 
-  it("a branch-limited Trainer assigned to a different branch cannot view the receipt", async () => {
+  it("a Trainer assigned to a different branch cannot view the receipt", async () => {
     const recorder = await setupAcademy("manager");
     const chargeResult = await createStudentCharge(recorder.context, { studentId: recorder.studentId, description: "Fee", amountCents: 500 });
     expect(chargeResult.ok).toBe(true);
@@ -363,7 +366,8 @@ describe("getReceiptPrintData — charge-linked payment", () => {
 
     const result = await getReceiptPrintData(trainer.context, receiptResult.receipt.id);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("not_found");
+    // Trainer rule: refused outright (no finance access at all).
+    if (!result.ok) expect(result.error.code).toBe("forbidden");
   });
 
 });

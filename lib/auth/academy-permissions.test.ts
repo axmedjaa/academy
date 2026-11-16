@@ -1,14 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { ACADEMY_ROLES } from "@/lib/auth/roles";
 import {
+  ACADEMY_AUDIT_LOG_ACTION,
   ACADEMY_BOOKS_ACTION,
+  ACADEMY_CERTIFICATES_ACTION,
+  ACADEMY_COURSES_BATCHES_ACTION,
+  ACADEMY_EXAMS_ACTION,
   ACADEMY_EXPENSES_ACTION,
   ACADEMY_FEE_PERIODS_ACTION,
   ACADEMY_GRADE_BANDS_ACTION,
   ACADEMY_INCOME_ACTION,
   ACADEMY_RESULTS_ACTION,
   ACADEMY_SETTINGS_ACTION,
+  ACADEMY_STAFF_ACTION,
+  ACADEMY_STUDENT_ID_CARDS_ACTION,
   ACADEMY_STUDENT_PAYMENTS_ACTION,
+  ACADEMY_STUDENTS_ACTION,
   getAcademyPermissionLevel,
   hasAcademyPermission,
 } from "./academy-permissions";
@@ -83,70 +90,75 @@ describe("getAcademyPermissionLevel", () => {
   });
 });
 
-// Later architecture decision: "no approval workflow should ever block
-// Owner/Academy Administrator/Manager on an action they are already
-// authorized to perform." The only permission-LEVEL change this required
-// anywhere in the matrix was Academy Administrator's row on
-// ACADEMY_GRADE_BANDS_ACTION (raised "manage" -> "full", matching Owner/
-// Manager, so Academy Administrator gains real approve/self-decide
-// authority on grade configurations). Every other row — including the
-// three closely related finance/results rows this scenario specifically
-// touched — is asserted unchanged here, so a regression that accidentally
-// widened Academy Administrator's access elsewhere would fail loudly.
-describe("Academy Administrator's grade-bands permission expansion is scoped to that one row only", () => {
-  it("ACADEMY_GRADE_BANDS_ACTION: academy_admin is 'full', matching Owner/Manager", () => {
-    expect(getAcademyPermissionLevel("academy_admin", ACADEMY_GRADE_BANDS_ACTION)).toBe("full");
-    expect(getAcademyPermissionLevel("academy_owner", ACADEMY_GRADE_BANDS_ACTION)).toBe("full");
-    expect(getAcademyPermissionLevel("manager", ACADEMY_GRADE_BANDS_ACTION)).toBe("full");
+// Academy Owner rule (lib/auth/academy-permissions.ts): the Academy Owner
+// can see and do everything inside their own academy, and the Academy
+// Administrator holds exactly the same authority. On every row both hold
+// that row's TOP level — the level its strictest gate checks for (e.g.
+// reversal needs "full" on student payments / fee periods, "approve" on
+// expenses, "manage" on income / books).
+const OWNER_TOP_LEVELS = {
+  [ACADEMY_SETTINGS_ACTION]: "full",
+  [ACADEMY_AUDIT_LOG_ACTION]: "full",
+  "academy.branches": "full",
+  [ACADEMY_STAFF_ACTION]: "full",
+  [ACADEMY_STUDENTS_ACTION]: "full",
+  [ACADEMY_STUDENT_ID_CARDS_ACTION]: "full",
+  [ACADEMY_COURSES_BATCHES_ACTION]: "full",
+  [ACADEMY_GRADE_BANDS_ACTION]: "full",
+  [ACADEMY_EXAMS_ACTION]: "full",
+  [ACADEMY_RESULTS_ACTION]: "approve",
+  [ACADEMY_STUDENT_PAYMENTS_ACTION]: "full",
+  [ACADEMY_EXPENSES_ACTION]: "approve",
+  [ACADEMY_INCOME_ACTION]: "manage",
+  [ACADEMY_CERTIFICATES_ACTION]: "full",
+  [ACADEMY_FEE_PERIODS_ACTION]: "full",
+  [ACADEMY_BOOKS_ACTION]: "manage",
+} as const;
+
+describe("Academy Owner rule — Owner and Academy Administrator hold every row's top level", () => {
+  for (const role of ["academy_owner", "academy_admin"] as const) {
+    for (const [action, level] of Object.entries(OWNER_TOP_LEVELS)) {
+      it(`${role} holds "${level}" on ${action}`, () => {
+        expect(getAcademyPermissionLevel(role, action)).toBe(level);
+      });
+    }
+  }
+
+  it("Owner and Academy Administrator are identical on every row", () => {
+    for (const action of Object.keys(OWNER_TOP_LEVELS)) {
+      expect(getAcademyPermissionLevel("academy_admin", action)).toBe(getAcademyPermissionLevel("academy_owner", action));
+    }
   });
 
-  it("every other row Academy Administrator holds is UNCHANGED by this expansion", () => {
-    // Results: already "approve" before this change (untouched here — the
-    // self-decide behavior change for results lives in results.ts's own
-    // logic, not in a permission-level change).
-    expect(getAcademyPermissionLevel("academy_admin", ACADEMY_RESULTS_ACTION)).toBe("approve");
-    // Expenses: level itself still "approve" (unrelated later change —
-    // see the "Expenses self-approval" describe block below for why
-    // Academy Administrator CAN now create/submit despite this level never
-    // changing: expense-records.ts's own `canCreate` function was widened
-    // to also accept "approve", not this permission row).
-    expect(getAcademyPermissionLevel("academy_admin", ACADEMY_EXPENSES_ACTION)).toBe("approve");
-    // Student payments / fee periods: still "manage" (raised in an earlier,
-    // separate, explicitly-approved change) — not "full", so Academy
-    // Administrator still cannot reverse/adjust a student payment.
-    expect(getAcademyPermissionLevel("academy_admin", ACADEMY_STUDENT_PAYMENTS_ACTION)).toBe("manage");
-    expect(getAcademyPermissionLevel("academy_admin", ACADEMY_FEE_PERIODS_ACTION)).toBe("manage");
+  it("Trainer rule: a trainer holds only students (view), courses/batches (assigned) and exams (enter marks)", () => {
+    const held = Object.keys(OWNER_TOP_LEVELS).filter((action) => getAcademyPermissionLevel("trainer", action) !== "none");
+    expect(held.sort()).toEqual(
+      ["academy.branches", ACADEMY_STUDENTS_ACTION, ACADEMY_COURSES_BATCHES_ACTION, ACADEMY_EXAMS_ACTION].sort(),
+    );
+    expect(getAcademyPermissionLevel("trainer", ACADEMY_STUDENTS_ACTION)).toBe("view");
+    expect(getAcademyPermissionLevel("trainer", ACADEMY_EXAMS_ACTION)).toBe("enter_marks");
+    for (const action of [
+      ACADEMY_STAFF_ACTION,
+      ACADEMY_STUDENT_PAYMENTS_ACTION,
+      ACADEMY_EXPENSES_ACTION,
+      ACADEMY_INCOME_ACTION,
+      ACADEMY_FEE_PERIODS_ACTION,
+      ACADEMY_CERTIFICATES_ACTION,
+      ACADEMY_BOOKS_ACTION,
+      ACADEMY_RESULTS_ACTION,
+    ]) {
+      expect(getAcademyPermissionLevel("trainer", action)).toBe("none");
+    }
   });
-});
 
-// Later architecture decision: "for ALL finance workflows, Owner/Academy
-// Administrator/Manager/Finance Officer must be able to approve their own
-// records — do not block on requestedBy === decidedBy for these four
-// roles." Applied to Expenses (the only finance workflow with a real
-// approval step — see lib/academies/expense-records.ts's own module
-// comment). The only permission-LEVEL change this required was Owner's row
-// on ACADEMY_EXPENSES_ACTION ("view" -> "manage", so Owner gains
-// create/submit capability it previously had none of at all). Admin/
-// Manager/Finance Officer's LEVELS are all unchanged — every behavior
-// difference for them (Admin/Manager gaining create; Finance Officer
-// gaining self-approve without general approve authority) lives in
-// expense-records.ts's function-level logic (`canCreate`'s widened check,
-// and the new role-based `SELF_APPROVE_ROLES` self-decide path),
-// deliberately NOT expressed as further permission-matrix changes.
-describe("Owner's expenses permission expansion is scoped to that one row only", () => {
-  it("ACADEMY_EXPENSES_ACTION: academy_owner is 'manage', Admin/Manager/Finance Officer unchanged", () => {
-    expect(getAcademyPermissionLevel("academy_owner", ACADEMY_EXPENSES_ACTION)).toBe("manage");
-    expect(getAcademyPermissionLevel("academy_admin", ACADEMY_EXPENSES_ACTION)).toBe("approve");
+  it("no other role is widened on the finance rows", () => {
+    expect(getAcademyPermissionLevel("manager", ACADEMY_STUDENT_PAYMENTS_ACTION)).toBe("full");
     expect(getAcademyPermissionLevel("manager", ACADEMY_EXPENSES_ACTION)).toBe("approve");
+    expect(getAcademyPermissionLevel("manager", ACADEMY_INCOME_ACTION)).toBe("manage");
+    expect(getAcademyPermissionLevel("manager", ACADEMY_BOOKS_ACTION)).toBe("manage");
+    expect(getAcademyPermissionLevel("finance_officer", ACADEMY_STUDENT_PAYMENTS_ACTION)).toBe("manage");
     expect(getAcademyPermissionLevel("finance_officer", ACADEMY_EXPENSES_ACTION)).toBe("manage");
-  });
-
-  it("every other row Owner holds is UNCHANGED by this expansion", () => {
-    expect(getAcademyPermissionLevel("academy_owner", ACADEMY_INCOME_ACTION)).toBe("view");
-    expect(getAcademyPermissionLevel("academy_owner", ACADEMY_BOOKS_ACTION)).toBe("view");
-    expect(getAcademyPermissionLevel("academy_owner", ACADEMY_STUDENT_PAYMENTS_ACTION)).toBe("view");
-    expect(getAcademyPermissionLevel("academy_owner", ACADEMY_FEE_PERIODS_ACTION)).toBe("view");
-    expect(getAcademyPermissionLevel("academy_owner", ACADEMY_GRADE_BANDS_ACTION)).toBe("full");
-    expect(getAcademyPermissionLevel("academy_owner", ACADEMY_RESULTS_ACTION)).toBe("approve");
+    expect(getAcademyPermissionLevel("trainer", ACADEMY_INCOME_ACTION)).toBe("none");
+    expect(getAcademyPermissionLevel("admissions_officer", ACADEMY_STUDENT_PAYMENTS_ACTION)).toBe("none");
   });
 });

@@ -30,7 +30,8 @@ import {
 import { DataTable, FeeProgress, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { Icon } from "@/app/academy/_shell/icons";
 import { ConfirmButton } from "@/app/academy/_shell/confirm-dialog";
-import { EnrollCoursesDialog } from "@/app/academy/_shell/enroll-courses-dialog";
+import { EnrollStudentDialog } from "./enroll-dialog";
+import type { ProgramBatchOption } from "@/lib/academies/program-enrollments";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -107,6 +108,8 @@ interface Props {
   /** Planned and active batches with their courses, for the Enroll dialog
    * (empty when the caller can't enroll). */
   enrollBatches: EnrollBatchOption[];
+  /** Program-based batches open for complete-program enrollment. */
+  programBatches?: ProgramBatchOption[];
   /** ACADEMY_COURSES_BATCHES_ACTION's manage gate (enrollStudentInBatch's own). */
   canEnroll: boolean;
   /** Each student-with-a-photo's own short-lived signed R2 GET url,
@@ -130,6 +133,7 @@ export function StudentsList({
   photoUrlByStudentId,
   paymentSummaries,
   enrollBatches,
+  programBatches = [],
   canEnroll,
 }: Props) {
   const router = useRouter();
@@ -302,7 +306,7 @@ export function StudentsList({
                             Record payment
                           </button>
                         ) : null}
-                        {canEnroll && enrollBatches.length > 0 && student.status === "active" && courses.length === 0 && (
+                        {canEnroll && (enrollBatches.length > 0 || programBatches.length > 0) && student.status === "active" && courses.length === 0 && (
                           <button type="button" onClick={() => setEnrollingId(student.id)} className={ROW_BTN}>
                             Enroll
                           </button>
@@ -523,7 +527,7 @@ export function StudentsList({
       )}
 
       {canEnroll && enrollingStudent && (
-        <EnrollCoursesDialog
+        <EnrollStudentDialog
           open={enrollingId !== null}
           onOpenChange={(open) => !open && setEnrollingId(null)}
           student={{
@@ -531,7 +535,9 @@ export function StudentsList({
             fullName: enrollingStudent.fullName,
             studentNumber: enrollingStudent.studentNumber,
           }}
-          batches={enrollBatches}
+          enrollBatches={enrollBatches}
+          programBatches={programBatches}
+          canRecordPayments={canManagePayments}
           enrolledPairs={enrolledPairs}
           onEnrolled={() => router.refresh()}
         />

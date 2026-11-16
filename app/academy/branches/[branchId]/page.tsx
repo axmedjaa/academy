@@ -92,7 +92,8 @@ export default async function BranchDetailPage({
   const courseName = new Map((coursesResult.ok ? coursesResult.courses : []).map((course) => [course.id, course.name]));
   const branchBatches = (batchesResult.ok ? batchesResult.batches : [])
     .filter((batch) => batch.branchId === branch.id)
-    .sort((a, b) => b.startDate.localeCompare(a.startDate));
+    // Newest first (a batch has no overall start date; its courses have dates).
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   const batchById = new Map(branchBatches.map((batch) => [batch.id, batch]));
 
   // One row per class: entries sharing batch, time, trainer and room are the
@@ -218,6 +219,11 @@ export default async function BranchDetailPage({
                         "Payments received",
                         `${moneyLine(financeResult.report.studentPayments.paymentsReceived.totalsByCurrency)} (${financeResult.report.studentPayments.paymentsReceived.count} payments)`,
                       ],
+                      // Part of "Payments received" above, not added to it.
+                      [
+                        "of which program fees",
+                        moneyLine(financeResult.report.studentPayments.paymentsReceived.bySource.filter((row) => row.source === "program")),
+                      ],
                       [
                         "Outstanding charges",
                         `${moneyLine(financeResult.report.studentPayments.outstandingCharges.totalsByCurrency)} (${financeResult.report.studentPayments.outstandingCharges.count} charges)`,
@@ -328,7 +334,6 @@ export default async function BranchDetailPage({
             <tr>
               <th className={rtTh}>Batch</th>
               <th className={rtTh}>Courses</th>
-              <th className={rtTh}>Dates</th>
               <th className={rtTh}>Status</th>
               <th className={rtTh}>Roster</th>
             </tr>
@@ -342,10 +347,6 @@ export default async function BranchDetailPage({
                 </td>
                 <td className={rtTd} data-label="Courses">
                   {batch.courseIds.map((id) => courseName.get(id) ?? "Unavailable course").join(", ")}
-                </td>
-                <td className={`${rtTd} tabular-nums`} data-label="Dates">
-                  {formatDate(batch.startDate)}
-                  {batch.endDate ? ` to ${formatDate(batch.endDate)}` : ""}
                 </td>
                 <td className={rtTd} data-label="Status">
                   <Badge label={batch.status} tone={BATCH_TONE[batch.status]} />

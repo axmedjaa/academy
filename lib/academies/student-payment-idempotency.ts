@@ -20,7 +20,10 @@ export type KeyedStudentPayment =
   | {
       kind: "found";
       payment: typeof studentPayments.$inferSelect;
-      allocations: { feePeriodId: string; enrollmentId: string; amountCents: number }[];
+      /** Each allocation's owner: a course enrollment, or (migration 0049) a
+       * program enrollment with enrollmentId null. Callers compare the owner
+       * to their own, so a key used for one kind can never replay as the other. */
+      allocations: { feePeriodId: string; enrollmentId: string | null; programEnrollmentId: string | null; amountCents: number }[];
     };
 
 export async function findKeyedStudentPayment(academyId: string, scope: BranchScope, key: string): Promise<KeyedStudentPayment> {
@@ -37,6 +40,7 @@ export async function findKeyedStudentPayment(academyId: string, scope: BranchSc
     .select({
       feePeriodId: paymentAllocations.feePeriodId,
       enrollmentId: feePeriods.enrollmentId,
+      programEnrollmentId: feePeriods.programEnrollmentId,
       amountCents: paymentAllocations.amountCents,
     })
     .from(paymentAllocations)

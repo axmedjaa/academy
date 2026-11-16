@@ -102,6 +102,33 @@ export const ACADEMY_AUDIT_LOG_ACTION = "academy.audit_log";
  * absent from this table (rather than explicitly `"none"`) is treated
  * identically to `"none"` by `getAcademyPermissionLevel` below, so later
  * items may add either a full row up front or grow it action-by-action.
+ *
+ * Academy Owner rule: the Academy Owner can see and do everything inside
+ * their own academy, so on every row the owner holds that row's TOP
+ * level — whichever level that row's strictest gate checks for (e.g.
+ * "full" where reversal requires "full", "approve" where approval
+ * requires "approve", "manage" on rows whose only write gate is
+ * "manage"). The Academy Administrator holds exactly the same level as
+ * the owner on every row. Any new row must give academy_owner AND
+ * academy_admin its top level too. (Older row comments below record how
+ * each row got here; the assignments are authoritative.)
+ *
+ * The only owner-vs-admin differences live outside this table, in
+ * role-based staff rules: only an owner can create/promote/demote/remove
+ * an Academy Owner or grant all-branch access (staff-role-rules.ts,
+ * staff.ts, staff-branch-assignments.ts). This is academy-scoped only: it
+ * grants nothing at platform level, and tenant isolation
+ * (checkAcademyAccessForContext) is unchanged.
+ *
+ * Trainer rule: a Trainer sees only their assigned students, timetable,
+ * exams and results. They hold only three rows — students "view" (scoped to
+ * students in batches they teach, lib/academies/students.ts resolveScope),
+ * courses/batches "manage" (their assigned batches; timetables.ts makes the
+ * timetable view-only and assigned-batch-only for them) and exams
+ * "enter_marks" (assigned batches only; results follow the exam). No staff,
+ * finance, fee-period or certificate access. The nav shows them only
+ * Dashboard/Students/Timetable/Exams/Results (nav-items.ts), and the
+ * sections they can't use refuse them at the route (TrainerBlocked).
  */
 const ACADEMY_PERMISSIONS: Record<
   AcademyRole,
@@ -196,7 +223,6 @@ export const ACADEMY_STAFF_ACTION = "academy.staff";
 ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STAFF_ACTION] = "full";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STAFF_ACTION] = "full";
 ACADEMY_PERMISSIONS.manager[ACADEMY_STAFF_ACTION] = "manage";
-ACADEMY_PERMISSIONS.trainer[ACADEMY_STAFF_ACTION] = "view";
 
 /**
  * PLAN.md Item 38 — Master Permission Matrix "Students / admissions" row:
@@ -237,7 +263,7 @@ ACADEMY_PERMISSIONS.trainer[ACADEMY_STUDENTS_ACTION] = "view";
  */
 export const ACADEMY_STUDENT_ID_CARDS_ACTION = "academy.student_id_cards";
 ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STUDENT_ID_CARDS_ACTION] = "full";
-ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_ID_CARDS_ACTION] = "full";
 ACADEMY_PERMISSIONS.manager[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.admissions_officer[ACADEMY_STUDENT_ID_CARDS_ACTION] = "manage";
 
@@ -467,15 +493,17 @@ ACADEMY_PERMISSIONS.manager[ACADEMY_RESULTS_ACTION] = "approve";
  * Officer, granting record/create/issue-receipt authority but NOT reversal
  * (`canReverse` still requires "full", i.e. Manager only — this change does
  * not give Administrator the ability to reverse or adjust anyone's
- * payment). Academy Owner remains "view" — this revision was scoped to
- * Administrator only, matching what was explicitly approved.
+ * payment).
+ *
+ * Academy Owner and Academy Administrator both raised to "full" (Academy
+ * Owner rule above): record, issue receipts, refund, and reverse/adjust
+ * any payment.
  */
 export const ACADEMY_STUDENT_PAYMENTS_ACTION = "academy.student_payments";
-ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
-ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_PAYMENTS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_STUDENT_PAYMENTS_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_STUDENT_PAYMENTS_ACTION] = "full";
 ACADEMY_PERMISSIONS.manager[ACADEMY_STUDENT_PAYMENTS_ACTION] = "full";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_STUDENT_PAYMENTS_ACTION] = "manage";
-ACADEMY_PERMISSIONS.trainer[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
 
 /**
  * PLAN.md Phase 4, Item 53 — Master Permission Matrix "Expenses
@@ -520,13 +548,16 @@ ACADEMY_PERMISSIONS.trainer[ACADEMY_STUDENT_PAYMENTS_ACTION] = "view";
  * Net effect on this row: Owner "view" -> "manage". Admin/Manager/Finance
  * Officer levels are byte-for-byte unchanged; every behavior difference
  * for them lives in expense-records.ts's function-level logic instead.
+ *
+ * Later: Owner raised again, "manage" -> "approve" (Academy Owner rule
+ * above), so the owner can approve/reject anyone's expense and reverse
+ * approved expenses, same as Admin/Manager.
  */
 export const ACADEMY_EXPENSES_ACTION = "academy.expenses";
-ACADEMY_PERMISSIONS.academy_owner[ACADEMY_EXPENSES_ACTION] = "manage";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_EXPENSES_ACTION] = "approve";
 ACADEMY_PERMISSIONS.academy_admin[ACADEMY_EXPENSES_ACTION] = "approve";
 ACADEMY_PERMISSIONS.manager[ACADEMY_EXPENSES_ACTION] = "approve";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_EXPENSES_ACTION] = "manage";
-ACADEMY_PERMISSIONS.trainer[ACADEMY_EXPENSES_ACTION] = "view";
 
 /**
  * PLAN.md Phase 4, Item 53 — Income has NO Master Permission Matrix row in
@@ -541,15 +572,16 @@ ACADEMY_PERMISSIONS.trainer[ACADEMY_EXPENSES_ACTION] = "view";
  * "view" only, mirroring Item 53's own then-undiscovered-source guess) —
  * corrected in Wave 2 once this table was found: Manager gets the same
  * "manage" (create) level as Finance Officer, matching PLAN.md's literal
- * "reuses the same recording capability" instruction exactly. Owner/Admin
- * remain read-only view, Admissions Officer/Trainer no access. Kept as its
+ * "reuses the same recording capability" instruction exactly. Owner and
+ * Admin get "manage" too (Academy Owner rule above: record and reverse
+ * income); Admissions Officer/Trainer no access. Kept as its
  * OWN row, separate from ACADEMY_EXPENSES_ACTION (decision D): an
  * approve-capable level on this row would be permanently meaningless, since
  * no income-approval action will ever exist to check it against.
  */
 export const ACADEMY_INCOME_ACTION = "academy.income";
-ACADEMY_PERMISSIONS.academy_owner[ACADEMY_INCOME_ACTION] = "view";
-ACADEMY_PERMISSIONS.academy_admin[ACADEMY_INCOME_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_INCOME_ACTION] = "manage";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_INCOME_ACTION] = "manage";
 ACADEMY_PERMISSIONS.manager[ACADEMY_INCOME_ACTION] = "manage";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_INCOME_ACTION] = "manage";
 
@@ -577,39 +609,36 @@ ACADEMY_PERMISSIONS.finance_officer[ACADEMY_INCOME_ACTION] = "manage";
  */
 export const ACADEMY_CERTIFICATES_ACTION = "academy.certificates";
 ACADEMY_PERMISSIONS.academy_owner[ACADEMY_CERTIFICATES_ACTION] = "full";
-ACADEMY_PERMISSIONS.academy_admin[ACADEMY_CERTIFICATES_ACTION] = "manage";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_CERTIFICATES_ACTION] = "full";
 ACADEMY_PERMISSIONS.manager[ACADEMY_CERTIFICATES_ACTION] = "manage";
-ACADEMY_PERMISSIONS.trainer[ACADEMY_CERTIFICATES_ACTION] = "view";
 
 /**
  * Student Fee Periods (new feature, not in PLAN.md/DESIGN.md's original
  * matrix). Mirrors ACADEMY_STUDENT_PAYMENTS_ACTION exactly, row for row —
  * fee-period payments are recorded through the SAME student_payments table
  * (see lib/academies/fee-periods.ts's module comment), so the authority to
- * manage them must be identical: Owner/Trainer view-only, Manager full,
- * Finance Officer and Academy Administrator manage, Admissions Officer no
- * access. (Academy Administrator raised from "view" to "manage" alongside
- * ACADEMY_STUDENT_PAYMENTS_ACTION above — see that row's own comment for
- * why.)
+ * manage them must be identical: Owner, Academy Administrator and Manager
+ * full, Finance Officer manage, Trainer view-only, Admissions Officer no
+ * access.
  */
 export const ACADEMY_FEE_PERIODS_ACTION = "academy.fee_periods";
-ACADEMY_PERMISSIONS.academy_owner[ACADEMY_FEE_PERIODS_ACTION] = "view";
-ACADEMY_PERMISSIONS.academy_admin[ACADEMY_FEE_PERIODS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_FEE_PERIODS_ACTION] = "full";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_FEE_PERIODS_ACTION] = "full";
 ACADEMY_PERMISSIONS.manager[ACADEMY_FEE_PERIODS_ACTION] = "full";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_FEE_PERIODS_ACTION] = "manage";
-ACADEMY_PERMISSIONS.trainer[ACADEMY_FEE_PERIODS_ACTION] = "view";
 
 /**
  * Academy Books (new feature). No approval workflow exists for this domain
  * (book-sale income posts directly, matching ACADEMY_INCOME_ACTION's
  * no-approval design) — "manage" is therefore the top level anyone reaches,
- * same shape as ACADEMY_INCOME_ACTION's row. Owner/Admin get read-only
- * visibility (can see the catalogue/sales history), Manager and Finance
- * Officer can create books, sell, record additional payments, and refund.
+ * same shape as ACADEMY_INCOME_ACTION's row. Owner, Academy
+ * Administrator, Manager and Finance Officer can create books, sell,
+ * record additional payments, and refund (Owner/Admin per the Academy
+ * Owner rule above).
  * Admissions Officer/Trainer have no entry ("none").
  */
 export const ACADEMY_BOOKS_ACTION = "academy.books";
-ACADEMY_PERMISSIONS.academy_owner[ACADEMY_BOOKS_ACTION] = "view";
-ACADEMY_PERMISSIONS.academy_admin[ACADEMY_BOOKS_ACTION] = "view";
+ACADEMY_PERMISSIONS.academy_owner[ACADEMY_BOOKS_ACTION] = "manage";
+ACADEMY_PERMISSIONS.academy_admin[ACADEMY_BOOKS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.manager[ACADEMY_BOOKS_ACTION] = "manage";
 ACADEMY_PERMISSIONS.finance_officer[ACADEMY_BOOKS_ACTION] = "manage";

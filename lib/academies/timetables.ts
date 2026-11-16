@@ -1,5 +1,6 @@
 import { and, eq, inArray, ne, sql, type SQL } from "drizzle-orm";
 import { getAssignedBranchIds } from "@/lib/academies/branch-access";
+import { getAssignedBatchIds } from "@/lib/academies/batch-assignments";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
 import {
@@ -81,6 +82,15 @@ interface ResolvedScopeAccess {
   membershipRole: AcademyRole;
   permissionLevel: AcademyPermissionLevel;
   academyWide: boolean;
+  /** Trainer only: the batches they are actively assigned to teach. A
+   * Trainer sees only these batches' classes. `null` for every other role
+   * (no batch restriction beyond branch scope). */
+  trainerBatchIds: Set<string> | null;
+}
+
+/** A Trainer only sees the classes of batches they teach. */
+function inTrainerScope(access: ResolvedScopeAccess, batchId: string): boolean {
+  return access.trainerBatchIds === null || access.trainerBatchIds.has(batchId);
 }
 
 type ResolveScopeAccessResult =
@@ -101,9 +111,23 @@ async function resolveScopeAccess(actorContext: AuthContext): Promise<ResolveSco
     return { ok: false, error: FORBIDDEN };
   }
 
+  // Trainers can only VIEW the timetable, and only for the batches they are
+  // assigned to teach (batch_trainer_assignments). Their "manage" on the
+  // courses/batches row is for their assigned batches' teaching work, never
+  // for creating, editing or deleting classes — so the effective level here
+  // is "view", which every create/update/delete gate refuses.
+  const isTrainer = access.membershipRole === "trainer";
   return {
     ok: true,
-    access: { academyId: access.academyId, membershipRole: access.membershipRole, academyWide: access.academyWide, permissionLevel },
+    access: {
+      academyId: access.academyId,
+      membershipRole: access.membershipRole,
+      academyWide: access.academyWide,
+      permissionLevel: isTrainer ? "view" : permissionLevel,
+      trainerBatchIds: isTrainer
+        ? new Set(await getAssignedBatchIds(db, actorContext.userId, access.academyId))
+        : null,
+    },
   };
 }
 
@@ -610,6 +634,9 @@ export async function listAcademyTimetable(
   const resolved = await resolveScopeAccess(actorContext);
   if (!resolved.ok) return resolved;
   const { academyId, permissionLevel, academyWide } = resolved.access;
+  if (resolved.access.trainerBatchIds?.size === 0) {
+    return { ok: true, entries: [], canManage: false };
+  }
 
   const rows = await db
     .select({
@@ -629,6 +656,7 @@ export async function listAcademyTimetable(
 
   const visible: typeof rows = [];
   for (const row of rows) {
+    if (!inTrainerScope(resolved.access, row.entry.batchId)) continue;
     const inScope = await assertBranchInScope(
       db,
       academyId,
@@ -690,7 +718,7 @@ export async function listTimetableForBatches(
       inScope = await assertBranchInScope(db, academyId, academyWide, actorContext.userId, row.entry.branchId);
       scopeByBranch.set(row.entry.branchId, inScope);
     }
-    if (inScope) visible.push(row);
+    if (inScope && inTrainerScope(resolved.access, row.entry.batchId)) visible.push(row);
   }
 
   return {
@@ -730,6 +758,10 @@ export async function listTimetableEntries(
     .where(and(eq(batches.id, batchId), eq(batches.academyId, academyId)))
     .limit(1);
   if (!batch) return { ok: false, error: BATCH_NOT_FOUND };
+
+  // A Trainer asking for a batch they don't teach sees nothing, exactly as
+  // if it didn't exist.
+  if (!inTrainerScope(resolved.access, batchId)) return { ok: false, error: BATCH_NOT_FOUND };
 
   const rows = await db.select().from(timetables).where(eq(timetables.batchId, batchId));
 

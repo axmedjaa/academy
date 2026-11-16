@@ -144,14 +144,16 @@ Per-role visibility is defined in §5. `Finance` never appears for a Trainer. `A
 | Students | — | — | Full | Full | Manage | Manage assigned | View | View assigned |
 | Courses/Batches | — | — | Full | Full | Manage | View assigned | — | Manage assigned |
 | Exams (mark entry) | — | — | Full | Full | Manage | — | — | Enter marks (assigned only) |
-| Grade Bands | — | — | Full | Manage | Manage/Approve | — | — | — |
+| Grade Bands | — | — | Full | Full | Manage/Approve | — | — | — |
 | Result Approval/Publish | — | — | Approve | Approve | Approve | — | — | Submit only |
-| Student Payments | — | — | View | View | Approve/Manage | — | Manage (not own) | View |
-| Expenses | — | — | View | Approve | Approve | — | Create/Submit | View |
-| Certificates | — | — | Full | Manage | Manage | — | — | View |
-| ID Cards | — | — | Full | Manage | Manage | Manage assigned | — | — |
+| Student Payments | — | — | Full | Full | Approve/Manage | — | Manage (not own) | View |
+| Expenses | — | — | Approve | Approve | Approve | — | Create/Submit | View |
+| Certificates | — | — | Full | Full | Manage | — | — | View |
+| ID Cards | — | — | Full | Full | Manage | Manage assigned | — | — |
 | Academy Audit Log | — | — | Full | Full | — | — | — | — |
 | Export (Reports/Students/Finance/Audit) | — | — | Per own view rights | Per own view rights | Per own view rights | Per own view rights | Per own view rights | Per own view rights |
+
+**Academy Owner rule**: the Academy Owner can see and do everything inside their own academy, and the Academy Administrator has the same authority. On every academy row both hold the top authority that row has (including Student Payments, Fee Periods, Income, Expenses and Books: record, approve, refund and reverse). The only difference: only an Academy Owner can create, promote, demote or remove an Academy Owner, or grant all-branch access. This is academy-scoped only. It grants nothing at platform level, and one academy's owner never sees another academy (source of truth: `lib/auth/academy-permissions.ts`).
 
 **Branch scope**: an `assigned` qualifier means the capability applies only within that role's assigned branch(es), per §2.2 — **Admissions Officer and Trainer are branch-limited**; Academy Owner, Academy Administrator, Manager, and Finance Officer are academy-wide (no `assigned` qualifier anywhere in their row). Admissions Officer's branch selector is locked exactly like Trainer's (§2.2) and can never show or select "All branches."
 

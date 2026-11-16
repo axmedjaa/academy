@@ -1,11 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { BookRecord } from "@/lib/academies/books";
 import { updateBookAction } from "@/lib/academies/books-actions";
-import { setCampaignStatusAction, verifyPreorderPaymentAction } from "@/lib/academies/book-preorders-actions";
+import { cancelBookOrderAction } from "@/lib/academies/book-orders-actions";
 import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
 import { formatMoney } from "@/lib/ui/money";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
@@ -164,111 +163,52 @@ export function BookCard({ book }: { book: BookRecord }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Campaign card buttons (design B02)                                  */
+/* Order buttons                                                       */
 /* ------------------------------------------------------------------ */
-
-export function CampaignButtons({ campaignId, status, name }: { campaignId: string; status: string; name: string }) {
-  const router = useRouter();
-  const { data } = useBooksActions();
-  const [pending, start] = useTransition();
-  const canToggle = data.canManageCampaigns && ["open", "closed", "draft", "scheduled"].includes(status);
-  const isOpen = status === "open";
-  return (
-    <div className="mt-auto flex flex-wrap gap-2">
-      {canToggle && (
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() =>
-            start(async () => {
-              try {
-                const result = await setCampaignStatusAction(campaignId, isOpen ? "closed" : "open");
-                if (!result.ok) {
-                  showErrorToast(result.error?.message ?? "The campaign couldn't be updated.");
-                  return;
-                }
-                showSuccessToast(isOpen ? `Ordering is closed: ${name}` : `Ordering is open: ${name}`);
-                router.refresh();
-              } catch {
-                showErrorToast(NETWORK_ERROR_MESSAGE);
-              }
-            })
-          }
-          className={`min-h-11 flex-[1_1_120px] rounded-lg font-semibold disabled:opacity-60 ${isOpen ? "border border-border-strong bg-surface text-ink hover:bg-app" : "bg-brand text-white hover:bg-brand-hover"}`}
-        >
-          {pending ? "Saving…" : isOpen ? "Close Ordering" : "Open Ordering"}
-        </button>
-      )}
-      <Link
-        href={`/academy/books/orders?campaign=${campaignId}`}
-        className="flex min-h-11 flex-1 items-center justify-center whitespace-nowrap rounded-lg border border-border-strong bg-surface px-3 font-semibold !text-ink !no-underline hover:bg-app hover:!no-underline"
-      >
-        View orders
-      </Link>
-      {data.canManageCampaigns && (
-        <ActionButton dialog={{ kind: "campaign", campaignId }} variant="secondary" className="flex-1">
-          Edit
-        </ActionButton>
-      )}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Payment verification                                                */
-/* ------------------------------------------------------------------ */
-
-export function VerifyButton({ paymentId, summary }: { paymentId: string; summary: string }) {
-  const { confirm, data } = useBooksActions();
-  if (!data.canManage) return null;
-  return (
-    <button
-      type="button"
-      onClick={() =>
-        confirm({
-          title: "Verify this payment?",
-          body: `Confirm the money was received: ${summary}.`,
-          label: "Verify Payment",
-          success: "Payment verified",
-          run: async () => {
-            const result = await verifyPreorderPaymentAction(paymentId);
-            return result.ok ? null : (result.error?.message ?? "The payment couldn't be verified.");
-          },
-        })
-      }
-      className="h-9 rounded-lg border border-brand px-3 text-sm font-semibold text-brand hover:bg-brand-tint"
-    >
-      Verify
-    </button>
-  );
-}
 
 export function ToneBadge({ badge }: { badge: { label: string; tone: Tone } }) {
   return <Badge label={badge.label} tone={badge.tone} />;
 }
 
-/** The "Record Payment" button on an order card (manage only). */
+/** "Record payment" (money from the buyer) on a student book order with a balance. */
 export function PayButton({ orderId, className = "" }: { orderId: string; className?: string }) {
   const { data } = useBooksActions();
-  if (!data.canManage) return null;
+  if (!data.canManageOrders) return null;
   return (
-    <ActionButton dialog={{ kind: "pay", orderId }} className={className}>
-      Record Payment
+    <ActionButton dialog={{ kind: "pay", orderId }} variant="secondary" className={className}>
+      Record payment
     </ActionButton>
   );
 }
 
-export function ReceiveButton({ campaignId, bookId, primary }: { campaignId: string; bookId: string; primary: boolean }) {
-  const { data } = useBooksActions();
-  if (!data.canManageCampaigns) return null;
+/** Cancel a student book order (only before any payment or hand-over). */
+export function CancelOrderButton({ orderId, summary }: { orderId: string; summary: string }) {
+  const { confirm, data } = useBooksActions();
+  if (!data.canManageOrders) return null;
   return (
-    <ActionButton dialog={{ kind: "receive", campaignId, bookId }} variant={primary ? "primary" : "secondary"} className="w-full">
-      Receive Books
-    </ActionButton>
+    <button
+      type="button"
+      onClick={() =>
+        confirm({
+          title: "Cancel this order?",
+          body: `${summary} A cancelled order can't take payments or be given.`,
+          label: "Cancel order",
+          success: "Order cancelled.",
+          run: async () => {
+            const result = await cancelBookOrderAction(orderId);
+            return result.ok ? null : (result.error?.message ?? "The order couldn't be cancelled.");
+          },
+        })
+      }
+      className="inline-flex min-h-11 items-center rounded-lg border border-border-strong bg-surface px-4 font-semibold text-[#B91C1C] hover:bg-app"
+    >
+      Cancel order
+    </button>
   );
 }
 
-export function GatedAction({ need, ...props }: { need: "canManage" | "canManageCampaigns" | "canManageBooks" | "canSell" } & Parameters<typeof ActionButton>[0]) {
+export function GatedAction({ need, ...props }: { need: "canManageOrders" | "canIssue" | "canManageBooks" | "canSell" } & Parameters<typeof ActionButton>[0]) {
+
   const { data } = useBooksActions();
   if (!data[need]) return null;
   return <ActionButton {...props} />;

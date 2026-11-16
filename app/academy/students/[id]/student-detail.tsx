@@ -42,6 +42,10 @@ import {
   invalidProps,
 } from "@/app/academy/_shell/design-form";
 import { Icon } from "@/app/academy/_shell/icons";
+import type { ProgramBatchOption, StudentProgramEnrollment } from "@/lib/academies/program-enrollments";
+import { ProgramEnrollmentCard } from "./program-enrollment-card";
+import type { BookIssueView } from "@/lib/academies/book-orders";
+import { StudentBooksCard } from "./student-books-card";
 import { nextDuePeriod, outstandingCents, previewAllocation, previewScheduleChange } from "@/lib/ui/fee-allocation";
 import { formatDate } from "@/lib/ui/date";
 import { PaymentHistoryPanel, RefundHistoryPanel, type RefundHistoryRow } from "./payment-history";
@@ -114,6 +118,9 @@ export interface PaymentHistoryRow {
 }
 
 interface Props {
+  /** Complete-program enrollments (one program fee each; migration 0049). */
+  programEnrollments?: StudentProgramEnrollment[];
+  programPermissions?: { canRecordPayment: boolean; canWithdraw: boolean; canRefund: boolean };
   /** Opens on this tab (`?tab=fees` from a Collect link). */
   initialTab?: Tab;
   student: StudentRecord;
@@ -147,6 +154,10 @@ interface Props {
   /** Enroll / withdraw rights (ACADEMY_COURSES_BATCHES_ACTION full/manage). */
   canEnroll: boolean;
   enrollBatches: EnrollBatchOption[];
+  /** Program-based batches open for complete-program enrollment. */
+  programBatches?: ProgramBatchOption[];
+  /** Books issued to this student; null when the viewer can't see books. */
+  bookIssues?: BookIssueView[] | null;
   currentUserId: string;
   /** "Today," server-computed in the academy's own Somalia-local calendar
    * (see lib/academies/fee-periods.ts's `todayDateOnlyInAcademyTimezone`) —
@@ -193,16 +204,26 @@ export function StudentDetail({
   canEditStudent,
   canEnroll,
   enrollBatches,
+  programBatches = [],
+  bookIssues = null,
   currentUserId,
   today,
+  programEnrollments = [],
+  programPermissions = { canRecordPayment: false, canWithdraw: false, canRefund: false },
 }: Props) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [enrollOpen, setEnrollOpen] = useState(false);
-  const feeTabs = enrollmentSummaries.map((entry) => ({
-    key: entry.enrollment.id,
-    label: `${entry.enrollment.batchCode} · ${entry.enrollment.courseName}`,
-  }));
+  const feeTabs = [
+    // One sub-tab per complete program (its ONE program fee) ...
+    ...programEnrollments.map((program) => ({ key: `program:${program.id}`, label: `Program · ${program.programName}` })),
+    // ... and one per individually enrolled course (its own course fee).
+    ...enrollmentSummaries.map((entry) => ({
+      key: entry.enrollment.id,
+      label: `${entry.enrollment.batchCode} · ${entry.enrollment.courseName}`,
+    })),
+  ];
   const [feeTab, setFeeTab] = useState<string>(feeTabs[0]?.key ?? "charges");
+  const feeProgram = programEnrollments.find((program) => `program:${program.id}` === feeTab) ?? null;
   const feeEntry = enrollmentSummaries.find((entry) => entry.enrollment.id === feeTab) ?? null;
 
   return (
@@ -216,6 +237,9 @@ export function StudentDetail({
             student={student}
             enrollments={enrollments}
             enrollBatches={enrollBatches}
+            programBatches={programBatches}
+            canRecordPayments={canManagePayments}
+            takenProgramIds={programEnrollments.filter((program) => program.status === "active").map((program) => program.programId)}
             canEnroll={canEnroll}
             canEdit={canEditStudent}
             enrollOpen={enrollOpen}
@@ -255,10 +279,20 @@ export function StudentDetail({
           enrollmentDetails={enrollmentDetails}
           canEditPhoto={canEditStudent}
           canWithdraw={canEnroll}
-          canEnroll={canEnroll && enrollBatches.length > 0}
+          canEnroll={canEnroll && (enrollBatches.length > 0 || programBatches.length > 0)}
           onEnroll={() => setEnrollOpen(true)}
+          afterProfile={programEnrollments.map((program) => (
+            <ProgramEnrollmentCard
+              key={program.id}
+              enrollment={program}
+              canRecordPayment={programPermissions.canRecordPayment}
+              canWithdraw={programPermissions.canWithdraw}
+              canRefund={programPermissions.canRefund}
+            />
+          ))}
         />
       )}
+      {tab === "overview" && bookIssues && <StudentBooksCard issues={bookIssues} />}
 
       {tab === "fees" && (
         <div className="flex flex-col gap-6">
@@ -287,7 +321,15 @@ export function StudentDetail({
               </button>
             )}
           </div>
-          {feeEntry ? (
+          {feeProgram ? (
+            <ProgramEnrollmentCard
+              key={feeProgram.id}
+              enrollment={feeProgram}
+              canRecordPayment={programPermissions.canRecordPayment}
+              canWithdraw={programPermissions.canWithdraw}
+              canRefund={programPermissions.canRefund}
+            />
+          ) : feeEntry ? (
             <EnrollmentPaymentPanel
               key={feeEntry.enrollment.id}
               studentId={student.id}
