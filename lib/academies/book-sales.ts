@@ -686,6 +686,8 @@ export interface BookSaleListRow extends BookSaleRecord {
   studentName: string | null;
   totalPaidCents: number;
   totalRefundedCents: number;
+  /** Copies brought back across this sale's refunds (stock already restored). */
+  totalReturnedQuantity: number;
   netPaidCents: number;
   remainingCents: number;
   /** Display label for `recordedBy` — this academy's current role for that
@@ -734,12 +736,17 @@ export async function listBookSales(
   // tests for the first time).
   const refundTotals = saleIds.length
     ? await db
-        .select({ bookSaleId: bookSaleRefunds.bookSaleId, total: sql<string>`coalesce(sum(${bookSaleRefunds.amountCents}), 0)` })
+        .select({
+          bookSaleId: bookSaleRefunds.bookSaleId,
+          total: sql<string>`coalesce(sum(${bookSaleRefunds.amountCents}), 0)`,
+          returned: sql<string>`coalesce(sum(${bookSaleRefunds.returnedQuantity}), 0)`,
+        })
         .from(bookSaleRefunds)
         .where(inArray(bookSaleRefunds.bookSaleId, saleIds))
         .groupBy(bookSaleRefunds.bookSaleId)
     : [];
   const refundedById = new Map(refundTotals.map((row) => [row.bookSaleId, Number(row.total)]));
+  const returnedById = new Map(refundTotals.map((row) => [row.bookSaleId, Number(row.returned)]));
 
   // Fetch every payment row (not just sums) so the latest method/reference
   // per sale can be derived alongside the paid total in one query/pass —
@@ -778,6 +785,7 @@ export async function listBookSales(
       studentName,
       totalPaidCents,
       totalRefundedCents,
+      totalReturnedQuantity: returnedById.get(sale.id) ?? 0,
       netPaidCents: totalPaidCents - totalRefundedCents,
       remainingCents: Math.max(0, sale.finalAmountCents - totalPaidCents),
       recordedByLabel: recordedByLabels.get(sale.recordedBy) ?? sale.recordedBy,
@@ -832,6 +840,7 @@ export async function getBookSale(actorContext: AuthContext, bookSaleId: string)
       studentName: row.studentName,
       totalPaidCents,
       totalRefundedCents,
+      totalReturnedQuantity: refunds.reduce((sum, r) => sum + r.returnedQuantity, 0),
       netPaidCents: totalPaidCents - totalRefundedCents,
       remainingCents: Math.max(0, row.sale.finalAmountCents - totalPaidCents),
       recordedByLabel: recordedByLabels.get(row.sale.recordedBy) ?? row.sale.recordedBy,

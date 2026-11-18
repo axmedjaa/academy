@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import type { BookSaleListRow } from "@/lib/academies/book-sales";
 import { formatMoney } from "@/lib/ui/money";
 import { formatDate } from "@/lib/ui/date";
-import { getStatusTone } from "@/lib/ui/status";
+import { saleStatusBadge } from "../../books-view";
 import { Badge, EmptyState, PageMessage, Section } from "@/app/academy/_shell/ui";
 import { ChipParamFilter, ClearFilters, DateParamField, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
 import { Icon } from "@/app/academy/_shell/icons";
@@ -220,7 +220,7 @@ export default async function BookSalesPage({
                 </div>
               </div>
               <div className="flex min-w-0 flex-[0_1_260px] flex-col items-start gap-2 [&>span:last-child]:justify-start">
-                <Badge label={sale.paymentStatus} tone={getStatusTone(sale.paymentStatus)} />
+                <Badge {...saleStatusBadge(sale)} />
                 <SaleActions sale={sale} canManage={salesResult.canManage} />
               </div>
             </article>
