@@ -34,6 +34,14 @@ const nextConfig: NextConfig = {
   // variable belongs to the build environment (the CI build step), not to
   // app.env.
   poweredByHeader: false,
+
+  // Policy for `next upgrade --agent` and the upgrade reminders shown by
+  // `next dev`/`next build`: only flag releases that fix a published
+  // security advisory.
+  experimental: {
+    agentUpgrade: "security",
+  },
+
   async headers() {
     return securityHeaderRules({
       isDev: process.env.NODE_ENV !== "production",
