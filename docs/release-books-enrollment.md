@@ -16,7 +16,7 @@ Server (`/srv/myapp/env/app.env`, checked by `deploy/myapp-deploy`):
 environment variable.**
 
 Build (GitHub repository variables, fixed at build time):
-`NEXT_PUBLIC_SITE_URL=https://duruusa.dardar.cc` (set), `APP_HTTPS_ENABLED`
+`NEXT_PUBLIC_SITE_URL=https://hirgal.dardar.cc` (set), `APP_HTTPS_ENABLED`
 (unset/"false" until HTTPS works).
 
 Migration step: the same `DATABASE_URL` from `app.env`, or a migration-only

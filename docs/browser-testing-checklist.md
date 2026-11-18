@@ -10,7 +10,7 @@ checks below have not yet been ticked one by one.
 
 ## Before you start
 
-- **Where:** the live site (`https://duruusa.dardar.cc`) or `npm run dev`.
+- **Where:** the live site (`https://hirgal.dardar.cc`) or `npm run dev`.
   Both use the same shared database, so everything you create is real data.
 - **Test data only:** use a test academy, or clearly named test records
   ("TEST Buyer", "TEST Student", a "TEST" batch with no real students) and
