@@ -25,6 +25,7 @@ import { addBookSalePayment, computeBookSalePricing, createBookSale, listBookSal
 import { getFinanceReports, subtractByCurrency } from "./finance-reports";
 import { partiallyReverseIncomeRecord, reverseIncomeRecord } from "./finance-reversals";
 import { listIncomeRecords } from "./income-records";
+import { saleStatusBadge } from "@/app/academy/books/books-view";
 
 // `createBook` (used by `insertBookDirect` below) now requires a verified
 // cover — same mock pattern as lib/academies/books.test.ts.
@@ -404,6 +405,28 @@ describe("stock-changed audit trail", () => {
 });
 
 describe("listBookSales — history enrichment", () => {
+  it("reports refunded money and returned copies, so lists and reports can show figures after refunds", async () => {
+    const fixture = await setupFixture();
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 3000, 20);
+    const full = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 1, amountPaidCents: 3000, method: "cash" });
+    const part = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 2, amountPaidCents: 6000, method: "cash" });
+    if (!full.ok || !part.ok) throw new Error("expected ok");
+    expect((await refundBookSale(fixture.managerContext, { bookSaleId: full.sale.id, amountCents: 3000, reason: "Returned", returnedQuantity: 1 })).ok).toBe(true);
+    expect((await refundBookSale(fixture.managerContext, { bookSaleId: part.sale.id, amountCents: 1000, reason: "Discount after sale" })).ok).toBe(true);
+
+    const listed = await listBookSales(fixture.managerContext);
+    if (!listed.ok) throw new Error("expected ok");
+    const fullRow = listed.sales.find((s) => s.id === full.sale.id)!;
+    const partRow = listed.sales.find((s) => s.id === part.sale.id)!;
+    expect(fullRow).toMatchObject({ totalPaidCents: 3000, totalRefundedCents: 3000, totalReturnedQuantity: 1, netPaidCents: 0, remainingCents: 0 });
+    expect(partRow).toMatchObject({ totalPaidCents: 6000, totalRefundedCents: 1000, totalReturnedQuantity: 0, netPaidCents: 5000 });
+
+    // The sale card badge no longer says "Paid" once money went back.
+    expect(saleStatusBadge(fullRow)).toEqual({ label: "Refunded", tone: "slate" });
+    expect(saleStatusBadge(partRow)).toEqual({ label: "Partly refunded", tone: "amber" });
+    expect(saleStatusBadge({ paymentStatus: "paid", totalPaidCents: 1000, totalRefundedCents: 0 })).toEqual({ label: "paid", tone: "green" });
+  });
+
   it("resolves recordedByLabel to the manager's current role label", async () => {
     const fixture = await setupFixture();
     const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 1000, 20);

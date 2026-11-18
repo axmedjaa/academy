@@ -83,14 +83,22 @@ export default async function BookReportsPage({ searchParams }: { searchParams: 
   const orderBalance: Money[] = orders.map((o) => ({ cents: o.outstandingCents, currency: o.currency }));
   const ordersFullyPaid = orders.filter((o) => o.paymentStatus === "paid").length;
 
-  // Sell (Books tab): direct sales, by the day they were recorded.
+  // Sell (Books tab): direct sales, by the day they were recorded. Refunds
+  // are money given back, so every money figure here is AFTER refunds
+  // (what the academy kept), and copies brought back on a refund no longer
+  // count as sold. Total = Received + Balance still holds: a refund lowers
+  // both Total and Received by the same amount.
   const sales = salesResult.ok ? salesResult.sales.filter((s) => inRange(s.createdAt.toISOString().slice(0, 10))) : [];
-  const saleCopies = sales.reduce((n, s) => n + s.quantity, 0);
-  const saleTotal: Money[] = sales.map((s) => ({ cents: s.finalAmountCents, currency: s.currency }));
-  const saleReceived: Money[] = sales.map((s) => ({ cents: s.totalPaidCents, currency: s.currency }));
-  const saleRefunded: Money[] = sales.map((s) => ({ cents: s.totalRefundedCents, currency: s.currency }));
+  const saleCopies = sales.reduce((n, s) => n + s.quantity - s.totalReturnedQuantity, 0);
+  const returnedCopies = sales.reduce((n, s) => n + s.totalReturnedQuantity, 0);
+  const saleTotal: Money[] = sales.map((s) => ({ cents: s.finalAmountCents - s.totalRefundedCents, currency: s.currency }));
+  const saleReceived: Money[] = sales.map((s) => ({ cents: s.netPaidCents, currency: s.currency }));
+  const saleRefunded: Money[] = sales.filter((s) => s.totalRefundedCents > 0).map((s) => ({ cents: s.totalRefundedCents, currency: s.currency }));
   const saleBalance: Money[] = sales.map((s) => ({ cents: s.remainingCents, currency: s.currency }));
-  const salesFullyPaid = sales.filter((s) => s.paymentStatus === "paid").length;
+  const refundedSales = sales.filter((s) => s.totalRefundedCents > 0 && s.totalRefundedCents >= s.totalPaidCents).length;
+  // A fully refunded sale is not "fully paid" any more.
+  const salesFullyPaid = sales.filter((s) => s.paymentStatus === "paid" && s.totalRefundedCents < s.totalPaidCents).length;
+  const refundedLine = saleRefunded.length > 0 ? `after ${money(saleRefunded)} refunded` : undefined;
 
   // Books: orders and Sell together.
   const byBook = new Map<string, { name: string; ordered: number; given: number; sold: number }>();
@@ -103,7 +111,7 @@ export default async function BookReportsPage({ searchParams }: { searchParams: 
     }
   for (const s of sales) {
     const row = byBook.get(s.bookId) ?? { name: s.bookName, ordered: 0, given: 0, sold: 0 };
-    row.sold += s.quantity;
+    row.sold += s.quantity - s.totalReturnedQuantity;
     byBook.set(s.bookId, row);
   }
   const books = [...byBook.values()].sort((a, b) => b.ordered + b.sold - (a.ordered + a.sold));
@@ -163,10 +171,14 @@ export default async function BookReportsPage({ searchParams }: { searchParams: 
             <div className="text-sm font-semibold text-white/80">All book income{from || to ? " in these dates" : ""}</div>
             <div className="mt-3 grid grid-cols-2 gap-4 lg:grid-cols-4">
               {[
-                { label: "Total sold", value: money([...orderTotal, ...saleTotal]) },
-                { label: "Received", value: money([...orderReceived, ...saleReceived]) },
+                { label: "Total sold", value: money([...orderTotal, ...saleTotal]), sub: refundedLine },
+                { label: "Received", value: money([...orderReceived, ...saleReceived]), sub: refundedLine },
                 { label: "Balance to collect", value: money([...orderBalance, ...saleBalance]) },
-                { label: "Copies", value: String(orderCopies + saleCopies), sub: `${orderCopies} ordered · ${saleCopies} sold` },
+                {
+                  label: "Copies",
+                  value: String(orderCopies + saleCopies),
+                  sub: `${orderCopies} ordered · ${saleCopies} sold${returnedCopies > 0 ? ` · ${returnedCopies} returned` : ""}`,
+                },
               ].map((item) => (
                 <div key={item.label} className="min-w-0 rounded-xl bg-white/[0.08] px-4 py-3 ring-1 ring-white/15">
                   <div className="text-xs text-white/75">{item.label}</div>
@@ -213,19 +225,23 @@ export default async function BookReportsPage({ searchParams }: { searchParams: 
               ) : (
                 <>
                   <div className="grid grid-cols-2 gap-4">
-                    <Figure label="Sales" value={sales.length} sub={plural(saleCopies, "copy", "copies")} />
-                    <Figure label="Total" value={money(saleTotal)} />
-                    <Figure label="Received" value={money(saleReceived)} sub={`Refunded ${money(saleRefunded)}`} />
+                    <Figure
+                      label="Sales"
+                      value={sales.length}
+                      sub={`${plural(saleCopies, "copy", "copies")}${refundedSales > 0 ? ` · ${refundedSales} refunded` : ""}`}
+                    />
+                    <Figure label="Total" value={money(saleTotal)} sub={refundedLine} />
+                    <Figure label="Received" value={money(saleReceived)} sub={refundedLine} />
                     <Figure label="Balance" value={money(saleBalance)} />
                   </div>
                   <div className="mt-4">
                     <div className="mb-1 flex justify-between text-xs">
                       <span className="font-semibold text-ink">Fully paid</span>
                       <span className="tabular-nums text-muted">
-                        {salesFullyPaid} of {sales.length}
+                        {salesFullyPaid} of {sales.length - refundedSales}
                       </span>
                     </div>
-                    <Bar value={salesFullyPaid} max={sales.length} />
+                    <Bar value={salesFullyPaid} max={sales.length - refundedSales} />
                   </div>
                 </>
               )}

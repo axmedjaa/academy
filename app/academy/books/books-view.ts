@@ -1,4 +1,5 @@
 import { formatMoney } from "@/lib/ui/money";
+import { getStatusTone } from "@/lib/ui/status";
 import {
   BOOK_ORDER_PAYMENT_STATUS_LABEL,
   BOOK_ORDER_STATUS_LABEL,
@@ -23,6 +24,22 @@ export const orderPaymentBadge = (status: BookOrderPaymentStatus) => ({ label: B
 /** Order status as staff read it: open (active) or cancelled. */
 export const buyerOrderStatusBadge = (status: BookOrderStatus) =>
   status === "cancelled" ? { label: "Cancelled", tone: "gray" as Tone } : { label: "Open", tone: "blue" as Tone };
+
+/**
+ * A Sell sale's badge. A refund never changes the stored payment status
+ * (the sale was still paid at the time), so a refunded sale would otherwise
+ * keep showing a green "Paid": all money back reads "Refunded", some back
+ * reads "Partly refunded".
+ */
+export function saleStatusBadge(sale: { paymentStatus: string; totalPaidCents: number; totalRefundedCents: number }): {
+  label: string;
+  tone: Tone;
+} {
+  if (sale.totalRefundedCents > 0 && sale.totalRefundedCents >= sale.totalPaidCents) return { label: "Refunded", tone: "slate" };
+  if (sale.totalRefundedCents > 0) return { label: "Partly refunded", tone: "amber" };
+  // Not refunded: unchanged from before (the shared status colours).
+  return { label: sale.paymentStatus, tone: getStatusTone(sale.paymentStatus) };
+}
 
 /** How many of the ordered copies were given to the buyer. */
 export type IssueStatus = "not_given" | "partly_given" | "all_given";
