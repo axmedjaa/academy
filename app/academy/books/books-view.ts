@@ -31,14 +31,33 @@ export const buyerOrderStatusBadge = (status: BookOrderStatus) =>
  * keep showing a green "Paid": all money back reads "Refunded", some back
  * reads "Partly refunded".
  */
-export function saleStatusBadge(sale: { paymentStatus: string; totalPaidCents: number; totalRefundedCents: number }): {
-  label: string;
-  tone: Tone;
-} {
-  if (sale.totalRefundedCents > 0 && sale.totalRefundedCents >= sale.totalPaidCents) return { label: "Refunded", tone: "slate" };
-  if (sale.totalRefundedCents > 0) return { label: "Partly refunded", tone: "amber" };
+type SaleRefundFields = { paymentStatus: string; totalPaidCents: number; totalRefundedCents: number };
+
+/** Whether a Sell sale had money given back: all of it, some, or none. */
+export function saleRefundState(sale: SaleRefundFields): "refunded" | "partly_refunded" | null {
+  if (sale.totalRefundedCents <= 0) return null;
+  return sale.totalRefundedCents >= sale.totalPaidCents ? "refunded" : "partly_refunded";
+}
+
+export function saleStatusBadge(sale: SaleRefundFields): { label: string; tone: Tone } {
+  const refund = saleRefundState(sale);
+  if (refund === "refunded") return { label: "Refunded", tone: "slate" };
+  if (refund === "partly_refunded") return { label: "Partly refunded", tone: "amber" };
   // Not refunded: unchanged from before (the shared status colours).
   return { label: sale.paymentStatus, tone: getStatusTone(sale.paymentStatus) };
+}
+
+/**
+ * The Sell list's status filter, matching what the badge shows: "refunded"
+ * finds every sale with money given back (all or part); a payment status
+ * ("paid", ...) finds only sales with no refund, so a refunded sale is no
+ * longer listed under "Paid". "owing" (balance still due) is handled by the
+ * caller from `remainingCents`.
+ */
+export function saleMatchesStatus(sale: SaleRefundFields, status: string): boolean {
+  const refund = saleRefundState(sale);
+  if (status === "refunded") return refund !== null;
+  return refund === null && sale.paymentStatus === status;
 }
 
 /** How many of the ordered copies were given to the buyer. */

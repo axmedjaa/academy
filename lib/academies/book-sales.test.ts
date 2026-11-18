@@ -25,7 +25,7 @@ import { addBookSalePayment, computeBookSalePricing, createBookSale, listBookSal
 import { getFinanceReports, subtractByCurrency } from "./finance-reports";
 import { partiallyReverseIncomeRecord, reverseIncomeRecord } from "./finance-reversals";
 import { listIncomeRecords } from "./income-records";
-import { saleStatusBadge } from "@/app/academy/books/books-view";
+import { saleMatchesStatus, saleStatusBadge } from "@/app/academy/books/books-view";
 
 // `createBook` (used by `insertBookDirect` below) now requires a verified
 // cover — same mock pattern as lib/academies/books.test.ts.
@@ -425,6 +425,25 @@ describe("listBookSales — history enrichment", () => {
     expect(saleStatusBadge(fullRow)).toEqual({ label: "Refunded", tone: "slate" });
     expect(saleStatusBadge(partRow)).toEqual({ label: "Partly refunded", tone: "amber" });
     expect(saleStatusBadge({ paymentStatus: "paid", totalPaidCents: 1000, totalRefundedCents: 0 })).toEqual({ label: "paid", tone: "green" });
+  });
+
+  it("the Sell list status filter matches the badge: refunded sales are under Refunded, not Paid", () => {
+    const paid = { paymentStatus: "paid", totalPaidCents: 1000, totalRefundedCents: 0 };
+    const full = { paymentStatus: "paid", totalPaidCents: 1000, totalRefundedCents: 1000 };
+    const part = { paymentStatus: "paid", totalPaidCents: 1000, totalRefundedCents: 400 };
+    const unpaid = { paymentStatus: "unpaid", totalPaidCents: 0, totalRefundedCents: 0 };
+
+    expect(saleMatchesStatus(paid, "paid")).toBe(true);
+    expect(saleMatchesStatus(full, "paid")).toBe(false);
+    expect(saleMatchesStatus(part, "paid")).toBe(false);
+    expect(saleMatchesStatus(unpaid, "paid")).toBe(false);
+
+    expect(saleMatchesStatus(full, "refunded")).toBe(true);
+    expect(saleMatchesStatus(part, "refunded")).toBe(true);
+    expect(saleMatchesStatus(paid, "refunded")).toBe(false);
+    expect(saleMatchesStatus(unpaid, "refunded")).toBe(false);
+
+    expect(saleMatchesStatus(unpaid, "unpaid")).toBe(true);
   });
 
   it("resolves recordedByLabel to the manager's current role label", async () => {
