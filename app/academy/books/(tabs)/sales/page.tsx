@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import type { BookSaleListRow } from "@/lib/academies/book-sales";
 import { formatMoney } from "@/lib/ui/money";
 import { formatDate } from "@/lib/ui/date";
-import { saleStatusBadge } from "../../books-view";
+import { saleMatchesStatus, saleStatusBadge } from "../../books-view";
 import { Badge, EmptyState, PageMessage, Section } from "@/app/academy/_shell/ui";
 import { ChipParamFilter, ClearFilters, DateParamField, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
 import { Icon } from "@/app/academy/_shell/icons";
@@ -60,7 +60,7 @@ export default async function BookSalesPage({
   const filtered = all.filter((sale) => {
     if (q && !`${sale.id} ${buyerOf(sale)} ${sale.bookName}`.toLowerCase().includes(q)) return false;
     if (status === "owing" && sale.remainingCents <= 0) return false;
-    if (status && status !== "owing" && sale.paymentStatus !== status) return false;
+    if (status && status !== "owing" && !saleMatchesStatus(sale, status)) return false;
     if (bookId && sale.bookId !== bookId) return false;
     if (method && sale.latestPaymentMethod !== method) return false;
     if (from && sale.createdAt < from) return false;
@@ -127,6 +127,7 @@ export default async function BookSalesPage({
                   { value: "", label: "All" },
                   { value: "owing", label: "Balance due" },
                   { value: "paid", label: "Paid" },
+                  { value: "refunded", label: "Refunded" },
                 ]}
               />
               <FilterDropdown
