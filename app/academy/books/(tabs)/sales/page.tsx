@@ -98,8 +98,8 @@ export default async function BookSalesPage({
             <h3 className="text-lg font-bold">Out of stock?</h3>
           </div>
           <p className="leading-normal text-[#4B5563]">
-            <b className="text-ink">Create an order for the buyer.</b> Stock goes up when you mark the order received, and you can then give the
-            books to the buyer from the order.
+            <b className="text-ink">Create an order for the buyer.</b> When the copies arrive, add them on the Stock tab with Add stock, then
+            give the books to the buyer from the order.
           </p>
           <GatedAction need="canManageOrders" dialog={{ kind: "order" }} variant="secondary" className="self-start px-5">
             New Order
