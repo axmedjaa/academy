@@ -7,6 +7,7 @@ import { getBookCoverKey } from "@/lib/storage/keys";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
+  addBookStock,
   createBook,
   getBook,
   getStockStatus,
@@ -330,6 +331,76 @@ describe("updateBook / listBooks / getBook — tenant isolation", () => {
       .from(auditLogs)
       .where(and(eq(auditLogs.action, "bookStockChanged"), eq(auditLogs.entityId, created.book.id)));
     expect(stockChangedRowsForBookAfter.length).toBe(1);
+  });
+});
+
+describe("addBookStock — copies that arrived", () => {
+  it("raises stock by the quantity and audits it with the note", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const created = await createTestBook(context, academyId, { stockQuantity: 3 });
+    if (!created.ok) throw new Error("expected ok");
+
+    const result = await addBookStock(context, created.book.id, { quantity: 12, note: "Delivery from supplier" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.book.stockQuantity).toBe(15);
+      expect(result.added).toBe(12);
+    }
+
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.action, "bookStockChanged"), eq(auditLogs.entityId, created.book.id)));
+    expect(audit.before).toEqual({ stockQuantity: 3 });
+    expect(audit.after).toEqual({ stockQuantity: 15 });
+    expect(audit.context).toMatchObject({ source: "stock_added", delta: 12, note: "Delivery from supplier" });
+  });
+
+  it("two additions at the same time both count (no lost update)", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const created = await createTestBook(context, academyId, { stockQuantity: 0 });
+    if (!created.ok) throw new Error("expected ok");
+
+    const [a, b] = await Promise.all([
+      addBookStock(context, created.book.id, { quantity: 5 }),
+      addBookStock(context, created.book.id, { quantity: 7 }),
+    ]);
+    expect(a.ok && b.ok).toBe(true);
+    const got = await getBook(context, created.book.id);
+    expect(got.ok && got.book.stockQuantity).toBe(12);
+  });
+
+  it("rejects zero, negative, fractional and oversized quantities without changing stock", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const created = await createTestBook(context, academyId, { stockQuantity: 4 });
+    if (!created.ok) throw new Error("expected ok");
+
+    for (const quantity of [0, -3, 1.5, 100_001]) {
+      const result = await addBookStock(context, created.book.id, { quantity });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("validation");
+    }
+    const got = await getBook(context, created.book.id);
+    expect(got.ok && got.book.stockQuantity).toBe(4);
+  });
+
+  it("is refused for a role without book management, and for another academy's book", async () => {
+    const owner = await setupAcademy("manager");
+    const created = await createTestBook(owner.context, owner.academyId, { stockQuantity: 2 });
+    if (!created.ok) throw new Error("expected ok");
+
+    const trainer = await setupAcademy("trainer");
+    const refused = await addBookStock(trainer.context, created.book.id, { quantity: 5 });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.error.code).toBe("forbidden");
+
+    const other = await setupAcademy("manager");
+    const notFound = await addBookStock(other.context, created.book.id, { quantity: 5 });
+    expect(notFound.ok).toBe(false);
+    if (!notFound.ok) expect(notFound.error.code).toBe("not_found");
+
+    const got = await getBook(owner.context, created.book.id);
+    expect(got.ok && got.book.stockQuantity).toBe(2);
   });
 });
 

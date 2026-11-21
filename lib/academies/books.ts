@@ -1,4 +1,4 @@
-import { and, eq, ilike, or } from "drizzle-orm";
+import { and, eq, ilike, or, sql } from "drizzle-orm";
 import { checkStorageAllowance, enforceStoredUploadWithinAllowance, storageFullMessage } from "@/lib/subscriptions/usage";
 import { viewOnlyWithoutAllBranches } from "@/lib/academies/branch-access";
 import { z } from "zod";
@@ -363,6 +363,74 @@ export async function updateBook(actorContext: AuthContext, bookId: string, inpu
 
   if (!result) return { ok: false, error: NOT_FOUND };
   return { ok: true, book: toBookRecord(result) };
+}
+
+/** Most copies one "Add stock" entry may add (a typing guard, not a business limit). */
+export const MAX_STOCK_ADDITION = 100_000;
+
+export const addBookStockSchema = z.object({
+  quantity: z
+    .number()
+    .int("Enter a whole number of copies")
+    .min(1, "Add at least 1 copy")
+    .max(MAX_STOCK_ADDITION, `Add at most ${MAX_STOCK_ADDITION.toLocaleString("en-US")} copies at a time`),
+  note: optionalText(300),
+});
+
+export type AddBookStockInput = z.input<typeof addBookStockSchema>;
+
+export type AddBookStockResult = { ok: true; book: BookRecord; added: number } | { ok: false; error: BookActionError };
+
+/**
+ * New copies arrived (a delivery, a reprint, books found): stock goes UP by
+ * `quantity`. The increment is done in SQL (`stock + n`), so a sale saved at
+ * the same moment is never lost. Recorded as a `bookStockChanged` audit event
+ * with source "stock_added", the copies added and the optional note.
+ */
+export async function addBookStock(actorContext: AuthContext, bookId: string, input: AddBookStockInput): Promise<AddBookStockResult> {
+  const resolved = await resolveBooksAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, membershipRole, permissionLevel } = resolved.access;
+  if (!canManage(permissionLevel)) return { ok: false, error: FORBIDDEN };
+
+  const parsedId = z.string().uuid().safeParse(bookId);
+  if (!parsedId.success) return { ok: false, error: NOT_FOUND };
+
+  const parsed = addBookStockSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid input." } };
+  }
+  const { quantity, note } = parsed.data;
+
+  const result = await db.transaction(async (tx) => {
+    const existing = await getScopedBook(tx, bookId, academyId);
+    if (!existing) return null;
+
+    const [row] = await tx
+      .update(books)
+      .set({ stockQuantity: sql`${books.stockQuantity} + ${quantity}`, updatedAt: new Date() })
+      .where(and(eq(books.id, bookId), eq(books.academyId, academyId)))
+      .returning();
+
+    await recordAudit(
+      {
+        actorUserId: actorContext.userId,
+        actorRole: membershipRole,
+        academyId,
+        action: "bookStockChanged",
+        entityType: "book",
+        entityId: row.id,
+        before: { stockQuantity: row.stockQuantity - quantity },
+        after: { stockQuantity: row.stockQuantity },
+        context: { source: "stock_added", delta: quantity, ...(note ? { note } : {}) },
+      },
+      tx,
+    );
+    return row;
+  });
+
+  if (!result) return { ok: false, error: NOT_FOUND };
+  return { ok: true, book: toBookRecord(result), added: quantity };
 }
 
 export type ListBooksResult = { ok: true; books: BookRecord[]; canManage: boolean } | { ok: false; error: BookActionError };

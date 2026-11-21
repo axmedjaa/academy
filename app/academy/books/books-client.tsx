@@ -7,6 +7,7 @@ import type { BookRecord } from "@/lib/academies/books";
 import type { BookSaleListRow } from "@/lib/academies/book-sales";
 import { getStockStatus } from "@/lib/academies/book-stock";
 import {
+  addBookStockAction,
   confirmBookCoverUploadAction,
   createBookAction,
   removeBookCoverAction,
@@ -131,6 +132,84 @@ export function AddBookButton() {
           />
         )}
       </DesignDialog>
+    </>
+  );
+}
+
+/**
+ * "Add stock": record copies that arrived (a delivery, a reprint). Stock goes
+ * up by the number entered; the change is kept in the audit log with the
+ * optional note. Shown only to staff who can manage books.
+ */
+export function AddStockButton({ book }: { book: Pick<BookRecord, "id" | "name" | "stockQuantity"> }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" className={ROW_BTN_PRIMARY} onClick={() => setOpen(true)}>
+        <Icon name="layers" width={16} height={16} />
+        Add stock
+      </button>
+      <ActionDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Add stock"
+        description="Record copies that arrived. Stock goes up by the number you enter."
+        summary={[
+          { label: "Book", value: book.name },
+          { label: "In stock now", value: book.stockQuantity },
+        ]}
+        submitLabel="Add stock"
+        pendingLabel="Adding…"
+        rules={[
+          {
+            name: "quantity",
+            label: "Copies to add",
+            required: true,
+            check: (value) => {
+              const v = value.trim();
+              if (!/^\d+$/.test(v) || Number(v) < 1) return "Enter a whole number of copies, at least 1.";
+              return Number(v) > 100_000 ? "Add at most 100,000 copies at a time." : null;
+            },
+          },
+        ]}
+        run={async (data) => {
+          try {
+            const quantity = Number(String(data.get("quantity") ?? "").trim());
+            const result = await addBookStockAction(book.id, {
+              quantity,
+              note: String(data.get("note") ?? "").trim() || undefined,
+            });
+            if (!result.ok) return result.error?.message ?? "The stock couldn't be added.";
+            showSuccessToast(`${quantity} ${quantity === 1 ? "copy" : "copies"} added. ${result.stockQuantity ?? ""} in stock now.`.trim());
+            setOpen(false);
+            router.refresh();
+            return null;
+          } catch {
+            return NETWORK_ERROR_MESSAGE;
+          }
+        }}
+        onDone={() => undefined}
+      >
+        {({ errors, blur }) => (
+          <>
+            <DField label="Copies to add" name="quantity" required error={errors.quantity}>
+              <input
+                type="text"
+                inputMode="numeric"
+                name="quantity"
+                autoFocus
+                onBlur={blur("quantity")}
+                className={controlClass(Boolean(errors.quantity))}
+                {...invalidProps("quantity", errors.quantity)}
+              />
+            </DField>
+            <DField label="Note" name="note" hint="Optional. For example: delivery from the supplier.">
+              <input type="text" name="note" maxLength={300} className={controlClass(false)} />
+            </DField>
+          </>
+        )}
+      </ActionDialog>
     </>
   );
 }
