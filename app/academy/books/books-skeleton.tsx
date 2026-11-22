@@ -472,9 +472,18 @@ export function NavRightSkeleton() {
 export function StockSkeleton() {
   return (
     <>
-      <SkeletonChips count={4} />
-      <span aria-hidden="true" className={`${SEARCH} mb-6`} />
-      <SkeletonTable headers={["Book", "Price", "In stock", "Sales (30 days)", "Level"]} avatar stackBelow={600} />
+      {/* Stock overview: headline, level bar and the five level filters. */}
+      <div aria-hidden="true" className="mb-6 rounded-card border border-border bg-surface p-4 shadow-card sm:p-6">
+        <Bone className="h-6 w-56" />
+        <Bone className="mt-4 h-3 w-full rounded-full" />
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <Bone key={i} className="h-14 rounded-lg" />
+          ))}
+        </div>
+      </div>
+      <span aria-hidden="true" className={`${SEARCH} mb-4`} />
+      <SkeletonTable headers={["Book", "In stock", "Sold (30 days)", "Price", ""]} avatar stackBelow={760} />
     </>
   );
 }
