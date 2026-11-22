@@ -1,4 +1,4 @@
-import { and, asc, count, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
+import { and, eq, ilike, inArray, isNull, or, type SQL } from "drizzle-orm";
 import { LIST_PAGE_SIZE_MAX } from "@/lib/ui/pagination";
 import { db } from "@/lib/db";
 import { batchEnrollments, batches, courses, enrollmentFeeSchedules, feePeriods, programEnrollments, programs, students } from "@/lib/db/schema";
@@ -18,7 +18,9 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 
 /**
  * Fee periods page (design A14): one row per ACTIVE enrollment the caller
- * can see, with its payment plan and where it stands today.
+ * can see, with its payment plan and where it stands today. A whole-program
+ * enrollment is ONE row with the program fee; the courses it covers have no
+ * fee of their own and get no row.
  *
  * Gated on the fee-periods permission row (view or above) and scoped with
  * the students list's own `resolveScope`, so branch-limited roles and
@@ -29,7 +31,12 @@ import type { AuthContext } from "@/lib/auth/auth-context";
  */
 
 export interface FeePeriodOverviewRow {
+  /** The course enrollment id, or for a whole-program row the program
+   * enrollment id. */
   enrollmentId: string;
+  /** "program": a whole-program enrollment with its ONE program fee
+   * (`courseName` holds the program name); its courses have no own row. */
+  kind: "course" | "program";
   studentId: string;
   studentName: string;
   studentNumber: string;
@@ -76,72 +83,97 @@ export async function listFeePeriodOverview(
     ...scope.conditions,
     eq(batchEnrollments.academyId, academyId),
     eq(batchEnrollments.status, "active"),
+    // A course taken as part of a whole program has no fee of its own: the
+    // ONE program fee is shown on the program row below instead.
+    isNull(batchEnrollments.programEnrollmentId),
+  ];
+  const programConditions: SQL[] = [
+    ...scope.conditions,
+    eq(programEnrollments.academyId, academyId),
+    eq(programEnrollments.status, "active"),
   ];
   const term = options.searchTerm?.trim();
   if (term) {
     const pattern = `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%`;
-    conditions.push(or(ilike(students.fullName, pattern), ilike(students.studentNumber, pattern))!);
+    const match = or(ilike(students.fullName, pattern), ilike(students.studentNumber, pattern))!;
+    conditions.push(match);
+    programConditions.push(match);
   }
 
-  const base = db
-    .select({
-      enrollmentId: batchEnrollments.id,
-      studentId: students.id,
-      studentName: students.fullName,
-      studentNumber: students.studentNumber,
-      batchCode: batches.code,
-      batchName: batches.name,
-      courseName: courses.name,
-    })
-    .from(batchEnrollments)
-    .innerJoin(students, eq(students.id, batchEnrollments.studentId))
-    .innerJoin(batches, and(eq(batches.id, batchEnrollments.batchId), eq(batches.academyId, academyId)))
-    .innerJoin(courses, and(eq(courses.id, batchEnrollments.courseId), eq(courses.academyId, academyId)))
-    .where(and(...conditions))
-    .orderBy(asc(students.fullName), asc(batches.code), asc(courses.name));
-
-  // A status filter needs every row's figures first; otherwise only the page.
-  const enrollmentRows = options.status ? await base : await base.limit(pageSize).offset((page - 1) * pageSize);
-  let totalCount = enrollmentRows.length;
-  if (!options.status) {
-    const [{ value }] = await db
-      .select({ value: count() })
+  // Course rows and program rows share one list (sorted by student, then
+  // batch), so both are read in full and paged here.
+  const [courseRows, programRows] = await Promise.all([
+    db
+      .select({
+        enrollmentId: batchEnrollments.id,
+        studentId: students.id,
+        studentName: students.fullName,
+        studentNumber: students.studentNumber,
+        batchCode: batches.code,
+        batchName: batches.name,
+        courseName: courses.name,
+      })
       .from(batchEnrollments)
       .innerJoin(students, eq(students.id, batchEnrollments.studentId))
       .innerJoin(batches, and(eq(batches.id, batchEnrollments.batchId), eq(batches.academyId, academyId)))
       .innerJoin(courses, and(eq(courses.id, batchEnrollments.courseId), eq(courses.academyId, academyId)))
-      .where(and(...conditions));
-    totalCount = Number(value);
-  }
-  if (enrollmentRows.length === 0) return { ...empty, totalCount };
-
-  const enrollmentIds = enrollmentRows.map((row) => row.enrollmentId);
-  const [schedules, periods] = await Promise.all([
+      .where(and(...conditions)),
     db
-      .select()
-      .from(enrollmentFeeSchedules)
-      .where(and(eq(enrollmentFeeSchedules.academyId, academyId), inArray(enrollmentFeeSchedules.enrollmentId, enrollmentIds))),
-    db
-      .select()
-      .from(feePeriods)
-      .where(and(eq(feePeriods.academyId, academyId), inArray(feePeriods.enrollmentId, enrollmentIds))),
+      .select({
+        enrollmentId: programEnrollments.id,
+        studentId: students.id,
+        studentName: students.fullName,
+        studentNumber: students.studentNumber,
+        batchCode: batches.code,
+        batchName: batches.name,
+        courseName: programs.name,
+      })
+      .from(programEnrollments)
+      .innerJoin(students, eq(students.id, programEnrollments.studentId))
+      .innerJoin(batches, and(eq(batches.id, programEnrollments.batchId), eq(batches.academyId, academyId)))
+      .innerJoin(programs, and(eq(programs.id, programEnrollments.programId), eq(programs.academyId, academyId)))
+      .where(and(...programConditions)),
   ]);
-  const scheduleByEnrollment = new Map(schedules.map((row) => [row.enrollmentId, row]));
-  const periodsByEnrollment = new Map<string, typeof periods>();
-  for (const period of periods) {
-    // Selected by course enrollment id above; the guard only narrows the type.
-    if (!period.enrollmentId) continue;
-    const list = periodsByEnrollment.get(period.enrollmentId) ?? [];
+  if (courseRows.length === 0 && programRows.length === 0) return empty;
+
+  const courseIds = courseRows.map((row) => row.enrollmentId);
+  const programIds = programRows.map((row) => row.enrollmentId);
+  const [courseSchedules, programSchedules, coursePeriods, programPeriods] = await Promise.all([
+    courseIds.length
+      ? db.select().from(enrollmentFeeSchedules).where(and(eq(enrollmentFeeSchedules.academyId, academyId), inArray(enrollmentFeeSchedules.enrollmentId, courseIds)))
+      : [],
+    programIds.length
+      ? db
+          .select()
+          .from(enrollmentFeeSchedules)
+          .where(and(eq(enrollmentFeeSchedules.academyId, academyId), inArray(enrollmentFeeSchedules.programEnrollmentId, programIds)))
+      : [],
+    courseIds.length ? db.select().from(feePeriods).where(and(eq(feePeriods.academyId, academyId), inArray(feePeriods.enrollmentId, courseIds))) : [],
+    programIds.length
+      ? db.select().from(feePeriods).where(and(eq(feePeriods.academyId, academyId), inArray(feePeriods.programEnrollmentId, programIds)))
+      : [],
+  ]);
+
+  // Schedules and periods keyed by the row's own id: the course enrollment
+  // for a course row, the program enrollment for a program row.
+  const scheduleByRow = new Map<string, (typeof courseSchedules)[number]>();
+  for (const row of courseSchedules) if (row.enrollmentId) scheduleByRow.set(row.enrollmentId, row);
+  for (const row of programSchedules) if (row.programEnrollmentId) scheduleByRow.set(row.programEnrollmentId, row);
+  const periodsByRow = new Map<string, typeof coursePeriods>();
+  for (const period of [...coursePeriods, ...programPeriods]) {
+    const key = period.enrollmentId ?? period.programEnrollmentId;
+    if (!key) continue;
+    const list = periodsByRow.get(key) ?? [];
     list.push(period);
-    periodsByEnrollment.set(period.enrollmentId, list);
+    periodsByRow.set(key, list);
   }
-  const paidByPeriod = await getApprovedPaidCentsByPeriod(db, periods.map((row) => row.id));
+  const paidByPeriod = await getApprovedPaidCentsByPeriod(db, [...coursePeriods, ...programPeriods].map((row) => row.id));
   const today = todayDateOnly();
 
-  let rows: FeePeriodOverviewRow[] = enrollmentRows.map((row) => {
-    const schedule = scheduleByEnrollment.get(row.enrollmentId) ?? null;
+  const toRow = (kind: "course" | "program") => (row: (typeof courseRows)[number]): FeePeriodOverviewRow => {
+    const schedule = scheduleByRow.get(row.enrollmentId) ?? null;
     const relevant = selectRelevantPeriods(
-      (periodsByEnrollment.get(row.enrollmentId) ?? []).sort((a, b) => compareDateOnly(a.periodStart, b.periodStart)),
+      (periodsByRow.get(row.enrollmentId) ?? []).sort((a, b) => compareDateOnly(a.periodStart, b.periodStart)),
       today,
     );
     const aggregate = aggregateEnrollmentPeriods(relevant, paidByPeriod, today);
@@ -153,6 +185,7 @@ export async function listFeePeriodOverview(
     }, 0);
     return {
       ...row,
+      kind,
       schedule: schedule
         ? { intervalMonths: schedule.intervalMonths, amountCents: schedule.amountCents, currency: schedule.currency, anchorDate: schedule.anchorDate }
         : null,
@@ -163,13 +196,18 @@ export async function listFeePeriodOverview(
       status: aggregate.status,
       hasStarted: relevant.some((period) => compareDateOnly(period.periodStart, today) <= 0),
     };
-  });
+  };
 
-  if (options.status) {
-    rows = rows.filter((row) => row.status === options.status);
-    totalCount = rows.length;
-    rows = rows.slice((page - 1) * pageSize, page * pageSize);
-  }
+  let rows: FeePeriodOverviewRow[] = [...courseRows.map(toRow("course")), ...programRows.map(toRow("program"))].sort(
+    (a, b) =>
+      a.studentName.localeCompare(b.studentName) ||
+      a.batchCode.localeCompare(b.batchCode) ||
+      (a.kind === b.kind ? 0 : a.kind === "program" ? -1 : 1) ||
+      a.courseName.localeCompare(b.courseName),
+  );
+  if (options.status) rows = rows.filter((row) => row.status === options.status);
+  const totalCount = rows.length;
+  rows = rows.slice((page - 1) * pageSize, page * pageSize);
   return { ok: true, rows, totalCount, page, pageSize, canManage };
 }
 

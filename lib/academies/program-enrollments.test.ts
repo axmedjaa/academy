@@ -30,11 +30,11 @@ import {
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
-import { createBatch, updateBatch } from "./batches";
+import { createBatch, listBatches, updateBatch } from "./batches";
 import { enrollStudentInBatch, withdrawStudentFromBatch } from "./batch-assignments";
 import { listEnrollmentsForStudent, recordEnrollmentPayment, setEnrollmentFeeSchedule } from "./fee-periods";
 import { getFinanceReports } from "./finance-reports";
-import { getFeeCollectionSummary, getProgramFeeCollectionSummary } from "./fee-period-overview";
+import { getFeeCollectionSummary, getProgramFeeCollectionSummary, listFeePeriodOverview } from "./fee-period-overview";
 import { issueReceipt } from "./student-payments";
 import { getReceiptPrintData } from "./receipt-print";
 import { reverseStudentPayment } from "./finance-reversals";
@@ -715,5 +715,126 @@ describe("program courses leave only with their program", () => {
     expect(rows.every((row) => row.status === "withdrawn")).toBe(true);
     const [program] = await db.select().from(programEnrollments).where(eq(programEnrollments.id, enrolled.enrollment.id));
     expect(program.status).toBe("withdrawn");
+  });
+});
+
+describe("Fee periods page — a program student is ONE row with the program fee", () => {
+  it("shows the program fee and its payments (Paid once fully paid); the program's courses get no row of their own", async () => {
+    const studentId = await newStudent(f);
+    const [{ studentNumber }] = await db.select({ studentNumber: students.studentNumber }).from(students).where(eq(students.id, studentId));
+    // $45 in 3 monthly installments from 2026-10-09: two have started by now.
+    const enrolled = await enroll(f, studentId, { programFeeCents: 4_500, installments: 3 });
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+
+    const before = await listFeePeriodOverview(f.owner, { searchTerm: studentNumber });
+    if (!before.ok) throw new Error(before.error.message);
+    expect(before.rows).toHaveLength(1);
+    expect(before.rows[0]).toMatchObject({ kind: "program", enrollmentId: enrolled.enrollment.id, courseName: "Full Stack Development", paidCents: 0 });
+    expect(before.rows[0].schedule).toMatchObject({ amountCents: 4_500, intervalMonths: 3 });
+    expect(before.rows[0].status).not.toBe("paid");
+
+    const paid = await pay(f, enrolled.enrollment.id, 4_500);
+    expect(paid.ok).toBe(true);
+    const after = await listFeePeriodOverview(f.owner, { searchTerm: studentNumber });
+    if (!after.ok) throw new Error(after.error.message);
+    expect(after.rows).toHaveLength(1);
+    expect(after.rows[0].status).toBe("paid");
+    expect(after.rows[0].paidCents).toBe(after.rows[0].dueCents);
+    expect(after.rows[0].remainingCents).toBe(0);
+
+    const paidFilter = await listFeePeriodOverview(f.owner, { searchTerm: studentNumber, status: "paid" });
+    const unpaidFilter = await listFeePeriodOverview(f.owner, { searchTerm: studentNumber, status: "unpaid" });
+    expect(paidFilter.ok && paidFilter.rows.length).toBe(1);
+    expect(unpaidFilter.ok && unpaidFilter.rows.length).toBe(0);
+  });
+
+  it("an individual course enrollment still shows its own course row", async () => {
+    const studentId = await newStudent(f);
+    const [{ studentNumber }] = await db.select({ studentNumber: students.studentNumber }).from(students).where(eq(students.id, studentId));
+    const enrolled = await enrollStudentInBatch(f.owner, {
+      batchId: f.courseBatchId,
+      studentId,
+      courseIds: [f.courseBatchCourseId],
+      paymentPlan: { intervalMonths: 1, amountCents: 2_000 },
+    });
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    const listed = await listFeePeriodOverview(f.owner, { searchTerm: studentNumber });
+    if (!listed.ok) throw new Error(listed.error.message);
+    expect(listed.rows.map((row) => [row.kind, row.courseName])).toEqual([["course", "Java"]]);
+  });
+});
+
+describe("Edit batch — type and program change only while no student is enrolled", () => {
+  it("an empty batch can switch program -> course-based -> program; a batch with students can't", async () => {
+    const created = await createBatch(f.owner, {
+      branchId: f.branchId,
+      courseIds: [f.programCourseIds[0]],
+      programId: f.programId,
+      name: "Empty program batch",
+      code: `EP-${randomUUID().slice(0, 6)}`,
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    const id = created.batch.id;
+    const base = { branchId: f.branchId, name: "Empty program batch", code: created.batch.code };
+    const listedFlag = async (batchId: string) => {
+      const listed = await listBatches(f.owner);
+      if (!listed.ok) throw new Error(listed.error.message);
+      return listed.batches.find((b) => b.id === batchId)?.hasEnrollments;
+    };
+    expect(await listedFlag(id)).toBe(false);
+
+    const toCourse = await updateBatch(f.owner, id, { ...base, batchType: "course", courseIds: [f.courseBatchCourseId] });
+    expect(toCourse.ok).toBe(true);
+    let [row] = await db.select().from(batches).where(eq(batches.id, id));
+    expect(row.programId).toBeNull();
+    let courseRows = await db.select({ courseId: batchCourses.courseId }).from(batchCourses).where(eq(batchCourses.batchId, id));
+    expect(courseRows.map((r) => r.courseId)).toEqual([f.courseBatchCourseId]);
+
+    const toProgram = await updateBatch(f.owner, id, { ...base, batchType: "program", programId: f.programId, courseIds: [f.courseBatchCourseId] });
+    expect(toProgram.ok).toBe(true);
+    [row] = await db.select().from(batches).where(eq(batches.id, id));
+    expect(row.programId).toBe(f.programId);
+    courseRows = await db.select({ courseId: batchCourses.courseId }).from(batchCourses).where(eq(batchCourses.batchId, id));
+    expect(courseRows.map((r) => r.courseId).sort()).toEqual([...f.programCourseIds].sort());
+
+    // Without a batch type the batch keeps its type and program (older callers).
+    const keep = await updateBatch(f.owner, id, { ...base, name: "Renamed", courseIds: [f.programCourseIds[0]] });
+    expect(keep.ok).toBe(true);
+    [row] = await db.select().from(batches).where(eq(batches.id, id));
+    expect(row.programId).toBe(f.programId);
+
+    // A batch with a program student keeps its type and program.
+    const studentId = await newStudent(f);
+    const enrolled = await enroll(f, studentId, { batchId: id });
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    expect(await listedFlag(id)).toBe(true);
+    const refused = await updateBatch(f.owner, id, { ...base, batchType: "course", courseIds: [f.courseBatchCourseId] });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error.code).toBe("conflict");
+      expect(refused.error.message).toMatch(/type and program can't change/);
+    }
+    [row] = await db.select().from(batches).where(eq(batches.id, id));
+    expect(row.programId).toBe(f.programId);
+  });
+
+  it("refuses switching to another academy's program", async () => {
+    const created = await createBatch(f.owner, {
+      branchId: f.branchId,
+      courseIds: [f.courseBatchCourseId],
+      name: "Empty course batch",
+      code: `EC-${randomUUID().slice(0, 6)}`,
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    const result = await updateBatch(f.owner, created.batch.id, {
+      branchId: f.branchId,
+      name: "Empty course batch",
+      code: created.batch.code,
+      batchType: "program",
+      programId: other.programId,
+      courseIds: [f.courseBatchCourseId],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
   });
 });

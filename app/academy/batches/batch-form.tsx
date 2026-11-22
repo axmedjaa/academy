@@ -232,10 +232,11 @@ function BatchFields({
   const branchOptions = branches.filter((branch) => branch.status === "active" || branch.id === batch?.branchId);
   const courseOptions = courses.filter((course) => course.status === "active" || batch?.courseIds.includes(course.id));
 
-  // Type and program are fixed once the batch exists.
+  // Type and program can change until a student is enrolled in the batch
+  // (the server checks again). Unknown enrollment state = locked.
   const [batchType, setBatchType] = useState<BatchType>(batch?.programId ? "program" : "course");
   const [programId, setProgramId] = useState(batch?.programId ?? "");
-  const typeLocked = Boolean(batch);
+  const typeLocked = batch ? batch.hasEnrollments !== false : false;
 
   // Programs that have at least one active course (only those can make a batch).
   const programOptions = useMemo(() => {
@@ -258,7 +259,8 @@ function BatchFields({
     batchType === "program"
       ? [
           ...new Set([
-            ...(batch?.courseIds ?? []),
+            // Only the batch's current courses of this same program are kept.
+            ...(batch && programId === batch.programId ? batch.courseIds : []),
             ...courses.filter((course) => course.programId === programId && course.status === "active").map((course) => course.id),
           ]),
         ]
@@ -306,7 +308,7 @@ function BatchFields({
     >
       {batch && <input type="hidden" name="batchId" value={batch.id} />}
       <input type="hidden" name="batchType" value={batchType} />
-      {/* The server reads it only on create; an existing batch keeps its program. */}
+      {/* On edit the server changes the program only while no student is enrolled. */}
       {batchType === "program" && <input type="hidden" name="programId" value={programId} />}
       {courseIds.map((id) => (
         <input key={id} type="hidden" name="courseIds" value={id} />
@@ -356,10 +358,12 @@ function BatchFields({
             </div>
             <span className="text-xs font-normal text-muted">
               {typeLocked
-                ? "The batch type can't change after the batch is created."
-                : batchType === "program"
-                  ? "Every active course of the program is included. Program students pay one program fee."
-                  : "Pick individual courses. Each enrolled course has its own fee."}
+                ? "Students are enrolled, so the batch type and program can't change."
+                : batch
+                  ? "No students yet, so the type and program can still change."
+                  : batchType === "program"
+                    ? "Every active course of the program is included. Program students pay one program fee."
+                    : "Pick individual courses. Each enrolled course has its own fee."}
             </span>
           </div>
 
@@ -596,7 +600,7 @@ export function BatchFormDialog({
       title={batch ? "Edit batch" : "New batch"}
       description={
         batch
-          ? "Change the name, branch, courses or each course's dates. Students already enrolled keep their fee plan. A course that students, classes or exams use in this batch can't be removed."
+          ? "Change the name, branch, courses or each course's dates. Until a student is enrolled, the batch type and program can change too. Students already enrolled keep their fee plan. A course that students, classes or exams use in this batch can't be removed."
           : "Choose a course-based batch (pick courses) or a program-based batch (a whole program). Course dates are optional and set per course."
       }
     >

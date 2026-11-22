@@ -50,7 +50,7 @@ export default async function FeePeriodsPage({
 
   return (
     <div className={PAGE_WRAP}>
-      <PageHeader title="Fee periods" description="Installment schedules for enrolled students." />
+      <PageHeader title="Fee periods" description="Installment schedules for enrolled students. A whole-program enrollment shows one program fee." />
 
       <div className="mb-4">
         <ChipParamFilter
@@ -110,7 +110,9 @@ export default async function FeePeriodsPage({
                   </td>
                   <td className={rtTd} data-label="Batch">
                     <span className="font-semibold">{row.batchCode}</span>
-                    <span className="block text-xs text-muted">{row.courseName}</span>
+                    <span className="block text-xs text-muted">
+                      {row.kind === "program" ? `Program · ${row.courseName}` : row.courseName}
+                    </span>
                   </td>
                   <td className={rtTd} data-label="Schedule">
                     {row.schedule ? (
@@ -146,7 +148,7 @@ export default async function FeePeriodsPage({
                           Periods
                         </Link>
                       )}
-                      {result.canManage && row.schedule && (
+                      {result.canManage && row.schedule && row.kind === "course" && (
                         <ChangeScheduleButton
                           enrollmentId={row.enrollmentId}
                           studentName={row.studentName}
