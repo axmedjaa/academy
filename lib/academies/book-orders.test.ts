@@ -293,6 +293,18 @@ describe("giving books for a request (fully paid + in stock)", () => {
     expect(listed.issues[0].recipientName).toBe("Amina");
     const [row] = await db.select().from(bookIssues).where(eq(bookIssues.id, listed.issues[0].id));
     expect(row.issuedBy).toBe(f.owner.userId);
+
+    // Each hand-over is also a stock movement, so the book's stock history
+    // lists it (the duplicate retry above records nothing).
+    const movements = await db
+      .select({ before: auditLogs.before, after: auditLogs.after, context: auditLogs.context })
+      .from(auditLogs)
+      .where(sql`${auditLogs.action} = 'bookStockChanged' and ${auditLogs.entityId} = ${f.bookA} and ${auditLogs.context}->>'orderId' = ${created.orderId}`);
+    expect(movements.map((m) => [m.before, m.after, (m.context as { delta: number }).delta]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual([
+      [{ stockQuantity: 2 }, { stockQuantity: 0 }, -2],
+      [{ stockQuantity: 5 }, { stockQuantity: 4 }, -1],
+    ]);
+    expect(movements.every((m) => (m.context as { source: string }).source === "order_issue")).toBe(true);
   });
 
   it("a request never changes stock, can't be cancelled once paid, and a cancelled request gives nothing", async () => {

@@ -1,9 +1,9 @@
-import { and, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, or, sql } from "drizzle-orm";
 import { checkStorageAllowance, enforceStoredUploadWithinAllowance, storageFullMessage } from "@/lib/subscriptions/usage";
 import { viewOnlyWithoutAllBranches } from "@/lib/academies/branch-access";
 import { z } from "zod";
 import { db, type DbClient } from "@/lib/db";
-import { academies, books } from "@/lib/db/schema";
+import { academies, auditLogs, books } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
   ACADEMY_BOOKS_ACTION,
@@ -11,6 +11,15 @@ import {
   type AcademyPermissionLevel,
 } from "@/lib/auth/academy-permissions";
 import { recordAudit } from "@/lib/audit";
+import { resolveStaffNames } from "@/lib/academies/staff-labels";
+import {
+  MAX_STOCK_ADJUSTMENT,
+  STOCK_IN_REASONS,
+  STOCK_OUT_REASONS,
+  STOCK_REASON_LABEL,
+  type StockAdjustReason,
+  type StockMovementSource,
+} from "@/lib/academies/book-stock";
 import { deleteObject, getDownloadUrl, getUploadUrl } from "@/lib/storage/client";
 import { getBookCoverKey, isBookCoverKey } from "@/lib/storage/keys";
 import { logger } from "@/lib/logger";
@@ -365,29 +374,38 @@ export async function updateBook(actorContext: AuthContext, bookId: string, inpu
   return { ok: true, book: toBookRecord(result) };
 }
 
-/** Most copies one "Add stock" entry may add (a typing guard, not a business limit). */
-export const MAX_STOCK_ADDITION = 100_000;
+const adjustBookStockSchema = z
+  .object({
+    direction: z.enum(["in", "out"]),
+    quantity: z
+      .number()
+      .int("Enter a whole number of copies")
+      .min(1, "Enter at least 1 copy")
+      .max(MAX_STOCK_ADJUSTMENT, `Adjust at most ${MAX_STOCK_ADJUSTMENT.toLocaleString("en-US")} copies at a time`),
+    reason: z.string(),
+    note: optionalText(300),
+  })
+  .superRefine((value, ctx) => {
+    const allowed: readonly string[] = value.direction === "in" ? STOCK_IN_REASONS : STOCK_OUT_REASONS;
+    if (!allowed.includes(value.reason)) ctx.addIssue({ code: "custom", message: "Choose a reason.", path: ["reason"] });
+    if (value.reason === "other" && !value.note) ctx.addIssue({ code: "custom", message: "Add a note explaining the change.", path: ["note"] });
+  });
 
-export const addBookStockSchema = z.object({
-  quantity: z
-    .number()
-    .int("Enter a whole number of copies")
-    .min(1, "Add at least 1 copy")
-    .max(MAX_STOCK_ADDITION, `Add at most ${MAX_STOCK_ADDITION.toLocaleString("en-US")} copies at a time`),
-  note: optionalText(300),
-});
+export type AdjustBookStockInput = z.input<typeof adjustBookStockSchema>;
 
-export type AddBookStockInput = z.input<typeof addBookStockSchema>;
-
-export type AddBookStockResult = { ok: true; book: BookRecord; added: number } | { ok: false; error: BookActionError };
+export type AdjustBookStockResult = { ok: true; book: BookRecord; delta: number } | { ok: false; error: BookActionError };
 
 /**
- * New copies arrived (a delivery, a reprint, books found): stock goes UP by
- * `quantity`. The increment is done in SQL (`stock + n`), so a sale saved at
- * the same moment is never lost. Recorded as a `bookStockChanged` audit event
- * with source "stock_added", the copies added and the optional note.
+ * A manual stock adjustment with a reason: copies arrived ("in") or copies
+ * left without a sale ("out": damaged, lost, added by mistake, a stock-take
+ * count). Money is never touched. The change is done in SQL (`stock ± n`),
+ * so a sale saved at the same moment is never lost, and a removal only
+ * succeeds while enough copies are in stock (stock never goes below 0).
+ * Recorded as a `bookStockChanged` audit event (source "adjustment") with
+ * direction, reason, signed delta, note and stock before and after; that
+ * event feeds the book's stock history.
  */
-export async function addBookStock(actorContext: AuthContext, bookId: string, input: AddBookStockInput): Promise<AddBookStockResult> {
+export async function adjustBookStock(actorContext: AuthContext, bookId: string, input: AdjustBookStockInput): Promise<AdjustBookStockResult> {
   const resolved = await resolveBooksAccess(actorContext);
   if (!resolved.ok) return resolved;
   const { academyId, membershipRole, permissionLevel } = resolved.access;
@@ -396,21 +414,27 @@ export async function addBookStock(actorContext: AuthContext, bookId: string, in
   const parsedId = z.string().uuid().safeParse(bookId);
   if (!parsedId.success) return { ok: false, error: NOT_FOUND };
 
-  const parsed = addBookStockSchema.safeParse(input);
+  const parsed = adjustBookStockSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: { code: "validation", message: parsed.error.issues[0]?.message ?? "Invalid input." } };
   }
-  const { quantity, note } = parsed.data;
+  const { direction, quantity, reason, note } = parsed.data;
+  const delta = direction === "in" ? quantity : -quantity;
 
   const result = await db.transaction(async (tx) => {
     const existing = await getScopedBook(tx, bookId, academyId);
-    if (!existing) return null;
+    if (!existing) return { kind: "not_found" as const };
 
+    const scoped = and(eq(books.id, bookId), eq(books.academyId, academyId));
     const [row] = await tx
       .update(books)
-      .set({ stockQuantity: sql`${books.stockQuantity} + ${quantity}`, updatedAt: new Date() })
-      .where(and(eq(books.id, bookId), eq(books.academyId, academyId)))
+      .set({ stockQuantity: sql`${books.stockQuantity} + ${delta}`, updatedAt: new Date() })
+      .where(direction === "out" ? and(scoped, gte(books.stockQuantity, quantity)) : scoped)
       .returning();
+    if (!row) {
+      const [current] = await tx.select({ stock: books.stockQuantity }).from(books).where(scoped);
+      return { kind: "short" as const, stock: current?.stock ?? 0 };
+    }
 
     await recordAudit(
       {
@@ -420,17 +444,95 @@ export async function addBookStock(actorContext: AuthContext, bookId: string, in
         action: "bookStockChanged",
         entityType: "book",
         entityId: row.id,
-        before: { stockQuantity: row.stockQuantity - quantity },
+        before: { stockQuantity: row.stockQuantity - delta },
         after: { stockQuantity: row.stockQuantity },
-        context: { source: "stock_added", delta: quantity, ...(note ? { note } : {}) },
+        context: { source: "adjustment", direction, reason, delta, ...(note ? { note } : {}) },
       },
       tx,
     );
-    return row;
+    return { kind: "ok" as const, row };
   });
 
-  if (!result) return { ok: false, error: NOT_FOUND };
-  return { ok: true, book: toBookRecord(result), added: quantity };
+  if (result.kind === "not_found") return { ok: false, error: NOT_FOUND };
+  if (result.kind === "short") {
+    return {
+      ok: false,
+      error: { code: "validation", message: `Only ${result.stock} ${result.stock === 1 ? "copy is" : "copies are"} in stock, so ${quantity} can't be removed.` },
+    };
+  }
+  return { ok: true, book: toBookRecord(result.row), delta };
+}
+
+export interface StockMovement {
+  id: string;
+  at: Date;
+  source: StockMovementSource;
+  /** Signed: +5 added, -2 removed. */
+  delta: number;
+  stockBefore: number | null;
+  stockAfter: number | null;
+  reason: StockAdjustReason | null;
+  note: string | null;
+  byLabel: string;
+}
+
+export type ListBookStockMovementsResult =
+  | { ok: true; book: BookRecord; movements: StockMovement[]; canManage: boolean }
+  | { ok: false; error: BookActionError };
+
+const MOVEMENT_SOURCES: readonly string[] = ["adjustment", "sale", "refund", "order_issue", "manual_update"];
+
+function stockOf(value: unknown): number | null {
+  const n = (value as { stockQuantity?: unknown } | null)?.stockQuantity;
+  return typeof n === "number" ? n : null;
+}
+
+/**
+ * One book's stock history, newest first: every `bookStockChanged` event
+ * (adjustments, sales, refunds with returned copies, books given from orders,
+ * older direct stock edits), read from the audit log for this academy's book
+ * only. "Add stock" entries from before reasons existed (source "stock_added")
+ * read as a delivery received.
+ */
+export async function listBookStockMovements(actorContext: AuthContext, bookId: string, limit = 200): Promise<ListBookStockMovementsResult> {
+  const resolved = await resolveBooksAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, permissionLevel } = resolved.access;
+
+  const parsedId = z.string().uuid().safeParse(bookId);
+  if (!parsedId.success) return { ok: false, error: NOT_FOUND };
+  const book = await getScopedBook(db, bookId, academyId);
+  if (!book) return { ok: false, error: NOT_FOUND };
+
+  const rows = await db
+    .select({ id: auditLogs.id, at: auditLogs.createdAt, actor: auditLogs.actorUserId, before: auditLogs.before, after: auditLogs.after, context: auditLogs.context })
+    .from(auditLogs)
+    .where(and(eq(auditLogs.academyId, academyId), eq(auditLogs.action, "bookStockChanged"), eq(auditLogs.entityType, "book"), eq(auditLogs.entityId, bookId)))
+    .orderBy(desc(auditLogs.createdAt))
+    .limit(Math.min(Math.max(limit, 1), 500));
+
+  const names = await resolveStaffNames(academyId, rows.map((r) => r.actor).filter((id): id is string => Boolean(id)));
+  const movements: StockMovement[] = rows.map((r) => {
+    const ctx = (r.context ?? {}) as { source?: string; delta?: unknown; reason?: string; note?: string };
+    const before = stockOf(r.before);
+    const after = stockOf(r.after);
+    const legacyAdd = ctx.source === "stock_added";
+    const source = (legacyAdd ? "adjustment" : MOVEMENT_SOURCES.includes(ctx.source ?? "") ? ctx.source : "manual_update") as StockMovementSource;
+    const delta = typeof ctx.delta === "number" ? ctx.delta : before !== null && after !== null ? after - before : 0;
+    const reason = legacyAdd ? "received" : ctx.reason && ctx.reason in STOCK_REASON_LABEL ? (ctx.reason as StockAdjustReason) : null;
+    return {
+      id: r.id,
+      at: r.at,
+      source,
+      delta,
+      stockBefore: before,
+      stockAfter: after,
+      reason,
+      note: ctx.note ?? null,
+      byLabel: r.actor ? (names[r.actor] ?? "Staff member") : "System",
+    };
+  });
+  return { ok: true, book: toBookRecord(book), movements, canManage: canManage(permissionLevel) };
 }
 
 export type ListBooksResult = { ok: true; books: BookRecord[]; canManage: boolean } | { ok: false; error: BookActionError };

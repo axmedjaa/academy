@@ -735,6 +735,23 @@ export async function issueBooksToStudent(actorContext: AuthContext, input: Issu
         },
         tx,
       );
+      // The same stock-movement event as sales, refunds and adjustments, so
+      // the book's stock history shows copies given from an order too.
+      await recordAudit(
+        {
+          actorUserId: actorContext.userId,
+          actorRole: membershipRole,
+          academyId,
+          action: "bookStockChanged",
+          entityType: "book",
+          entityId: book.id,
+          branchId: branchId ?? undefined,
+          before: { stockQuantity: updated.stock + data.quantity },
+          after: { stockQuantity: updated.stock },
+          context: { source: "order_issue", delta: -data.quantity, orderId, bookIssueId: issue.id },
+        },
+        tx,
+      );
       return { ok: true as const, issueId: issue.id, stockLeft: updated.stock, duplicate: false };
     });
   } catch (err) {

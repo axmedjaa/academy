@@ -9,8 +9,8 @@ import {
   requestBookCoverUploadUrl as requestBookCoverUploadUrlForActor,
   requestNewBookCoverUploadUrl as requestNewBookCoverUploadUrlForActor,
   updateBook as updateBookForActor,
-  addBookStock as addBookStockForActor,
-  type AddBookStockInput,
+  adjustBookStock as adjustBookStockForActor,
+  type AdjustBookStockInput,
   type BookActionError,
   type CreateBookInput,
   type UpdateBookInput,
@@ -46,11 +46,11 @@ export async function updateBookAction(bookId: string, input: UpdateBookInput): 
   return { ok: true, bookId: result.book.id };
 }
 
-export async function addBookStockAction(bookId: string, input: AddBookStockInput): Promise<BookFormState & { stockQuantity?: number }> {
+export async function adjustBookStockAction(bookId: string, input: AdjustBookStockInput): Promise<BookFormState & { stockQuantity?: number }> {
   const context = await getAuthContext();
   if (!context) return { ok: false, error: UNAUTHENTICATED };
 
-  const result = await addBookStockForActor(context, bookId, input);
+  const result = await adjustBookStockForActor(context, bookId, input);
   if (!result.ok) return { ok: false, error: result.error };
 
   revalidatePath("/academy/books");
