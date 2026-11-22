@@ -5,7 +5,7 @@ import { getRecentSaleCountsByBook } from "@/lib/academies/book-sales";
 import { LOW_STOCK_THRESHOLD, getStockStatus } from "@/lib/academies/book-stock";
 import { formatMoney } from "@/lib/ui/money";
 import { EmptyState, PageMessage, Section, trHover } from "@/app/academy/_shell/ui";
-import { DataTable, NoteBlock, ROW_BTN, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { DataTable, NoteBlock, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { ClearFilters, FilterSelect, SearchField } from "@/app/academy/_shell/filter-controls";
 import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
@@ -226,10 +226,12 @@ export default async function AcademyBooksStockPage({
           <thead>
             <tr>
               <th className={rtTh}>Book</th>
-              <th className={rtTh}>In stock</th>
-              <th className={`${rtTh} text-right`}>Sold (30 days)</th>
-              <th className={`${rtTh} text-right`}>Price</th>
-              <th className={`${rtTh} text-right`}>
+              <th className={`${rtTh} w-[220px] whitespace-nowrap`}>In stock</th>
+              <th className={`${rtTh} w-[110px] whitespace-nowrap text-right`}>
+                Sold <span className="font-medium normal-case tracking-normal text-muted">30 days</span>
+              </th>
+              <th className={`${rtTh} w-[100px] whitespace-nowrap text-right`}>Price</th>
+              <th className={`${rtTh} w-[1%] text-right`}>
                 <span className="sr-only">Actions</span>
               </th>
             </tr>
@@ -261,10 +263,10 @@ export default async function AcademyBooksStockPage({
                     </span>
                   </td>
                   <td className={rtTd} data-label="In stock">
-                    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <span className={`text-xl font-bold leading-none tabular-nums ${COUNT_TONE[bookLevel]}`}>
-                        {book.stockQuantity}
-                        <span className="sr-only"> {book.stockQuantity === 1 ? "copy" : "copies"}</span>
+                    <span className="inline-flex items-center gap-3 whitespace-nowrap">
+                      <span className="inline-flex items-baseline gap-1">
+                        <span className={`text-xl font-bold leading-none tabular-nums ${COUNT_TONE[bookLevel]}`}>{book.stockQuantity}</span>
+                        <span className="text-xs text-muted">{book.stockQuantity === 1 ? "copy" : "copies"}</span>
                       </span>
                       <StockBadge quantity={book.stockQuantity} inactive={book.status !== "active"} />
                     </span>
@@ -276,16 +278,21 @@ export default async function AcademyBooksStockPage({
                     {formatMoney(book.priceCents, book.currency)}
                   </td>
                   <td className={`${rtTd} text-right`} data-actions="">
-                    <span className="inline-flex flex-wrap items-center justify-end gap-2">
+                    <span className="inline-flex items-center justify-end gap-2 whitespace-nowrap">
                       {booksResult.canManage && (
-                        <>
-                          <StockAdjustButton direction="in" book={{ id: book.id, name: book.name, stockQuantity: book.stockQuantity }} />
-                          <StockAdjustButton direction="out" book={{ id: book.id, name: book.name, stockQuantity: book.stockQuantity }} />
-                        </>
+                        // One joined control: + Add | − Remove.
+                        <span role="group" aria-label={`Adjust stock of ${book.name}`} className="inline-flex divide-x divide-border overflow-hidden rounded-lg border border-border-strong bg-surface shadow-[0_1px_2px_rgba(15,23,42,0.05)]">
+                          <StockAdjustButton segment direction="in" book={{ id: book.id, name: book.name, stockQuantity: book.stockQuantity }} />
+                          <StockAdjustButton segment direction="out" book={{ id: book.id, name: book.name, stockQuantity: book.stockQuantity }} />
+                        </span>
                       )}
-                      <Link href={`/academy/books/stock/${book.id}`} className={ROW_BTN} aria-label={`Stock history of ${book.name}`}>
-                        <Icon name="history" width={16} height={16} />
-                        History
+                      <Link
+                        href={`/academy/books/stock/${book.id}`}
+                        title="Stock history"
+                        aria-label={`Stock history of ${book.name}`}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border-strong bg-surface text-[#374151] no-underline shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition-colors duration-150 hover:bg-app hover:text-ink hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+                      >
+                        <Icon name="history" width={17} height={17} />
                       </Link>
                     </span>
                   </td>
