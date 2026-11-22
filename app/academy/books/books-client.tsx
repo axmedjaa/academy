@@ -5,9 +5,16 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { BookRecord } from "@/lib/academies/books";
 import type { BookSaleListRow } from "@/lib/academies/book-sales";
-import { getStockStatus } from "@/lib/academies/book-stock";
 import {
-  addBookStockAction,
+  MAX_STOCK_ADJUSTMENT,
+  STOCK_IN_REASONS,
+  STOCK_OUT_REASONS,
+  STOCK_REASON_LABEL,
+  getStockStatus,
+  type StockDirection,
+} from "@/lib/academies/book-stock";
+import {
+  adjustBookStockAction,
   confirmBookCoverUploadAction,
   createBookAction,
   removeBookCoverAction,
@@ -137,51 +144,70 @@ export function AddBookButton() {
 }
 
 /**
- * "Add stock": record copies that arrived (a delivery, a reprint). Stock goes
- * up by the number entered; the change is kept in the audit log with the
- * optional note. Shown only to staff who can manage books.
+ * Stock adjustment (Books > Stock): "Add" for copies that arrived, "Remove"
+ * for copies that left without a sale. A reason is always required ("Other"
+ * also needs a note); a removal can't take more than is in stock. Money is
+ * never touched, and each adjustment appears in the book's stock history.
+ * Shown only to staff who can manage books; the server checks again.
  */
-export function AddStockButton({ book }: { book: Pick<BookRecord, "id" | "name" | "stockQuantity"> }) {
+export function StockAdjustButton({ book, direction }: { book: Pick<BookRecord, "id" | "name" | "stockQuantity">; direction: StockDirection }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const adding = direction === "in";
+  const reasons = (adding ? STOCK_IN_REASONS : STOCK_OUT_REASONS).map((value) => ({ value, label: STOCK_REASON_LABEL[value] }));
+  const disabled = !adding && book.stockQuantity <= 0;
   return (
     <>
-      <button type="button" className={ROW_BTN_PRIMARY} onClick={() => setOpen(true)}>
-        <Icon name="layers" width={16} height={16} />
-        Add stock
+      <button
+        type="button"
+        className={adding ? ROW_BTN_PRIMARY : ROW_BTN}
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+        title={disabled ? "No copies in stock to remove." : undefined}
+        aria-label={`${adding ? "Add stock to" : "Remove stock from"} ${book.name}`}
+      >
+        {adding ? "Add" : "Remove"}
       </button>
       <ActionDialog
         open={open}
         onOpenChange={setOpen}
-        title="Add stock"
-        description="Record copies that arrived. Stock goes up by the number you enter."
+        title={adding ? "Add stock" : "Remove stock"}
+        description={
+          adding
+            ? "Record copies that arrived. Stock goes up by the number you enter."
+            : "Record copies that left without a sale, such as damaged or lost books. Sales and income are not changed."
+        }
         summary={[
           { label: "Book", value: book.name },
           { label: "In stock now", value: book.stockQuantity },
         ]}
-        submitLabel="Add stock"
-        pendingLabel="Adding…"
+        submitLabel={adding ? "Add stock" : "Remove stock"}
+        pendingLabel={adding ? "Adding…" : "Removing…"}
+        danger={!adding}
         rules={[
           {
             name: "quantity",
-            label: "Copies to add",
+            label: "Copies",
             required: true,
             check: (value) => {
               const v = value.trim();
               if (!/^\d+$/.test(v) || Number(v) < 1) return "Enter a whole number of copies, at least 1.";
-              return Number(v) > 100_000 ? "Add at most 100,000 copies at a time." : null;
+              if (Number(v) > MAX_STOCK_ADJUSTMENT) return `Enter at most ${MAX_STOCK_ADJUSTMENT.toLocaleString("en-US")} copies.`;
+              if (!adding && Number(v) > book.stockQuantity) return `Only ${book.stockQuantity} in stock.`;
+              return null;
             },
           },
         ]}
         run={async (data) => {
+          const reason = String(data.get("reason") ?? "");
+          const note = String(data.get("note") ?? "").trim();
+          if (reason === "other" && !note) return "Add a note explaining the change.";
           try {
             const quantity = Number(String(data.get("quantity") ?? "").trim());
-            const result = await addBookStockAction(book.id, {
-              quantity,
-              note: String(data.get("note") ?? "").trim() || undefined,
-            });
-            if (!result.ok) return result.error?.message ?? "The stock couldn't be added.";
-            showSuccessToast(`${quantity} ${quantity === 1 ? "copy" : "copies"} added. ${result.stockQuantity ?? ""} in stock now.`.trim());
+            const result = await adjustBookStockAction(book.id, { direction, quantity, reason, note: note || undefined });
+            if (!result.ok) return result.error?.message ?? "The stock couldn't be changed.";
+            const copies = `${quantity} ${quantity === 1 ? "copy" : "copies"}`;
+            showSuccessToast(`${copies} ${adding ? "added" : "removed"}. ${result.stockQuantity ?? ""} in stock now.`.trim());
             setOpen(false);
             router.refresh();
             return null;
@@ -193,7 +219,13 @@ export function AddStockButton({ book }: { book: Pick<BookRecord, "id" | "name" 
       >
         {({ errors, blur }) => (
           <>
-            <DField label="Copies to add" name="quantity" required error={errors.quantity}>
+            <DField
+              label={adding ? "Copies to add" : "Copies to remove"}
+              name="quantity"
+              required
+              error={errors.quantity}
+              hint={adding ? undefined : `${book.stockQuantity} in stock.`}
+            >
               <input
                 type="text"
                 inputMode="numeric"
@@ -204,7 +236,10 @@ export function AddStockButton({ book }: { book: Pick<BookRecord, "id" | "name" 
                 {...invalidProps("quantity", errors.quantity)}
               />
             </DField>
-            <DField label="Note" name="note" hint="Optional. For example: delivery from the supplier.">
+            <DField label="Reason" name="reason" group required>
+              <ChoiceChips name="reason" defaultValue={reasons[0].value} options={reasons} />
+            </DField>
+            <DField label="Note" name="note" hint="Required when the reason is Other. For example: supplier invoice 1042.">
               <input type="text" name="note" maxLength={300} className={controlClass(false)} />
             </DField>
           </>

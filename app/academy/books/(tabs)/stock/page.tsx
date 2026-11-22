@@ -5,20 +5,20 @@ import { getRecentSaleCountsByBook } from "@/lib/academies/book-sales";
 import { getStockStatus } from "@/lib/academies/book-stock";
 import { formatMoney } from "@/lib/ui/money";
 import { EmptyState, PageMessage, Section, trHover } from "@/app/academy/_shell/ui";
-import { DataTable, NoteBlock, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { DataTable, NoteBlock, ROW_BTN, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
 import { ChipParamFilter, FilterBar, SearchField } from "@/app/academy/_shell/filter-controls";
 import { Icon } from "@/app/academy/_shell/icons";
 import { getBooksOverview } from "../../books-data";
-import { AddStockButton, StockBadge } from "../../books-client";
+import { StockAdjustButton, StockBadge } from "../../books-client";
 
 const LEVEL_LABEL: Record<string, string> = { in_stock: "in stock", low_stock: "low on stock", out_of_stock: "out of stock" };
 
 /**
  * Books stock (design A16, Stock tab): a read-only inventory table — copies
  * in stock, copies sold in the last 30 days, and the stock level — with
- * search and a level filter. Staff who manage books can add copies that
- * arrived (Add stock); sales and given books lower stock, returned copies
- * on a refund raise it.
+ * search and a level filter. Staff who manage books adjust stock with a
+ * reason (Add / Remove); sales and books given from orders lower it, copies
+ * returned on a refund raise it. History lists every movement of one book.
  */
 export default async function AcademyBooksStockPage({
   searchParams,
@@ -93,7 +93,7 @@ export default async function AcademyBooksStockPage({
             />
           ) : (
             <EmptyState
-              message="No stock to show yet. Stock appears once a title is in the catalogue. Add copies that arrive with Add stock."
+              message="No stock to show yet. Stock appears once a title is in the catalogue. Add copies that arrive with Add, and record damaged or lost copies with Remove."
               icon={<Icon name="layers" />}
               action={
                 <Link href="/academy/books" className="inline-flex min-h-11 items-center rounded-lg border border-border-strong bg-surface px-4 text-sm font-semibold !text-ink no-underline hover:bg-app hover:no-underline">
@@ -112,7 +112,7 @@ export default async function AcademyBooksStockPage({
               <th className={`${rtTh} text-right`}>In stock</th>
               <th className={`${rtTh} text-right`}>Sales (30 days)</th>
               <th className={rtTh}>Level</th>
-              {booksResult.canManage && <th className={`${rtTh} text-right`}>Actions</th>}
+              <th className={`${rtTh} text-right`}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -146,11 +146,19 @@ export default async function AcademyBooksStockPage({
                 <td className={rtTd} data-label="Level">
                   <StockBadge quantity={book.stockQuantity} inactive={book.status !== "active"} />
                 </td>
-                {booksResult.canManage && (
-                  <td className={`${rtTd} text-right`} data-label="Actions">
-                    <AddStockButton book={{ id: book.id, name: book.name, stockQuantity: book.stockQuantity }} />
-                  </td>
-                )}
+                <td className={`${rtTd} text-right`} data-label="Actions">
+                  <span className="inline-flex flex-wrap justify-end gap-2">
+                    {booksResult.canManage && (
+                      <>
+                        <StockAdjustButton direction="in" book={{ id: book.id, name: book.name, stockQuantity: book.stockQuantity }} />
+                        <StockAdjustButton direction="out" book={{ id: book.id, name: book.name, stockQuantity: book.stockQuantity }} />
+                      </>
+                    )}
+                    <Link href={`/academy/books/stock/${book.id}`} className={ROW_BTN} aria-label={`Stock history of ${book.name}`}>
+                      History
+                    </Link>
+                  </span>
+                </td>
               </tr>
             ))}
           </tbody>

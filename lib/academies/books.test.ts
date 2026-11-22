@@ -7,10 +7,11 @@ import { getBookCoverKey } from "@/lib/storage/keys";
 import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import {
-  addBookStock,
+  adjustBookStock,
   createBook,
   getBook,
   getStockStatus,
+  listBookStockMovements,
   listBooks,
   removeBookCover,
   requestBookCoverUploadUrl,
@@ -334,17 +335,17 @@ describe("updateBook / listBooks / getBook — tenant isolation", () => {
   });
 });
 
-describe("addBookStock — copies that arrived", () => {
-  it("raises stock by the quantity and audits it with the note", async () => {
+describe("adjustBookStock — Add / Remove with a reason", () => {
+  it("Add raises stock and audits direction, reason, delta and note", async () => {
     const { academyId, context } = await setupAcademy("manager");
     const created = await createTestBook(context, academyId, { stockQuantity: 3 });
     if (!created.ok) throw new Error("expected ok");
 
-    const result = await addBookStock(context, created.book.id, { quantity: 12, note: "Delivery from supplier" });
+    const result = await adjustBookStock(context, created.book.id, { direction: "in", quantity: 12, reason: "received", note: "Supplier invoice 1042" });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.book.stockQuantity).toBe(15);
-      expect(result.added).toBe(12);
+      expect(result.delta).toBe(12);
     }
 
     const [audit] = await db
@@ -353,35 +354,75 @@ describe("addBookStock — copies that arrived", () => {
       .where(and(eq(auditLogs.action, "bookStockChanged"), eq(auditLogs.entityId, created.book.id)));
     expect(audit.before).toEqual({ stockQuantity: 3 });
     expect(audit.after).toEqual({ stockQuantity: 15 });
-    expect(audit.context).toMatchObject({ source: "stock_added", delta: 12, note: "Delivery from supplier" });
+    expect(audit.context).toMatchObject({ source: "adjustment", direction: "in", reason: "received", delta: 12, note: "Supplier invoice 1042" });
   });
 
-  it("two additions at the same time both count (no lost update)", async () => {
+  it("Remove lowers stock, and can never take more than is in stock", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const created = await createTestBook(context, academyId, { stockQuantity: 5 });
+    if (!created.ok) throw new Error("expected ok");
+
+    const removed = await adjustBookStock(context, created.book.id, { direction: "out", quantity: 2, reason: "damaged" });
+    expect(removed.ok).toBe(true);
+    if (removed.ok) {
+      expect(removed.book.stockQuantity).toBe(3);
+      expect(removed.delta).toBe(-2);
+    }
+
+    const tooMany = await adjustBookStock(context, created.book.id, { direction: "out", quantity: 4, reason: "lost" });
+    expect(tooMany.ok).toBe(false);
+    if (!tooMany.ok) {
+      expect(tooMany.error.code).toBe("validation");
+      expect(tooMany.error.message).toMatch(/Only 3 copies are in stock/);
+    }
+
+    const all = await adjustBookStock(context, created.book.id, { direction: "out", quantity: 3, reason: "mistake" });
+    expect(all.ok && all.book.stockQuantity).toBe(0);
+  });
+
+  it("concurrent adjustments all count (no lost update), and parallel removals never go below 0", async () => {
     const { academyId, context } = await setupAcademy("manager");
     const created = await createTestBook(context, academyId, { stockQuantity: 0 });
     if (!created.ok) throw new Error("expected ok");
 
-    const [a, b] = await Promise.all([
-      addBookStock(context, created.book.id, { quantity: 5 }),
-      addBookStock(context, created.book.id, { quantity: 7 }),
+    const adds = await Promise.all([
+      adjustBookStock(context, created.book.id, { direction: "in", quantity: 5, reason: "received" }),
+      adjustBookStock(context, created.book.id, { direction: "in", quantity: 7, reason: "received" }),
     ]);
-    expect(a.ok && b.ok).toBe(true);
+    expect(adds.every((r) => r.ok)).toBe(true);
+
+    const removals = await Promise.all(
+      [1, 2, 3].map(() => adjustBookStock(context, created.book.id, { direction: "out", quantity: 5, reason: "stocktake" })),
+    );
+    expect(removals.filter((r) => r.ok).length).toBe(2);
     const got = await getBook(context, created.book.id);
-    expect(got.ok && got.book.stockQuantity).toBe(12);
+    expect(got.ok && got.book.stockQuantity).toBe(2);
   });
 
-  it("rejects zero, negative, fractional and oversized quantities without changing stock", async () => {
+  it("requires a reason that fits the direction, and a note for Other", async () => {
     const { academyId, context } = await setupAcademy("manager");
     const created = await createTestBook(context, academyId, { stockQuantity: 4 });
     if (!created.ok) throw new Error("expected ok");
 
-    for (const quantity of [0, -3, 1.5, 100_001]) {
-      const result = await addBookStock(context, created.book.id, { quantity });
+    const cases = [
+      { direction: "in" as const, quantity: 1, reason: "damaged" }, // a removal reason on an addition
+      { direction: "out" as const, quantity: 1, reason: "received" }, // an addition reason on a removal
+      { direction: "out" as const, quantity: 1, reason: "" },
+      { direction: "out" as const, quantity: 1, reason: "other" }, // Other without a note
+      { direction: "in" as const, quantity: 0, reason: "received" },
+      { direction: "in" as const, quantity: -3, reason: "received" },
+      { direction: "in" as const, quantity: 1.5, reason: "received" },
+      { direction: "in" as const, quantity: 100_001, reason: "received" },
+    ];
+    for (const input of cases) {
+      const result = await adjustBookStock(context, created.book.id, input);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe("validation");
     }
+    const withNote = await adjustBookStock(context, created.book.id, { direction: "out", quantity: 1, reason: "other", note: "Given to the library" });
+    expect(withNote.ok).toBe(true);
     const got = await getBook(context, created.book.id);
-    expect(got.ok && got.book.stockQuantity).toBe(4);
+    expect(got.ok && got.book.stockQuantity).toBe(3);
   });
 
   it("is refused for a role without book management, and for another academy's book", async () => {
@@ -390,17 +431,44 @@ describe("addBookStock — copies that arrived", () => {
     if (!created.ok) throw new Error("expected ok");
 
     const trainer = await setupAcademy("trainer");
-    const refused = await addBookStock(trainer.context, created.book.id, { quantity: 5 });
+    const refused = await adjustBookStock(trainer.context, created.book.id, { direction: "in", quantity: 5, reason: "received" });
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.error.code).toBe("forbidden");
 
     const other = await setupAcademy("manager");
-    const notFound = await addBookStock(other.context, created.book.id, { quantity: 5 });
-    expect(notFound.ok).toBe(false);
-    if (!notFound.ok) expect(notFound.error.code).toBe("not_found");
+    for (const direction of ["in", "out"] as const) {
+      const notFound = await adjustBookStock(other.context, created.book.id, { direction, quantity: 1, reason: "stocktake" });
+      expect(notFound.ok).toBe(false);
+      if (!notFound.ok) expect(notFound.error.code).toBe("not_found");
+    }
+    const otherHistory = await listBookStockMovements(other.context, created.book.id);
+    expect(otherHistory.ok).toBe(false);
 
     const got = await getBook(owner.context, created.book.id);
     expect(got.ok && got.book.stockQuantity).toBe(2);
+  });
+});
+
+describe("listBookStockMovements — a book's stock history", () => {
+  it("lists every movement newest first with reason, note, signed change and stock after", async () => {
+    const { academyId, context } = await setupAcademy("manager");
+    const created = await createTestBook(context, academyId, { stockQuantity: 10 });
+    if (!created.ok) throw new Error("expected ok");
+
+    await adjustBookStock(context, created.book.id, { direction: "in", quantity: 6, reason: "received", note: "Box 1" });
+    await adjustBookStock(context, created.book.id, { direction: "out", quantity: 2, reason: "damaged" });
+
+    const history = await listBookStockMovements(context, created.book.id);
+    expect(history.ok).toBe(true);
+    if (!history.ok) return;
+    expect(history.canManage).toBe(true);
+    expect(history.book.stockQuantity).toBe(14);
+    expect(history.movements.map((m) => [m.source, m.reason, m.delta, m.stockBefore, m.stockAfter])).toEqual([
+      ["adjustment", "damaged", -2, 16, 14],
+      ["adjustment", "received", 6, 10, 16],
+    ]);
+    expect(history.movements[1].note).toBe("Box 1");
+    expect(history.movements[0].byLabel).toBeTruthy();
   });
 });
 
