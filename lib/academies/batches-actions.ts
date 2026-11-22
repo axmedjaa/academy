@@ -40,6 +40,9 @@ function parseBatchFormData(formData: FormData): CreateBatchInput | UpdateBatchI
     courseDates: parseCourseDates(formData),
     // Edit batch only; omitted (create, or an archived batch) keeps the status.
     ...(formData.has("status") ? { status: String(formData.get("status")) as UpdateBatchInput["status"] } : {}),
+    ...(formData.get("batchType") === "course" || formData.get("batchType") === "program"
+      ? { batchType: formData.get("batchType") as "course" | "program" }
+      : {}),
   };
 }
 

@@ -13,6 +13,7 @@ import {
   courses,
   examResults,
   exams,
+  programEnrollments,
   programs,
   timetables,
 } from "@/lib/db/schema";
@@ -113,7 +114,8 @@ export const createBatchSchema = z.object({
   // Program-based batch (migration 0049): the program whose active courses
   // this batch runs — the server takes the courses from the program, so
   // `courseIds` is ignored for them. Omitted/empty = course-based batch.
-  // Only used on create; a batch's program never changes afterwards.
+  // On edit it changes only together with `batchType`, and only while the
+  // batch has no students (see updateBatch).
   programId: z
     .string()
     .trim()
@@ -158,6 +160,10 @@ export type EditableBatchStatus = (typeof EDITABLE_BATCH_STATUSES)[number];
  * createBatch never takes a status. */
 export const updateBatchSchema = createBatchSchema.extend({
   status: z.enum(EDITABLE_BATCH_STATUSES, { message: "Choose Planned, Active or Completed. Use Archive to archive a batch." }).optional(),
+  // The type the batch should have after the edit. Omitted = keep the
+  // current type and program (older callers). Changing the type or program
+  // is allowed only while no student was ever enrolled in the batch.
+  batchType: z.enum(["course", "program"]).optional(),
 });
 export type UpdateBatchInput = z.input<typeof updateBatchSchema>;
 
@@ -176,6 +182,9 @@ export interface BatchRecord {
   code: string;
   status: "planned" | "active" | "completed" | "archived";
   createdAt: Date;
+  /** listBatches only: a student was ever enrolled (any status). While
+   * false, Edit batch may still change the batch type and program. */
+  hasEnrollments?: boolean;
   /** Each course's own dates, keyed by course id (listBatches only). */
   courseDates?: Record<string, BatchCourseDates>;
 }
@@ -408,6 +417,7 @@ export async function listBatches(actorContext: AuthContext): Promise<ListBatche
       const reasons = buildBatchDeletionReasons(counts);
       return {
         ...toRecord(row, courseIdsByBatch.get(row.id)),
+        hasEnrollments: counts.enrollmentCount > 0,
         courseDates: courseDatesByBatch.get(row.id) ?? {},
         deletionEligibility: { eligible: reasons.length === 0, reasons },
       };
@@ -461,6 +471,18 @@ export async function getBatch(
 class CourseNotFoundSignal extends Error {}
 class ProgramNotFoundSignal extends Error {}
 class ProgramHasNoCoursesSignal extends Error {}
+class BatchTypeLockedSignal extends Error {}
+
+/** Any student was ever enrolled in this batch (a course enrollment or a
+ * whole-program enrollment, in any status). From then on the batch keeps
+ * its type and program, so no student's fee plan or records change under
+ * them. */
+async function batchHasEnrollments(executor: DbClient, batchId: string): Promise<boolean> {
+  const [course] = await executor.select({ id: batchEnrollments.id }).from(batchEnrollments).where(eq(batchEnrollments.batchId, batchId)).limit(1);
+  if (course) return true;
+  const [program] = await executor.select({ id: programEnrollments.id }).from(programEnrollments).where(eq(programEnrollments.batchId, batchId)).limit(1);
+  return Boolean(program);
+}
 
 /** The active courses of an active program in this academy, or null when
  * the program isn't one (another academy's, archived, or unknown). */
@@ -693,13 +715,30 @@ export async function updateBatch(
         }
       }
 
-      // A program-based batch keeps its program: its courses are what it
-      // already runs plus any course since added to the program. Nothing is
-      // removed, so a program student's course records are never orphaned.
-      if (existing.programId) {
-        const programCourses = (await activeProgramCourseIds(tx, academyId, existing.programId)) ?? [];
+      // Type and program after the edit. Without `batchType` the batch keeps
+      // both. A change (course <-> program, or another program) is allowed
+      // only while no student was ever enrolled in the batch.
+      const nextProgramId =
+        data.batchType === undefined ? existing.programId : data.batchType === "program" ? (data.programId ?? null) : null;
+      if (data.batchType === "program" && !nextProgramId) throw new ProgramNotFoundSignal();
+      const typeChanged = nextProgramId !== existing.programId;
+      if (typeChanged && (await batchHasEnrollments(tx, batchId))) throw new BatchTypeLockedSignal();
+
+      if (nextProgramId && !typeChanged) {
+        // A program-based batch keeps its program: its courses are what it
+        // already runs plus any course since added to the program. Nothing is
+        // removed, so a program student's course records are never orphaned.
+        const programCourses = (await activeProgramCourseIds(tx, academyId, nextProgramId)) ?? [];
         const current = (await loadBatchCourseIds(tx, [batchId])).get(batchId) ?? [existing.courseId];
         data.courseIds = [...new Set([...current, ...programCourses])];
+      } else if (nextProgramId) {
+        // Switched to a (different) program: exactly that program's active
+        // courses, as on create. Courses it no longer runs are removed below,
+        // unless classes or exams in this batch use them.
+        const programCourses = await activeProgramCourseIds(tx, academyId, nextProgramId);
+        if (programCourses === null) throw new ProgramNotFoundSignal();
+        if (programCourses.length === 0) throw new ProgramHasNoCoursesSignal();
+        data.courseIds = programCourses;
       }
 
       for (const courseId of data.courseIds) {
@@ -753,6 +792,7 @@ export async function updateBatch(
         .set({
           branchId: data.branchId,
           courseId: primary,
+          programId: nextProgramId,
           name: data.name,
           code: data.code,
           ...(data.status ? { status: data.status } : {}),
@@ -807,6 +847,12 @@ export async function updateBatch(
     }
     if (err instanceof ProgramHasNoCoursesSignal) {
       return { ok: false, error: PROGRAM_HAS_NO_COURSES };
+    }
+    if (err instanceof BatchTypeLockedSignal) {
+      return {
+        ok: false,
+        error: { code: "conflict", message: "Students are enrolled in this batch, so its type and program can't change." },
+      };
     }
     if (err instanceof CourseInUseSignal) {
       return {
