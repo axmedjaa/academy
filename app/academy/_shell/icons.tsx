@@ -205,6 +205,17 @@ const ICONS: Record<string, (props: IconProps) => React.ReactElement> = {
   // trail." A clock with a counter-clockwise sweep arrow is the standard
   // "history/log" concept; same hand-rolled-SVG convention as every icon
   // above, not a new icon library.
+  plus: (props) => (
+    <Base {...props}>
+      <path d="M12 5v14" />
+      <path d="M5 12h14" />
+    </Base>
+  ),
+  minus: (props) => (
+    <Base {...props}>
+      <path d="M5 12h14" />
+    </Base>
+  ),
   history: (props) => (
     <Base {...props}>
       <path d="M3 12a9 9 0 1 0 3-6.7" />

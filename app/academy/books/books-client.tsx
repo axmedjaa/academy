@@ -150,7 +150,21 @@ export function AddBookButton() {
  * never touched, and each adjustment appears in the book's stock history.
  * Shown only to staff who can manage books; the server checks again.
  */
-export function StockAdjustButton({ book, direction }: { book: Pick<BookRecord, "id" | "name" | "stockQuantity">; direction: StockDirection }) {
+/** One half of the compact Add / Remove control in a stock row (a joined
+ * pair inside one bordered group; see the Stock tab). */
+const STOCK_SEGMENT =
+  "inline-flex h-9 items-center gap-1.5 whitespace-nowrap px-3 text-[13px] font-semibold transition-colors duration-150 focus-visible:relative focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand/40 disabled:cursor-not-allowed disabled:text-muted disabled:opacity-60 disabled:hover:bg-transparent";
+
+export function StockAdjustButton({
+  book,
+  direction,
+  segment = false,
+}: {
+  book: Pick<BookRecord, "id" | "name" | "stockQuantity">;
+  direction: StockDirection;
+  /** Render as one half of the joined Add / Remove control. */
+  segment?: boolean;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const adding = direction === "in";
@@ -160,12 +174,19 @@ export function StockAdjustButton({ book, direction }: { book: Pick<BookRecord, 
     <>
       <button
         type="button"
-        className={adding ? ROW_BTN_PRIMARY : ROW_BTN}
+        className={
+          segment
+            ? `${STOCK_SEGMENT} ${adding ? "text-brand hover:bg-brand-tint" : "text-ink hover:bg-app"}`
+            : adding
+              ? ROW_BTN_PRIMARY
+              : ROW_BTN
+        }
         onClick={() => setOpen(true)}
         disabled={disabled}
         title={disabled ? "No copies in stock to remove." : undefined}
         aria-label={`${adding ? "Add stock to" : "Remove stock from"} ${book.name}`}
       >
+        {segment && <Icon name={adding ? "plus" : "minus"} width={16} height={16} strokeWidth={2.2} />}
         {adding ? "Add" : "Remove"}
       </button>
       <ActionDialog
