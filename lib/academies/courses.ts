@@ -153,7 +153,7 @@ function optionalText(maxLength = 2000) {
 }
 
 // Plain "YYYY-MM-DD" string, same convention as register-student.ts's
-// dateOfBirth / batches.ts's startDate for a `date` (not `timestamp`)
+// registrationDate / batches.ts's startDate for a `date` (not `timestamp`)
 // column — optional (nullable at the DB level; see schema.ts's comment on
 // why these two columns aren't NOT NULL), not required, matching every
 // other non-identity field on this form (description/code/durationWeeks).

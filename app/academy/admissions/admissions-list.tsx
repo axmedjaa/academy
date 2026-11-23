@@ -104,6 +104,11 @@ export function AdmissionsList({ admissions, canManage, canEnroll: canEnrollRole
                     />
                     <span className="min-w-0">
                       {row.fullName}, <span className="tabular-nums">{row.studentNumber}</span>
+                      {row.enrollmentNote && (
+                        <span className="mt-0.5 block text-xs text-muted [overflow-wrap:anywhere]" title={row.enrollmentNote}>
+                          <span className="font-semibold text-[#374151]">Note:</span> {row.enrollmentNote}
+                        </span>
+                      )}
                     </span>
                   </span>
                 </td>
@@ -111,7 +116,7 @@ export function AdmissionsList({ admissions, canManage, canEnroll: canEnrollRole
                   <Badge label="Applied" tone="amber" />
                 </td>
                 <td className={`${rtTd} tabular-nums`} data-label="Registered">
-                  {formatDate(row.createdAt)}
+                  {formatDate(row.registrationDate ?? row.createdAt)}
                 </td>
                 {(canManage || canEnroll) && (
                   <td className={`${rtTd} text-right`} data-actions="">

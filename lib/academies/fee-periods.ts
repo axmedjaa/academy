@@ -1039,6 +1039,8 @@ export interface StudentEnrollmentOption {
   /** Set when this course belongs to a complete-program enrollment: it is
    * managed (and withdrawn) with the program, never on its own. */
   programEnrollmentId: string | null;
+  /** Migration 0057: "full" (free) or "partial", null when none. */
+  scholarship: "full" | "partial" | null;
 }
 
 export type ListEnrollmentsForStudentResult =
@@ -1080,6 +1082,7 @@ export async function listEnrollmentsForStudent(
       batchStatus: batches.status,
       branchName: branches.name,
       programEnrollmentId: batchEnrollments.programEnrollmentId,
+      scholarship: batchEnrollments.scholarship,
     })
     .from(batchEnrollments)
     .innerJoin(batches, eq(batchEnrollments.batchId, batches.id))

@@ -177,7 +177,7 @@ function validInput(branchId: string, overrides: Partial<RegisterStudentInput> =
   return {
     branchId,
     fullName: `Test Student ${randomUUID()}`,
-    dateOfBirth: "2005-01-01",
+    registrationDate: "2026-01-01",
     gender: "female",
     phone: "+1-555-0177",
     email: "",

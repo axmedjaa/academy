@@ -16,6 +16,7 @@ import { showSuccessToast } from "@/lib/ui/toast";
 import { NETWORK_ERROR_MESSAGE } from "@/lib/ui/guard-action";
 import { Badge, Button, Section } from "@/app/academy/_shell/ui";
 import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { ChangeFeeButton } from "@/app/academy/finance/fee-periods/change-fee";
 import {
   DField,
   DesignDialog,
@@ -298,6 +299,7 @@ export function ProgramEnrollmentCard({
         </div>
         <span className="flex flex-wrap items-center gap-2">
           <Badge label={enrollment.status} tone={active ? "green" : "gray"} />
+          {enrollment.scholarship && <Badge label={enrollment.scholarship === "full" ? "Full scholarship" : "Partial scholarship"} tone="blue" />}
           {status && <Badge label={status.label} tone={status.tone} />}
         </span>
       </div>
@@ -334,16 +336,23 @@ export function ProgramEnrollmentCard({
       </DataTable>
       <p className="mb-5 mt-2 text-xs text-muted">These courses are part of the program. They have no separate fees.</p>
 
-      {billing ? (
+      {billing && enrollment.scholarship === "full" && billing.periods.length === 0 ? (
+        <p className="text-[13px] text-muted">Full scholarship: this program is free and nothing is ever due.</p>
+      ) : billing ? (
         <>
           <h3 className="mb-2 text-sm font-semibold text-ink">Program fee</h3>
           <dl className="mb-4 grid grid-cols-2 gap-x-6 gap-y-2 text-[13px] sm:grid-cols-4">
             {(
               [
                 ["Program fee", formatMoney(billing.programFeeCents, billing.currency)],
-                ["Discount", formatMoney(billing.discountCents, billing.currency)],
+                [enrollment.scholarship === "partial" ? "Scholarship" : "Discount", formatMoney(billing.discountCents, billing.currency)],
                 ["Final fee", formatMoney(billing.finalFeeCents, billing.currency)],
-                ["Plan", describePaymentPlan(billing.finalFeeCents, billing.installments, billing.currency)],
+                [
+                  "Plan",
+                  billing.periods.length === billing.installments
+                    ? describePaymentPlan(billing.finalFeeCents, billing.installments, billing.currency)
+                    : `${billing.periods.length} installment${billing.periods.length === 1 ? "" : "s"}`,
+                ],
                 ["Paid", formatMoney(billing.paidCents, billing.currency)],
                 ["Outstanding", formatMoney(billing.outstandingCents, billing.currency)],
                 ["Overdue", formatMoney(billing.overdueCents, billing.currency)],
@@ -454,6 +463,14 @@ export function ProgramEnrollmentCard({
             <Button type="button" onClick={() => setPayOpen(true)}>
               Record payment
             </Button>
+          )}
+          {canRecordPayment && (
+            <ChangeFeeButton
+              target={{ kind: "program", programEnrollmentId: enrollment.id }}
+              studentName={enrollment.programName}
+              label={`${enrollment.batchCode} · Program · ${enrollment.programName}`}
+              className="inline-flex min-h-11 items-center rounded-lg border border-border-strong bg-surface px-4 text-sm font-semibold text-ink transition-colors duration-150 hover:bg-app"
+            />
           )}
           {canWithdraw && (
             <Button type="button" variant="danger" onClick={() => setWithdrawOpen(true)}>

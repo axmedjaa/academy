@@ -116,7 +116,7 @@ describe("students", () => {
         branchId,
         studentNumber: `STD-${randomUUID().slice(0, 8)}`,
         fullName: "Ada Lovelace",
-        dateOfBirth: "2005-06-15",
+        registrationDate: "2005-06-15",
         gender: "female",
         phone: "+1-555-0100",
         email: "ada@example.com",
@@ -145,7 +145,7 @@ describe("students", () => {
       .returning();
     createdStudentIds.push(row.id);
 
-    expect(row.dateOfBirth).toBeNull();
+    expect(row.registrationDate).toBeNull();
     expect(row.gender).toBeNull();
     expect(row.guardianName).toBeNull();
     expect(row.status).toBe("active");

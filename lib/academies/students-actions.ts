@@ -48,7 +48,7 @@ export interface StudentFormState {
 function parseStudentFormData(formData: FormData): UpdateStudentInput {
   const input: UpdateStudentInput = {
     fullName: String(formData.get("fullName") ?? ""),
-    dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
+    registrationDate: String(formData.get("registrationDate") ?? ""),
     gender: String(formData.get("gender") ?? ""),
     phone: String(formData.get("phone") ?? ""),
     email: String(formData.get("email") ?? ""),

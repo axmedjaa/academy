@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listFeePeriodOverview } from "@/lib/academies/fee-period-overview";
-import { todayDateOnlyInAcademyTimezone, type EnrollmentPaymentStatus } from "@/lib/academies/fee-periods";
+import type { EnrollmentPaymentStatus } from "@/lib/academies/fee-periods";
 import { getStudentPhotoUrlsByIds } from "@/lib/academies/students";
 import { formatMoney } from "@/lib/ui/money";
 import { describePaymentPlan } from "@/lib/ui/payment-plan";
@@ -12,16 +12,16 @@ import { DataTable, NoteBlock, PersonCell, ROW_BTN, ROW_BTN_PRIMARY, rtTd, rtTh 
 import { ChipParamFilter, FilterBar, SearchField } from "@/app/academy/_shell/filter-controls";
 import { Icon } from "@/app/academy/_shell/icons";
 import { PaginationNav } from "@/components/pagination-nav";
-import { ChangeScheduleButton } from "./change-schedule";
+import { ChangeFeeButton } from "./change-fee";
 
 const STATUSES: EnrollmentPaymentStatus[] = ["overdue", "partially_paid", "unpaid", "paid"];
 
 /**
  * Fee periods (design A14): every active enrollment's installment plan and
  * where it stands today, searchable and filterable by status. Collect and
- * the period-by-period ledger live on the student's own page (Fees tab);
- * Change schedule is the existing audited schedule action, which carries
- * any unpaid balance into the new plan server-side.
+ * the period-by-period ledger live on the student's own page (Fees tab).
+ * Change fee (course or program) keeps what was paid and spreads the rest of
+ * the new fee over new monthly payments (lib/academies/fee-plan-change.ts).
  */
 export default async function FeePeriodsPage({
   searchParams,
@@ -32,7 +32,6 @@ export default async function FeePeriodsPage({
   if (!context) redirect("/login");
 
   const params = await searchParams;
-  const today = todayDateOnlyInAcademyTimezone();
   const get = (key: string) => {
     const value = params[key];
     return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
@@ -121,7 +120,12 @@ export default async function FeePeriodsPage({
                         <span className="block text-xs text-muted">Plan total {formatMoney(row.schedule.amountCents, currency)}</span>
                       </>
                     ) : (
-                      <span className="text-muted">No schedule</span>
+                      <span className="text-muted">{row.scholarship === "full" ? "Free, nothing due" : row.status === "paid" ? "Paid in full" : "No schedule"}</span>
+                    )}
+                    {row.scholarship && (
+                      <span className="mt-1 block">
+                        <Badge label={row.scholarship === "full" ? "Full scholarship" : "Partial scholarship"} tone="blue" />
+                      </span>
                     )}
                   </td>
                   <td className={`${rtTd} text-right tabular-nums`} data-label="Due so far">
@@ -148,15 +152,11 @@ export default async function FeePeriodsPage({
                           Periods
                         </Link>
                       )}
-                      {result.canManage && row.schedule && row.kind === "course" && (
-                        <ChangeScheduleButton
-                          enrollmentId={row.enrollmentId}
+                      {result.canManage && (
+                        <ChangeFeeButton
+                          target={row.kind === "course" ? { kind: "course", enrollmentId: row.enrollmentId } : { kind: "program", programEnrollmentId: row.enrollmentId }}
                           studentName={row.studentName}
-                          batchLabel={`${row.batchCode} · ${row.courseName}`}
-                          schedule={row.schedule}
-                          paidCents={row.paidCents}
-                          hasStarted={row.hasStarted}
-                          today={today}
+                          label={`${row.batchCode} · ${row.kind === "program" ? `Program · ${row.courseName}` : row.courseName}`}
                         />
                       )}
                     </span>
@@ -170,7 +170,8 @@ export default async function FeePeriodsPage({
 
       <NoteBlock>
         The schedule total is the full fee, not a per-installment amount, and the last installment absorbs any rounding.
-        Changing a schedule after payments carries the remaining balance into the new plan. Overpayment is not supported.
+        Change fee keeps what was already paid and spreads the rest of the new fee over the new monthly payments. A full
+        scholarship is free and never shows as unpaid. Overpayment is not supported.
         Figures cover the installments that have started so far. Open a student to see each period and collect payments.
       </NoteBlock>
     </div>

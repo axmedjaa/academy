@@ -15,8 +15,10 @@ import {
   FEE_INTERVAL_MONTHS_OPTIONS,
   feePeriods,
   paymentAllocations,
+  SCHOLARSHIP_KINDS,
   staffProfiles,
   students,
+  type ScholarshipKind,
 } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import {
@@ -632,18 +634,31 @@ const paymentPlanSchema = z.object({
 
 export type PaymentPlanInput = z.input<typeof paymentPlanSchema>;
 
-export const enrollStudentSchema = z.object({
-  batchId: z.string().uuid("Select a batch"),
-  studentId: z.string().uuid("Select a student"),
-  /** The batch courses to enroll in, each with its own enrollment and fee
-   * plan. May be omitted only when the batch runs exactly one course. */
-  courseIds: z
-    .array(z.string().uuid("Select a course"))
-    .optional()
-    .transform((ids) => [...new Set(ids ?? [])]),
-  /** Applied to each course: the total fee per course and its installments. */
-  paymentPlan: paymentPlanSchema,
-});
+export const enrollStudentSchema = z
+  .object({
+    batchId: z.string().uuid("Select a batch"),
+    studentId: z.string().uuid("Select a student"),
+    /** The batch courses to enroll in, each with its own enrollment and fee
+     * plan. May be omitted only when the batch runs exactly one course. */
+    courseIds: z
+      .array(z.string().uuid("Select a course"))
+      .optional()
+      .transform((ids) => [...new Set(ids ?? [])]),
+    /** Migration 0057. "full" = free: no fee plan at all (paymentPlan is
+     * ignored). "partial" = the plan's discount is a scholarship. */
+    scholarship: z.enum(SCHOLARSHIP_KINDS).optional(),
+    /** Applied to each course: the total fee per course and its
+     * installments. Required unless the scholarship is "full". */
+    paymentPlan: paymentPlanSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.scholarship === "full") return;
+    if (!data.paymentPlan) {
+      ctx.addIssue({ code: "custom", path: ["paymentPlan"], message: "Enter the course fee and payment plan." });
+    } else if (data.scholarship === "partial" && !(data.paymentPlan.discountCents && data.paymentPlan.discountCents > 0)) {
+      ctx.addIssue({ code: "custom", path: ["paymentPlan", "discountCents"], message: "Enter the scholarship amount taken off the fee." });
+    }
+  });
 
 export type EnrollStudentInput = z.input<typeof enrollStudentSchema>;
 
@@ -660,6 +675,8 @@ export interface BatchEnrollmentRecord {
   /** Set when this course row belongs to a complete-program enrollment
    * (migration 0049): it is managed with the program, never on its own. */
   programEnrollmentId: string | null;
+  /** Migration 0057: "full" (free) or "partial", null when none. */
+  scholarship: ScholarshipKind | null;
 }
 
 function toEnrollmentRecord(row: typeof batchEnrollments.$inferSelect): BatchEnrollmentRecord {
@@ -673,6 +690,7 @@ function toEnrollmentRecord(row: typeof batchEnrollments.$inferSelect): BatchEnr
     status: row.status,
     createdAt: row.createdAt,
     programEnrollmentId: row.programEnrollmentId ?? null,
+    scholarship: row.scholarship ?? null,
   };
 }
 
@@ -789,7 +807,8 @@ export async function enrollStudentInBatch(
         };
       }
 
-      const currency = await resolveCurrency(tx, academyId, data.paymentPlan.currency);
+      const plan = data.scholarship === "full" ? null : data.paymentPlan ?? null;
+      const currency = plan ? await resolveCurrency(tx, academyId, plan.currency) : null;
       const created: (typeof batchEnrollments.$inferSelect)[] = [];
       for (const courseId of courseIds) {
         const [row] = await tx
@@ -799,8 +818,28 @@ export async function enrollStudentInBatch(
             batchId: data.batchId,
             courseId,
             studentId: data.studentId,
+            scholarship: data.scholarship ?? null,
           })
           .returning();
+
+        // A full scholarship is free: no fee plan, nothing is ever due.
+        if (!plan || !currency) {
+          await recordAudit(
+            {
+              actorUserId: actorContext.userId,
+              actorRole: membershipRole,
+              academyId,
+              action: "enrollStudentInBatch",
+              entityType: "batch_enrollment",
+              entityId: row.id,
+              branchId: batch.branchId,
+              after: { ...toEnrollmentRecord(row), scholarship: "full", paymentPlan: null },
+            },
+            tx,
+          );
+          created.push(row);
+          continue;
+        }
 
         // Atomically create the enrollment's initial payment plan in the SAME
         // transaction — approved architecture decision: "There must never be
@@ -816,15 +855,15 @@ export async function enrollStudentInBatch(
         const schedule = await createInitialEnrollmentFeeSchedule(tx, {
           academyId,
           enrollmentId: row.id,
-          intervalMonths: data.paymentPlan.intervalMonths,
-          amountCents: data.paymentPlan.amountCents,
-          discountCents: data.paymentPlan.discountCents ?? 0,
+          intervalMonths: plan.intervalMonths,
+          amountCents: plan.amountCents,
+          discountCents: plan.discountCents ?? 0,
           currency,
           // Defaults to today — Somalia-local calendar date, not the
           // server's own (likely UTC) timezone — see
           // todayDateOnlyInAcademyTimezone's own doc comment. The first fee
           // period is generated from this anchor immediately below.
-          anchorDate: data.paymentPlan.anchorDate ?? todayDateOnlyInAcademyTimezone(),
+          anchorDate: plan.anchorDate ?? todayDateOnlyInAcademyTimezone(),
           createdBy: actorContext.userId,
         });
 
@@ -842,7 +881,11 @@ export async function enrollStudentInBatch(
             entityType: "batch_enrollment",
             entityId: row.id,
             branchId: batch.branchId,
-            after: { ...toEnrollmentRecord(row), paymentPlan: { intervalMonths: schedule.intervalMonths, amountCents: schedule.amountCents, currency: schedule.currency, anchorDate: schedule.anchorDate } },
+            after: {
+              ...toEnrollmentRecord(row),
+              ...(data.scholarship ? { scholarship: data.scholarship } : {}),
+              paymentPlan: { intervalMonths: schedule.intervalMonths, amountCents: schedule.amountCents, discountCents: schedule.discountCents, currency: schedule.currency, anchorDate: schedule.anchorDate },
+            },
           },
           tx,
         );
