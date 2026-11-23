@@ -3,19 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import {
-  getEnrollmentFeeSchedule as getEnrollmentFeeScheduleForActor,
   listEnrollmentsForStudent as listEnrollmentsForStudentForActor,
   listFeePeriodsForEnrollment as listFeePeriodsForEnrollmentForActor,
   recordEnrollmentPayment as recordEnrollmentPaymentForActor,
   recordFeePeriodPayment as recordFeePeriodPaymentForActor,
-  setEnrollmentFeeSchedule as setEnrollmentFeeScheduleForActor,
   type FeePeriodActionError,
-  type GetEnrollmentFeeScheduleResult,
   type ListEnrollmentsForStudentResult,
   type ListFeePeriodsResult,
   type RecordEnrollmentPaymentInput,
   type RecordFeePeriodPaymentInput,
-  type SetEnrollmentFeeScheduleInput,
 } from "@/lib/academies/fee-periods";
 
 /** Thin "use server" wrappers — same convention as
@@ -26,17 +22,6 @@ const UNAUTHENTICATED: FeePeriodActionError = { code: "forbidden", message: "You
 export interface FeePeriodsFormState {
   ok: boolean;
   error?: FeePeriodActionError;
-}
-
-export async function setEnrollmentFeeScheduleAction(input: SetEnrollmentFeeScheduleInput): Promise<FeePeriodsFormState> {
-  const context = await getAuthContext();
-  if (!context) return { ok: false, error: UNAUTHENTICATED };
-
-  const result = await setEnrollmentFeeScheduleForActor(context, input);
-  if (!result.ok) return { ok: false, error: result.error };
-
-  revalidatePath("/academy/finance/fee-periods");
-  return { ok: true };
 }
 
 export async function recordFeePeriodPaymentAction(input: RecordFeePeriodPaymentInput): Promise<FeePeriodsFormState> {
@@ -80,10 +65,4 @@ export async function listFeePeriodsForEnrollmentAction(enrollmentId: string): P
   const context = await getAuthContext();
   if (!context) return { ok: false, error: UNAUTHENTICATED };
   return listFeePeriodsForEnrollmentForActor(context, enrollmentId);
-}
-
-export async function getEnrollmentFeeScheduleAction(enrollmentId: string): Promise<GetEnrollmentFeeScheduleResult> {
-  const context = await getAuthContext();
-  if (!context) return { ok: false, error: UNAUTHENTICATED };
-  return getEnrollmentFeeScheduleForActor(context, enrollmentId);
 }
