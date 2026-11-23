@@ -347,16 +347,25 @@ export function EnrolledStudentsTable({
     } else if (withdrawState.error) showErrorToast(withdrawState.error.message);
   }, [withdrawState, router]);
 
-  const active = enrollments.filter((e) => e.status === "active").length;
   const withdrawRow = enrollments.find((e) => e.id === withdrawId) ?? null;
   const deleteRow = enrollments.find((e) => e.id === deleteId) ?? null;
+
+  // One row per student: a student taking Word and Excel here (as a program
+  // or as separate courses) is listed once, with both courses.
+  const groups: { studentId: string; rows: EnrollmentRow[] }[] = [];
+  for (const enrollment of enrollments) {
+    const group = groups.find((entry) => entry.studentId === enrollment.studentId);
+    if (group) group.rows.push(enrollment);
+    else groups.push({ studentId: enrollment.studentId, rows: [enrollment] });
+  }
+  const activeStudents = groups.filter((group) => group.rows.some((row) => row.status === "active")).length;
 
   return (
     <>
       <BlockTitle>
         Enrolled students{" "}
         <span className="font-normal text-muted">
-          ({active} active{enrollments.length !== active ? `, ${enrollments.length} in total` : ""})
+          ({activeStudents} active{groups.length !== activeStudents ? `, ${groups.length} in total` : ""})
         </span>
       </BlockTitle>
       {enrollments.length === 0 ? (
@@ -366,7 +375,7 @@ export function EnrolledStudentsTable({
           <thead>
             <tr>
               <th className={rtTh}>Student</th>
-              <th className={rtTh}>Course</th>
+              <th className={rtTh}>Courses</th>
               {showFees && <th className={rtTh}>Fee plan</th>}
               {showFees && <th className={rtTh}>Overdue</th>}
               <th className={rtTh}>Enrolled</th>
@@ -379,83 +388,108 @@ export function EnrolledStudentsTable({
             </tr>
           </thead>
           <tbody>
-            {enrollments.map((enrollment) => (
-              <tr key={enrollment.id} className={trHover}>
-                <td className={rtTd} data-label="Student">
-                  <Link
-                    href={`/academy/students/${enrollment.studentId}`}
-                    className="flex min-h-11 flex-col justify-center no-underline hover:no-underline"
-                  >
-                    <span className="font-semibold !text-ink hover:underline">{enrollment.studentFullName}</span>
-                    <span className="text-xs text-muted">{enrollment.studentNumber}</span>
-                  </Link>
-                </td>
-                <td className={rtTd} data-label="Course">
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    {enrollment.courseName}
-                    {enrollment.programEnrollmentId && <Badge label="Program" tone="blue" />}
-                  </span>
-                </td>
-                {showFees && (
-                  <td className={rtTd} data-label="Fee plan">
-                    {enrollment.feePlan ?? <span className="text-muted">No fee plan</span>}
+            {groups.map(({ studentId, rows }) => {
+              const first = rows[0];
+              const program = rows.some((row) => row.programEnrollmentId);
+              const anyActive = rows.some((row) => row.status === "active");
+              const status = anyActive ? "active" : first.status;
+              const enrolledAt = rows.reduce((earliest, row) => (row.enrolledAt < earliest ? row.enrolledAt : earliest), first.enrolledAt);
+              // Fee plans: one for a program; one per course otherwise.
+              const plans = program
+                ? [{ key: first.id, label: null as string | null, plan: rows.find((row) => row.status === "active")?.feePlan ?? first.feePlan }]
+                : rows.filter((row) => row.status === "active" || rows.length === 1).map((row) => ({ key: row.id, label: rows.length > 1 ? row.courseName : null, plan: row.feePlan }));
+              const single = rows.length === 1;
+              return (
+                <tr key={studentId} className={trHover}>
+                  <td className={rtTd} data-label="Student">
+                    <Link href={`/academy/students/${studentId}`} className="flex min-h-11 flex-col justify-center no-underline hover:no-underline">
+                      <span className="font-semibold !text-ink hover:underline">{first.studentFullName}</span>
+                      <span className="text-xs text-muted">{first.studentNumber}</span>
+                    </Link>
                   </td>
-                )}
-                {showFees && (
-                  <td className={`${rtTd} tabular-nums`} data-label="Overdue">
-                    {enrollment.overdue ? (
-                      <span className="font-semibold text-[#B91C1C]">{enrollment.overdue}</span>
-                    ) : (
-                      <span className="text-muted">None</span>
-                    )}
-                  </td>
-                )}
-                <td className={`${rtTd} tabular-nums`} data-label="Enrolled">
-                  {formatDate(enrollment.enrolledAt)}
-                </td>
-                <td className={rtTd} data-label="Status">
-                  <Badge label={enrollment.status} tone={enrollment.status === "active" ? "green" : enrollment.status === "completed" ? "slate" : "gray"} />
-                </td>
-                {canManage && (
-                  <td className={rtTd} data-actions="">
-                    {enrollment.programEnrollmentId ? (
-                      // Program courses leave only with the whole program.
-                      enrollment.status === "active" && (
-                        <Link
-                          href={`/academy/students/${enrollment.studentId}`}
-                          className="inline-flex min-h-11 items-center whitespace-nowrap text-[13px] font-semibold !text-brand hover:underline"
-                        >
-                          Manage on student page
-                        </Link>
-                      )
-                    ) : (
-                    <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                      {enrollment.status === "active" && (
-                        <button type="button" disabled={withdrawing} onClick={() => setWithdrawId(enrollment.id)} className={ROW_BTN}>
-                          Withdraw
-                        </button>
-                      )}
-                      {canDelete && (
-                        <button
-                          type="button"
-                          disabled={!enrollment.deletionEligibility.eligible}
-                          title={
-                            enrollment.deletionEligibility.eligible
-                              ? undefined
-                              : `This enrollment can't be deleted because ${enrollment.deletionEligibility.reasons.join("; ")}. Withdraw it instead.`
-                          }
-                          onClick={() => setDeleteId(enrollment.id)}
-                          className={`${ROW_BTN} !text-[#B91C1C] disabled:cursor-not-allowed`}
-                        >
-                          Delete
-                        </button>
-                      )}
+                  <td className={rtTd} data-label="Courses">
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      {program && <Badge label="Program" tone="blue" />}
+                      {rows.map((row, index) => (
+                        <span key={row.id} className={row.status === "active" ? "text-ink" : "text-muted line-through decoration-1"}>
+                          {row.courseName}
+                          {row.status !== "active" && <span className="sr-only"> ({row.status})</span>}
+                          {index < rows.length - 1 && <span aria-hidden="true">,</span>}
+                        </span>
+                      ))}
                     </span>
-                    )}
                   </td>
-                )}
-              </tr>
-            ))}
+                  {showFees && (
+                    <td className={rtTd} data-label="Fee plan">
+                      <span className="flex flex-col gap-0.5">
+                        {plans.map((entry) => (
+                          <span key={entry.key}>
+                            {entry.label && <span className="font-semibold">{entry.label}: </span>}
+                            {entry.plan ?? <span className="text-muted">No fee plan</span>}
+                          </span>
+                        ))}
+                      </span>
+                    </td>
+                  )}
+                  {showFees && (
+                    <td className={`${rtTd} tabular-nums`} data-label="Overdue">
+                      {first.overdue ? <span className="font-semibold text-[#B91C1C]">{first.overdue}</span> : <span className="text-muted">None</span>}
+                    </td>
+                  )}
+                  <td className={`${rtTd} tabular-nums`} data-label="Enrolled">
+                    {formatDate(enrolledAt)}
+                  </td>
+                  <td className={rtTd} data-label="Status">
+                    <Badge label={status} tone={status === "active" ? "green" : status === "completed" ? "slate" : "gray"} />
+                  </td>
+                  {canManage && (
+                    <td className={rtTd} data-actions="">
+                      {program ? (
+                        // Program courses leave only with the whole program.
+                        anyActive && (
+                          <Link
+                            href={`/academy/students/${studentId}`}
+                            className="inline-flex min-h-11 items-center whitespace-nowrap text-[13px] font-semibold !text-brand hover:underline"
+                          >
+                            Manage on student page
+                          </Link>
+                        )
+                      ) : (
+                        <span className="flex flex-col items-start gap-1.5">
+                          {rows.map((row) =>
+                            row.status === "active" || canDelete ? (
+                              <span key={row.id} className="inline-flex items-center gap-2 whitespace-nowrap">
+                                {row.status === "active" && (
+                                  <button type="button" disabled={withdrawing} onClick={() => setWithdrawId(row.id)} className={ROW_BTN}>
+                                    {single ? "Withdraw" : `Withdraw ${row.courseName}`}
+                                  </button>
+                                )}
+                                {canDelete && (
+                                  <button
+                                    type="button"
+                                    disabled={!row.deletionEligibility.eligible}
+                                    title={
+                                      row.deletionEligibility.eligible
+                                        ? undefined
+                                        : `This enrollment can't be deleted because ${row.deletionEligibility.reasons.join("; ")}. Withdraw it instead.`
+                                    }
+                                    onClick={() => setDeleteId(row.id)}
+                                    aria-label={single ? undefined : `Delete ${row.courseName} enrollment`}
+                                    className={`${ROW_BTN} !text-[#B91C1C] disabled:cursor-not-allowed`}
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                              </span>
+                            ) : null,
+                          )}
+                        </span>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
           </tbody>
         </DataTable>
       )}

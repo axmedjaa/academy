@@ -18,6 +18,8 @@ import {
   studentCourseRefunds,
   studentPayments,
   students,
+  SCHOLARSHIP_KINDS,
+  type ScholarshipKind,
 } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { getBranchScope, inBranchScope, type BranchScope } from "@/lib/academies/branch-access";
@@ -201,8 +203,12 @@ export const enrollStudentInProgramSchema = z
     studentId: z.string().uuid("Select a student"),
     /** A program-based batch: the program and its courses come from it. */
     batchId: z.string().uuid("Select a program batch"),
-    /** The full program fee before discount, typed in by staff. */
-    programFeeCents: z.number().int("Fee must be a whole number of cents").positive("Enter the program fee"),
+    /** Migration 0057. "full" = free: no program fee, no installments.
+     * "partial" = the discount is a scholarship. */
+    scholarship: z.enum(SCHOLARSHIP_KINDS).optional(),
+    /** The full program fee before discount, typed in by staff (not needed
+     * for a full scholarship). */
+    programFeeCents: z.number().int("Fee must be a whole number of cents").nonnegative("Enter the program fee").default(0),
     discountCents: z.number().int("Discount must be a whole number of cents").nonnegative("Discount can't be negative").default(0),
     /** Number of equal monthly installments (e.g. 12 for a one-year program). */
     installments: installmentsSchema,
@@ -213,9 +219,18 @@ export const enrollStudentInProgramSchema = z
     initialPayment: z.object(paymentFields).optional(),
     idempotencyKey: idempotencyKeyField,
   })
-  .refine((data) => data.discountCents < data.programFeeCents, {
-    message: "The discount must be less than the program fee.",
-    path: ["discountCents"],
+  .superRefine((data, ctx) => {
+    if (data.scholarship === "full") {
+      if (data.initialPayment) ctx.addIssue({ code: "custom", path: ["initialPayment"], message: "A full scholarship has nothing to pay." });
+      return;
+    }
+    if (data.programFeeCents <= 0) {
+      ctx.addIssue({ code: "custom", path: ["programFeeCents"], message: "Enter the program fee" });
+    } else if (data.discountCents >= data.programFeeCents) {
+      ctx.addIssue({ code: "custom", path: ["discountCents"], message: "The discount must be less than the program fee." });
+    } else if (data.scholarship === "partial" && data.discountCents <= 0) {
+      ctx.addIssue({ code: "custom", path: ["discountCents"], message: "Enter the scholarship amount taken off the program fee." });
+    }
   });
 
 export type EnrollStudentInProgramInput = z.input<typeof enrollStudentInProgramSchema>;
@@ -228,6 +243,8 @@ export interface ProgramEnrollmentRecord {
   batchId: string;
   status: "active" | "withdrawn" | "completed";
   enrolledAt: Date;
+  /** Migration 0057: "full" (free) or "partial", null when none. */
+  scholarship: ScholarshipKind | null;
 }
 
 function toRecord(row: typeof programEnrollments.$inferSelect): ProgramEnrollmentRecord {
@@ -239,6 +256,7 @@ function toRecord(row: typeof programEnrollments.$inferSelect): ProgramEnrollmen
     batchId: row.batchId,
     status: row.status,
     enrolledAt: row.enrolledAt,
+    scholarship: row.scholarship ?? null,
   };
 }
 
@@ -276,7 +294,8 @@ export async function enrollStudentInProgram(
   // Recording money at registration needs the payment authority too.
   if (data.initialPayment && !canManageLevel(access.feeLevel)) return { ok: false, error: FORBIDDEN };
 
-  const finalFeeCents = data.programFeeCents - data.discountCents;
+  const free = data.scholarship === "full";
+  const finalFeeCents = free ? 0 : data.programFeeCents - data.discountCents;
   if (data.initialPayment && data.initialPayment.amountCents > finalFeeCents) {
     return {
       ok: false,
@@ -364,6 +383,7 @@ export async function enrollStudentInProgram(
           studentId: student.id,
           programId: program.id,
           batchId: batch.id,
+          scholarship: data.scholarship ?? null,
           createdBy: actorContext.userId,
         })
         .returning();
@@ -381,6 +401,24 @@ export async function enrollStudentInProgram(
           })),
         )
         .returning({ id: batchEnrollments.id });
+
+      // A full scholarship is free: no fee schedule and no installments.
+      if (free) {
+        await recordAudit(
+          {
+            actorUserId: actorContext.userId,
+            actorRole: access.membershipRole,
+            academyId: access.academyId,
+            branchId: batch.branchId,
+            action: "enrollStudentInProgram",
+            entityType: "program_enrollment",
+            entityId: enrollment.id,
+            after: { ...toRecord(enrollment), courseEnrollmentIds: courseEnrollments.map((row) => row.id), fee: null },
+          },
+          tx,
+        );
+        return { enrollment, courseEnrollmentIds: courseEnrollments.map((row) => row.id), installmentCents: [] as number[], initialPaymentId: null };
+      }
 
       // The one program fee.
       const currency = await resolveCurrency(tx, access.academyId, data.currency);
@@ -428,6 +466,7 @@ export async function enrollStudentInProgram(
             ...toRecord(enrollment),
             courseEnrollmentIds: courseEnrollments.map((row) => row.id),
             fee: {
+              ...(data.scholarship ? { scholarship: data.scholarship } : {}),
               programFeeCents: data.programFeeCents,
               discountCents: data.discountCents,
               finalFeeCents,
@@ -753,6 +792,8 @@ export type ListStudentProgramEnrollmentsResult =
   | { ok: false; error: ProgramEnrollmentError };
 
 export function programPaymentStatus(finalFeeCents: number, paidCents: number): ProgramPaymentStatus {
+  // Nothing to pay (a full scholarship): settled.
+  if (finalFeeCents <= 0) return "paid";
   if (paidCents <= 0) return "unpaid";
   return paidCents >= finalFeeCents ? "paid" : "partially_paid";
 }
@@ -834,6 +875,47 @@ export async function listStudentProgramEnrollments(
   };
 }
 
+/** A program enrollment's fee plan in one line's worth of data, for lists
+ * (the batch roster). Empty when the viewer can't see student fees. */
+export interface ProgramFeePlanSummary {
+  scholarship: ScholarshipKind | null;
+  /** The current plan (null: free, or nothing left to pay). */
+  plan: { amountCents: number; intervalMonths: number; currency: string } | null;
+}
+
+export async function getProgramFeePlans(actorContext: AuthContext, programEnrollmentIds: string[]): Promise<Map<string, ProgramFeePlanSummary>> {
+  const result = new Map<string, ProgramFeePlanSummary>();
+  const ids = [...new Set(programEnrollmentIds)].filter((id) => z.string().uuid().safeParse(id).success);
+  if (ids.length === 0) return result;
+  const resolved = await resolveAccess(actorContext);
+  if (!resolved.ok || resolved.access.feeLevel === "none") return result;
+  const access = resolved.access;
+  const rows = await db
+    .select({
+      id: programEnrollments.id,
+      scholarship: programEnrollments.scholarship,
+      branchId: batches.branchId,
+      amountCents: enrollmentFeeSchedules.amountCents,
+      intervalMonths: enrollmentFeeSchedules.intervalMonths,
+      currency: enrollmentFeeSchedules.currency,
+    })
+    .from(programEnrollments)
+    .innerJoin(batches, eq(batches.id, programEnrollments.batchId))
+    .leftJoin(enrollmentFeeSchedules, eq(enrollmentFeeSchedules.programEnrollmentId, programEnrollments.id))
+    .where(and(eq(programEnrollments.academyId, access.academyId), inArray(programEnrollments.id, ids)));
+  for (const row of rows) {
+    if (!inBranchScope(access.scope, row.branchId)) continue;
+    result.set(row.id, {
+      scholarship: row.scholarship ?? null,
+      plan:
+        row.amountCents !== null && row.intervalMonths !== null && row.currency !== null
+          ? { amountCents: row.amountCents, intervalMonths: row.intervalMonths, currency: row.currency }
+          : null,
+    });
+  }
+  return result;
+}
+
 /** Program fee, installments, payments and balances for these enrollments. */
 async function loadBilling(academyId: string, programEnrollmentIds: string[]): Promise<Map<string, ProgramBilling>> {
   const [schedules, periods] = await Promise.all([
@@ -898,9 +980,11 @@ async function loadBilling(academyId: string, programEnrollmentIds: string[]): P
 
   const today = todayDateOnly();
   const result = new Map<string, ProgramBilling>();
-  for (const schedule of schedules) {
-    const id = schedule.programEnrollmentId;
-    if (!id) continue;
+  const scheduleById = new Map(schedules.map((row) => [row.programEnrollmentId, row]));
+  for (const id of programEnrollmentIds) {
+    // No schedule = a full scholarship, or a fee already paid in full after
+    // Change fee (lib/academies/fee-plan-change.ts): nothing more is due.
+    const schedule = scheduleById.get(id) ?? null;
     const own = periods
       .filter((period) => period.programEnrollmentId === id)
       .sort((a, b) => (a.periodStart < b.periodStart ? -1 : a.periodStart > b.periodStart ? 1 : 0));
@@ -918,7 +1002,10 @@ async function loadBilling(academyId: string, programEnrollmentIds: string[]): P
       };
     });
     const paidCents = installments.reduce((sum, p) => sum + Math.min(p.paidCents, p.expectedAmountCents), 0);
-    const finalFeeCents = schedule.amountCents;
+    // What is owed in total is what the installments charge: after Change
+    // fee the schedule describes only the part planned from its anchor on.
+    const finalFeeCents = own.reduce((sum, period) => sum + period.expectedAmountCents, 0);
+    const discountCents = schedule?.discountCents ?? 0;
     const seen = new Set<string>();
     const payments: ProgramPaymentRow[] = [];
     for (const row of paymentRows.filter((payment) => payment.programEnrollmentId === id)) {
@@ -939,13 +1026,13 @@ async function loadBilling(academyId: string, programEnrollmentIds: string[]): P
     }
     payments.sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime());
     result.set(id, {
-      currency: schedule.currency,
-      programFeeCents: finalFeeCents + schedule.discountCents,
-      discountCents: schedule.discountCents,
+      currency: schedule?.currency ?? own[0]?.currency ?? "USD",
+      programFeeCents: finalFeeCents + discountCents,
+      discountCents,
       finalFeeCents,
-      installments: schedule.intervalMonths,
+      installments: schedule?.intervalMonths ?? own.length,
       installmentCents: own.map((period) => period.expectedAmountCents),
-      anchorDate: schedule.anchorDate,
+      anchorDate: schedule?.anchorDate ?? own[0]?.periodStart ?? "",
       paidCents,
       refundedCents: refundedByEnrollment.get(id) ?? 0,
       outstandingCents: Math.max(0, finalFeeCents - paidCents),

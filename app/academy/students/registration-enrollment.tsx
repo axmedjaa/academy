@@ -31,6 +31,16 @@ import { DField, controlClass } from "@/app/academy/_shell/design-form";
 
 export type EnrollmentMode = "none" | "courses" | "program";
 type Method = "cash" | "mobile_money" | "bank_transfer";
+type Scholarship = "none" | "partial" | "full";
+
+const SCHOLARSHIPS: [Scholarship, string][] = [
+  ["none", "No scholarship"],
+  ["partial", "Partial"],
+  ["full", "Full (free)"],
+];
+/** Why the student isn't enrolled yet ("Don't enroll yet"). */
+export const ENROLLMENT_NOTE_MAX = 500;
+const NOTE_NEEDED = "Add a note: why isn't the student enrolled yet?";
 
 const METHODS: { value: Method; label: string }[] = [
   { value: "cash", label: "Cash" },
@@ -41,6 +51,7 @@ const PROGRAM_INSTALLMENTS = [1, 2, 3, 4, 6, 12] as const;
 const CURRENCY = "USD";
 
 interface MoneyDraft {
+  scholarship: Scholarship;
   fee: string;
   discount: string;
   installments: number;
@@ -53,7 +64,7 @@ interface CourseLine extends MoneyDraft {
   batchId: string;
 }
 
-const emptyMoney = (installments: number): MoneyDraft => ({ fee: "", discount: "", installments, paid: "", method: "" });
+const emptyMoney = (installments: number): MoneyDraft => ({ scholarship: "none", fee: "", discount: "", installments, paid: "", method: "" });
 const toCents = (value: string) => (value.trim() === "" ? 0 : dollarsToCents(value));
 
 interface MoneyFigures {
@@ -67,13 +78,19 @@ interface MoneyFigures {
 }
 
 function figures(draft: MoneyDraft, canRecordPayments: boolean): MoneyFigures {
+  // A full scholarship is free: no fee, nothing to pay now or later.
+  if (draft.scholarship === "full") {
+    return { feeCents: 0, discountCents: 0, paidCents: 0, finalCents: 0, outstandingCents: 0, problem: null, status: "Fully paid" };
+  }
   const feeCents = draft.fee.trim() ? dollarsToCents(draft.fee) : null;
   const discountCents = toCents(draft.discount);
   const paidCents = canRecordPayments ? toCents(draft.paid) : 0;
   let problem: string | null = null;
   if (feeCents === null || feeCents <= 0) problem = "Enter the fee, for example 100 or 100.50.";
   else if (discountCents === null) problem = "Enter the discount as an amount, for example 10.";
-  else if (discountCents >= feeCents) problem = "The discount must be less than the fee.";
+  else if (discountCents >= feeCents)
+    problem = draft.scholarship === "partial" ? "The scholarship must be less than the fee. Choose Full (free) instead." : "The discount must be less than the fee.";
+  else if (draft.scholarship === "partial" && discountCents <= 0) problem = "Enter the scholarship amount taken off the fee.";
   else if (paidCents === null) problem = "Enter the amount paid, for example 40.";
   else if (paidCents > feeCents - discountCents) problem = "The amount paid is more than the fee after discount.";
   else if (paidCents > 0 && !draft.method) problem = "Choose how the payment was made.";
@@ -100,8 +117,33 @@ function MoneyFields({
 }) {
   const set = (patch: Partial<MoneyDraft>) => onChange({ ...draft, ...patch });
   const money = figures(draft, canRecordPayments);
+  const free = draft.scholarship === "full";
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="col-span-full flex flex-col gap-1.5">
+        <span id={`${idPrefix}-scholarship`} className="text-[13px] font-semibold text-ink">
+          Scholarship
+        </span>
+        <div role="radiogroup" aria-labelledby={`${idPrefix}-scholarship`} className="grid grid-cols-3 gap-2">
+          {SCHOLARSHIPS.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={draft.scholarship === value}
+              onClick={() => set({ scholarship: value, ...(value === "full" ? { paid: "", method: "" } : {}) })}
+              className={`flex min-h-11 items-center justify-center rounded-lg border px-2 text-center text-[13px] font-semibold leading-tight transition-colors duration-150 ${
+                draft.scholarship === value ? "border-brand bg-brand-tint text-brand" : "border-border-strong bg-surface text-ink hover:bg-app"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {free && <span className="text-xs text-muted">Free: no fee and no payments. Nothing is ever due for it.</span>}
+      </div>
+      {!free && (
+        <>
       <DField label={feeLabel} name={`${idPrefix}-fee`} required>
         <input
           type="text"
@@ -112,7 +154,11 @@ function MoneyFields({
           className={controlClass(false)}
         />
       </DField>
-      <DField label="Discount (USD, optional)" name={`${idPrefix}-discount`}>
+      <DField
+        label={draft.scholarship === "partial" ? "Scholarship amount (USD)" : "Discount (USD, optional)"}
+        name={`${idPrefix}-discount`}
+        required={draft.scholarship === "partial"}
+      >
         <input
           type="text"
           inputMode="decimal"
@@ -145,6 +191,8 @@ function MoneyFields({
               ))}
             </select>
           </DField>
+        </>
+      )}
         </>
       )}
       <div className="col-span-full flex flex-wrap gap-x-5 gap-y-1 rounded-lg bg-app px-3 py-2 text-[13px] tabular-nums text-ink">
@@ -217,6 +265,7 @@ export function RegistrationEnrollmentFields({
   const [lines, setLines] = useState<CourseLine[]>([]);
   const [programBatchId, setProgramBatchId] = useState("");
   const [program, setProgram] = useState<MoneyDraft>(emptyMoney(12));
+  const [note, setNote] = useState("");
 
   // Courses offered for individual enrollment, with the course-based batches running each.
   const courseCatalog = useMemo(() => {
@@ -233,7 +282,7 @@ export function RegistrationEnrollmentFields({
   }, [enrollBatches, takenCourseIds]);
   const programBatch = programBatches.find((batch) => batch.batchId === programBatchId) ?? null;
 
-  function compute(nextMode: EnrollmentMode, nextLines: CourseLine[], nextProgramBatchId: string, nextProgram: MoneyDraft): RegistrationEnrollmentValue {
+  function compute(nextMode: EnrollmentMode, nextLines: CourseLine[], nextProgramBatchId: string, nextProgram: MoneyDraft, nextNote: string): RegistrationEnrollmentValue {
     const methodLabel = (method: Method | "") => METHODS.find((option) => option.value === method)?.label ?? null;
     if (nextMode === "courses") {
       if (nextLines.length === 0) {
@@ -249,7 +298,7 @@ export function RegistrationEnrollmentFields({
         if (!problem && money.problem) problem = `${course?.name ?? "A course"}: ${money.problem}`;
         summary.push({
           label: course?.name ?? "Course",
-          detail: `${batch ? batch.name : "No batch chosen"} · ${describePaymentPlan(money.finalCents ?? 0, line.installments, CURRENCY)}`,
+          detail: `${batch ? batch.name : "No batch chosen"} · ${line.scholarship === "full" ? "Full scholarship (free)" : `${describePaymentPlan(money.finalCents ?? 0, line.installments, CURRENCY)}${line.scholarship === "partial" ? " after scholarship" : ""}`}`,
           finalCents: money.finalCents ?? 0,
           paidCents: money.paidCents ?? 0,
           outstandingCents: money.outstandingCents ?? 0,
@@ -266,6 +315,7 @@ export function RegistrationEnrollmentFields({
                 courseId: line.courseId,
                 courseName: courseCatalog.find((entry) => entry.id === line.courseId)?.name ?? "Course",
                 batchId: line.batchId,
+                scholarship: line.scholarship,
                 feeCents: money.feeCents ?? 0,
                 discountCents: money.discountCents ?? 0,
                 installments: line.installments,
@@ -285,7 +335,7 @@ export function RegistrationEnrollmentFields({
       const summary = [
         {
           label: `${batch.programName} (complete program)`,
-          detail: `${batch.batchName} · ${batch.courses.length} course${batch.courses.length === 1 ? "" : "s"} · ${describePaymentPlan(money.finalCents ?? 0, nextProgram.installments, CURRENCY)}`,
+          detail: `${batch.batchName} · ${batch.courses.length} course${batch.courses.length === 1 ? "" : "s"} · ${nextProgram.scholarship === "full" ? "Full scholarship (free)" : `${describePaymentPlan(money.finalCents ?? 0, nextProgram.installments, CURRENCY)}${nextProgram.scholarship === "partial" ? " after scholarship" : ""}`}`,
           finalCents: money.finalCents ?? 0,
           paidCents: money.paidCents ?? 0,
           outstandingCents: money.outstandingCents ?? 0,
@@ -301,6 +351,7 @@ export function RegistrationEnrollmentFields({
           type: "program",
           batchId: batch.batchId,
           programName: batch.programName,
+          scholarship: nextProgram.scholarship,
           feeCents: money.feeCents ?? 0,
           discountCents: money.discountCents ?? 0,
           installments: nextProgram.installments,
@@ -309,19 +360,27 @@ export function RegistrationEnrollmentFields({
         },
       };
     }
-    return { mode: "none", payload: { type: "none" }, problem: null, summary: [] };
+    const trimmed = nextNote.trim();
+    return {
+      mode: "none",
+      payload: trimmed ? { type: "none", note: trimmed } : null,
+      problem: trimmed ? (trimmed.length > ENROLLMENT_NOTE_MAX ? `Keep the note under ${ENROLLMENT_NOTE_MAX} characters.` : null) : NOTE_NEEDED,
+      summary: [],
+    };
   }
 
-  function update(next: { mode?: EnrollmentMode; lines?: CourseLine[]; programBatchId?: string; program?: MoneyDraft }) {
+  function update(next: { mode?: EnrollmentMode; lines?: CourseLine[]; programBatchId?: string; program?: MoneyDraft; note?: string }) {
     const nextMode = next.mode ?? mode;
     const nextLines = next.lines ?? lines;
     const nextProgramBatchId = next.programBatchId ?? programBatchId;
     const nextProgram = next.program ?? program;
+    const nextNote = next.note ?? note;
     if (next.mode !== undefined) setMode(next.mode);
     if (next.lines !== undefined) setLines(next.lines);
     if (next.programBatchId !== undefined) setProgramBatchId(next.programBatchId);
     if (next.program !== undefined) setProgram(next.program);
-    onChange(compute(nextMode, nextLines, nextProgramBatchId, nextProgram));
+    if (next.note !== undefined) setNote(next.note);
+    onChange(compute(nextMode, nextLines, nextProgramBatchId, nextProgram, nextNote));
   }
 
   function addCourse(courseId: string) {
@@ -369,6 +428,24 @@ export function RegistrationEnrollmentFields({
               : "You can enroll the student later from the student's page."}
         </span>
       </div>
+
+      {mode === "none" && (
+        <DField
+          label="Note"
+          name="reg-enrollment-note"
+          required
+          hint="Why the student isn't enrolled yet, e.g. “Waiting for the March program” or “Will pay next week”. Shown on their page and in Admissions."
+        >
+          <textarea
+            value={note}
+            onChange={(event) => update({ note: event.target.value })}
+            rows={3}
+            maxLength={ENROLLMENT_NOTE_MAX}
+            placeholder="Waiting for the March program"
+            className={`${controlClass(false)} min-h-[5.5rem] py-2`}
+          />
+        </DField>
+      )}
 
       {mode === "courses" && (
         <div className="flex flex-col gap-3">

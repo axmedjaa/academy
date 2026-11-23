@@ -14,7 +14,7 @@ import { listStaff } from "@/lib/academies/staff";
 import { searchStudents } from "@/lib/academies/students";
 import { getStudentsOverview } from "@/lib/academies/students-overview";
 import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
-import { listProgramBatchOptions } from "@/lib/academies/program-enrollments";
+import { getProgramFeePlans, listProgramBatchOptions } from "@/lib/academies/program-enrollments";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
 import { ACADEMY_FEE_PERIODS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
 import { canManageFeePeriodPayments } from "@/lib/academies/fee-periods";
@@ -115,17 +115,36 @@ export default async function BatchDetailPage({ params }: { params: Promise<{ ba
   const isAssignedToMe = myAssignedResult.ok && myAssignedResult.batchIds.includes(batchId);
 
   // Fee plan per enrollment (read-only), shown only when the caller may see fees.
-  const schedules = await Promise.all(rawEnrollments.map((e) => getEnrollmentFeeSchedule(context, e.id)));
-  const showFees = schedules.length > 0 && schedules.every((s) => s.ok);
+  // A program course has no fee of its own: the program enrollment carries
+  // the one program fee (read once per program enrollment below).
+  const [schedules, programPlans] = await Promise.all([
+    Promise.all(rawEnrollments.map((e) => (e.programEnrollmentId ? Promise.resolve(null) : getEnrollmentFeeSchedule(context, e.id)))),
+    getProgramFeePlans(
+      context,
+      rawEnrollments.flatMap((e) => (e.programEnrollmentId ? [e.programEnrollmentId] : [])),
+    ),
+  ]);
+  const courseSchedules = schedules.filter((s) => s !== null);
+  const showFees = rawEnrollments.length > 0 && (courseSchedules.length > 0 ? courseSchedules.every((s) => s.ok) : programPlans.size > 0);
   const overdueByStudent = overviewResult.ok ? overviewResult.overview.finance?.overdueByStudent ?? {} : {};
   const enrollments: EnrollmentRow[] = rawEnrollments.map((enrollment, index) => {
-    const result = schedules[index];
-    const schedule = result.ok ? result.schedule : null;
     const overdue = (overdueByStudent[enrollment.studentId] ?? []).map((t) => formatMoney(t.amountCents, t.currency)).join(" + ");
+    let feePlan: string | null = null;
+    let scholarship = enrollment.scholarship;
+    if (enrollment.programEnrollmentId) {
+      const program = programPlans.get(enrollment.programEnrollmentId);
+      scholarship = program?.scholarship ?? null;
+      feePlan = program?.plan ? describePaymentPlan(program.plan.amountCents, program.plan.intervalMonths, program.plan.currency) : null;
+    } else {
+      const result = schedules[index];
+      const schedule = result?.ok ? result.schedule : null;
+      feePlan = schedule ? describePaymentPlan(schedule.amountCents, schedule.intervalMonths, schedule.currency) : null;
+    }
     return {
       ...enrollment,
+      scholarship,
       courseName: courseNameById.get(enrollment.courseId) ?? "Unavailable course",
-      feePlan: schedule ? describePaymentPlan(schedule.amountCents, schedule.intervalMonths, schedule.currency) : null,
+      feePlan: scholarship === "full" ? "Free (full scholarship)" : feePlan && scholarship === "partial" ? `${feePlan} · partial scholarship` : feePlan,
       overdue: overdue || null,
     };
   });

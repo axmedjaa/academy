@@ -1178,7 +1178,10 @@ export const students = pgTable(
       .references(() => branches.id),
     studentNumber: text("student_number").notNull(),
     fullName: text("full_name").notNull(),
-    dateOfBirth: date("date_of_birth"),
+    // The student's registration date, entered by staff ("Registration
+    // date" on every form). Migration 0057 renamed it from date_of_birth:
+    // staff had always used that field for this date, so the values stay.
+    registrationDate: date("registration_date"),
     gender: text("gender"),
     phone: text("phone"),
     email: text("email"),
@@ -1205,6 +1208,10 @@ export const students = pgTable(
     // over time, so it has no single canonical "this student's photo"
     // value the way this column does.
     profileImageRef: text("profile_image_ref"),
+    // Migration 0057: why the student was registered without an enrollment
+    // ("Don't enroll yet"), e.g. "Waiting for the March program". Shown on
+    // the student's page and in Admissions while they are not enrolled.
+    enrollmentNote: text("enrollment_note"),
     status: branchStatusEnum("status").notNull().default("active"),
     createdBy: uuid("created_by")
       .notNull()
@@ -1644,6 +1651,10 @@ export const batchEnrollmentStatusEnum = pgEnum("batch_enrollment_status", [
   "completed",
 ]);
 
+/** Migration 0057: "full" = free, "partial" = part of the fee waived. */
+export const SCHOLARSHIP_KINDS = ["full", "partial"] as const;
+export type ScholarshipKind = (typeof SCHOLARSHIP_KINDS)[number];
+
 export const batchEnrollments = pgTable(
   "batch_enrollments",
   {
@@ -1671,11 +1682,17 @@ export const batchEnrollments = pgTable(
     // schedule or fee periods (the program enrollment carries the one
     // program fee); it exists for course dates, exams, results, certificates.
     programEnrollmentId: uuid("program_enrollment_id").references((): AnyPgColumn => programEnrollments.id),
+    // Migration 0057: a scholarship on this course's fee. "full" = free (no
+    // fee schedule, nothing is ever due); "partial" = the schedule's
+    // discount is a scholarship. null = none. Never set on a program course
+    // (the program enrollment carries it).
+    scholarship: text("scholarship").$type<ScholarshipKind>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
+    check("batch_enrollments_scholarship_valid", sql`${table.scholarship} IS NULL OR ${table.scholarship} IN ('full', 'partial')`),
     uniqueIndex("batch_enrollments_student_batch_course_active_unique")
       .on(table.studentId, table.batchId, table.courseId)
       .where(sql`${table.status} = 'active'`),
@@ -1715,6 +1732,9 @@ export const programEnrollments = pgTable(
       .notNull()
       .references(() => batches.id),
     status: batchEnrollmentStatusEnum("status").notNull().default("active"),
+    // Migration 0057: same meaning as batch_enrollments.scholarship, for the
+    // one program fee.
+    scholarship: text("scholarship").$type<ScholarshipKind>(),
     enrolledAt: timestamp("enrolled_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -1726,6 +1746,7 @@ export const programEnrollments = pgTable(
       .defaultNow(),
   },
   (table) => [
+    check("program_enrollments_scholarship_valid", sql`${table.scholarship} IS NULL OR ${table.scholarship} IN ('full', 'partial')`),
     // One active enrollment per student per program.
     uniqueIndex("program_enrollments_student_program_active_unique")
       .on(table.studentId, table.programId)

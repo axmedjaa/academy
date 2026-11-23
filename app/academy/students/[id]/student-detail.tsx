@@ -3,7 +3,6 @@
 import { useActionState, useEffect, useState } from "react";
 import type { StudentRecord } from "@/lib/academies/students";
 import type {
-  EnrollmentFeeScheduleRecord,
   FeePeriodRecord,
   StudentEnrollmentOption,
 } from "@/lib/academies/fee-periods";
@@ -12,7 +11,6 @@ import {
   listFeePeriodsForEnrollmentAction,
   recordEnrollmentPaymentAction,
   recordFeePeriodPaymentAction,
-  setEnrollmentFeeScheduleAction,
 } from "@/lib/academies/fee-periods-actions";
 import {
   createStudentChargeAction,
@@ -21,8 +19,6 @@ import {
 } from "@/lib/academies/student-payments-actions";
 import { BackLink, Badge, Button, ErrorMessage, Field, PageHeader, Section, TableWrap, inputClass, td, th, trHover } from "@/app/academy/_shell/ui";
 import type { EnrollBatchOption } from "@/lib/academies/enroll-options";
-import { PAYMENT_PLAN_OPTIONS } from "@/lib/ui/payment-plan";
-import { PaymentPlanField } from "@/app/academy/_shell/payment-plan-field";
 import {
   ManageStudentSection,
   STATUS_LABEL,
@@ -33,6 +29,7 @@ import {
   type EnrollmentSummaryEntry,
 } from "./student-overview";
 import { DataTable, rtTd, rtTh } from "@/app/academy/_shell/page-blocks";
+import { ChangeFeeButton } from "@/app/academy/finance/fee-periods/change-fee";
 import {
   ActionDialog,
   ChoiceChips,
@@ -46,7 +43,7 @@ import type { ProgramBatchOption, StudentProgramEnrollment } from "@/lib/academi
 import { ProgramEnrollmentCard } from "./program-enrollment-card";
 import type { BookIssueView } from "@/lib/academies/book-orders";
 import { StudentBooksCard } from "./student-books-card";
-import { nextDuePeriod, outstandingCents, previewAllocation, previewScheduleChange } from "@/lib/ui/fee-allocation";
+import { nextDuePeriod, outstandingCents, previewAllocation } from "@/lib/ui/fee-allocation";
 import { formatDate } from "@/lib/ui/date";
 import { PaymentHistoryPanel, PaymentTotalsStrip, RefundHistoryPanel, type RefundHistoryRow } from "./payment-history";
 import { showErrorToast, showSuccessToast } from "@/lib/ui/toast";
@@ -55,10 +52,6 @@ import { centsToDollars, dollarsToCents, formatMoney } from "@/lib/ui/money";
 import { Bone } from "@/app/academy/_shell/skeletons";
 
 const initialState: StudentPaymentsFormState = { ok: false };
-
-
-// The plan value is the number of monthly installments (see lib/ui/payment-plan.ts).
-const INTERVAL_OPTIONS = PAYMENT_PLAN_OPTIONS;
 
 /** A period that hasn't started yet is "future," never "currently due" —
  * same helper/rationale as fee-periods-manager.tsx's identical copy (no new
@@ -478,7 +471,13 @@ function EnrollmentPaymentPanel({
         />
       ) : (
         <Section className="mb-8">
-          <p className="text-sm text-muted">{schedule ? "Fee totals are not available to your role." : "No fee schedule set yet."}</p>
+          <p className="text-sm text-muted">
+            {schedule
+              ? "Fee totals are not available to your role."
+              : enrollment.scholarship === "full"
+                ? "Full scholarship: this course is free."
+                : "No fee schedule set."}
+          </p>
         </Section>
       )}
 
@@ -488,17 +487,23 @@ function EnrollmentPaymentPanel({
             {enrollment.courseName} · {enrollment.batchCode}
           </h2>
           <p className="mb-3 text-[13px] text-muted">
-            {schedule
-              ? `${schedule.intervalMonths} monthly payment${schedule.intervalMonths === 1 ? "" : "s"} of ${formatMoney(schedule.monthlyInstallmentCents, schedule.currency)}, ${formatMoney(schedule.amountCents, schedule.currency)} in total.`
-              : "Set the fee schedule to generate this course's fee periods."}
+            {enrollment.scholarship === "full"
+              ? "Full scholarship: this course is free and nothing is ever due."
+              : schedule
+                ? `${schedule.intervalMonths} monthly payment${schedule.intervalMonths === 1 ? "" : "s"} of ${formatMoney(schedule.monthlyInstallmentCents, schedule.currency)}, ${formatMoney(schedule.amountCents, schedule.currency)} in total${enrollment.scholarship === "partial" ? " after a partial scholarship" : ""}.`
+                : periods.length > 0
+                  ? "Paid in full: nothing more is due."
+                  : "No fee set yet. Use Change fee to set one."}
           </p>
-          <ScheduleForm
-            enrollmentId={enrollment.id}
-            schedule={schedule}
-            periods={periods}
-            today={today}
-            onSaved={() => setRefreshKey((k) => k + 1)}
-          />
+          {enrollment.status === "active" && !enrollment.programEnrollmentId && (
+            <ChangeFeeButton
+              target={{ kind: "course", enrollmentId: enrollment.id }}
+              studentName={studentName}
+              label={`${enrollment.batchCode} · ${enrollment.courseName}`}
+              className="inline-flex min-h-9 items-center rounded-lg border border-border-strong bg-surface px-3 text-[13px] font-semibold text-ink transition-colors duration-150 hover:bg-app"
+              onSaved={() => setRefreshKey((k) => k + 1)}
+            />
+          )}
         </Section>
       )}
 
@@ -508,7 +513,7 @@ function EnrollmentPaymentPanel({
         </div>
       )}
 
-      {schedule && (
+      {(schedule || periods.length > 0) && (
         <>
           <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
             <h2 className="text-base font-semibold text-ink">
@@ -950,185 +955,6 @@ function PeriodPaymentForm({
         <Button type="button" variant="secondary" disabled={submitting} className="self-start" onClick={onCancel}>
           Cancel
         </Button>
-      </div>
-    </div>
-  );
-}
-
-function ScheduleForm({
-  enrollmentId,
-  schedule,
-  periods,
-  today,
-  onSaved,
-}: {
-  enrollmentId: string;
-  schedule: EnrollmentFeeScheduleRecord | null;
-  /** The enrollment's current fee periods (all of them, upcoming included). */
-  periods: FeePeriodRecord[];
-  today: string;
-  onSaved: () => void;
-}) {
-  const [open, setOpen] = useState(schedule === null);
-  const [intervalMonths, setIntervalMonths] = useState<number>(schedule?.intervalMonths ?? 1);
-  // Entered/displayed in dollars (e.g. "10.00"), never raw cents — see
-  // lib/ui/money.ts's dollarsToCents/centsToDollars.
-  const [amountDollars, setAmountDollars] = useState(schedule ? centsToDollars(schedule.amountCents) : "");
-  const [anchorDate, setAnchorDate] = useState(schedule?.anchorDate ?? "");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const currency = schedule?.currency ?? "USD";
-
-  // What setEnrollmentFeeSchedule will actually do (lib/ui/fee-allocation.ts
-  // mirrors its rule): started or paid periods stay as they are with their
-  // own amounts; once any do, the part of the plan they don't already
-  // charge carries over and the new installments start the day after them,
-  // whatever amount or date is typed. Those two fields are locked to the
-  // server's figures in that case rather than accepting a value the server
-  // would silently replace.
-  const typedCents = dollarsToCents(amountDollars) ?? 0;
-  const preview = previewScheduleChange({
-    current: schedule ? { amountCents: schedule.amountCents, anchorDate: schedule.anchorDate } : null,
-    periods,
-    today,
-    amountCents: typedCents,
-    anchorDate,
-    count: intervalMonths,
-  });
-
-  if (!open) {
-    return (
-      <Button type="button" variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setOpen(true)}>
-        Change payment plan
-      </Button>
-    );
-  }
-
-  async function handleSave() {
-    setError(null);
-    const amount = preview.amountCarried ? preview.totalCents : dollarsToCents(amountDollars);
-    const date = preview.dateMoved ? (preview.installments[0]?.date ?? anchorDate) : anchorDate;
-    if (amount === null || amount <= 0 || !date) {
-      setError("Enter a valid amount and start date.");
-      return;
-    }
-    setSaving(true);
-    const result = await setEnrollmentFeeScheduleAction({ enrollmentId, intervalMonths, amountCents: amount, anchorDate: date });
-    setSaving(false);
-    if (!result.ok) {
-      setError(result.error?.message ?? "Failed to save fee schedule.");
-      showErrorToast(result.error?.message ?? "Failed to save fee schedule.");
-      return;
-    }
-    showSuccessToast(schedule ? "Payment plan changed." : "Payment plan saved.");
-    setOpen(false);
-    onSaved();
-  }
-
-  const planLabel = (count: number) => INTERVAL_OPTIONS.find((option) => option.value === count)?.label ?? `${count} payments`;
-
-  return (
-    <div className="rounded-card border border-border bg-app p-4">
-      <h3 className="text-sm font-semibold text-ink">{schedule ? "Change payment plan" : "Set payment plan"}</h3>
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <PaymentPlanField name="intervalMonths" value={intervalMonths} onChange={setIntervalMonths} />
-        <Field label={preview.amountCarried ? "Amount still to schedule (carried over)" : "Total fee (USD)"}>
-          <input
-            type="number"
-            min={0.01}
-            step="0.01"
-            placeholder="0.00"
-            className={inputClass}
-            value={preview.amountCarried ? centsToDollars(preview.totalCents) : amountDollars}
-            disabled={preview.amountCarried}
-            onChange={(e) => setAmountDollars(e.target.value)}
-          />
-        </Field>
-        <Field label={preview.dateMoved ? "First new installment (after kept periods)" : "First installment date"}>
-          <input
-            type="date"
-            className={inputClass}
-            value={preview.dateMoved ? (preview.installments[0]?.date ?? "") : anchorDate}
-            disabled={preview.dateMoved}
-            onChange={(e) => setAnchorDate(e.target.value)}
-          />
-        </Field>
-      </div>
-
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-        {schedule && (
-          <div className="rounded-lg border border-border bg-surface p-3 text-sm">
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted">Saved plan</div>
-            <div className="mt-1 font-semibold text-ink">
-              {planLabel(schedule.intervalMonths)} · {formatMoney(schedule.amountCents, currency)}
-            </div>
-            <div className="mt-1 text-[13px] text-muted">From {formatDate(schedule.anchorDate)}</div>
-            {preview.keptCount > 0 && (
-              <p className="mt-2 text-[13px] text-[#374151]">
-                {preview.keptCount} period{preview.keptCount === 1 ? " has" : "s have"} started or been paid (
-                {formatMoney(preview.keptPaidCents, currency)} paid). {preview.keptCount === 1 ? "It stays" : "They stay"} exactly
-                as recorded; only later, unpaid periods are replaced.
-              </p>
-            )}
-          </div>
-        )}
-        <div className="rounded-lg border border-dashed border-[#F0CDD5] bg-surface p-3 text-sm" aria-live="polite">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted">Proposed plan</span>
-            <Badge label="Preview, not saved" tone="amber" />
-          </div>
-          {preview.nothingToReschedule ? (
-            <p className="mt-2 text-[13px] text-[#374151]">
-              Nothing left to reschedule: every installment of the saved plan has started or been paid.
-            </p>
-          ) : preview.installments.length === 0 ? (
-            <p className="mt-2 text-[13px] text-muted">Enter an amount and a first installment date to see the installments.</p>
-          ) : (
-            <>
-              <div className="mt-1 font-semibold text-ink">
-                {planLabel(intervalMonths)} · {formatMoney(preview.totalCents, currency)}
-              </div>
-              <ul className="mt-2 divide-y divide-border">
-                {preview.installments.map((installment, index) => (
-                  <li key={installment.date} className="flex justify-between gap-3 py-1.5">
-                    <span className="text-[#374151]">
-                      {index + 1}. due {formatDate(installment.date)}
-                    </span>
-                    <span className="font-semibold tabular-nums text-ink">{formatMoney(installment.amountCents, currency)}</span>
-                  </li>
-                ))}
-              </ul>
-              {preview.amountCarried && (
-                <p className="mt-2 text-[13px] text-muted">
-                  The saved plan&apos;s total less the installments kept above, which keep their own amounts and balances,
-                  so the total owed doesn&apos;t change.
-                </p>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {preview.nothingToReschedule && (
-        <div role="alert" className="mt-3 rounded-lg border border-[#F5D08A] bg-[#FFF8E6] px-3 py-2 text-[13px] text-[#7A4B00]">
-          This plan can&apos;t be changed. Every installment has started or been paid, so a new plan could only add charges
-          beyond the course fee. Record payments against the existing periods instead.
-        </div>
-      )}
-      {error && (
-        <div className="mt-3">
-          <ErrorMessage message={error} />
-        </div>
-      )}
-      <div className="mt-3 flex gap-2">
-        <Button type="button" disabled={saving || preview.installments.length === 0} onClick={handleSave}>
-          {saving ? "Saving..." : schedule ? "Save new plan" : "Save plan"}
-        </Button>
-        {schedule && (
-          <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
-            Cancel
-          </Button>
-        )}
       </div>
     </div>
   );

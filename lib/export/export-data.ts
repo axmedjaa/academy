@@ -498,14 +498,14 @@ export const STUDENT_LIST_COLUMNS = [
   "Full Name",
   "Branch",
   "Status",
-  "Date of Birth",
+  "Registration Date",
   "Gender",
   "Phone",
   "Email",
   "Guardian Name",
   "Guardian Phone",
   "Registered By",
-  "Registered On",
+  "Recorded On",
   "Last Updated",
 ] as const;
 
@@ -521,14 +521,14 @@ export async function toReadableStudentRows(students: StudentRecord[], academyId
     "Full Name": s.fullName,
     Branch: branchNames.get(s.branchId) ?? UNKNOWN_BRANCH,
     Status: exportLabel(s.status),
-    "Date of Birth": exportDate(s.dateOfBirth),
+    "Registration Date": exportDate(s.registrationDate),
     Gender: exportLabel(s.gender),
     Phone: s.phone ?? "",
     Email: s.email ?? "",
     "Guardian Name": s.guardianName ?? "",
     "Guardian Phone": s.guardianPhone ?? "",
     "Registered By": staffNames.get(s.createdBy) ?? "",
-    "Registered On": exportDate(s.createdAt),
+    "Recorded On": exportDate(s.createdAt),
     "Last Updated": exportDate(s.updatedAt),
   }));
 }

@@ -197,9 +197,9 @@ const EDIT_RULES: DesignFormRule[] = [
     check: (value) => (value.trim() && !/^\S+@\S+\.\S+$/.test(value.trim()) ? "Enter a valid email address." : null),
   },
   {
-    name: "dateOfBirth",
-    label: "Date of birth",
-    check: (value) => (value && value > new Date().toISOString().slice(0, 10) ? "Date of birth cannot be in the future." : null),
+    name: "registrationDate",
+    label: "Registration date",
+    check: (value) => (value && value > new Date().toISOString().slice(0, 10) ? "The registration date can't be in the future." : null),
   },
 ];
 
@@ -216,7 +216,7 @@ function EditStudentFields({ student, onCancel, onSaved }: { student: StudentRec
     } else if (state.error) {
       showServerError(state.error.message, [
         [/email/i, "email"],
-        [/birth/i, "dateOfBirth"],
+        [/birth|registration date/i, "registrationDate"],
         [/guardian phone/i, "guardianPhone"],
         [/address/i, "address"],
         [/district/i, "district"],
@@ -269,14 +269,14 @@ function EditStudentFields({ student, onCancel, onSaved }: { student: StudentRec
           <DField label="Guardian phone" name="guardianPhone" error={errors.guardianPhone}>
             <PhoneField name="guardianPhone" defaultValue={student.guardianPhone} error={errors.guardianPhone} />
           </DField>
-          <DField label="Date of birth" name="dateOfBirth" error={errors.dateOfBirth}>
+          <DField label="Registration date" name="registrationDate" error={errors.registrationDate}>
             <input
               type="date"
-              name="dateOfBirth"
-              defaultValue={student.dateOfBirth ?? ""}
-              onBlur={blur("dateOfBirth")}
-              className={controlClass(Boolean(errors.dateOfBirth))}
-              {...invalidProps("dateOfBirth", errors.dateOfBirth)}
+              name="registrationDate"
+              defaultValue={student.registrationDate ?? ""}
+              onBlur={blur("registrationDate")}
+              className={controlClass(Boolean(errors.registrationDate))}
+              {...invalidProps("registrationDate", errors.registrationDate)}
             />
           </DField>
           <DField label="Gender" name="gender">
@@ -341,17 +341,6 @@ function EditStudentDialog({
 /* ------------------------------------------------------------------ */
 /* Overview                                                            */
 /* ------------------------------------------------------------------ */
-
-function ageOn(dateOfBirth: string): number | null {
-  const born = new Date(`${dateOfBirth}T00:00:00Z`);
-  if (Number.isNaN(born.getTime())) return null;
-  const now = new Date();
-  let age = now.getUTCFullYear() - born.getUTCFullYear();
-  const beforeBirthday =
-    now.getUTCMonth() < born.getUTCMonth() || (now.getUTCMonth() === born.getUTCMonth() && now.getUTCDate() < born.getUTCDate());
-  if (beforeBirthday) age -= 1;
-  return age >= 0 ? age : null;
-}
 
 function PhoneRow({ phone, who }: { phone: string | null; who: string }) {
   if (!phone) return <span className="text-muted">Not given</span>;
@@ -419,7 +408,6 @@ export function StudentOverview({
       : statuses.some((s) => s === "partially_paid" || s === "paid")
         ? "partially_paid"
         : "unpaid";
-  const dob = student.dateOfBirth ? ageOn(student.dateOfBirth) : null;
 
   return (
     <>
@@ -447,10 +435,7 @@ export function StudentOverview({
           ["Status", student.status === "active" ? "Active" : "Archived"],
           ["Phone", <PhoneRow key="p" phone={student.phone} who={student.fullName} />],
           ["Email", student.email ?? <span key="e" className="text-muted">Not given</span>],
-          [
-            "Date of birth",
-            student.dateOfBirth ? `${formatDate(student.dateOfBirth)}${dob !== null ? `, age ${dob}` : ""}` : <span key="d" className="text-muted">Not given</span>,
-          ],
+          ["Registration date", student.registrationDate ? formatDate(student.registrationDate) : <span key="d" className="text-muted">Not given</span>],
           ["Gender", student.gender ?? <span key="g" className="text-muted">Not specified</span>],
           ["Guardian", student.guardianName ?? <span key="gn" className="text-muted">Not given</span>],
           [
@@ -488,9 +473,15 @@ export function StudentOverview({
           </span>
           <div className="min-w-0 flex-1">
             <div className="font-semibold text-ink">{student.status === "archived" ? "Archived, not enrolled" : "Not enrolled in a course yet"}</div>
-            <p className="mt-0.5 text-[13px] text-[#374151]">
-              Enrolling picks a batch and the courses the student takes in it. Each course gets its own fee plan.
-            </p>
+            {student.enrollmentNote ? (
+              <p className="mt-0.5 text-[13px] text-[#374151] [overflow-wrap:anywhere]">
+                <span className="font-semibold">Note:</span> {student.enrollmentNote}
+              </p>
+            ) : (
+              <p className="mt-0.5 text-[13px] text-[#374151]">
+                Enrolling picks a batch and the courses the student takes in it. Each course gets its own fee plan.
+              </p>
+            )}
           </div>
           {canEnroll && student.status === "active" && (
             <button type="button" onClick={onEnroll} className={HEADER_PRIMARY}>
@@ -532,6 +523,11 @@ export function StudentOverview({
                     >
                       {enrollment.courseName}
                     </Link>
+                    {enrollment.scholarship && (
+                      <span className="ml-2 align-middle">
+                        <Badge label={enrollment.scholarship === "full" ? "Full scholarship" : "Partial scholarship"} tone="blue" />
+                      </span>
+                    )}
                   </td>
                   <td className={rtTd} data-label="Batch">
                     <Link
@@ -1109,7 +1105,7 @@ export function ManageStudentSection({
             onConfirm={() =>
               updateStudentStatus(student.id, {
                 fullName: student.fullName,
-                dateOfBirth: student.dateOfBirth ?? "",
+                registrationDate: student.registrationDate ?? "",
                 gender: student.gender ?? "",
                 phone: student.phone ?? "",
                 email: student.email ?? "",

@@ -174,7 +174,7 @@ function clearableText(maxLength: number, label: string) {
 export const updateStudentSchema = z.object({
   branchId: z.string().uuid().optional(),
   fullName: z.string().trim().min(1, "Full name is required").max(200),
-  dateOfBirth: optionalText(20),
+  registrationDate: optionalText(20),
   gender: optionalText(50),
   phone: optionalText(50),
   email: optionalEmail(),
@@ -203,7 +203,7 @@ export interface StudentRecord {
   branchId: string;
   studentNumber: string;
   fullName: string;
-  dateOfBirth: string | null;
+  registrationDate: string | null;
   gender: string | null;
   phone: string | null;
   email: string | null;
@@ -215,6 +215,8 @@ export interface StudentRecord {
    * schema.ts comment. Resolve to a short-lived signed GET URL via
    * `getStudentPhotoUrl` before ever handing it to the browser. */
   profileImageRef: string | null;
+  /** Why the student was registered without an enrollment (migration 0057). */
+  enrollmentNote: string | null;
   status: "active" | "archived";
   createdBy: string;
   createdAt: Date;
@@ -228,7 +230,7 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
     branchId: row.branchId,
     studentNumber: row.studentNumber,
     fullName: row.fullName,
-    dateOfBirth: row.dateOfBirth,
+    registrationDate: row.registrationDate,
     gender: row.gender,
     phone: row.phone,
     email: row.email,
@@ -237,6 +239,7 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
     address: row.address,
     district: row.district,
     profileImageRef: row.profileImageRef,
+    enrollmentNote: row.enrollmentNote ?? null,
     status: row.status,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
@@ -756,7 +759,7 @@ export async function updateStudent(
       .set({
         branchId: data.branchId ?? existing.branchId,
         fullName: data.fullName,
-        dateOfBirth: data.dateOfBirth,
+        registrationDate: data.registrationDate,
         gender: data.gender,
         phone: data.phone,
         email: data.email,

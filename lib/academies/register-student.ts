@@ -113,11 +113,11 @@ function clearableText(maxLength: number, label: string) {
 export const registerStudentSchema = z.object({
   branchId: z.string().uuid("Select a branch"),
   fullName: z.string().trim().min(1, "Full name is required").max(200),
-  // PLAN.md's literal column is `date_of_birth date nullable` — same
+  // The registration date (migration 0057 renamed date_of_birth) — same
   // plain "YYYY-MM-DD" string convention as staff.ts's hireDate (no
   // separate Date-object parsing layer exists anywhere in this repo for a
   // `date`, as opposed to `timestamp`, column).
-  dateOfBirth: optionalText(20),
+  registrationDate: optionalText(20),
   gender: optionalText(50),
   phone: optionalText(50),
   email: optionalEmail(),
@@ -134,6 +134,8 @@ export const registerStudentSchema = z.object({
   // have. Optional, unlike a book's cover — not every student has (or
   // needs) a photo at registration time.
   profileImageRef: optionalText(500),
+  // Migration 0057: why the student is registered without an enrollment.
+  enrollmentNote: optionalText(500),
 });
 
 export type RegisterStudentInput = z.input<typeof registerStudentSchema>;
@@ -144,7 +146,7 @@ export interface StudentRecord {
   branchId: string;
   studentNumber: string;
   fullName: string;
-  dateOfBirth: string | null;
+  registrationDate: string | null;
   gender: string | null;
   phone: string | null;
   email: string | null;
@@ -164,7 +166,7 @@ function toRecord(row: typeof students.$inferSelect): StudentRecord {
     branchId: row.branchId,
     studentNumber: row.studentNumber,
     fullName: row.fullName,
-    dateOfBirth: row.dateOfBirth,
+    registrationDate: row.registrationDate,
     gender: row.gender,
     phone: row.phone,
     email: row.email,
@@ -450,7 +452,7 @@ export async function registerStudent(
             branchId: data.branchId,
             studentNumber,
             fullName: data.fullName,
-            dateOfBirth: data.dateOfBirth,
+            registrationDate: data.registrationDate,
             gender: data.gender,
             phone: data.phone,
             email: data.email,
@@ -459,6 +461,7 @@ export async function registerStudent(
             address: data.address ?? null,
             district: data.district ?? null,
             profileImageRef: data.profileImageRef,
+            enrollmentNote: data.enrollmentNote,
             createdBy: actorContext.userId,
           })
           .returning();

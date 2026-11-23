@@ -49,7 +49,7 @@ describe("enrollStudentInBatch — atomic initial payment plan", () => {
     const result = await enrollStudentInBatch(context, {
       batchId,
       studentId,
-      // @ts-expect-error — deliberately omitted to prove the schema itself requires it.
+      // Omitted: only a full scholarship may enroll without a plan.
       paymentPlan: undefined,
     });
     expect(result.ok).toBe(false);

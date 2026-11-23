@@ -43,7 +43,10 @@ export interface FeePeriodOverviewRow {
   batchCode: string;
   batchName: string;
   courseName: string;
-  /** Null only for a legacy enrollment without a schedule. */
+  /** Migration 0057: "full" = free (no schedule, nothing due), "partial". */
+  scholarship: "full" | "partial" | null;
+  /** Null for a full scholarship, a fee already paid in full after Change
+   * fee, or a legacy enrollment without a schedule. */
   schedule: { intervalMonths: number; amountCents: number; currency: string; anchorDate: string } | null;
   /** Expected / paid / remaining over the periods that have started. */
   dueCents: number;
@@ -112,6 +115,7 @@ export async function listFeePeriodOverview(
         batchCode: batches.code,
         batchName: batches.name,
         courseName: courses.name,
+        scholarship: batchEnrollments.scholarship,
       })
       .from(batchEnrollments)
       .innerJoin(students, eq(students.id, batchEnrollments.studentId))
@@ -127,6 +131,7 @@ export async function listFeePeriodOverview(
         batchCode: batches.code,
         batchName: batches.name,
         courseName: programs.name,
+        scholarship: programEnrollments.scholarship,
       })
       .from(programEnrollments)
       .innerJoin(students, eq(students.id, programEnrollments.studentId))
@@ -183,8 +188,12 @@ export async function listFeePeriodOverview(
         ? sum + Math.max(0, period.expectedAmountCents - paid)
         : sum;
     }, 0);
+    // Nothing is due at all (a full scholarship, or nothing left after
+    // Change fee): settled, never "unpaid".
+    const settled = aggregate.expectedCents === 0 && (row.scholarship === "full" || (periodsByRow.get(row.enrollmentId) ?? []).length > 0);
     return {
       ...row,
+      scholarship: row.scholarship ?? null,
       kind,
       schedule: schedule
         ? { intervalMonths: schedule.intervalMonths, amountCents: schedule.amountCents, currency: schedule.currency, anchorDate: schedule.anchorDate }
@@ -193,7 +202,7 @@ export async function listFeePeriodOverview(
       paidCents: aggregate.paidCents,
       remainingCents: aggregate.remainingCents,
       overdueCents,
-      status: aggregate.status,
+      status: settled ? "paid" : aggregate.status,
       hasStarted: relevant.some((period) => compareDateOnly(period.periodStart, today) <= 0),
     };
   };

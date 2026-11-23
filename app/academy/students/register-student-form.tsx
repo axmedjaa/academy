@@ -26,7 +26,7 @@ import {
 
 /**
  * Register student (design A02 form `student`): Full name, Branch, Phone,
- * Email, Guardian name, Guardian phone, Date of birth, Gender, Student
+ * Email, Guardian name, Guardian phone, Registration date, Gender, Student
  * photo — in that order, on the design's form system. Two reconciliations
  * with the real data model, both deliberate:
  * - The design's "Home address" and "City / district" are omitted: the
@@ -47,7 +47,7 @@ const initialState: RegisterStudentFormState = { ok: false };
 
 const SERVER_FIELD_PATTERNS: [RegExp, string][] = [
   [/email/i, "email"],
-  [/date of birth|born/i, "dateOfBirth"],
+  [/date of birth|born|registration date/i, "registrationDate"],
   [/full name/i, "fullName"],
   [/branch/i, "branchId"],
   [/guardian phone/i, "guardianPhone"],
@@ -80,9 +80,9 @@ const RULES: DesignFormRule[] = [
     check: (value) => (value.trim() && !/^\S+@\S+\.\S+$/.test(value.trim()) ? "Enter a valid email address." : null),
   },
   {
-    name: "dateOfBirth",
-    label: "Date of birth",
-    check: (value) => (value && value > todayIso() ? "Date of birth cannot be in the future." : null),
+    name: "registrationDate",
+    label: "Registration date",
+    check: (value) => (value && value > todayIso() ? "The registration date can't be in the future." : null),
   },
 ];
 
@@ -97,6 +97,8 @@ export interface RegisterStudentOptions {
 }
 
 const NO_ENROLLMENT: RegistrationEnrollmentValue = { mode: "none", payload: { type: "none" }, problem: null, summary: [] };
+/** "Don't enroll yet" starts without its required note. */
+const NOTE_FIRST: RegistrationEnrollmentValue = { mode: "none", payload: null, problem: "Add a note: why isn't the student enrolled yet?", summary: [] };
 
 function RegisterStudentFields({
   branches,
@@ -108,10 +110,11 @@ function RegisterStudentFields({
   const router = useRouter();
   const [state, formAction, pending] = useActionState(registerStudent, initialState);
   const { formRef, errors, banner, validate, blur, showServerError, setBanner } = useDesignForm(RULES);
-  const [enrollment, setEnrollment] = useState<RegistrationEnrollmentValue>(NO_ENROLLMENT);
+  const canEnroll = enrollBatches.length > 0 || programBatches.length > 0;
+  // With no batch to enroll in, the enrollment step (and its note) isn't shown.
+  const [enrollment, setEnrollment] = useState<RegistrationEnrollmentValue>(canEnroll ? NOTE_FIRST : NO_ENROLLMENT);
   // When enrolling, the first press shows the summary; the second confirms.
   const [reviewing, setReviewing] = useState(false);
-  const canEnroll = enrollBatches.length > 0 || programBatches.length > 0;
 
   useEffect(() => {
     if (state.ok && state.studentId) {
@@ -196,14 +199,15 @@ function RegisterStudentFields({
           <DField label="Guardian phone" name="guardianPhone" error={errors.guardianPhone}>
             <PhoneField name="guardianPhone" error={errors.guardianPhone} />
           </DField>
-          <DField label="Date of birth" name="dateOfBirth" error={errors.dateOfBirth}>
+          <DField label="Registration date" name="registrationDate" error={errors.registrationDate}>
             <input
               type="date"
-              name="dateOfBirth"
+              name="registrationDate"
+              defaultValue={todayIso()}
               max={todayIso()}
-              onBlur={blur("dateOfBirth")}
-              className={controlClass(Boolean(errors.dateOfBirth))}
-              {...invalidProps("dateOfBirth", errors.dateOfBirth)}
+              onBlur={blur("registrationDate")}
+              className={controlClass(Boolean(errors.registrationDate))}
+              {...invalidProps("registrationDate", errors.registrationDate)}
             />
           </DField>
           <DField label="Gender" name="gender">

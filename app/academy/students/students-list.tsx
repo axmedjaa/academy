@@ -181,7 +181,7 @@ export function StudentsList({
     const nextStatus: "active" | "archived" = student.status === "active" ? "archived" : "active";
     return updateStudentStatus(student.id, {
       fullName: student.fullName,
-      dateOfBirth: student.dateOfBirth ?? "",
+      registrationDate: student.registrationDate ?? "",
       gender: student.gender ?? "",
       phone: student.phone ?? "",
       email: student.email ?? "",
@@ -462,8 +462,8 @@ export function StudentsList({
               <input type="text" name="fullName" defaultValue={editingStudent.fullName} required className={inputClass} />
             </Field>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Date of birth">
-                <input type="date" name="dateOfBirth" defaultValue={editingStudent.dateOfBirth ?? ""} className={inputClass} />
+              <Field label="Registration date">
+                <input type="date" name="registrationDate" defaultValue={editingStudent.registrationDate ?? ""} className={inputClass} />
               </Field>
               <Field label="Gender">
                 <input type="text" name="gender" defaultValue={editingStudent.gender ?? ""} className={inputClass} />

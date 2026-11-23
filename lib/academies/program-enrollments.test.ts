@@ -32,7 +32,9 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import { legacyAllBranchAccess } from "@/lib/testing/legacy-all-branch-access";
 import { createBatch, listBatches, updateBatch } from "./batches";
 import { enrollStudentInBatch, withdrawStudentFromBatch } from "./batch-assignments";
-import { listEnrollmentsForStudent, recordEnrollmentPayment, setEnrollmentFeeSchedule } from "./fee-periods";
+import { listEnrollmentsForStudent, listFeePeriodsForEnrollment, recordEnrollmentPayment, setEnrollmentFeeSchedule } from "./fee-periods";
+import { changeFeePlan, getFeePlanPosition } from "./fee-plan-change";
+import { registerStudent } from "./register-student";
 import { getFinanceReports } from "./finance-reports";
 import { getFeeCollectionSummary, getProgramFeeCollectionSummary, listFeePeriodOverview } from "./fee-period-overview";
 import { issueReceipt } from "./student-payments";
@@ -836,5 +838,150 @@ describe("Edit batch — type and program change only while no student is enroll
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+});
+
+describe("scholarships, Change fee and the registration note (migration 0057)", () => {
+  const periodsOf = (programEnrollmentId: string) =>
+    db.select().from(feePeriods).where(eq(feePeriods.programEnrollmentId, programEnrollmentId)).orderBy(feePeriods.periodStart);
+
+  it("a full-scholarship program is free: no schedule, no installments, settled on Fee periods", async () => {
+    const studentId = await newStudent(f);
+    const [{ studentNumber }] = await db.select({ studentNumber: students.studentNumber }).from(students).where(eq(students.id, studentId));
+    const refused = await enroll(f, studentId, { scholarship: "full", initialPayment: { amountCents: 1_000, method: "cash", receivedAt: new Date().toISOString() } });
+    expect(refused.ok).toBe(false);
+
+    const enrolled = await enroll(f, studentId, { scholarship: "full", programFeeCents: 0 });
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    expect(enrolled.enrollment.scholarship).toBe("full");
+    expect(enrolled.finalFeeCents).toBe(0);
+    expect(await periodsOf(enrolled.enrollment.id)).toHaveLength(0);
+    const schedules = await db.select().from(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.programEnrollmentId, enrolled.enrollment.id));
+    expect(schedules).toHaveLength(0);
+
+    const billing = await billingOf(f, studentId);
+    expect(billing).toMatchObject({ finalFeeCents: 0, outstandingCents: 0, status: "paid" });
+    const listed = await listFeePeriodOverview(f.owner, { searchTerm: studentNumber });
+    if (!listed.ok) throw new Error(listed.error.message);
+    expect(listed.rows).toHaveLength(1);
+    expect(listed.rows[0]).toMatchObject({ kind: "program", scholarship: "full", status: "paid", schedule: null });
+  });
+
+  it("a partial scholarship needs an amount off the fee and is recorded", async () => {
+    const studentId = await newStudent(f);
+    expect((await enroll(f, studentId, { scholarship: "partial", discountCents: 0 })).ok).toBe(false);
+    const enrolled = await enroll(f, studentId, { scholarship: "partial", discountCents: 12_000 });
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    expect(enrolled.enrollment.scholarship).toBe("partial");
+    expect(enrolled.finalFeeCents).toBe(36_000);
+  });
+
+  it("a full-scholarship course enrollment has no fee plan", async () => {
+    const studentId = await newStudent(f);
+    const enrolled = await enrollStudentInBatch(f.owner, { batchId: f.courseBatchId, studentId, courseIds: [f.courseBatchCourseId], scholarship: "full" });
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    expect(enrolled.enrollment.scholarship).toBe("full");
+    const schedules = await db.select().from(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.enrollmentId, enrolled.enrollment.id));
+    expect(schedules).toHaveLength(0);
+    const listed = await listEnrollmentsForStudent(f.owner, studentId);
+    expect(listed.ok && listed.enrollments[0].scholarship).toBe("full");
+    // Without a scholarship the plan is still required.
+    const other = await newStudent(f);
+    expect((await enrollStudentInBatch(f.owner, { batchId: f.courseBatchId, studentId: other, courseIds: [f.courseBatchCourseId] })).ok).toBe(false);
+  });
+
+  it("Change fee on a program keeps what was paid and spreads the rest of the new fee", async () => {
+    const studentId = await newStudent(f);
+    // $480 in 12 x $40 from 2026-10-09; $50 paid = installment 1 + $10 of installment 2.
+    const enrolled = await enroll(f, studentId);
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    expect((await pay(f, enrolled.enrollment.id, 5_000)).ok).toBe(true);
+    const target = { kind: "program" as const, programEnrollmentId: enrolled.enrollment.id };
+
+    const position = await getFeePlanPosition(f.owner, target);
+    expect(position.ok && position.position).toMatchObject({ feeCents: 48_000, discountCents: 0, installments: 12, paidCents: 5_000, scholarship: null });
+
+    // More already paid than the new fee: refused, nothing changes.
+    const tooLow = await changeFeePlan(f.owner, { target, scholarship: "none", feeCents: 4_000, installments: 1 });
+    expect(tooLow.ok).toBe(false);
+    expect(await periodsOf(enrolled.enrollment.id)).toHaveLength(12);
+
+    const changed = await changeFeePlan(f.owner, { target, scholarship: "none", feeCents: 30_000, installments: 3 });
+    if (!changed.ok) throw new Error(changed.error.message);
+    expect(changed).toMatchObject({ finalFeeCents: 30_000, keptCents: 5_000, plannedCents: 25_000, installmentCents: [8_333, 8_333, 8_334] });
+
+    const periods = await periodsOf(enrolled.enrollment.id);
+    expect(periods.map((p) => [p.periodStart, p.expectedAmountCents])).toEqual([
+      ["2026-10-09", 4_000],
+      ["2026-11-09", 1_000],
+      ["2026-12-09", 8_333],
+      ["2027-01-09", 8_333],
+      ["2027-02-09", 8_334],
+    ]);
+    const billing = await billingOf(f, studentId);
+    expect(billing).toMatchObject({ finalFeeCents: 30_000, paidCents: 5_000, outstandingCents: 25_000, programFeeCents: 30_000 });
+    const [audit] = await db
+      .select()
+      .from(auditLogs)
+      .where(and(eq(auditLogs.entityId, enrolled.enrollment.id), eq(auditLogs.action, "changeEnrollmentFee")));
+    expect(audit).toBeDefined();
+  }, 90_000);
+
+  it("Change fee to a full scholarship removes the unpaid plan", async () => {
+    const studentId = await newStudent(f);
+    const enrolled = await enroll(f, studentId, { programFeeCents: 9_000, installments: 3 });
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    const changed = await changeFeePlan(f.owner, { target: { kind: "program", programEnrollmentId: enrolled.enrollment.id }, scholarship: "full", installments: 1 });
+    if (!changed.ok) throw new Error(changed.error.message);
+    expect(await periodsOf(enrolled.enrollment.id)).toHaveLength(0);
+    const [row] = await db.select().from(programEnrollments).where(eq(programEnrollments.id, enrolled.enrollment.id));
+    expect(row.scholarship).toBe("full");
+    expect(await billingOf(f, studentId)).toMatchObject({ finalFeeCents: 0, status: "paid" });
+  });
+
+  it("Change fee on a course replans its periods, and later period generation adds nothing", async () => {
+    const studentId = await newStudent(f);
+    const enrolled = await enrollStudentInBatch(f.owner, {
+      batchId: f.courseBatchId,
+      studentId,
+      courseIds: [f.courseBatchCourseId],
+      paymentPlan: { intervalMonths: 1, amountCents: 12_000, anchorDate: "2026-10-01" },
+    });
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    const target = { kind: "course" as const, enrollmentId: enrolled.enrollment.id };
+    const changed = await changeFeePlan(f.owner, { target, scholarship: "partial", feeCents: 12_000, discountCents: 3_000, installments: 3 });
+    if (!changed.ok) throw new Error(changed.error.message);
+
+    const listed = await listFeePeriodsForEnrollment(f.owner, enrolled.enrollment.id);
+    if (!listed.ok) throw new Error(listed.error.message);
+    expect(listed.periods.map((p) => [p.periodStart, p.expectedAmountCents])).toEqual([
+      ["2026-10-01", 3_000],
+      ["2026-11-01", 3_000],
+      ["2026-12-01", 3_000],
+    ]);
+    const [schedule] = await db.select().from(enrollmentFeeSchedules).where(eq(enrollmentFeeSchedules.enrollmentId, enrolled.enrollment.id));
+    expect(schedule).toMatchObject({ amountCents: 9_000, discountCents: 3_000, intervalMonths: 3, anchorDate: "2026-10-01" });
+    const [row] = await db.select().from(batchEnrollments).where(eq(batchEnrollments.id, enrolled.enrollment.id));
+    expect(row.scholarship).toBe("partial");
+  });
+
+  it("Change fee refuses a program's own course (the fee is on the program)", async () => {
+    const studentId = await newStudent(f);
+    const enrolled = await enroll(f, studentId);
+    if (!enrolled.ok) throw new Error(enrolled.error.message);
+    const result = await changeFeePlan(f.owner, {
+      target: { kind: "course", enrollmentId: enrolled.courseEnrollmentIds[0] },
+      scholarship: "none",
+      feeCents: 10_000,
+      installments: 1,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("registering without an enrollment keeps the note on the student", async () => {
+    const registered = await registerStudent(f.owner, { branchId: f.branchId, fullName: "Axmed", enrollmentNote: "  Waiting for the March program  " });
+    if (!registered.ok) throw new Error(registered.error.message);
+    const [row] = await db.select({ note: students.enrollmentNote }).from(students).where(eq(students.id, registered.student.id));
+    expect(row.note).toBe("Waiting for the March program");
   });
 });

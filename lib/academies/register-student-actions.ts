@@ -59,7 +59,7 @@ function parseRegisterStudentFormData(formData: FormData): RegisterStudentInput 
   return {
     branchId: String(formData.get("branchId") ?? ""),
     fullName: String(formData.get("fullName") ?? ""),
-    dateOfBirth: String(formData.get("dateOfBirth") ?? ""),
+    registrationDate: String(formData.get("registrationDate") ?? ""),
     gender: String(formData.get("gender") ?? ""),
     phone: String(formData.get("phone") ?? ""),
     email: String(formData.get("email") ?? ""),
@@ -85,14 +85,29 @@ const method = z.enum(["cash", "mobile_money", "bank_transfer"]);
 /** One money line (a course or the program): fee, discount, plan, and what
  * was paid now. Final fee = fee − discount; outstanding = final − paid. */
 const moneyLine = {
-  feeCents: z.number().int().positive("Enter the fee."),
+  /** Migration 0057: "full" = free (no fee plan), "partial" = the discount
+   * is a scholarship. */
+  scholarship: z.enum(["none", "partial", "full"]).default("none"),
+  feeCents: z.number().int().nonnegative("Enter the fee."),
   discountCents: cents("Discount"),
   installments,
   paidCents: cents("Amount paid"),
   method: method.optional(),
 };
-function checkMoney(line: { feeCents: number; discountCents: number; paidCents: number; method?: string }, ctx: z.RefinementCtx, what: string) {
-  if (line.discountCents >= line.feeCents) {
+function checkMoney(
+  line: { scholarship: "none" | "partial" | "full"; feeCents: number; discountCents: number; paidCents: number; method?: string },
+  ctx: z.RefinementCtx,
+  what: string,
+) {
+  if (line.scholarship === "full") {
+    if (line.paidCents > 0) ctx.addIssue({ code: "custom", message: `${what}: a full scholarship has nothing to pay.` });
+    return;
+  }
+  if (line.feeCents <= 0) {
+    ctx.addIssue({ code: "custom", message: `${what}: enter the fee.` });
+  } else if (line.scholarship === "partial" && line.discountCents <= 0) {
+    ctx.addIssue({ code: "custom", message: `${what}: enter the scholarship amount taken off the fee.` });
+  } else if (line.discountCents >= line.feeCents) {
     ctx.addIssue({ code: "custom", message: `${what}: the discount must be less than the fee.` });
   } else if (line.paidCents > line.feeCents - line.discountCents) {
     ctx.addIssue({ code: "custom", message: `${what}: the amount paid is more than the fee after discount.` });
@@ -104,7 +119,8 @@ function checkMoney(line: { feeCents: number; discountCents: number; paidCents: 
 
 const registrationEnrollmentSchema = z
   .discriminatedUnion("type", [
-    z.object({ type: z.literal("none") }),
+    // Registered without an enrollment: why (shown on the student's page).
+    z.object({ type: z.literal("none"), note: z.string().trim().max(500, "Keep the note under 500 characters.").optional() }),
     z.object({
       type: z.literal("courses"),
       lines: z
@@ -190,7 +206,10 @@ export async function registerStudent(
     enrollment = parsed.data;
   }
 
-  const result = await registerStudentForActor(context, parseRegisterStudentFormData(formData));
+  const result = await registerStudentForActor(context, {
+    ...parseRegisterStudentFormData(formData),
+    ...(enrollment.type === "none" && enrollment.note ? { enrollmentNote: enrollment.note } : {}),
+  });
   if (!result.ok) {
     return { ok: false, error: result.error };
   }
@@ -296,15 +315,19 @@ async function applyEnrollment(
 
   if (enrollment.type === "courses") {
     for (const line of enrollment.lines) {
+      const free = line.scholarship === "full";
       const enrolled = await enrollStudentInBatch(context, {
         batchId: line.batchId,
         studentId,
         courseIds: [line.courseId],
-        paymentPlan: {
-          intervalMonths: line.installments,
-          amountCents: line.feeCents - line.discountCents,
-          discountCents: line.discountCents,
-        },
+        ...(line.scholarship === "none" ? {} : { scholarship: line.scholarship }),
+        paymentPlan: free
+          ? undefined
+          : {
+              intervalMonths: line.installments,
+              amountCents: line.feeCents - line.discountCents,
+              discountCents: line.discountCents,
+            },
       });
       if (!enrolled.ok) {
         warnings.push(`${line.courseName}: not enrolled (${enrolled.error.message})`);
@@ -331,6 +354,7 @@ async function applyEnrollment(
     const enrolled = await enrollStudentInProgram(context, {
       studentId,
       batchId: enrollment.batchId,
+      ...(enrollment.scholarship === "none" ? {} : { scholarship: enrollment.scholarship }),
       programFeeCents: enrollment.feeCents,
       discountCents: enrollment.discountCents,
       installments: enrollment.installments,

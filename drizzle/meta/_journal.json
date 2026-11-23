@@ -400,6 +400,13 @@
       "when": 1794900000000,
       "tag": "0056_book_order_numbers",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1795000000000,
+      "tag": "0057_scholarships_enrollment_note",
+      "breakpoints": true
     }
   ]
 }
