@@ -374,6 +374,12 @@ export type SetEnrollmentFeeScheduleResult =
   | { ok: false; error: FeePeriodActionError };
 
 /**
+ * NOT USED BY ANY SCREEN: staff change a fee with Change fee
+ * (lib/academies/fee-plan-change.ts, `changeFeePlan`), which keeps what was
+ * paid and re-plans the rest. This function is kept because the billing
+ * tests use it to give a test enrollment its fee schedule; don't wire it to
+ * a new screen or server action.
+ *
  * Creates or updates the one fee schedule an enrollment may have. Manager/
  * Finance Officer only (`canManage`).
  *
