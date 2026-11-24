@@ -2,7 +2,8 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { batchEnrollments, batches, studentCharges, studentPayments, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { resolveScope, studentRegisteredMonth } from "@/lib/academies/students";
+import { resolveScope, studentRegisteredDate, studentRegisteredMonth } from "@/lib/academies/students";
+import { registrationPresetOptions, registrationToday, type RegistrationPresetKey } from "@/lib/academies/registration-periods";
 import { getOverdueFeeSummary, getStudentPaymentSummaries } from "@/lib/academies/fee-periods";
 import {
   ACADEMY_FEE_PERIODS_ACTION,
@@ -38,6 +39,9 @@ export interface StudentsOverview {
   byBranch: Record<string, number>;
   /** Students per registration month, newest first ("2026-11"). */
   byMonth: { month: string; count: number }[];
+  /** Students per "Registration date" preset (Today … This year), counted
+   * with the same Mogadishu dates the filter uses. */
+  byPeriod: Record<RegistrationPresetKey, number>;
   finance: null | {
     overdueStudentCount: number;
     overdueTotals: { currency: string; amountCents: number }[];
@@ -52,6 +56,10 @@ export type GetStudentsOverviewResult = { ok: true; overview: StudentsOverview }
 function addTo(map: Map<string, number>, currency: string, cents: number) {
   if (cents > 0) map.set(currency, (map.get(currency) ?? 0) + cents);
 }
+function emptyPeriods(): Record<RegistrationPresetKey, number> {
+  return { today: 0, yesterday: 0, "7d": 0, "30d": 0, month: 0, "last-month": 0, year: 0 };
+}
+
 const totalsOf = (map: Map<string, number>) =>
   [...map].map(([currency, amountCents]) => ({ currency, amountCents })).sort((a, b) => b.amountCents - a.amountCents);
 
@@ -65,7 +73,7 @@ export async function getStudentsOverview(
   if (getAcademyPermissionLevel(membershipRole, ACADEMY_STUDENTS_ACTION) === "none") return { ok: false };
 
   const empty: StudentsOverview = {
-    total: 0, active: 0, archived: 0, enrolled: 0, needsEnrollment: 0, batches: [], noBatch: 0, byBranch: {}, byMonth: [], finance: null,
+    total: 0, active: 0, archived: 0, enrolled: 0, needsEnrollment: 0, batches: [], noBatch: 0, byBranch: {}, byMonth: [], byPeriod: emptyPeriods(), finance: null,
   };
   const scope = await resolveScope(access, actorContext.userId, options.branchId || undefined);
   if (scope.unreachable) return { ok: true, overview: empty };
@@ -91,7 +99,8 @@ export async function getStudentsOverview(
       and ${batchEnrollments.status} = 'active'
   )`;
 
-  const [countRows, batchRows, summaries, overdue, chargeRows, monthRows] = await Promise.all([
+  const presets = registrationPresetOptions(registrationToday());
+  const [countRows, batchRows, summaries, overdue, chargeRows, monthRows, periodRows] = await Promise.all([
     db
       .select({
         status: students.status,
@@ -142,6 +151,17 @@ export async function getStudentsOverview(
       .where(scopeWhere)
       .groupBy(studentRegisteredMonth)
       .orderBy(sql`1 desc`),
+    db
+      .select(
+        Object.fromEntries(
+          presets.map((preset) => [
+            preset.key,
+            sql<number>`count(*) filter (where ${studentRegisteredDate} between ${preset.range.from}::date and ${preset.range.to}::date)::int`,
+          ]),
+        ) as Record<RegistrationPresetKey, ReturnType<typeof sql<number>>>,
+      )
+      .from(students)
+      .where(scopeWhere),
   ]);
 
   let total = 0;
@@ -172,6 +192,7 @@ export async function getStudentsOverview(
     noBatch: total - enrolledAnyStatus,
     byBranch,
     byMonth: monthRows.map((row) => ({ month: row.month, count: row.count })),
+    byPeriod: { ...emptyPeriods(), ...(periodRows[0] ?? {}) },
     finance: null,
   };
 

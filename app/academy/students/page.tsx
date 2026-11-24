@@ -23,6 +23,8 @@ import { PAGE_WRAP, PageHeader, PageMessage } from "@/app/academy/_shell/ui";
 import { NoteBlock, StatBento } from "@/app/academy/_shell/page-blocks";
 import { ClearFilters, FilterBar, FilterDropdown, SearchField } from "@/app/academy/_shell/filter-controls";
 import { PaginationNav } from "@/components/pagination-nav";
+import { monthLabel, registrationPresetOptions, registrationToday, resolveRegistrationPeriod } from "@/lib/academies/registration-periods";
+import { RegistrationDateFilter } from "./registration-date-filter";
 
 /**
  * `/academy/students` — Screen Inventory A02, built from the active design
@@ -39,12 +41,6 @@ import { PaginationNav } from "@/components/pagination-nav";
  * appear for roles that can read fee periods. The design's "City" filter is
  * derived from the branch name, so this page filters by Branch.
  */
-/** "2026-11" → "November 2026" (the Registered filter's month labels). */
-function formatRegisteredMonth(month: string): string {
-  const [year, m] = month.split("-").map(Number);
-  return new Date(Date.UTC(year, m - 1, 1)).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
-}
-
 const PAY_LABEL: Record<PaymentFilter, string> = { unpaid: "Unpaid balance", overdue: "Overdue", paid: "Paid in full" };
 
 function moneyLine(totals: { currency: string; amountCents: number }[]): string {
@@ -73,7 +69,11 @@ export default async function AcademyStudentsPage({
   const statusParam = get("status");
   const batchId = get("batch");
   const payParam = get("pay");
-  const monthParam = get("month");
+  // "Registration date" (lib/academies/registration-periods.ts). A link from
+  // the earlier month-only filter (`month=2026-11`) still opens that month.
+  const today = registrationToday();
+  const regParam = get("reg") || get("month");
+  const period = resolveRegistrationPeriod({ reg: regParam, regFrom: get("regFrom"), regTo: get("regTo") }, today);
   const pay = payParam === "unpaid" || payParam === "overdue" || payParam === "paid" ? payParam : null;
   const pageParam = Number.parseInt(get("page"), 10);
   const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
@@ -84,7 +84,8 @@ export default async function AcademyStudentsPage({
     status: statusParam === "active" || statusParam === "archived" ? statusParam : undefined,
     needsEnrollment: statusParam === "needs" || undefined,
     batchId: batchId && batchId !== "none" ? batchId : undefined,
-    registeredMonth: monthParam || undefined,
+    registeredFrom: period?.from,
+    registeredTo: period?.to,
   };
   if (batchId === "none") filters.needsEnrollment = true;
 
@@ -136,7 +137,7 @@ export default async function AcademyStudentsPage({
   // roles only) and the registration dialog's branch choice.
   const branchOptions = branchesResult.ok ? branchesResult.branches.filter((branch) => branch.status === "active") : [];
 
-  const hasActiveFilters = Boolean(searchTerm || branchId || statusParam || batchId || pay || monthParam);
+  const hasActiveFilters = Boolean(searchTerm || branchId || statusParam || batchId || pay || period);
 
   const academyId = access.level !== "blocked" ? access.academyId : null;
   // Record payment needs the fee-periods "manage" gate (the permission
@@ -231,6 +232,8 @@ export default async function AcademyStudentsPage({
         />
       )}
 
+      {/* Paging scrolls back here (components/pagination-links.tsx). */}
+      <div data-pagination-top="" className="scroll-mt-4" aria-hidden="true" />
       <FilterBar>
         <SearchField placeholder="Search by name or student number" />
         {overview && (
@@ -288,20 +291,24 @@ export default async function AcademyStudentsPage({
             ]}
           />
         )}
-        {overview && overview.byMonth.length > 0 && (
-          <FilterDropdown
-            param="month"
-            label="Registered"
-            icon="calendar"
-            options={[
-              { value: "", label: "Any month", count: overview.total },
-              ...overview.byMonth.map((row) => ({ value: row.month, label: formatRegisteredMonth(row.month), count: row.count })),
-            ]}
+        {overview && (
+          <RegistrationDateFilter
+            total={overview.total}
+            current={period ? { value: regParam === "custom" ? "custom" : regParam, label: period.label, hint: period.hint, from: period.from, to: period.to } : null}
+            presets={registrationPresetOptions(today).map((preset) => ({
+              value: preset.key,
+              label: preset.label,
+              hint: preset.hint,
+              count: overview.byPeriod[preset.key],
+            }))}
+            months={overview.byMonth.map((row) => ({ value: row.month, label: monthLabel(row.month), count: row.count }))}
+            today={today}
           />
         )}
-        <ClearFilters params={["q", "status", "branchId", "batch", "pay", "month"]} />
+        <ClearFilters params={["q", "status", "branchId", "batch", "pay", "reg", "regFrom", "regTo", "month"]} />
       </FilterBar>
 
+      <div data-pagination-list="">
       <StudentsList
         students={data.rows}
         canManage={canManage}
@@ -318,6 +325,7 @@ export default async function AcademyStudentsPage({
         hasActiveFilters={hasActiveFilters}
         canRegister={canManage && branchOptions.length > 0}
       />
+      </div>
 
       <PaginationNav page={data.page} pageSize={data.pageSize} totalCount={data.totalCount} searchParams={params} />
 

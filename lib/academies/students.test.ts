@@ -499,8 +499,8 @@ describe("searchStudents — filtering by name/student number", () => {
   });
 });
 
-describe("searchStudents — Registered month filter", () => {
-  it("filters by the registration date's month, else the day the record was created, and counts per month", async () => {
+describe("searchStudents — Registration date filter", () => {
+  it("filters by the registration date, else the day the record was created, and counts per month", async () => {
     const { academyId, userId, context } = await setupAcademy("academy_owner");
     const branchId = await insertBranchDirect(academyId);
     const march = await insertStudentDirect(academyId, branchId, userId, { registrationDate: "2025-03-10" });
@@ -509,15 +509,17 @@ describe("searchStudents — Registered month filter", () => {
     // so 22:30 UTC on 31 May is already 1 June there.
     const created = await insertStudentDirect(academyId, branchId, userId, { createdAt: new Date("2025-05-31T22:30:00Z") });
 
-    const byMonth = async (month: string) => {
-      const result = await searchStudents(context, { registeredMonth: month });
+    const between = async (from: string, to: string) => {
+      const result = await searchStudents(context, { registeredFrom: from, registeredTo: to });
       expect(result.ok).toBe(true);
       return result.ok ? result.data.rows.map((row) => row.id) : [];
     };
-    expect(await byMonth("2025-03")).toEqual([march.id]);
-    expect(await byMonth("2025-06")).toEqual([created.id]);
-    expect(await byMonth("2025-05")).toEqual([]);
-    expect(await byMonth("not-a-month")).toEqual([]);
+    expect(await between("2025-03-01", "2025-03-31")).toEqual([march.id]);
+    expect(await between("2025-03-10", "2025-03-10")).toEqual([march.id]);
+    expect(await between("2025-03-11", "2025-03-31")).toEqual([]);
+    expect(await between("2025-06-01", "2025-06-30")).toEqual([created.id]);
+    expect(await between("2025-05-01", "2025-05-31")).toEqual([]);
+    expect(await between("not-a-date", "2025-05-31")).toEqual([]);
 
     const overview = await getStudentsOverview(context);
     expect(overview.ok).toBe(true);
