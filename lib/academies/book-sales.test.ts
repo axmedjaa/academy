@@ -13,6 +13,8 @@ import {
   books,
   branches,
   incomeRecords,
+  staffBranchAssignments,
+  staffProfiles,
   students,
   subscriptionPlans,
   users,
@@ -152,6 +154,8 @@ afterAll(async () => {
     await db.delete(incomeRecords).where(eq(incomeRecords.academyId, academyId));
     await db.delete(books).where(eq(books.academyId, academyId));
     await db.delete(students).where(eq(students.academyId, academyId));
+    await db.delete(staffBranchAssignments).where(eq(staffBranchAssignments.academyId, academyId));
+    await db.delete(staffProfiles).where(eq(staffProfiles.academyId, academyId));
     await db.delete(branches).where(eq(branches.academyId, academyId));
     await db.delete(academySubscriptions).where(eq(academySubscriptions.academyId, academyId));
     await db.delete(academyMemberships).where(eq(academyMemberships.academyId, academyId));
@@ -264,6 +268,84 @@ describe("createBookSale", () => {
     await addMembership(ownerUserId, fixture.academyId, "academy_owner");
     const result = await createBookSale({ userId: ownerUserId, branchIds: [], academyWide: false }, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 1, amountPaidCents: 0 });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("createBookSale — a seller limited to one branch", () => {
+  // The Sell Book dialog sends no branch for a student buyer. A member
+  // without all-branch access used to be refused ("Branch not found.").
+  async function branchLimitedSeller(fixture: Fixture) {
+    const userId = await createUser();
+    await db.insert(academyMemberships).values({ userId, academyId: fixture.academyId, role: "manager", status: "active", academyWide: false });
+    const [profile] = await db
+      .insert(staffProfiles)
+      .values({ academyId: fixture.academyId, userId, fullName: "Branch Seller", phone: "+252611000001" })
+      .returning({ id: staffProfiles.id });
+    await db.insert(staffBranchAssignments).values({ academyId: fixture.academyId, staffProfileId: profile.id, branchId: fixture.branchId });
+    const context: AuthContext = { userId, branchIds: [fixture.branchId], academyWide: false };
+    return context;
+  }
+
+  it("sells to a student of their branch without a branch in the request, recording the student's branch", async () => {
+    const fixture = await setupFixture();
+    const seller = await branchLimitedSeller(fixture);
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 300, 10);
+
+    const result = await createBookSale(seller, {
+      bookId: book.id,
+      buyerType: "student",
+      studentId: fixture.studentId,
+      quantity: 1,
+      amountPaidCents: 300,
+      method: "cash",
+      idempotencyKey: randomUUID(),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.sale.branchId).toBe(fixture.branchId);
+    const [income] = await db.select().from(incomeRecords).where(eq(incomeRecords.academyId, fixture.academyId));
+    expect(income.branchId).toBe(fixture.branchId);
+  });
+
+  it("refuses a student of another branch", async () => {
+    const fixture = await setupFixture();
+    const seller = await branchLimitedSeller(fixture);
+    const otherBranch = await insertBranchDirect(fixture.academyId);
+    const otherStudent = await insertStudentDirect(fixture.academyId, otherBranch, fixture.creatorUserId);
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 300, 10);
+
+    const result = await createBookSale(seller, { bookId: book.id, buyerType: "student", studentId: otherStudent, quantity: 1 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("not_found");
+  });
+
+  it("sells to another person only for one of their own branches", async () => {
+    const fixture = await setupFixture();
+    const seller = await branchLimitedSeller(fixture);
+    const otherBranch = await insertBranchDirect(fixture.academyId);
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 300, 10);
+    const sale = (branchId?: string) =>
+      createBookSale(seller, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in buyer", quantity: 1, branchId });
+
+    const noBranch = await sale();
+    expect(noBranch.ok).toBe(false);
+    const wrongBranch = await sale(otherBranch);
+    expect(wrongBranch.ok).toBe(false);
+    const ownBranch = await sale(fixture.branchId);
+    expect(ownBranch.ok).toBe(true);
+    if (ownBranch.ok) expect(ownBranch.sale.branchId).toBe(fixture.branchId);
+  });
+
+  it("a retried student sale (same idempotency key, no branch sent) returns the first sale", async () => {
+    const fixture = await setupFixture();
+    const seller = await branchLimitedSeller(fixture);
+    const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 300, 10);
+    const input = { bookId: book.id, buyerType: "student" as const, studentId: fixture.studentId, quantity: 1, idempotencyKey: randomUUID() };
+
+    const first = await createBookSale(seller, input);
+    const again = await createBookSale(seller, input);
+    expect(first.ok && again.ok).toBe(true);
+    if (first.ok && again.ok) expect(again.sale.id).toBe(first.sale.id);
   });
 });
 

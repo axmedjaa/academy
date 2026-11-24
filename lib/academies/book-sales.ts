@@ -252,7 +252,8 @@ async function replayCreateBookSale(
   if (!inBranchScope(scope, row.branchId)) return { ok: false, error: BRANCH_NOT_FOUND };
   const sameOperation =
     row.bookId === data.bookId &&
-    row.branchId === (data.branchId ?? null) &&
+    // No branch in the request = the server chose it (the student's branch).
+    (data.branchId === undefined || row.branchId === data.branchId) &&
     row.buyerType === data.buyerType &&
     row.studentId === (data.buyerType === "student" ? (data.studentId ?? null) : null) &&
     row.quantity === data.quantity &&
@@ -260,6 +261,23 @@ async function replayCreateBookSale(
     row.discountValue === (data.discountType === "none" ? 0 : data.discountValue);
   if (!sameOperation) return { ok: false, error: IDEMPOTENCY_KEY_REUSED };
   return { ok: true, sale: toSaleRecord(row), duplicate: true };
+}
+
+/** Active branches the caller may sell for (their own branches when
+ * branch-limited), for the Sell Book dialog's Branch field. Empty when the
+ * caller can't record sales. */
+export async function listBookSaleBranchOptions(
+  actorContext: AuthContext,
+): Promise<{ ok: true; branches: { id: string; name: string }[] } | { ok: false; error: BookSaleActionError }> {
+  const resolved = await resolveAccess(actorContext);
+  if (!resolved.ok) return resolved;
+  const { academyId, permissionLevel, scope } = resolved.access;
+  if (!canManage(permissionLevel)) return { ok: true, branches: [] };
+  const conditions = [eq(branches.academyId, academyId), eq(branches.status, "active")];
+  const scoped = branchScopeCondition(scope, branches.id);
+  if (scoped) conditions.push(scoped);
+  const rows = await db.select({ id: branches.id, name: branches.name }).from(branches).where(and(...conditions)).orderBy(branches.name);
+  return { ok: true, branches: rows };
 }
 
 export async function createBookSale(actorContext: AuthContext, input: CreateBookSaleInput): Promise<CreateBookSaleResult> {
@@ -290,26 +308,33 @@ export async function createBookSale(actorContext: AuthContext, input: CreateBoo
     if (book.status !== "active") return { kind: "inactive" as const };
     if (book.stockQuantity < data.quantity) return { kind: "insufficient_stock" as const, available: book.stockQuantity };
 
+    // The sale's branch: the one chosen in the form, else (a student buyer)
+    // the student's own branch, the same rule as book pre-orders. The Sell
+    // Book dialog only asks for a branch when the buyer is not a student.
+    let branchId: string | null = data.branchId ?? null;
     if (data.buyerType === "student") {
       const [student] = await tx
-        .select({ id: students.id, academyId: students.academyId })
+        .select({ id: students.id, academyId: students.academyId, branchId: students.branchId })
         .from(students)
         .where(eq(students.id, data.studentId!))
         .limit(1);
       if (!student || student.academyId !== academyId) return { kind: "student_not_found" as const };
+      if (!branchId) branchId = student.branchId;
+      // A branch-limited member sells only to students of their own branches.
+      if (!scope.academyWide && !inBranchScope(scope, student.branchId)) return { kind: "student_not_found" as const };
     }
 
-    if (data.branchId) {
+    if (branchId) {
       const [branch] = await tx
         .select({ id: branches.id, academyId: branches.academyId })
         .from(branches)
-        .where(eq(branches.id, data.branchId))
+        .where(eq(branches.id, branchId))
         .limit(1);
       if (!branch || branch.academyId !== academyId) return { kind: "branch_not_found" as const };
     }
     // Multi-branch: a member without all-branch access sells only for one of
     // their own branches.
-    if (!scope.academyWide && (!data.branchId || !scope.branchIds.includes(data.branchId))) {
+    if (!scope.academyWide && (!branchId || !scope.branchIds.includes(branchId))) {
       return { kind: "branch_not_found" as const };
     }
 
@@ -328,7 +353,7 @@ export async function createBookSale(actorContext: AuthContext, input: CreateBoo
       .insert(bookSales)
       .values({
         academyId,
-        branchId: data.branchId,
+        branchId: branchId,
         bookId: data.bookId,
         buyerType: data.buyerType,
         studentId: data.buyerType === "student" ? data.studentId : null,
@@ -355,7 +380,7 @@ export async function createBookSale(actorContext: AuthContext, input: CreateBoo
         .insert(incomeRecords)
         .values({
           academyId,
-          branchId: data.branchId,
+          branchId: branchId,
           category: "book_sale",
           description: `Book sale: ${book.name} x${data.quantity}`,
           amountCents: data.amountPaidCents,

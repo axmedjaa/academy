@@ -320,6 +320,16 @@ async function resolveStudentAccess(
 // from this phase onward" — same default/max page size and offset-based
 // shape already established by lib/audit-query.ts (Item 32a) for the first
 // paginated list in this codebase; reused verbatim here as the second.
+/** The month a student registered, "YYYY-MM": the registration date staff
+ * entered, else the day the record was created (Mogadishu time). Shared by
+ * the Registered filter and its month counts (students-overview.ts). */
+export const studentRegisteredMonth = sql<string>`to_char(coalesce(${students.registrationDate}, (${students.createdAt} at time zone 'Africa/Mogadishu')::date), 'YYYY-MM')`;
+
+/** "2026-11" → true. A month the Registered filter accepts. */
+export function isRegisteredMonth(value: string): boolean {
+  return /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
+}
+
 export const STUDENTS_DEFAULT_PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 /** Ceiling for server-only option loads (student pickers) and export
  * batches — never a displayed list page, which uses the default above. */
@@ -350,6 +360,8 @@ export interface StudentSearchFilters {
   batchId?: string;
   /** Only active students with no active enrollment ("Needs enrollment"). */
   needsEnrollment?: boolean;
+  /** Only students registered in this month, "YYYY-MM" (studentRegisteredMonth). */
+  registeredMonth?: string;
   /** Restrict to these ids (e.g. a payment-status filter resolved from the
    * students overview). Intersected with the caller's scope, never widening
    * it; an empty array matches nothing. */
@@ -547,6 +559,9 @@ export async function searchStudents(
     conditions.push(
       sql`not exists (select 1 from ${batchEnrollments} where ${batchEnrollments.studentId} = ${students.id} and ${batchEnrollments.academyId} = ${academyId} and ${batchEnrollments.status} = 'active')`,
     );
+  }
+  if (filters.registeredMonth) {
+    conditions.push(isRegisteredMonth(filters.registeredMonth) ? sql`${studentRegisteredMonth} = ${filters.registeredMonth}` : sql`false`);
   }
   if (filters.studentIds) {
     conditions.push(filters.studentIds.length ? inArray(students.id, filters.studentIds) : sql`false`);

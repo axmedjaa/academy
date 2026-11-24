@@ -64,6 +64,12 @@ function todayIso() {
 const RULES: DesignFormRule[] = [
   { name: "fullName", label: "Full name", required: true },
   {
+    name: "phone",
+    label: "Phone",
+    required: true,
+    check: (value) => (value.replace(/\D/g, "").length < 6 ? "Enter the student's phone number, for example +252 61 234 5678." : null),
+  },
+  {
     name: "address",
     label: "Home address",
     check: (value) => (value.trim().length > 500 ? "Keep the address under 500 characters." : null),
@@ -180,7 +186,7 @@ function RegisterStudentFields({
               ))}
             </select>
           </DField>
-          <DField label="Phone" name="phone" error={errors.phone}>
+          <DField label="Phone" name="phone" required error={errors.phone}>
             <PhoneField name="phone" error={errors.phone} />
           </DField>
           <DField label="Email (optional)" name="email" error={errors.email}>

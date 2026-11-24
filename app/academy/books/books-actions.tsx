@@ -391,7 +391,7 @@ function SellBookForm({ initialBookId, onCancel, onDone }: { initialBookId?: str
         )}
       </div>
       {book ? (
-        <SellForm key={book.id} book={book} studentOptions={studentOptions} onCancel={onCancel} onDone={onDone} />
+        <SellForm key={book.id} book={book} studentOptions={studentOptions} branchOptions={data.branches} onCancel={onCancel} onDone={onDone} />
       ) : (
         <div className="flex flex-wrap justify-end gap-3 border-t border-border bg-[#FAFBFC] px-6 py-4">
           <button type="button" onClick={onCancel} className="h-11 rounded-lg border border-border-strong bg-surface px-[18px] font-medium text-ink hover:bg-app">

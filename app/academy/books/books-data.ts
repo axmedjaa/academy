@@ -1,7 +1,7 @@
 import { cache } from "react";
 import { getAuthContext } from "@/lib/auth/auth-context";
 import { listBooks } from "@/lib/academies/books";
-import { listBookSales } from "@/lib/academies/book-sales";
+import { listBookSaleBranchOptions, listBookSales } from "@/lib/academies/book-sales";
 import { getBookOrdersOverview, listBookBranchOptions, listBookStudentOptions } from "@/lib/academies/book-orders";
 import { getPreorderOverview } from "@/lib/academies/book-preorders";
 
@@ -31,6 +31,14 @@ export const getBookBranches = cache(async () => {
   const context = await getAuthContext();
   if (!context) return [];
   const result = await listBookBranchOptions(context);
+  return result.ok ? result.branches : [];
+});
+
+/** Branches the caller may sell books for (Sell Book's Branch field). */
+export const getBookSaleBranches = cache(async () => {
+  const context = await getAuthContext();
+  if (!context) return [];
+  const result = await listBookSaleBranchOptions(context);
   return result.ok ? result.branches : [];
 });
 

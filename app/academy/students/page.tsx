@@ -39,6 +39,12 @@ import { PaginationNav } from "@/components/pagination-nav";
  * appear for roles that can read fee periods. The design's "City" filter is
  * derived from the branch name, so this page filters by Branch.
  */
+/** "2026-11" → "November 2026" (the Registered filter's month labels). */
+function formatRegisteredMonth(month: string): string {
+  const [year, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, m - 1, 1)).toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
+}
+
 const PAY_LABEL: Record<PaymentFilter, string> = { unpaid: "Unpaid balance", overdue: "Overdue", paid: "Paid in full" };
 
 function moneyLine(totals: { currency: string; amountCents: number }[]): string {
@@ -67,6 +73,7 @@ export default async function AcademyStudentsPage({
   const statusParam = get("status");
   const batchId = get("batch");
   const payParam = get("pay");
+  const monthParam = get("month");
   const pay = payParam === "unpaid" || payParam === "overdue" || payParam === "paid" ? payParam : null;
   const pageParam = Number.parseInt(get("page"), 10);
   const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1;
@@ -77,6 +84,7 @@ export default async function AcademyStudentsPage({
     status: statusParam === "active" || statusParam === "archived" ? statusParam : undefined,
     needsEnrollment: statusParam === "needs" || undefined,
     batchId: batchId && batchId !== "none" ? batchId : undefined,
+    registeredMonth: monthParam || undefined,
   };
   if (batchId === "none") filters.needsEnrollment = true;
 
@@ -128,7 +136,7 @@ export default async function AcademyStudentsPage({
   // roles only) and the registration dialog's branch choice.
   const branchOptions = branchesResult.ok ? branchesResult.branches.filter((branch) => branch.status === "active") : [];
 
-  const hasActiveFilters = Boolean(searchTerm || branchId || statusParam || batchId || pay);
+  const hasActiveFilters = Boolean(searchTerm || branchId || statusParam || batchId || pay || monthParam);
 
   const academyId = access.level !== "blocked" ? access.academyId : null;
   // Record payment needs the fee-periods "manage" gate (the permission
@@ -280,7 +288,18 @@ export default async function AcademyStudentsPage({
             ]}
           />
         )}
-        <ClearFilters params={["q", "status", "branchId", "batch", "pay"]} />
+        {overview && overview.byMonth.length > 0 && (
+          <FilterDropdown
+            param="month"
+            label="Registered"
+            icon="calendar"
+            options={[
+              { value: "", label: "Any month", count: overview.total },
+              ...overview.byMonth.map((row) => ({ value: row.month, label: formatRegisteredMonth(row.month), count: row.count })),
+            ]}
+          />
+        )}
+        <ClearFilters params={["q", "status", "branchId", "batch", "pay", "month"]} />
       </FilterBar>
 
       <StudentsList

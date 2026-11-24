@@ -127,10 +127,19 @@ export function ChatActions({
 }
 
 /** A phone number with its chat buttons beneath it (design table cell). */
-export function PhoneCell({ phone, who }: { phone: string | null | undefined; who?: string }) {
+export function PhoneCell({
+  phone,
+  who,
+  inline = false,
+}: {
+  phone: string | null | undefined;
+  who?: string;
+  /** Number and chat buttons on one line (dense tables), not stacked. */
+  inline?: boolean;
+}) {
   if (!phone) return <span className="text-muted">Not given</span>;
   return (
-    <span className="inline-flex flex-col items-start gap-2">
+    <span className={inline ? "inline-flex items-center gap-2 whitespace-nowrap" : "inline-flex flex-col items-start gap-2"}>
       <span className="tabular-nums">{phone}</span>
       <ChatActions phone={phone} who={who} />
     </span>

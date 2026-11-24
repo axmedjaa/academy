@@ -553,7 +553,7 @@ describe("registerStudent with a profileImageRef", () => {
     const key = getStudentPhotoKey({ academyId, extension: "png" });
     headObjectMock.mockResolvedValue({ ok: true, exists: true, info: { contentType: "image/png", contentLength: 1000 } });
 
-    const result = await registerStudent(context, { branchId, fullName: "New Student", profileImageRef: key });
+    const result = await registerStudent(context, { branchId, phone: "+252611000000", fullName: "New Student", profileImageRef: key });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -567,7 +567,7 @@ describe("registerStudent with a profileImageRef", () => {
     const key = getStudentPhotoKey({ academyId, extension: "png" });
     headObjectMock.mockResolvedValue({ ok: true, exists: false });
 
-    const result = await registerStudent(context, { branchId, fullName: "Unverified Photo Student", profileImageRef: key });
+    const result = await registerStudent(context, { branchId, phone: "+252611000000", fullName: "Unverified Photo Student", profileImageRef: key });
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
@@ -580,7 +580,7 @@ describe("registerStudent with a profileImageRef", () => {
     const { academyId, context } = await setupAcademy("manager");
     const branchId = await insertBranchDirect(academyId);
 
-    const result = await registerStudent(context, { branchId, fullName: "No Photo Student" });
+    const result = await registerStudent(context, { branchId, phone: "+252611000000", fullName: "No Photo Student" });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
