@@ -41,6 +41,9 @@ Production data is in **PostgreSQL 18 on the VPS itself**, no longer on Neon:
   `127.0.0.1:5432` only (never on a public address);
 - `DATABASE_URL` in `APP_ENV` (and so in `/srv/myapp/env/app.env`) is
   `postgresql://dardar_app:<password>@127.0.0.1:5432/dardar_production_final`;
+- a password character that has a meaning in URLs (`@ : / ? # % [ ]`,
+  space) must be percent-encoded in `DATABASE_URL`: `@` is `%40`, `:` is
+  `%3A`, `/` is `%2F`, `#` is `%23`, `%` is `%25`;
 - the data and all migrations up to 0057 were copied from Neon with
   `pg_dump`/`pg_restore` on 2026-11-24.
 
