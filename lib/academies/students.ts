@@ -1,4 +1,5 @@
 import { and, count, desc, eq, getTableName, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { isIsoDate } from "@/lib/academies/registration-periods";
 import { checkStorageAllowance, enforceStoredUploadWithinAllowance, storageFullMessage } from "@/lib/subscriptions/usage";
 import { checkAllowance } from "@/lib/subscriptions/usage";
 import { getAssignedBranchIds } from "@/lib/academies/branch-access";
@@ -320,15 +321,13 @@ async function resolveStudentAccess(
 // from this phase onward" — same default/max page size and offset-based
 // shape already established by lib/audit-query.ts (Item 32a) for the first
 // paginated list in this codebase; reused verbatim here as the second.
-/** The month a student registered, "YYYY-MM": the registration date staff
- * entered, else the day the record was created (Mogadishu time). Shared by
- * the Registered filter and its month counts (students-overview.ts). */
-export const studentRegisteredMonth = sql<string>`to_char(coalesce(${students.registrationDate}, (${students.createdAt} at time zone 'Africa/Mogadishu')::date), 'YYYY-MM')`;
+/** The day a student registered: the registration date staff entered, else
+ * the day the record was created (Mogadishu time). Shared by the
+ * "Registration date" filter and its counts (students-overview.ts). */
+export const studentRegisteredDate = sql<string>`coalesce(${students.registrationDate}, (${students.createdAt} at time zone 'Africa/Mogadishu')::date)`;
 
-/** "2026-11" → true. A month the Registered filter accepts. */
-export function isRegisteredMonth(value: string): boolean {
-  return /^\d{4}-(0[1-9]|1[0-2])$/.test(value);
-}
+/** Its month, "YYYY-MM" (the filter's By month list). */
+export const studentRegisteredMonth = sql<string>`to_char(${studentRegisteredDate}, 'YYYY-MM')`;
 
 export const STUDENTS_DEFAULT_PAGE_SIZE = LIST_PAGE_SIZE_MAX;
 /** Ceiling for server-only option loads (student pickers) and export
@@ -360,8 +359,10 @@ export interface StudentSearchFilters {
   batchId?: string;
   /** Only active students with no active enrollment ("Needs enrollment"). */
   needsEnrollment?: boolean;
-  /** Only students registered in this month, "YYYY-MM" (studentRegisteredMonth). */
-  registeredMonth?: string;
+  /** Only students registered in this inclusive range of days, "YYYY-MM-DD"
+   * (studentRegisteredDate; lib/academies/registration-periods.ts). */
+  registeredFrom?: string;
+  registeredTo?: string;
   /** Restrict to these ids (e.g. a payment-status filter resolved from the
    * students overview). Intersected with the caller's scope, never widening
    * it; an empty array matches nothing. */
@@ -560,8 +561,12 @@ export async function searchStudents(
       sql`not exists (select 1 from ${batchEnrollments} where ${batchEnrollments.studentId} = ${students.id} and ${batchEnrollments.academyId} = ${academyId} and ${batchEnrollments.status} = 'active')`,
     );
   }
-  if (filters.registeredMonth) {
-    conditions.push(isRegisteredMonth(filters.registeredMonth) ? sql`${studentRegisteredMonth} = ${filters.registeredMonth}` : sql`false`);
+  if (filters.registeredFrom || filters.registeredTo) {
+    const from = filters.registeredFrom ?? "";
+    const to = filters.registeredTo ?? "";
+    conditions.push(
+      isIsoDate(from) && isIsoDate(to) ? sql`${studentRegisteredDate} between ${from}::date and ${to}::date` : sql`false`,
+    );
   }
   if (filters.studentIds) {
     conditions.push(filters.studentIds.length ? inArray(students.id, filters.studentIds) : sql`false`);

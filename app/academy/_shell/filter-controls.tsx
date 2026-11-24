@@ -12,7 +12,7 @@ import { Icon } from "./icons";
  * `page`.
  */
 
-function useParamWriter() {
+export function useParamWriter() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();

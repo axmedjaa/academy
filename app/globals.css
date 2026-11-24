@@ -699,3 +699,12 @@ html {
 @container (max-width: 759px) { .rt-760 .rt tr[data-skel-extra] { display: none; } }
 @container (max-width: 899px) { .rt-900 .rt tr[data-skel-extra] { display: none; } }
 @container (max-width: 1039px) { .rt-1040 .rt tr[data-skel-extra] { display: none; } }
+
+/* Paging a list on the client (components/pagination-links.tsx): the old
+   rows stay, dimmed, until the next page arrives. */
+[data-pagination-list] {
+  transition: opacity 150ms ease-out;
+}
+body:has([data-pagination-pending]) [data-pagination-list] {
+  opacity: 0.55;
+}

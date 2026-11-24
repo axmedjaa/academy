@@ -46,6 +46,7 @@ import {
 } from "@/app/academy/_shell/design-form";
 import { StudentPhotoField } from "../student-photo-field";
 import { StudentAvatar } from "../student-avatar";
+import { PhotoLightbox } from "../photo-lightbox";
 import { guardAction } from "@/lib/ui/guard-action";
 
 // Failed requests come back as form errors (see lib/ui/guard-action.ts).
@@ -386,6 +387,7 @@ export function StudentOverview({
 }) {
   const router = useRouter();
   const [withdrawId, setWithdrawId] = useState<string | null>(null);
+  const [photoOpen, setPhotoOpen] = useState(false);
 
   const active = enrollments.filter((e) => e.status === "active");
   const past = enrollments.filter((e) => e.status !== "active");
@@ -421,7 +423,14 @@ export function StudentOverview({
         />
       ) : (
         <section className="mb-8 flex flex-wrap items-center gap-5 rounded-card border border-border bg-surface p-5 shadow-card">
-          <StudentAvatar fullName={student.fullName} photoUrl={photoUrl} sizeClassName="h-24 w-24" textClassName="text-[28px]" />
+          <StudentAvatar
+            fullName={student.fullName}
+            photoUrl={photoUrl}
+            onPreview={photoUrl ? () => setPhotoOpen(true) : undefined}
+            sizeClassName="h-24 w-24"
+            textClassName="text-[28px]"
+          />
+          {photoUrl && <PhotoLightbox open={photoOpen} onOpenChange={setPhotoOpen} photoUrl={photoUrl} fullName={student.fullName} />}
           <div className="min-w-0 flex-1">
             <h2 className="text-base font-semibold text-ink">Student photo</h2>
             <p className="mt-1 text-[13px] text-muted">Shown on the student list and the ID card.</p>

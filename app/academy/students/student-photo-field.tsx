@@ -9,6 +9,7 @@ import {
 import { requestNewStudentPhotoUploadUrlAction } from "@/lib/academies/register-student-actions";
 import { ConfirmButton, type ConfirmActionResult } from "@/app/academy/_shell/confirm-dialog";
 import { Icon } from "@/app/academy/_shell/icons";
+import { PhotoLightbox } from "./photo-lightbox";
 import { showSuccessToast } from "@/lib/ui/toast";
 import { MAX_RASTER_IMAGE_SIZE_BYTES, RASTER_IMAGE_ACCEPT_ATTRIBUTE, isRasterImageContentType } from "@/lib/storage/upload-policy";
 
@@ -62,6 +63,7 @@ export function StudentPhotoField(props: Props) {
   const [uploadedKey, setUploadedKey] = useState<string | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
 
   function resetSelection() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -185,14 +187,24 @@ export function StudentPhotoField(props: Props) {
       .join("");
     return (
       <section className="mb-8 flex flex-wrap items-center gap-5 rounded-card border border-border bg-surface p-5 shadow-card">
-        <span className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-surface bg-brand-tint text-[28px] font-bold text-brand shadow-[0_2px_10px_rgba(17,24,39,0.14)]">
-          {displayedPreviewUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- a local blob: preview or a short-lived signed R2 URL.
-            <img src={displayedPreviewUrl} alt={`Photo of ${props.hero.fullName}`} className="h-full w-full object-cover" />
-          ) : (
+        {displayedPreviewUrl ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setViewerOpen(true)}
+              aria-label={`View ${props.hero.fullName}'s photo full size`}
+              className="block h-24 w-24 shrink-0 cursor-zoom-in overflow-hidden rounded-full border-4 border-surface bg-brand-tint shadow-[0_2px_10px_rgba(17,24,39,0.14)] transition-[box-shadow,transform] duration-150 ease-out hover:shadow-[0_4px_16px_rgba(17,24,39,0.22)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 motion-safe:active:scale-[0.97]"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element -- a local blob: preview or a short-lived signed R2 URL. */}
+              <img src={displayedPreviewUrl} alt={`Photo of ${props.hero.fullName}`} className="h-full w-full object-cover" />
+            </button>
+            <PhotoLightbox open={viewerOpen} onOpenChange={setViewerOpen} photoUrl={displayedPreviewUrl} fullName={props.hero.fullName} />
+          </>
+        ) : (
+          <span className="flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-full border-4 border-surface bg-brand-tint text-[28px] font-bold text-brand shadow-[0_2px_10px_rgba(17,24,39,0.14)]">
             <span aria-hidden="true">{initials}</span>
-          )}
-        </span>
+          </span>
+        )}
         <div className="min-w-[180px] flex-1">
           <h2 className="text-base font-semibold text-ink">Student photo</h2>
           <p className="mt-1 max-w-[340px] text-[13px] text-muted">

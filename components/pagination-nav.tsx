@@ -1,4 +1,5 @@
 import { buildPaginationItems } from "@/lib/ui/pagination";
+import { PaginationLinks } from "@/components/pagination-links";
 import {
   Pagination,
   PaginationContent,
@@ -55,7 +56,8 @@ function buildPageHref(
  * the only pages with real server-side pagination (`page`/`pageSize`/
  * `totalCount` from their own data-access layer; see each page's own
  * comment). Deliberately not scoped under `app/academy/` — it's shared by
- * the Platform Owner console too. Pure presentation: plain `<a href>` links
+ * the Platform Owner console too. Real `<a href>` links (PaginationLinks makes a plain click a client
+ * navigation, so the page doesn't reload)
  * built from the caller's existing `searchParams`, same "GET query param,
  * re-navigate, server-render" convention those pages already used — no
  * client JS, no new fetch, no change to how any page loads its data.
@@ -77,6 +79,7 @@ export function PaginationNav({ page, pageSize, totalCount, searchParams, paramN
   return (
     <nav aria-label="Results pagination" className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-between">
       {showTotal && <p className="text-sm text-muted">{totalCount} total</p>}
+      <PaginationLinks>
       <Pagination className="mx-0 w-auto justify-end">
         <PaginationContent>
           <PaginationItem>
@@ -100,6 +103,7 @@ export function PaginationNav({ page, pageSize, totalCount, searchParams, paramN
           </PaginationItem>
         </PaginationContent>
       </Pagination>
+      </PaginationLinks>
     </nav>
   );
 }
