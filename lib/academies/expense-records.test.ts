@@ -276,17 +276,20 @@ describe("createExpenseRecord — permission matrix", () => {
   });
 
   it("rejects a branchId belonging to a DIFFERENT academy and creates no record", async () => {
-    const { context } = await setupAcademy("academy_owner");
+    const { academyId, context } = await setupAcademy("academy_owner");
     const other = await setupAcademy("academy_owner");
     const otherAcademyBranch = await insertBranchDirect(other.academyId);
+    // Only this test's two academies: other test files run in parallel and
+    // add or delete expense records of their own.
+    const ownAcademies = or(eq(expenseRecords.academyId, academyId), eq(expenseRecords.academyId, other.academyId));
 
-    const before = await db.select().from(expenseRecords);
+    const before = await db.select().from(expenseRecords).where(ownAcademies);
 
     const result = await createExpenseRecord(context, validInput({ branchId: otherAcademyBranch }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("not_found");
 
-    const after = await db.select().from(expenseRecords);
+    const after = await db.select().from(expenseRecords).where(ownAcademies);
     expect(after).toHaveLength(before.length);
   });
 });

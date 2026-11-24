@@ -13,6 +13,10 @@ an isolated test database: create one, point tests at it, and anything a
 test run leaves behind only ever lands on that branch, never on `main`
 (the branch dev actually uses).
 
+Since 2026-11-24 production no longer runs on Neon: it is PostgreSQL on the
+VPS (`deploy/README.md`). The Neon database in `.env.local` is therefore not
+live data any more; it holds production as it was on the day of the move.
+
 ## One-time setup
 
 1. **Create a dedicated branch**, via the Neon console (console.neon.tech

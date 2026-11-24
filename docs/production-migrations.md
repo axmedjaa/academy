@@ -81,11 +81,11 @@ sudo systemd-run --wait --pipe --collect --quiet \
 
 ### 5. Back up
 
-Production runs on Neon: create a branch of the production branch in the
-Neon console right before migrating (it is an instant copy you can restore
-from). For an additional off-site copy, or on another provider, use
-`pg_dump`; the client must be at least the server's major version
-(`pg_dump --version`).
+Production runs on PostgreSQL 18 on the VPS (moved from Neon on
+2026-11-24; see `deploy/README.md`). There are no instant Neon branches any
+more: take a `pg_dump` right before migrating, check it with
+`pg_restore --list`, and keep it until the release is confirmed. The client
+must be at least the server's major version (`pg_dump --version`).
 
 ```bash
 sudo install -d -m 700 /var/backups/myapp
