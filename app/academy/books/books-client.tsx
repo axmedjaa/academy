@@ -662,15 +662,20 @@ export function EditBookForm({
 export function SellForm({
   book,
   studentOptions,
+  branchOptions = [],
   onCancel,
   onDone,
 }: {
   book: BookRecord;
   studentOptions: StudentPickerOption[];
+  /** The caller's active branches. A student sale uses the student's branch;
+   * another buyer's sale needs one, asked for only when there are several. */
+  branchOptions?: { id: string; name: string }[];
   onCancel: () => void;
   onDone: () => void;
 }) {
   const [buyerType, setBuyerType] = useState<"student" | "other_person">("student");
+  const [branchId, setBranchId] = useState(branchOptions.length === 1 ? branchOptions[0].id : "");
   const [studentId, setStudentId] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [discountType, setDiscountType] = useState<"none" | "fixed" | "percentage">("none");
@@ -696,7 +701,10 @@ export function SellForm({
   const rules: DesignFormRule[] = [
     ...(buyerType === "student"
       ? [{ name: "studentId", label: "Student", required: true, kind: "select" as const }]
-      : [{ name: "otherBuyerName", label: "Buyer name", required: true }]),
+      : [
+          { name: "otherBuyerName", label: "Buyer name", required: true },
+          ...(branchOptions.length > 1 ? [{ name: "branchId", label: "Branch", required: true, kind: "select" as const }] : []),
+        ]),
     {
       name: "quantity",
       label: "Quantity",
@@ -777,6 +785,7 @@ export function SellForm({
               studentId: buyerType === "student" ? studentId : undefined,
               otherBuyerName: buyerType === "other_person" ? text("otherBuyerName") : undefined,
               otherBuyerPhone: buyerType === "other_person" ? text("otherBuyerPhone") : undefined,
+              branchId: buyerType === "other_person" && branchId ? branchId : undefined,
               quantity: qty,
               discountType,
               discountValue:
@@ -845,6 +854,25 @@ export function SellForm({
               <DField label="Buyer phone" name="otherBuyerPhone" hint="Optional.">
                 <input type="tel" name="otherBuyerPhone" maxLength={40} placeholder="+252 63 400 0000" className={controlClass(false)} />
               </DField>
+              {branchOptions.length > 1 && (
+                <DField label="Branch" name="branchId" required error={errors.branchId} hint="The branch this sale belongs to." full>
+                  <select
+                    name="branchId"
+                    value={branchId}
+                    onChange={(event) => setBranchId(event.target.value)}
+                    onBlur={blur("branchId")}
+                    className={controlClass(Boolean(errors.branchId))}
+                    {...invalidProps("branchId", errors.branchId)}
+                  >
+                    <option value="">Choose a branch</option>
+                    {branchOptions.map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </DField>
+              )}
             </>
           )}
           <DField label="Quantity" name="quantity" required error={errors.quantity} hint={`${book.stockQuantity} in stock.`}>

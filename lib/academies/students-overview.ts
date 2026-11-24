@@ -2,7 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { batchEnrollments, batches, studentCharges, studentPayments, students } from "@/lib/db/schema";
 import { checkAcademyAccessForContext } from "@/lib/academies/access-gate";
-import { resolveScope } from "@/lib/academies/students";
+import { resolveScope, studentRegisteredMonth } from "@/lib/academies/students";
 import { getOverdueFeeSummary, getStudentPaymentSummaries } from "@/lib/academies/fee-periods";
 import {
   ACADEMY_FEE_PERIODS_ACTION,
@@ -36,6 +36,8 @@ export interface StudentsOverview {
   batches: { id: string; name: string; count: number }[];
   noBatch: number;
   byBranch: Record<string, number>;
+  /** Students per registration month, newest first ("2026-11"). */
+  byMonth: { month: string; count: number }[];
   finance: null | {
     overdueStudentCount: number;
     overdueTotals: { currency: string; amountCents: number }[];
@@ -63,7 +65,7 @@ export async function getStudentsOverview(
   if (getAcademyPermissionLevel(membershipRole, ACADEMY_STUDENTS_ACTION) === "none") return { ok: false };
 
   const empty: StudentsOverview = {
-    total: 0, active: 0, archived: 0, enrolled: 0, needsEnrollment: 0, batches: [], noBatch: 0, byBranch: {}, finance: null,
+    total: 0, active: 0, archived: 0, enrolled: 0, needsEnrollment: 0, batches: [], noBatch: 0, byBranch: {}, byMonth: [], finance: null,
   };
   const scope = await resolveScope(access, actorContext.userId, options.branchId || undefined);
   if (scope.unreachable) return { ok: true, overview: empty };
@@ -89,7 +91,7 @@ export async function getStudentsOverview(
       and ${batchEnrollments.status} = 'active'
   )`;
 
-  const [countRows, batchRows, summaries, overdue, chargeRows] = await Promise.all([
+  const [countRows, batchRows, summaries, overdue, chargeRows, monthRows] = await Promise.all([
     db
       .select({
         status: students.status,
@@ -134,6 +136,12 @@ export async function getStudentsOverview(
             ),
           )
       : Promise.resolve([]),
+    db
+      .select({ month: studentRegisteredMonth, count: sql<number>`count(*)::int` })
+      .from(students)
+      .where(scopeWhere)
+      .groupBy(studentRegisteredMonth)
+      .orderBy(sql`1 desc`),
   ]);
 
   let total = 0;
@@ -163,6 +171,7 @@ export async function getStudentsOverview(
       .sort((a, b) => a.name.localeCompare(b.name)),
     noBatch: total - enrolledAnyStatus,
     byBranch,
+    byMonth: monthRows.map((row) => ({ month: row.month, count: row.count })),
     finance: null,
   };
 

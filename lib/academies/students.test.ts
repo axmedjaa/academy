@@ -499,6 +499,37 @@ describe("searchStudents — filtering by name/student number", () => {
   });
 });
 
+describe("searchStudents — Registered month filter", () => {
+  it("filters by the registration date's month, else the day the record was created, and counts per month", async () => {
+    const { academyId, userId, context } = await setupAcademy("academy_owner");
+    const branchId = await insertBranchDirect(academyId);
+    const march = await insertStudentDirect(academyId, branchId, userId, { registrationDate: "2025-03-10" });
+    await insertStudentDirect(academyId, branchId, userId, { registrationDate: "2025-04-01" });
+    // No registration date: counted by its created time (Mogadishu, UTC+3),
+    // so 22:30 UTC on 31 May is already 1 June there.
+    const created = await insertStudentDirect(academyId, branchId, userId, { createdAt: new Date("2025-05-31T22:30:00Z") });
+
+    const byMonth = async (month: string) => {
+      const result = await searchStudents(context, { registeredMonth: month });
+      expect(result.ok).toBe(true);
+      return result.ok ? result.data.rows.map((row) => row.id) : [];
+    };
+    expect(await byMonth("2025-03")).toEqual([march.id]);
+    expect(await byMonth("2025-06")).toEqual([created.id]);
+    expect(await byMonth("2025-05")).toEqual([]);
+    expect(await byMonth("not-a-month")).toEqual([]);
+
+    const overview = await getStudentsOverview(context);
+    expect(overview.ok).toBe(true);
+    if (!overview.ok) return;
+    expect(overview.overview.byMonth).toEqual([
+      { month: "2025-06", count: 1 },
+      { month: "2025-04", count: 1 },
+      { month: "2025-03", count: 1 },
+    ]);
+  });
+});
+
 describe("updateStudent — permission matrix", () => {
   it.each<[AcademyRole, boolean]>([
     ["academy_owner", true],

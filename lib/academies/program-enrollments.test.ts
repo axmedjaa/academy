@@ -979,7 +979,7 @@ describe("scholarships, Change fee and the registration note (migration 0057)", 
   });
 
   it("registering without an enrollment keeps the note on the student", async () => {
-    const registered = await registerStudent(f.owner, { branchId: f.branchId, fullName: "Axmed", enrollmentNote: "  Waiting for the March program  " });
+    const registered = await registerStudent(f.owner, { branchId: f.branchId, phone: "+252611000000", fullName: "Axmed", enrollmentNote: "  Waiting for the March program  " });
     if (!registered.ok) throw new Error(registered.error.message);
     const [row] = await db.select({ note: students.enrollmentNote }).from(students).where(eq(students.id, registered.student.id));
     expect(row.note).toBe("Waiting for the March program");

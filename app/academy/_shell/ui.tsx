@@ -696,8 +696,8 @@ export const trHover = "transition-colors duration-150 hover:bg-app/60";
 
 /** A phone number with the design's WhatsApp / Telegram buttons under it.
  * Kept under its old name for existing callers; see chat-actions.tsx. */
-export function PhoneLink({ phone, who }: { phone: string | null | undefined; who?: string }) {
-  return <PhoneCell phone={phone} who={who} />;
+export function PhoneLink({ phone, who, inline }: { phone: string | null | undefined; who?: string; inline?: boolean }) {
+  return <PhoneCell phone={phone} who={who} inline={inline} />;
 }
 
 /** DESIGN.md §3 "Usage/allowance bar": label + "used / limit" + a thin

@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getBookCoverUrl } from "@/lib/academies/books";
 import { PAGE_WRAP, PageMessage } from "@/app/academy/_shell/ui";
 import { BooksShell } from "../books-shell";
-import { getBookBranches, getBookStudents, getBooksOverview } from "../books-data";
+import { getBookBranches, getBookSaleBranches, getBookStudents, getBooksOverview } from "../books-data";
 
 /**
  * Book Management: one page with Books and Orders tabs. This layout renders
@@ -30,7 +30,8 @@ export default async function BooksLayout({ children }: { children: React.ReactN
   const [coverEntries, students, branchOptions] = await Promise.all([
     Promise.all(booksResult.books.filter((book) => book.coverRef).map(async (book) => [book.id, await getBookCoverUrl(book.coverRef)] as const)),
     orders?.canManageOrders || orders?.canIssue || (salesResult.ok && salesResult.canManage) ? getBookStudents() : Promise.resolve([]),
-    orders?.canManageOrders ? getBookBranches() : Promise.resolve([]),
+    // Pre-orders and sales both pick from the caller's own active branches.
+    orders?.canManageOrders ? getBookBranches() : salesResult.ok && salesResult.canManage ? getBookSaleBranches() : Promise.resolve([]),
   ]);
   const coverUrls = Object.fromEntries(coverEntries.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
 

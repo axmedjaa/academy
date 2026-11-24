@@ -119,7 +119,9 @@ export const registerStudentSchema = z.object({
   // `date`, as opposed to `timestamp`, column).
   registrationDate: optionalText(20),
   gender: optionalText(50),
-  phone: optionalText(50),
+  // Required at registration (staff reach students by phone). Editing an
+  // older student without one stays possible (students.ts update schema).
+  phone: z.string({ error: "Enter the student's phone number." }).trim().min(1, "Enter the student's phone number.").max(50),
   email: optionalEmail(),
   guardianName: optionalText(200),
   guardianPhone: optionalText(50),

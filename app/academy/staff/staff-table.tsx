@@ -140,10 +140,8 @@ export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Pr
         <DataTable stackBelow={1040}>
           <thead>
             <tr>
-              <th className={rtTh}>Name</th>
-              <th className={rtTh}>Employee #</th>
+              <th className={rtTh}>Staff member</th>
               <th className={rtTh}>Phone</th>
-              <th className={rtTh}>Login email</th>
               <th className={rtTh}>Role</th>
               <th className={rtTh}>Branches</th>
               <th className={rtTh}>Status</th>
@@ -153,22 +151,38 @@ export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Pr
           <tbody>
             {staff.map((row) => (
               <tr key={row.id} className={trHover}>
-                <td className={rtTd} data-label="Name">
-                  <span className="flex items-center gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-tint text-[13px] font-bold text-brand">
+                <td className={rtTd} data-label="Staff member">
+                  <span className="flex w-[280px] max-w-full min-w-0 items-center gap-3">
+                    <span
+                      aria-hidden="true"
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-tint text-[13px] font-bold text-brand"
+                    >
                       {getInitials(row.fullName)}
                     </span>
-                    <span className="font-semibold text-ink">{row.fullName}</span>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate font-semibold text-ink" title={row.fullName}>
+                        {row.fullName}
+                      </span>
+                      <span className="flex min-w-0 items-center gap-1.5 text-[13px] text-muted">
+                        {row.employeeNumber && (
+                          <>
+                            <span className="shrink-0 tabular-nums" title="Employee number">
+                              {row.employeeNumber}
+                            </span>
+                            <span aria-hidden="true" className="shrink-0">
+                              ·
+                            </span>
+                          </>
+                        )}
+                        <span className="truncate" title={`Login email: ${row.loginEmail}`}>
+                          {row.loginEmail}
+                        </span>
+                      </span>
+                    </span>
                   </span>
                 </td>
-                <td className={`${rtTd} tabular-nums`} data-label="Employee #">
-                  {row.employeeNumber ?? <span className="text-muted">—</span>}
-                </td>
                 <td className={rtTd} data-label="Phone">
-                  <PhoneLink phone={row.phone} who={row.fullName} />
-                </td>
-                <td className={`${rtTd} [overflow-wrap:anywhere]`} data-label="Login email">
-                  {row.loginEmail}
+                  <PhoneLink phone={row.phone} who={row.fullName} inline />
                 </td>
                 <td className={rtTd} data-label="Role">
                   {row.role === null ? (
@@ -181,7 +195,7 @@ export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Pr
                       disabled={isPending}
                       aria-label={`Role for ${row.fullName}`}
                       onChange={(event) => onRoleChange(row.userId, event.target.value as AcademyRole)}
-                      className={`${inputClass} h-10 !w-auto max-w-full py-1.5 text-[13px]`}
+                      className={`${inputClass} h-10 !w-[168px] max-w-full py-1.5 text-[13px]`}
                     >
                       {ACADEMY_ROLES.filter((role) => role === row.role || row.assignableRoles.includes(role)).map((role) => (
                         // A retired role still shows as the member's current
@@ -196,7 +210,7 @@ export function StaffTable({ staff, canManage, canDelete, workplaceOptions }: Pr
                     ACADEMY_ROLE_LABELS[row.role]
                   )}
                 </td>
-                <td className={`${rtTd} max-w-[220px]`} data-label="Branches">
+                <td className={`${rtTd} max-w-[200px]`} data-label="Branches">
                   <BranchesCell row={row} />
                 </td>
                 <td className={rtTd} data-label="Status">

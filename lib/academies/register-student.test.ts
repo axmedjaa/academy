@@ -262,6 +262,18 @@ describe("registerStudent — permission matrix", () => {
     if (!result.ok) expect(result.error.code).toBe("validation");
   });
 
+  it("refuses a registration without a phone number", async () => {
+    const { context, branchId } = await setupAcademy("academy_owner");
+    for (const phone of ["", "   ", undefined]) {
+      const result = await registerStudent(context, validInput(branchId, { phone }));
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("validation");
+        expect(result.error.message).toMatch(/phone/i);
+      }
+    }
+  });
+
   it("auto-generates the student number — the caller can never supply one", async () => {
     const { branchId, context } = await setupAcademy("academy_owner");
     const result = await registerStudent(context, validInput(branchId));
