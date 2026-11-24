@@ -33,6 +33,40 @@ ships the file inside the bundle on SSH stdin. `myapp-deploy` installs it as
 `/srv/myapp/env/app.env` with mode 600 (directory 700, owner `deploy`);
 systemd reads it as root for both services.
 
+## Production database (on this server since 2026-11-24)
+
+Production data is in **PostgreSQL 18 on the VPS itself**, no longer on Neon:
+
+- database `dardar_production_final`, role `dardar_app`, listening on
+  `127.0.0.1:5432` only (never on a public address);
+- `DATABASE_URL` in `APP_ENV` (and so in `/srv/myapp/env/app.env`) is
+  `postgresql://dardar_app:<password>@127.0.0.1:5432/dardar_production_final`;
+- the data and all migrations up to 0057 were copied from Neon with
+  `pg_dump`/`pg_restore` on 2026-11-24.
+
+The old Neon production branch is kept, unchanged, as a fallback until the
+server copy has been confirmed in use (target: 2026-12-08). Rolling back to
+it means putting its `DATABASE_URL` back into `APP_ENV` **and** losing what
+was entered on the server since the move, so do it only together with a
+fresh copy back.
+
+Neon used to make its own backups; this server does not. Nightly
+`pg_dump` backups with an off-server copy must be in place
+(`docs/production-migrations.md` step 5 shows the dump command).
+
+`APP_ENV` always replaces `app.env` on deploy. Change `DATABASE_URL` in the
+secret first, never only on the server, or the next deploy switches the app
+back to the old database.
+
+### Redeploying
+
+Deploys run only for a new commit pushed to `main`. **Re-running** an old
+workflow run is refused (`commit … is current but was deployed from a
+different artifact`): the rebuilt package for the same commit is never
+byte-identical, and `myapp-deploy` will not swap the running release for a
+different build of the same commit. Nothing on the server changes when that
+happens.
+
 ## Plain HTTP on the IP address: what does not work yet
 
 HSTS and the CSP's `upgrade-insecure-requests` are sent only when the release
