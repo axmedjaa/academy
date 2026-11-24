@@ -27,6 +27,7 @@ describe("student address and district", () => {
     const parsed = registerStudentSchema.parse({
       ...base,
       branchId: "7d1f4c63-6f0b-4a3c-9a43-2c1b0f8e9a10",
+      phone: "+252611000000",
       address: "Independence Ave",
       district: "Hargeisa",
     });
