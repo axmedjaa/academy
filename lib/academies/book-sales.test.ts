@@ -24,6 +24,7 @@ import type { AcademyRole } from "@/lib/auth/roles";
 import type { AuthContext } from "@/lib/auth/auth-context";
 import { createBook } from "./books";
 import { addBookSalePayment, computeBookSalePricing, createBookSale, listBookSales, refundBookSale } from "./book-sales";
+import { nameFromEmail } from "./staff-labels";
 import { getFinanceReports, subtractByCurrency } from "./finance-reports";
 import { partiallyReverseIncomeRecord, reverseIncomeRecord } from "./finance-reversals";
 import { listIncomeRecords } from "./income-records";
@@ -528,7 +529,7 @@ describe("listBookSales — history enrichment", () => {
     expect(saleMatchesStatus(unpaid, "unpaid")).toBe(true);
   });
 
-  it("resolves recordedByLabel to the manager's current role label", async () => {
+  it("resolves recordedByLabel to the recorder's name, not their role", async () => {
     const fixture = await setupFixture();
     const book = await insertBookDirect(fixture.academyId, fixture.managerContext, 1000, 20);
     const sale = await createBookSale(fixture.managerContext, { bookId: book.id, buyerType: "other_person", otherBuyerName: "Walk-in", quantity: 1, amountPaidCents: 1000, method: "cash" });
@@ -538,7 +539,10 @@ describe("listBookSales — history enrichment", () => {
     expect(listed.ok).toBe(true);
     if (listed.ok) {
       const row = listed.sales.find((s) => s.id === sale.sale.id);
-      expect(row?.recordedByLabel).toBe("Manager");
+      // No staff profile for this manager, so the name comes from their email.
+      const [manager] = await db.select({ email: users.email }).from(users).where(eq(users.id, fixture.managerContext.userId));
+      expect(row?.recordedByLabel).toBe(nameFromEmail(manager.email));
+      expect(row?.recordedByLabel).not.toBe("Manager");
     }
   });
 

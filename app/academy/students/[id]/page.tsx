@@ -128,8 +128,7 @@ export default async function StudentDetailPage({
   // authorized, so this is a display-field fetch on already-authorized
   // ids, not a fresh authorization decision (same reasoning as
   // app/academy/finance/page.tsx's own studentLabels lookup). Resolves to
-  // the recorder's current role in this academy (e.g. "Manager"), falling
-  // back to their email if their membership no longer exists.
+  // the recorder's name (staff-profile name, else a name from their email).
   const recorderIds = payments.map((payment) => payment.recordedBy);
   const [
     enrollmentSummaries,

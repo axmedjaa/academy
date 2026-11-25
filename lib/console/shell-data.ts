@@ -4,7 +4,7 @@ import { staffProfiles, users } from "@/lib/db/schema";
 import { getAcademyShellIdentity } from "@/lib/academies/shell";
 import { getAcademyLogoUrl } from "@/lib/academies/academy-logo";
 import { getVisibleAcademyNavItems, groupNavItems } from "@/lib/academies/nav-items";
-import { ROLE_LABELS as ACADEMY_ROLE_LABELS } from "@/lib/academies/staff-labels";
+import { ROLE_LABELS as ACADEMY_ROLE_LABELS, nameFromEmail } from "@/lib/academies/staff-labels";
 import { getVisiblePlatformNavItems } from "@/lib/platform/nav-items";
 import { hasPermission } from "@/lib/auth/permissions";
 import { ACADEMY_STUDENTS_ACTION, getAcademyPermissionLevel } from "@/lib/auth/academy-permissions";
@@ -55,15 +55,6 @@ export interface ConsoleShellData {
 }
 
 const NOTIFICATION_PREVIEW_LIMIT = 4;
-
-function nameFromEmail(email: string): string {
-  const local = email.split("@")[0] ?? email;
-  return local
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map((part) => part[0].toUpperCase() + part.slice(1))
-    .join(" ");
-}
 
 async function getEmail(userId: string): Promise<string> {
   const [row] = await db.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);

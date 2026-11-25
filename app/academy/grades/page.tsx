@@ -43,8 +43,8 @@ export default async function AcademyGradesPage() {
   const creatorNames: Record<string, string> = Object.fromEntries(
     (staffResult.ok ? staffResult.staff : []).map((member) => [member.userId, member.fullName]),
   );
-  // Creators without a staff profile (e.g. the academy owner) fall back to
-  // their role in this academy, or their email, as payment history does.
+  // Creators not on the scoped staff list (e.g. the academy owner) get
+  // their name from resolveStaffLabels, as payment history does.
   const missing = [...new Set(result.configurations.flatMap((c) => [c.createdBy, c.approvedBy ?? c.createdBy]))].filter((id) => !creatorNames[id]);
   if (missing.length > 0 && result.configurations[0]) {
     const labels = await resolveStaffLabels(result.configurations[0].academyId, missing);
