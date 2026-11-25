@@ -32,6 +32,7 @@ import { createStudentCharge, issueReceipt, recordStudentPayment } from "./stude
 import { generateFeePeriodsForEnrollment, recordFeePeriodPayment, setEnrollmentFeeSchedule } from "./fee-periods";
 import { reverseStudentPayment } from "./finance-reversals";
 import { getReceiptPrintData } from "./receipt-print";
+import { nameFromEmail } from "./staff-labels";
 
 // None of this file's other dependencies (student-payments.ts, fee-periods.ts,
 // finance-reversals.ts) touch storage — safe to mock module-wide here,
@@ -216,7 +217,7 @@ afterAll(async () => {
 
 describe("getReceiptPrintData — charge-linked payment", () => {
   it("returns academy/student/payment/description/recordedByLabel for an issued receipt", async () => {
-    const { studentId, context } = await setupAcademy("manager");
+    const { studentId, userId, context } = await setupAcademy("manager");
     const chargeResult = await createStudentCharge(context, {
       studentId,
       description: "ID card replacement",
@@ -253,7 +254,11 @@ describe("getReceiptPrintData — charge-linked payment", () => {
     expect(result.data.payment.notes).toBe("Paid in full");
     expect(result.data.payment.status).toBe("approved");
     expect(result.data.description).toBe("Charge: ID card replacement");
-    expect(result.data.recordedByLabel).toBe("Manager");
+    // The recorder's name, never their role. This manager has no staff
+    // profile, so the name comes from their sign-in email.
+    const [manager] = await db.select({ email: users.email }).from(users).where(eq(users.id, userId));
+    expect(result.data.recordedByLabel).toBe(nameFromEmail(manager.email));
+    expect(result.data.recordedByLabel).not.toBe("Manager");
   });
 
   it("reflects the CURRENT (reversed) payment state, never the state at issuance time", async () => {

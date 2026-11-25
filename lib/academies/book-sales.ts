@@ -715,9 +715,9 @@ export interface BookSaleListRow extends BookSaleRecord {
   totalReturnedQuantity: number;
   netPaidCents: number;
   remainingCents: number;
-  /** Display label for `recordedBy` — this academy's current role for that
-   * user, or their email if the membership no longer exists. See
-   * lib/academies/staff-labels.ts's `resolveStaffLabels`. */
+  /** Display name for `recordedBy` — the recorder's staff-profile name, else
+   * a name from their email. See lib/academies/staff-labels.ts's
+   * `resolveStaffLabels`. */
   recordedByLabel: string;
   /** The most recent payment event's method/reference (a sale can have
    * several payment events — initial + additional — so "the" payment

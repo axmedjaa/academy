@@ -23,6 +23,7 @@ import type { AuthContext } from "@/lib/auth/auth-context";
 import { createBook } from "./books";
 import { addBookSalePayment, createBookSale } from "./book-sales";
 import { getBookSaleReceiptPrintData } from "./book-sale-receipt-print";
+import { nameFromEmail } from "./staff-labels";
 
 // `createBook` requires a verified cover — same mock pattern as
 // books.test.ts/book-sales.test.ts.
@@ -332,8 +333,12 @@ describe("getBookSaleReceiptPrintData", () => {
     const result = await getBookSaleReceiptPrintData(fixture.managerContext, sale.sale.id);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.data.recordedByLabel).toBe("Manager");
-      expect(result.data.payments[0].recordedByLabel).toBe("Manager");
+      // The recorder's name, never their role. This manager has no staff
+      // profile, so the name comes from their sign-in email.
+      const [manager] = await db.select({ email: users.email }).from(users).where(eq(users.id, fixture.managerContext.userId));
+      expect(result.data.recordedByLabel).toBe(nameFromEmail(manager.email));
+      expect(result.data.payments[0].recordedByLabel).toBe(nameFromEmail(manager.email));
+      expect(result.data.recordedByLabel).not.toBe("Manager");
     }
   });
 });
